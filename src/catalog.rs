@@ -1,10 +1,3 @@
-// Database/collection/table -> partition mapping
-
-// TODO:
-//  - CatalogProvider in DataFusion's SessionContext
-//  - but only one catalog ("database") based on who's connected / which database they're connected to
-//  - this means a separate SessionContext based on the database (which is fine)
-
 use std::{any::Any, sync::Arc};
 
 use async_trait::async_trait;
@@ -20,7 +13,11 @@ use datafusion::{
     physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics},
 };
 
-struct SeafowlCatalog {}
+use crate::data_types::{Collection, Database};
+
+struct SeafowlCatalog {
+    inner: Database,
+}
 
 impl CatalogProvider for SeafowlCatalog {
     fn as_any(&self) -> &dyn std::any::Any {
@@ -28,15 +25,18 @@ impl CatalogProvider for SeafowlCatalog {
     }
 
     fn schema_names(&self) -> Vec<String> {
-        todo!()
+        todo!("List all collection names")
     }
 
     fn schema(&self, _name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        todo!()
+        Some(Arc::new(SeafowlSchema { inner: todo!() }));
+        todo!("Get a Collection object (store ID, name?)")
     }
 }
 
-struct SeafowlSchema {}
+struct SeafowlSchema {
+    inner: Collection,
+}
 
 impl SchemaProvider for SeafowlSchema {
     fn as_any(&self) -> &dyn Any {
@@ -56,7 +56,10 @@ impl SchemaProvider for SeafowlSchema {
     }
 }
 
-struct SeafowlTable {}
+struct SeafowlTable {
+    // TODO: Metadata for the latest table version here
+// (partitions, min/max, schema)
+}
 
 #[async_trait]
 impl TableProvider for SeafowlTable {
@@ -79,12 +82,17 @@ impl TableProvider for SeafowlTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+        // Filter partitions by the predicate
+        // Create the node to scan through them
+        // No UNION node here?
         Ok(Arc::new(SeafowlBaseTableScanNode {}))
     }
 }
 
 #[derive(Debug)]
-struct SeafowlBaseTableScanNode {}
+struct SeafowlBaseTableScanNode {
+    // TODO: list of partitions to scan through
+}
 
 impl ExecutionPlan for SeafowlBaseTableScanNode {
     fn as_any(&self) -> &dyn Any {
@@ -120,6 +128,7 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         todo!()
+        // Hit the object store up for a certain partition, scan through it
     }
 
     fn statistics(&self) -> Statistics {
