@@ -1,10 +1,11 @@
-pub struct DatabaseId(i64);
-pub struct CollectionId(i64);
-pub struct TableId(i64);
-pub struct Timestamp(i64);
-pub struct TableVersionId(i64);
-pub struct TableRegionId(i64);
-pub struct ColumnId(i64);
+pub type DatabaseId = i64;
+pub type CollectionId = i64;
+pub type TableId = i64;
+pub type TableVersionId = i64;
+pub type Timestamp = i64;
+pub type TableColumnId = i64;
+pub type PhysicalRegionId = i64;
+pub type PhysicalRegionColumnId = i64;
 
 pub struct Database {
     pub id: DatabaseId,
@@ -19,7 +20,6 @@ pub struct Collection {
 
 pub struct Table {
     pub id: TableId,
-    pub database_id: DatabaseId,
     pub collection_id: CollectionId,
     pub name: String,
 }
@@ -27,38 +27,35 @@ pub struct Table {
 pub struct TableVersion {
     pub id: TableVersionId,
     pub table_id: TableId,
-    // TODO do we need other IDs
     pub creation_time: Timestamp,
     // TODO is_deleted flag?
 }
 
-pub struct TableRegion {
-    pub id: TableRegionId,
-    pub table_version_id: TableVersionId,
-    // TODO: json? a table with TableRegionId + ColumnId? + min/max values as binary?
-    // Should we duplicate these for every region OR for every file?
-    // Separate PhysicalRegion entity; make this a join table instead?
-    pub min_max: String,
-    // TODO object storage path (ID) here?
-    pub row_count: u32,
-    // TODO can we somehow store ordering here / in the TableVersion doc?
-}
-
-pub struct Column {
-    pub id: ColumnId,
+pub struct TableColumn {
+    pub id: TableColumnId,
     pub table_version_id: TableVersionId,
     pub name: String,
     // TODO enum?
-    pub column_type: String,
+    pub r#type: String,
     // TODO ordinal?
 }
 
-// Get database by name / id
-// Get collection by name / id
-// Get all collections in a database
-// Get table by name/id + collection (latest version)
-//   - including all regions/partitions
-// Get partitions matching a certain predicate?
-// Get total table row count
-//
-//
+pub struct PhysicalRegion {
+    pub id: PhysicalRegionId,
+    pub row_count: i32,
+    pub object_storage_id: String,
+}
+
+pub struct PhysicalRegionColumn {
+    pub id: PhysicalRegionColumnId,
+    pub physical_region_id: PhysicalRegionId,
+    pub name: String,
+    pub r#type: String,
+    pub min_value: Option<Vec<u8>>,
+    pub max_value: Option<Vec<u8>>,
+}
+
+pub struct TableRegion {
+    pub table_version_id: TableVersionId,
+    pub physical_region_id: PhysicalRegionId,
+}

@@ -3,11 +3,10 @@ name = "seafowl"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 datafusion = "9.0.0"
 async-trait = "0.1.41"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 futures = "0.3"
 sqlparser = "0.18"
+sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "postgres" ] }
