@@ -1,4 +1,4 @@
-pub mod catalog;
+pub mod provider;
 pub mod context;
 pub mod data_types;
 pub mod repository;

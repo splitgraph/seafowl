@@ -13,32 +13,32 @@ use datafusion::{
     physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics},
 };
 
-use crate::data_types::{Collection, Database};
+use crate::{data_types::Database, repository::Repository};
 
-struct SeafowlCatalog {
-    inner: Database,
+struct SeafowlCatalogProvider {
+    database: Database,
+    repository: Arc<dyn Repository>,
 }
 
-impl CatalogProvider for SeafowlCatalog {
+impl CatalogProvider for SeafowlCatalogProvider {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
     fn schema_names(&self) -> Vec<String> {
-        todo!("List all collection names")
+        self.repository
+            .get_collections_in_database(self.database.id).await
     }
 
     fn schema(&self, _name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        Some(Arc::new(SeafowlSchema { inner: todo!() }));
+        Some(Arc::new(SeafowlSchemaProvider {}));
         todo!("Get a Collection object (store ID, name?)")
     }
 }
 
-struct SeafowlSchema {
-    inner: Collection,
-}
+struct SeafowlSchemaProvider {}
 
-impl SchemaProvider for SeafowlSchema {
+impl SchemaProvider for SeafowlSchemaProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -56,13 +56,13 @@ impl SchemaProvider for SeafowlSchema {
     }
 }
 
-struct SeafowlTable {
+struct SeafowlTableProvider {
     // TODO: Metadata for the latest table version here
 // (partitions, min/max, schema)
 }
 
 #[async_trait]
-impl TableProvider for SeafowlTable {
+impl TableProvider for SeafowlTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
