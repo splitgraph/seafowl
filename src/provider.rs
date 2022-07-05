@@ -1,8 +1,8 @@
-use std::{any::Any, sync::Arc};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::{
-    arrow::datatypes::SchemaRef,
+    arrow::datatypes::SchemaRef as ArrowSchemaRef,
     catalog::{catalog::CatalogProvider, schema::SchemaProvider},
     common::{DataFusionError, Result},
     datasource::TableProvider,
@@ -13,62 +13,88 @@ use datafusion::{
     physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics},
 };
 
-use crate::{data_types::Database, repository::Repository};
-
-struct SeafowlCatalogProvider {
-    database: Database,
-    repository: Arc<dyn Repository>,
+pub struct SeafowlDatabase {
+    pub name: Arc<str>,
+    pub collections: HashMap<Arc<str>, Arc<SeafowlCollection>>,
 }
 
-impl CatalogProvider for SeafowlCatalogProvider {
+impl CatalogProvider for SeafowlDatabase {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
     fn schema_names(&self) -> Vec<String> {
-        self.repository
-            .get_collections_in_database(self.database.id).await
+        self.collections.keys().map(|s| s.to_string()).collect()
     }
 
-    fn schema(&self, _name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        Some(Arc::new(SeafowlSchemaProvider {}));
-        todo!("Get a Collection object (store ID, name?)")
+    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+        self.collections.get(name).map(|c| Arc::clone(c) as _)
     }
 }
 
-struct SeafowlSchemaProvider {}
+pub struct SeafowlCollection {
+    pub name: Arc<str>,
+    pub tables: HashMap<Arc<str>, Arc<SeafowlTable>>,
+}
 
-impl SchemaProvider for SeafowlSchemaProvider {
+impl SchemaProvider for SeafowlCollection {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn table_names(&self) -> Vec<String> {
-        todo!()
+        self.tables.keys().map(|s| s.to_string()).collect()
     }
 
-    fn table(&self, _name: &str) -> Option<Arc<dyn TableProvider>> {
-        todo!()
+    fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+        self.tables.get(name).map(|c| Arc::clone(c) as _)
     }
 
-    fn table_exist(&self, _name: &str) -> bool {
+    fn table_exist(&self, name: &str) -> bool {
+        self.tables.contains_key(name)
+    }
+}
+
+pub struct SeafowlRegion {
+    pub object_storage_id: Arc<str>,
+    pub row_count: i32,
+    pub columns: Arc<Vec<RegionColumn>>,
+}
+
+pub struct RegionColumn {
+    pub name: Arc<str>,
+    pub r#type: Arc<str>,
+    pub min_value: Arc<Option<Vec<u8>>>,
+    pub max_value: Arc<Option<Vec<u8>>>,
+}
+
+pub struct Schema {
+    pub arrow_schema: ArrowSchemaRef,
+}
+
+impl Schema {
+    pub fn from_column_names_types<'a, I>(_columns: I) -> Self
+    where
+        I: Iterator<Item = (&'a String, &'a String)>,
+    {
         todo!()
     }
 }
 
-struct SeafowlTableProvider {
-    // TODO: Metadata for the latest table version here
-// (partitions, min/max, schema)
+pub struct SeafowlTable {
+    pub name: Arc<str>,
+    pub schema: Arc<Schema>,
+    pub regions: Arc<Vec<SeafowlRegion>>,
 }
 
 #[async_trait]
-impl TableProvider for SeafowlTableProvider {
+impl TableProvider for SeafowlTable {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        todo!()
+    fn schema(&self) -> ArrowSchemaRef {
+        self.schema.arrow_schema.clone()
     }
 
     fn table_type(&self) -> TableType {
@@ -99,7 +125,7 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
+    fn schema(&self) -> ArrowSchemaRef {
         todo!()
     }
 
