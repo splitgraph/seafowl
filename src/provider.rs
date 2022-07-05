@@ -13,6 +13,8 @@ use datafusion::{
     physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics},
 };
 
+use crate::schema::Schema;
+
 pub struct SeafowlDatabase {
     pub name: Arc<str>,
     pub collections: HashMap<Arc<str>, Arc<SeafowlCollection>>,
@@ -68,19 +70,6 @@ pub struct RegionColumn {
     pub max_value: Arc<Option<Vec<u8>>>,
 }
 
-pub struct Schema {
-    pub arrow_schema: ArrowSchemaRef,
-}
-
-impl Schema {
-    pub fn from_column_names_types<'a, I>(_columns: I) -> Self
-    where
-        I: Iterator<Item = (&'a String, &'a String)>,
-    {
-        todo!()
-    }
-}
-
 pub struct SeafowlTable {
     pub name: Arc<str>,
     pub schema: Arc<Schema>,
@@ -108,16 +97,20 @@ impl TableProvider for SeafowlTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        // Filter partitions by the predicate
-        // Create the node to scan through them
-        // No UNION node here?
-        Ok(Arc::new(SeafowlBaseTableScanNode {}))
+        // TODO: Filter partitions by the predicate
+        Ok(Arc::new(SeafowlBaseTableScanNode {
+            name: self.name.to_owned(),
+            schema: self.schema.to_owned(),
+            regions: self.regions.to_owned(),
+        }))
     }
 }
 
 #[derive(Debug)]
 struct SeafowlBaseTableScanNode {
-    // TODO: list of partitions to scan through
+    pub name: Arc<str>,
+    pub schema: Arc<Schema>,
+    pub regions: Arc<Vec<SeafowlRegion>>,
 }
 
 impl ExecutionPlan for SeafowlBaseTableScanNode {
@@ -126,11 +119,11 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
     }
 
     fn schema(&self) -> ArrowSchemaRef {
-        todo!()
+        self.schema.arrow_schema.clone()
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        todo!()
+        Partitioning::UnknownPartitioning(self.regions.len())
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {

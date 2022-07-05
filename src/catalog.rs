@@ -5,10 +5,9 @@ use itertools::Itertools;
 
 use crate::{
     data_types::DatabaseId,
-    provider::{
-        RegionColumn, Schema, SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable,
-    },
+    provider::{RegionColumn, SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable},
     repository::{AllDatabaseColumnsResult, PostgresRepository, Repository},
+    schema::Schema,
 };
 
 #[async_trait]
