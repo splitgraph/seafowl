@@ -125,8 +125,9 @@ impl TableProvider for SeafowlTable {
         limit: Option<usize>,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         // This is partially taken from ListingTable.
-        let region_path = self.regions.get(0).unwrap().object_storage_id.to_string();
-        let url = Url::parse(&region_path).expect("URL parsing error");
+        let _region_path = self.regions.get(0).unwrap().object_storage_id.to_string();
+        // let url = Url::parse(&region_path).expect("URL parsing error");
+        let url = Url::parse("seafowl:///").expect("URL parsing error");
         let store = ctx.runtime_env.object_store(UrlWrapper { url })?;
 
         // TODO: we can load the regions dynamically here, since we're async
@@ -146,7 +147,7 @@ impl TableProvider for SeafowlTable {
             .expect("general error with partitioned file lists");
 
         let config = FileScanConfig {
-            object_store_url: ObjectStoreUrl::parse("seafowl-object://").expect("TODO parse error"),
+            object_store_url: ObjectStoreUrl::parse("seafowl://").expect("TODO parse error"),
             file_schema: self.schema(),
             file_groups: partitioned_file_lists,
             statistics: Statistics::default(),
@@ -216,5 +217,77 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
 
     fn statistics(&self) -> Statistics {
         Statistics::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bytes::{BufMut, Bytes, BytesMut};
+    use datafusion::{
+        arrow::{
+            array::{ArrayRef, Int64Array},
+            record_batch::RecordBatch,
+        },
+        parquet::{arrow::ArrowWriter, file::properties::WriterProperties},
+        prelude::{SessionConfig, SessionContext}, datasource::TableProvider,
+        physical_plan::collect
+    };
+    use object_store::{memory::InMemory, path::Path, ObjectStore};
+
+    use crate::schema::Schema;
+
+    use super::{SeafowlRegion, SeafowlTable};
+
+    #[tokio::test]
+    async fn test_scan_plan() {
+        // Make a batch
+        let c1: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+        let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())]).unwrap();
+
+        // Write a Parquet file to the object store
+        let buf = BytesMut::new();
+        let mut writer = buf.writer();
+
+        let props = WriterProperties::builder().build();
+        let mut arrow_writer = ArrowWriter::try_new(&mut writer, batch1.schema(), Some(props))
+            .expect("creating writer");
+
+        arrow_writer.write(&batch1).expect("Writing batch");
+        arrow_writer.close().unwrap();
+
+        // Write the file to an in-memory store
+        let object_store = InMemory::new();
+        let location = Path::from("some-file.parquet");
+        object_store
+            .put(&location, Bytes::from(writer.into_inner()))
+            .await
+            .expect("Error putting data");
+
+        let session_config = SessionConfig::new().with_information_schema(true);
+        let context = SessionContext::with_config(session_config);
+        context
+            .runtime_env()
+            .register_object_store("seafowl", "", Arc::new(object_store));
+
+        // Try planning the query
+        let table = SeafowlTable {
+            name: Arc::from("table"),
+            regions: Arc::from(vec![SeafowlRegion {
+                object_storage_id: Arc::from("some-file.parquet"),
+                row_count: 3,
+                columns: Arc::new(vec![]),
+            }]),
+            schema: Arc::new(Schema {
+                arrow_schema: batch1.schema(),
+            }),
+        };
+
+        let state = context.state.read().clone();
+        let plan = table.scan(&state, &None, &[], None).await.expect("error creating plan");
+        let task_ctx = context.task_ctx();
+        let result = collect(plan, task_ctx).await.expect("error running");
+        dbg!(result);
     }
 }
