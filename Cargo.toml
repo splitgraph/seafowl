@@ -15,6 +15,9 @@ object_store = "0.3.0"
 serde_json = "1.0.81"
 url = "2.2"
 
+# passing to DF's query planner
+hashbrown = { version = "0.12", features = ["raw"] }
+
 # TODO might not be necessary
 parquet = { version = "16.0.0", features = ["arrow"] }
 bytes = "1.1.0"

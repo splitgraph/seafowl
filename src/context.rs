@@ -1,21 +1,130 @@
 // DataFusion bindings
 
 use futures::TryStreamExt;
-use sqlparser::ast::Statement;
+
+use hashbrown::HashMap;
+use sqlparser::ast::{
+    ColumnDef as SQLColumnDef, ColumnOption, DataType as SQLDataType, Ident, Statement,
+    TableFactor, TableWithJoins,
+};
 use std::sync::Arc;
 
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::{
-    arrow::record_batch::RecordBatch,
+    arrow::{
+        datatypes::{
+            DataType, Field, Schema, SchemaRef, TimeUnit, DECIMAL_DEFAULT_SCALE,
+            DECIMAL_MAX_PRECISION,
+        },
+        record_batch::RecordBatch,
+    },
+    error::DataFusionError,
     execution::context::TaskContext,
-    logical_plan::LogicalPlan,
+    logical_plan::{plan::Extension, Column, DFSchema, LogicalPlan, ToDFSchema},
     physical_plan::{
-        coalesce_partitions::CoalescePartitionsExec, EmptyRecordBatchStream, ExecutionPlan,
-        SendableRecordBatchStream,
+        coalesce_partitions::CoalescePartitionsExec, empty::EmptyExec, EmptyRecordBatchStream,
+        ExecutionPlan, SendableRecordBatchStream,
     },
     prelude::SessionContext,
     sql::{parser::DFParser, planner::SqlToRel},
 };
+
+use crate::nodes::{Assignment, CreateTable, Insert, Update};
+
+// Copied from datafusion::sql::utils (private)
+
+/// Returns a validated `DataType` for the specified precision and
+/// scale
+fn make_decimal_type(precision: Option<u64>, scale: Option<u64>) -> Result<DataType> {
+    // postgres like behavior
+    let (precision, scale) = match (precision, scale) {
+        (Some(p), Some(s)) => (p as usize, s as usize),
+        (Some(p), None) => (p as usize, 0),
+        (None, Some(_)) => {
+            return Err(DataFusionError::Internal(
+                "Cannot specify only scale for decimal data type".to_string(),
+            ))
+        }
+        (None, None) => (DECIMAL_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
+    };
+
+    // Arrow decimal is i128 meaning 38 maximum decimal digits
+    if precision > DECIMAL_MAX_PRECISION || scale > precision {
+        return Err(DataFusionError::Internal(format!(
+            "For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
+            precision, scale
+        )));
+    } else {
+        Ok(DataType::Decimal(precision, scale))
+    }
+}
+
+// Normalize an identifier to a lowercase string unless the identifier is quoted.
+fn normalize_ident(id: &Ident) -> String {
+    match id.quote_style {
+        Some(_) => id.value.clone(),
+        None => id.value.to_ascii_lowercase(),
+    }
+}
+
+// Copied from SqlRel (private there)
+fn build_schema(columns: Vec<SQLColumnDef>) -> Result<Schema> {
+    let mut fields = Vec::with_capacity(columns.len());
+
+    for column in columns {
+        let data_type = make_data_type(&column.data_type)?;
+        let allow_null = column
+            .options
+            .iter()
+            .any(|x| x.option == ColumnOption::Null);
+        fields.push(Field::new(
+            &normalize_ident(&column.name),
+            data_type,
+            allow_null,
+        ));
+    }
+
+    Ok(Schema::new(fields))
+}
+
+/// Maps the SQL type to the corresponding Arrow `DataType`
+fn make_data_type(sql_type: &SQLDataType) -> Result<DataType> {
+    match sql_type {
+        SQLDataType::BigInt(_) => Ok(DataType::Int64),
+        SQLDataType::Int(_) => Ok(DataType::Int32),
+        SQLDataType::SmallInt(_) => Ok(DataType::Int16),
+        SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => Ok(DataType::Utf8),
+        SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
+        SQLDataType::Float(_) => Ok(DataType::Float32),
+        SQLDataType::Real => Ok(DataType::Float32),
+        SQLDataType::Double => Ok(DataType::Float64),
+        SQLDataType::Boolean => Ok(DataType::Boolean),
+        SQLDataType::Date => Ok(DataType::Date32),
+        SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Millisecond)),
+        SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        _ => Err(DataFusionError::NotImplemented(format!(
+            "The SQL data type {:?} is not implemented",
+            sql_type
+        ))),
+    }
+}
+
+/// End copied functions
+
+fn compound_identifier_to_column(ids: &Vec<Ident>) -> Result<Column> {
+    // OK, this one is partially taken from the planner for SQLExpr::CompoundIdentifier
+    let mut var_names: Vec<_> = ids.into_iter().map(|s| normalize_ident(&s)).collect();
+    match (var_names.pop(), var_names.pop()) {
+        (Some(name), Some(relation)) if var_names.is_empty() => Ok(Column {
+            relation: Some(relation),
+            name,
+        }),
+        _ => Err(DataFusionError::NotImplemented(format!(
+            "Unsupported compound identifier '{:?}'",
+            var_names,
+        ))),
+    }
+}
 
 struct SeafowlContext {
     inner: SessionContext,
@@ -45,27 +154,107 @@ impl SeafowlContext {
                 Statement::Explain { .. }
                 | Statement::Query { .. }
                 | Statement::ShowVariable { .. }
-                | Statement::ShowColumns { .. } => query_planner.sql_statement_to_plan(*s),
+                | Statement::ShowColumns { .. }
+                | Statement::CreateView { .. }
+                | Statement::CreateSchema { .. }
+                | Statement::CreateDatabase { .. }
+                | Statement::Drop { .. } => query_planner.sql_statement_to_plan(*s),
 
-                // These are handled by SqlToRel but we want to create these differently
-                Statement::CreateTable { .. } => {
-                    todo!()
+                // CREATE TABLE (create empty table with columns)
+                Statement::CreateTable {
+                    query: None,
+                    name,
+                    columns,
+                    constraints,
+                    table_properties,
+                    with_options,
+                    if_not_exists,
+                    or_replace: _,
+                    ..
+                } if constraints.is_empty()
+                    && table_properties.is_empty()
+                    && with_options.is_empty() =>
+                {
+                    let cols = build_schema(columns)?;
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(CreateTable {
+                            schema: cols.to_dfschema_ref()?,
+                            name: name.to_string(),
+                            if_not_exists,
+                        }),
+                    }))
                 }
-                Statement::CreateView { .. } => {
-                    todo!()
-                }
-                Statement::CreateSchema { .. } => {
-                    todo!()
-                }
-                Statement::CreateDatabase { .. } => {
-                    todo!()
-                }
-                Statement::Drop { .. } => {
-                    todo!()
-                }
+
+                // Other CREATE TABLE: SqlToRel only allows CreateTableAs statements and makes
+                // a CreateMemoryTable node. We're fine with that, but we'll execute it differently.
+                Statement::CreateTable { .. } => query_planner.sql_statement_to_plan(*s),
 
                 // This DML is defined by us
-                Statement::Insert { .. } => {
+                Statement::Insert {
+                    table_name,
+                    columns,
+                    source,
+                    ..
+                } => {
+                    let plan = query_planner.query_to_plan(*source, &mut HashMap::new())?;
+
+                    let column_exprs = columns
+                        .iter()
+                        .map(|id| {
+                            Column::from_name(normalize_ident(id))
+                        })
+                        .collect();
+
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(Insert {
+                            name: table_name.to_string(),
+                            columns: column_exprs,
+                            input: Arc::new(plan),
+                        }),
+                    }))
+                    // Add a new partition to the table
+                    // Index the partitions
+                    // Create a new table version
+                }
+                Statement::Update {
+                    table: TableWithJoins {relation: TableFactor::Table { name, alias: None, args: None, with_hints }, joins },
+                    assignments,
+                    from: None,
+                    selection,
+                }
+                // We only support the most basic form of UPDATE (no aliases or FROM or joins)
+                    if with_hints.is_empty() && joins.is_empty()
+                => {
+                    // Scan through the original table (with selection) and:
+                    // SELECT [for each col, "col AS col" if not an assignment, otherwise "expr AS col"]
+                    //   FROM original_table WHERE [selection]
+                    // Somehow also split the result by existing partition boundaries and leave unchanged partitions alone
+
+                    // TODO we need to load the table object here in order to validate the UPDATE clauses
+                    let table_schema: DFSchema = DFSchema::empty();
+
+                    let selection_expr = match selection {
+                        None => None,
+                        Some(expr) => Some(query_planner.sql_to_rex(expr, &table_schema, &mut HashMap::new())?),
+                    };
+
+                    let assignments_expr = assignments.iter().map(|a| {
+                        Ok(Assignment { column: compound_identifier_to_column(&a.id)?, expr: query_planner.sql_to_rex(a.value.clone(), &table_schema, &mut HashMap::new())? })
+                    }).collect::<Result<Vec<Assignment>>>()?;
+
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(Update {
+                            name: name.to_string(),
+                            selection: selection_expr,
+                            assignments: assignments_expr,
+                        }),
+                    }))
+                }
+                Statement::Delete {
+                    table_name: _,
+                    selection: _,
+                } => {
+                    // Same as Update but we just filter out the selection
                     todo!()
                 }
                 _ => Err(Error::NotImplemented(format!(
@@ -84,7 +273,62 @@ impl SeafowlContext {
                 )))
             }
         }?;
-        self.inner.create_physical_plan(&logical_plan).await
+
+        // Similarly to DataFrame::sql, run certain logical plans outside of the actual execution flow
+        // and produce a dummy physical plan instead
+        match logical_plan {
+            LogicalPlan::CreateExternalTable(_) => {
+                // We're not supposed to reach this since we filtered it out above
+                panic!("No plan for CreateExternalTable");
+            }
+            LogicalPlan::CreateCatalogSchema(_) => {
+                // CREATE SCHEMA
+                // Create a schema and register it
+                Ok(Arc::new(EmptyExec::new(
+                    false,
+                    SchemaRef::new(Schema::empty()),
+                )))
+            }
+            LogicalPlan::CreateCatalog(_) => {
+                // CREATE DATABASE
+                Ok(Arc::new(EmptyExec::new(
+                    false,
+                    SchemaRef::new(Schema::empty()),
+                )))
+            }
+            LogicalPlan::CreateMemoryTable(_) => {
+                // This is actually CREATE TABLE AS
+                Ok(Arc::new(EmptyExec::new(
+                    false,
+                    SchemaRef::new(Schema::empty()),
+                )))
+            }
+            LogicalPlan::DropTable(_) => {
+                // DROP TABLE
+                Ok(Arc::new(EmptyExec::new(
+                    false,
+                    SchemaRef::new(Schema::empty()),
+                )))
+            }
+            LogicalPlan::CreateView(_) => {
+                // CREATE VIEW
+                Ok(Arc::new(EmptyExec::new(
+                    false,
+                    SchemaRef::new(Schema::empty()),
+                )))
+            }
+            LogicalPlan::Extension(Extension { node: _ }) => {
+                // Other custom nodes we made like CREATE TABLE/INSERT/UPDATE/DELETE/ALTER
+                // TODO: maybe this works better as an ExtensionPlanner?
+                // also TODO: if the actual execution isn't async, how are we meant to update our metadata?
+
+                Ok(Arc::new(EmptyExec::new(
+                    false,
+                    SchemaRef::new(Schema::empty()),
+                )))
+            }
+            _ => self.inner.create_physical_plan(&logical_plan).await,
+        }
     }
 
     pub async fn create_physical_plan(&self, plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {

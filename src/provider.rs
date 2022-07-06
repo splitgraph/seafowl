@@ -24,7 +24,7 @@ use datafusion::{
 
 use futures::future;
 
-use object_store::{path::Path};
+use object_store::path::Path;
 
 use url::Url;
 
@@ -157,10 +157,7 @@ impl TableProvider for SeafowlTable {
         };
 
         let format = ParquetFormat::default();
-        let plan = format
-            .create_physical_plan(config, filters)
-            .await
-            .expect("TODO plan gen error");
+        let plan = format.create_physical_plan(config, filters).await?;
 
         Ok(Arc::new(SeafowlBaseTableScanNode {
             name: self.name.to_owned(),
@@ -230,9 +227,10 @@ mod tests {
             array::{ArrayRef, Int64Array},
             record_batch::RecordBatch,
         },
+        datasource::TableProvider,
         parquet::{arrow::ArrowWriter, file::properties::WriterProperties},
-        prelude::{SessionConfig, SessionContext}, datasource::TableProvider,
-        physical_plan::collect
+        physical_plan::collect,
+        prelude::{SessionConfig, SessionContext},
     };
     use object_store::{memory::InMemory, path::Path, ObjectStore};
 
@@ -285,7 +283,10 @@ mod tests {
         };
 
         let state = context.state.read().clone();
-        let plan = table.scan(&state, &None, &[], None).await.expect("error creating plan");
+        let plan = table
+            .scan(&state, &None, &[], None)
+            .await
+            .expect("error creating plan");
         let task_ctx = context.task_ctx();
         let result = collect(plan, task_ctx).await.expect("error running");
         dbg!(result);
