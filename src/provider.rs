@@ -1,19 +1,32 @@
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
+
 use datafusion::{
     arrow::datatypes::SchemaRef as ArrowSchemaRef,
     catalog::{catalog::CatalogProvider, schema::SchemaProvider},
     common::{DataFusionError, Result},
-    datasource::TableProvider,
+    datasource::{
+        file_format::{parquet::ParquetFormat, FileFormat},
+        listing::PartitionedFile,
+        object_store::ObjectStoreUrl,
+        TableProvider,
+    },
     execution::context::{SessionState, TaskContext},
     logical_expr::TableType,
     logical_plan::Expr,
     physical_expr::PhysicalSortExpr,
-    physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics},
+    physical_plan::{
+        file_format::FileScanConfig, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+        Statistics,
+    },
 };
 
+use futures::future;
+
 use object_store::{path::Path, DynObjectStore};
+
+use url::Url;
 
 use crate::schema::Schema;
 
@@ -81,6 +94,16 @@ pub struct SeafowlTable {
     pub regions: Arc<Vec<SeafowlRegion>>,
 }
 
+pub struct UrlWrapper {
+    pub url: Url,
+}
+
+impl AsRef<Url> for UrlWrapper {
+    fn as_ref(&self) -> &Url {
+        &self.url
+    }
+}
+
 #[async_trait]
 impl TableProvider for SeafowlTable {
     fn as_any(&self) -> &dyn Any {
@@ -97,16 +120,53 @@ impl TableProvider for SeafowlTable {
 
     async fn scan(
         &self,
-        _ctx: &SessionState,
-        _projection: &Option<Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
+        ctx: &SessionState,
+        projection: &Option<Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        // TODO: Filter partitions by the predicate
+        // This is partially taken from ListingTable.
+        let region_path = self.regions.get(0).unwrap().object_storage_id.to_string();
+        let url = Url::parse(&region_path).expect("URL parsing error");
+        let store = ctx.runtime_env.object_store(UrlWrapper { url })?;
+
+        // TODO: we can load the regions dynamically here, since we're async
+
+        // TODO: use filters and apply them to regions here (grab the code from list_files_for_scan)
+        let partitioned_file_lists: Vec<Vec<PartitionedFile>> =
+            future::try_join_all(self.regions.iter().map(|r| async {
+                let path = Path::parse(&r.object_storage_id)?;
+                let meta = store.head(&path).await?;
+                Ok(vec![PartitionedFile {
+                    object_meta: meta,
+                    partition_values: vec![],
+                    range: None,
+                }]) as Result<_>
+            }))
+            .await
+            .expect("general error with partitioned file lists");
+
+        let config = FileScanConfig {
+            object_store_url: ObjectStoreUrl::parse("seafowl-object://").expect("TODO parse error"),
+            file_schema: self.schema(),
+            file_groups: partitioned_file_lists,
+            statistics: Statistics::default(),
+            projection: projection.clone(),
+            limit: limit,
+            table_partition_cols: vec![],
+        };
+
+        let format = ParquetFormat::default();
+        let plan = format
+            .create_physical_plan(config, filters)
+            .await
+            .expect("TODO plan gen error");
+
         Ok(Arc::new(SeafowlBaseTableScanNode {
             name: self.name.to_owned(),
             schema: self.schema.to_owned(),
             regions: self.regions.to_owned(),
+            inner: plan,
         }))
     }
 }
@@ -116,6 +176,7 @@ struct SeafowlBaseTableScanNode {
     pub name: Arc<str>,
     pub schema: Arc<Schema>,
     pub regions: Arc<Vec<SeafowlRegion>>,
+    pub inner: Arc<dyn ExecutionPlan>,
 }
 
 impl ExecutionPlan for SeafowlBaseTableScanNode {
@@ -149,13 +210,9 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let region = &self.regions[partition];
-        let path = Path::from(region.object_storage_id.as_ref());
-        let _result = region.object_storage.get(&path);
-        todo!()
-        // Hit the object store up for a certain partition, scan through it
+        self.inner.execute(partition, context)
     }
 
     fn statistics(&self) -> Statistics {

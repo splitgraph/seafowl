@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-datafusion = "9.0.0"
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev="bf7564f62117487a9a397c25326fcda1ed22d08d", default-features = false, package = "datafusion" }
 async-trait = "0.1.41"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 futures = "0.3"
@@ -13,3 +13,8 @@ sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "postgres" ] }
 itertools = ">=0.10.0"
 object_store = "0.3.0"
 serde_json = "1.0.81"
+url = "2.2"
+
+# TODO might not be necessary
+parquet = { version = "16.0.0", features = ["arrow"] }
+bytes = "1.1.0"
