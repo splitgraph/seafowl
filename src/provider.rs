@@ -24,7 +24,7 @@ use datafusion::{
 
 use futures::future;
 
-use object_store::{path::Path, DynObjectStore};
+use object_store::{path::Path};
 
 use url::Url;
 
@@ -77,7 +77,6 @@ pub struct SeafowlRegion {
     pub object_storage_id: Arc<str>,
     pub row_count: i32,
     pub columns: Arc<Vec<RegionColumn>>,
-    pub object_storage: Arc<DynObjectStore>,
 }
 
 #[derive(Debug)]

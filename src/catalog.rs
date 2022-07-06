@@ -40,7 +40,6 @@ impl PostgresCatalog {
                 })
                 .collect(),
             ),
-            object_storage: Arc::clone(&self.object_storage),
         }
     }
 
