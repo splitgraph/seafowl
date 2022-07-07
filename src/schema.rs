@@ -23,4 +23,12 @@ impl Schema {
             arrow_schema: Arc::new(ArrowSchema::new(fields)),
         }
     }
+
+    pub fn to_column_names_types(&self) -> Vec<(String, String)> {
+        self.arrow_schema
+            .fields()
+            .iter()
+            .map(|f| (f.name().clone(), f.to_json().to_string()))
+            .collect()
+    }
 }

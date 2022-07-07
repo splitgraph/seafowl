@@ -1,8 +1,11 @@
 use async_trait::async_trait;
 use futures::TryStreamExt;
-use sqlx::{Error, PgPool, Row};
+use sqlx::{Error, PgPool, Postgres, QueryBuilder, Row};
 
-use crate::data_types::DatabaseId;
+use crate::{
+    data_types::{CollectionId, DatabaseId, Table, TableId},
+    schema::Schema,
+};
 
 #[derive(sqlx::FromRow)]
 pub struct AllDatabaseColumnsResult {
@@ -27,6 +30,13 @@ pub trait Repository: Send + Sync {
         &mut self,
         database_id: DatabaseId,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
+
+    async fn create_table(
+        mut self,
+        collection_id: CollectionId,
+        table_name: &String,
+        schema: Schema,
+    ) -> Result<TableId, Error>;
 }
 
 pub struct PostgresRepository {
@@ -86,5 +96,49 @@ impl Repository for PostgresRepository {
         .fetch_all(&self.executor)
         .await?;
         Ok(columns)
+    }
+    async fn create_table(
+        mut self,
+        collection_id: CollectionId,
+        table_name: &String,
+        schema: Schema,
+    ) -> Result<TableId, Error> {
+        // Create new (empty) table
+        let new_table_id: i64 = sqlx::query!(
+            r#"
+        INSERT INTO "table" (collection_id, name) VALUES ($1, $2) RETURNING (id)
+        "#,
+            collection_id,
+            table_name
+        )
+        .fetch_one(&self.executor)
+        .await?
+        .id;
+
+        // Create initial table version
+        let new_version_id: i64 = sqlx::query!(
+            r#"
+        INSERT INTO table_version (table_id) VALUES ($1) RETURNING (id)
+        "#,
+            new_table_id
+        )
+        .fetch_one(&self.executor)
+        .await?
+        .id;
+
+        // Create columns
+        // TODO this breaks if we have more than (bind limit) columns
+        let mut builder: QueryBuilder<Postgres> =
+            QueryBuilder::new("INSERT INTO table_column(table_version_id, name, type) ");
+        builder.push_values(schema.to_column_names_types(), |mut b, col| {
+            b.push_bind(new_version_id)
+                .push_bind(col.0)
+                .push_bind(col.1);
+        });
+
+        let query = builder.build();
+        query.execute(&self.executor).await?;
+
+        Ok(new_table_id)
     }
 }
