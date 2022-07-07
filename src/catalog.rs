@@ -2,7 +2,6 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use itertools::Itertools;
-use object_store::DynObjectStore;
 
 use crate::{
     data_types::DatabaseId,
@@ -18,7 +17,6 @@ pub trait Catalog {
 
 pub struct PostgresCatalog {
     repository: PostgresRepository,
-    object_storage: Arc<DynObjectStore>,
 }
 
 impl PostgresCatalog {
