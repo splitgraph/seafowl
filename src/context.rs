@@ -333,15 +333,41 @@ impl SeafowlContext {
                     SchemaRef::new(Schema::empty()),
                 )))
             }
-            LogicalPlan::Extension(Extension { node: _ }) => {
+            LogicalPlan::Extension(Extension { ref node }) => {
                 // Other custom nodes we made like CREATE TABLE/INSERT/UPDATE/DELETE/ALTER
-                // TODO: maybe this works better as an ExtensionPlanner?
-                // also TODO: if the actual execution isn't async, how are we meant to update our metadata?
+                let any = node.as_any();
 
-                Ok(Arc::new(EmptyExec::new(
-                    false,
-                    SchemaRef::new(Schema::empty()),
-                )))
+                if let Some(CreateTable {
+                    schema,
+                    name,
+                    if_not_exists,
+                }) = any.downcast_ref::<CreateTable>()
+                {
+                    let table_ref = TableReference::from(name.as_str());
+                    let (schema_name, table_name) = match table_ref {
+                        TableReference::Bare { table: _ } => Err(Error::NotImplemented(
+                            "Cannot CREATE TABLE without a schema qualifier!".to_string(),
+                        )),
+                        TableReference::Partial { schema, table } => Ok((schema, table)),
+                        TableReference::Full {
+                            catalog: _,
+                            schema,
+                            table,
+                        } => Ok((schema, table)),
+                    }?;
+
+                    let sf_schema = SeafowlSchema {
+                        arrow_schema: Arc::new(schema.as_ref().into()),
+                    }
+                    .to_column_names_types();
+
+                    Ok(Arc::new(EmptyExec::new(
+                        false,
+                        SchemaRef::new(Schema::empty()),
+                    )))
+                } else {
+                    self.inner.create_physical_plan(&logical_plan).await
+                }
             }
             _ => self.inner.create_physical_plan(&logical_plan).await,
         }
