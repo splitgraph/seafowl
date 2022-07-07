@@ -23,26 +23,32 @@ pub struct AllDatabaseColumnsResult {
 #[async_trait]
 pub trait Repository: Send + Sync {
     async fn get_collections_in_database(
-        &mut self,
+        &self,
         database_id: DatabaseId,
     ) -> Result<Vec<String>, Error>;
     async fn get_all_columns_in_database(
-        &mut self,
+        &self,
         database_id: DatabaseId,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
-    async fn create_database(mut self, database_name: &String) -> Result<DatabaseId, Error>;
+    async fn get_collection_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+    ) -> Result<CollectionId, Error>;
+
+    async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error>;
 
     async fn create_collection(
-        mut self,
+        &self,
         database_id: DatabaseId,
-        collection_name: &String,
+        collection_name: &str,
     ) -> Result<CollectionId, Error>;
 
     async fn create_table(
-        mut self,
+        &self,
         collection_id: CollectionId,
-        table_name: &String,
+        table_name: &str,
         schema: Schema,
     ) -> Result<TableId, Error>;
 }
@@ -54,7 +60,7 @@ pub struct PostgresRepository {
 #[async_trait]
 impl Repository for PostgresRepository {
     async fn get_collections_in_database(
-        &mut self,
+        &self,
         database_id: DatabaseId,
     ) -> Result<Vec<String>, Error> {
         let names = sqlx::query("SELECT name FROM collection WHERE database_id = $1")
@@ -66,7 +72,7 @@ impl Repository for PostgresRepository {
         Ok(names)
     }
     async fn get_all_columns_in_database(
-        &mut self,
+        &self,
         database_id: DatabaseId,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error> {
         let columns = sqlx::query_as!(
@@ -106,7 +112,7 @@ impl Repository for PostgresRepository {
         Ok(columns)
     }
 
-    async fn create_database(mut self, database_name: &String) -> Result<DatabaseId, Error> {
+    async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error> {
         let id = sqlx::query!(
             r#"
         INSERT INTO database (name) VALUES ($1) RETURNING (id)
@@ -120,10 +126,31 @@ impl Repository for PostgresRepository {
         Ok(id)
     }
 
+    async fn get_collection_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+    ) -> Result<CollectionId, Error> {
+        let id = sqlx::query!(
+            r#"
+        SELECT collection.id
+        FROM collection JOIN database ON collection.database_id = database.id
+        WHERE database.name = $1 AND collection.name = $2
+        "#,
+            database_name,
+            collection_name
+        )
+        .fetch_one(&self.executor)
+        .await?
+        .id;
+
+        Ok(id)
+    }
+
     async fn create_collection(
-        mut self,
+        &self,
         database_id: DatabaseId,
-        collection_name: &String,
+        collection_name: &str,
     ) -> Result<CollectionId, Error> {
         let id = sqlx::query!(
             r#"
@@ -140,9 +167,9 @@ impl Repository for PostgresRepository {
     }
 
     async fn create_table(
-        mut self,
+        &self,
         collection_id: CollectionId,
-        table_name: &String,
+        table_name: &str,
         schema: Schema,
     ) -> Result<TableId, Error> {
         // Create new (empty) table
@@ -183,4 +210,8 @@ impl Repository for PostgresRepository {
 
         Ok(new_table_id)
     }
+
+    // Create a table with regions
+    // Append a region to a table
+    // Replace / delete a region (in a copy?)
 }

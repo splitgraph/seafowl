@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use itertools::Itertools;
 
 use crate::{
-    data_types::DatabaseId,
+    data_types::{CollectionId, DatabaseId, TableId},
     provider::{RegionColumn, SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable},
     repository::{AllDatabaseColumnsResult, PostgresRepository, Repository},
     schema::Schema,
@@ -12,7 +12,18 @@ use crate::{
 
 #[async_trait]
 pub trait Catalog {
-    async fn load_database(mut self, id: DatabaseId) -> SeafowlDatabase;
+    async fn load_database(&self, id: DatabaseId) -> SeafowlDatabase;
+    async fn create_table(
+        &self,
+        collection_id: CollectionId,
+        table_name: &str,
+        schema: Schema,
+    ) -> TableId;
+    async fn get_collection_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+    ) -> Option<CollectionId>;
 }
 
 pub struct PostgresCatalog {
@@ -104,16 +115,16 @@ impl PostgresCatalog {
 
 #[async_trait]
 impl Catalog for PostgresCatalog {
-    async fn load_database(mut self, database_id: DatabaseId) -> SeafowlDatabase {
+    async fn load_database(&self, database_id: DatabaseId) -> SeafowlDatabase {
         let all_columns = self
             .repository
             .get_all_columns_in_database(database_id)
             .await
-            .unwrap();
+            .expect("TODO db load error");
 
         // This is a slight mess. We get a severely denormalized table of all collections, tables, regions,
         // columns and column min-max values in the database, sorted by collection name, table name and region ID.
-        // Through some
+        // Through some group_by, build a nested map of collections -> tables -> columns and regions with min/max values.
 
         let collections: HashMap<Arc<str>, Arc<SeafowlCollection>> = all_columns
             .iter()
@@ -126,6 +137,34 @@ impl Catalog for PostgresCatalog {
             // TODO load the database name too
             name: Arc::from("database"),
             collections,
+        }
+    }
+
+    async fn create_table(
+        &self,
+        collection_id: CollectionId,
+        table_name: &str,
+        schema: Schema,
+    ) -> TableId {
+        self.repository
+            .create_table(collection_id, table_name, schema)
+            .await
+            .expect("TODO table create error")
+    }
+
+    async fn get_collection_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+    ) -> Option<CollectionId> {
+        match self
+            .repository
+            .get_collection_id_by_name(database_name, collection_name)
+            .await
+        {
+            Ok(id) => Some(id),
+            Err(sqlx::error::Error::RowNotFound) => None,
+            Err(e) => panic!("TODO SQL error: {:?}", e),
         }
     }
 }

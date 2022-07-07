@@ -20,16 +20,17 @@ use datafusion::{
     },
     error::DataFusionError,
     execution::context::TaskContext,
-    logical_plan::{plan::Extension, Column, DFSchema, LogicalPlan, ToDFSchema},
+    logical_plan::{plan::Extension, Column, CreateMemoryTable, DFSchema, LogicalPlan, ToDFSchema},
     physical_plan::{
         coalesce_partitions::CoalescePartitionsExec, empty::EmptyExec, EmptyRecordBatchStream,
         ExecutionPlan, SendableRecordBatchStream,
     },
     prelude::SessionContext,
-    sql::{parser::DFParser, planner::SqlToRel},
+    sql::{parser::DFParser, planner::SqlToRel, TableReference},
 };
 
 use crate::{
+    catalog::Catalog,
     data_types::{PhysicalRegion, PhysicalRegionColumn, TableRegion},
     nodes::{Assignment, CreateTable, Delete, Insert, Update},
     schema::Schema as SeafowlSchema,
@@ -132,6 +133,8 @@ fn compound_identifier_to_column(ids: &Vec<Ident>) -> Result<Column> {
 
 struct SeafowlContext {
     inner: SessionContext,
+    catalog: Arc<dyn Catalog>,
+    database: String,
 }
 
 impl SeafowlContext {
@@ -358,8 +361,19 @@ impl SeafowlContext {
 
                     let sf_schema = SeafowlSchema {
                         arrow_schema: Arc::new(schema.as_ref().into()),
-                    }
-                    .to_column_names_types();
+                    };
+
+                    let collection_id = self
+                        .catalog
+                        .get_collection_id_by_name(&self.database, schema_name)
+                        .await
+                        .ok_or_else(|| {
+                            Error::Plan(format!("Schema {:?} does not exist!", schema_name))
+                        })?;
+
+                    self.catalog
+                        .create_table(collection_id, table_name, sf_schema)
+                        .await;
 
                     Ok(Arc::new(EmptyExec::new(
                         false,
@@ -392,20 +406,18 @@ impl SeafowlContext {
             0 => Ok(Box::pin(EmptyRecordBatchStream::new(
                 physical_plan.schema(),
             ))),
-            1 => self.execute_stream_partitioned(physical_plan, 0).await,
+            1 => self.execute_stream_partitioned(&physical_plan, 0).await,
             _ => {
-                self.execute_stream_partitioned(
-                    Arc::new(CoalescePartitionsExec::new(physical_plan)),
-                    0,
-                )
-                .await
+                let plan: Arc<dyn ExecutionPlan> =
+                    Arc::new(CoalescePartitionsExec::new(physical_plan));
+                self.execute_stream_partitioned(&plan, 0).await
             }
         }
     }
 
     pub async fn execute_stream_partitioned(
         &self,
-        physical_plan: Arc<dyn ExecutionPlan>,
+        physical_plan: &Arc<dyn ExecutionPlan>,
         partition: usize,
     ) -> Result<SendableRecordBatchStream> {
         let task_context = Arc::new(TaskContext::from(self.inner()));
