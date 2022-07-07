@@ -132,3 +132,41 @@ impl UserDefinedLogicalNode for Update {
         todo!()
     }
 }
+
+#[derive(Debug)]
+pub struct Delete {
+    /// The table name (TODO: should this be a table ref?)
+    pub name: String,
+    /// WHERE clause
+    pub selection: Option<Expr>,
+}
+
+impl UserDefinedLogicalNode for Delete {
+    fn as_any(&self) -> &dyn Any {
+        todo!()
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        todo!()
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        todo!()
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        todo!()
+    }
+
+    fn fmt_for_explain(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        todo!()
+    }
+
+    fn from_template(
+        &self,
+        _exprs: &[Expr],
+        _inputs: &[LogicalPlan],
+    ) -> Arc<dyn UserDefinedLogicalNode> {
+        todo!()
+    }
+}

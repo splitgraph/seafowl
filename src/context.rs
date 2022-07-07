@@ -29,7 +29,11 @@ use datafusion::{
     sql::{parser::DFParser, planner::SqlToRel},
 };
 
-use crate::nodes::{Assignment, CreateTable, Insert, Update};
+use crate::{
+    data_types::{PhysicalRegion, PhysicalRegionColumn, TableRegion},
+    nodes::{Assignment, CreateTable, Delete, Insert, Update},
+    schema::Schema as SeafowlSchema,
+};
 
 // Copied from datafusion::sql::utils (private)
 
@@ -251,11 +255,23 @@ impl SeafowlContext {
                     }))
                 }
                 Statement::Delete {
-                    table_name: _,
-                    selection: _,
+                    table_name,
+                    selection,
                 } => {
                     // Same as Update but we just filter out the selection
-                    todo!()
+                    let table_schema: DFSchema = DFSchema::empty();
+
+                    let selection_expr = match selection {
+                        None => None,
+                        Some(expr) => Some(query_planner.sql_to_rex(expr, &table_schema, &mut HashMap::new())?),
+                    };
+
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(Delete {
+                            name: table_name.to_string(),
+                            selection: selection_expr,
+                        }),
+                    }))
                 }
                 _ => Err(Error::NotImplemented(format!(
                     "Unsupported SQL statement: {:?}",
