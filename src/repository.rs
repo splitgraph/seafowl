@@ -1,13 +1,20 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use futures::TryStreamExt;
-use sqlx::{Error, PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{
+    migrate::Migrator, postgres::PgPoolOptions, Error, Executor, PgPool, Postgres, QueryBuilder,
+    Row,
+};
 
 use crate::{
-    data_types::{CollectionId, DatabaseId, Table, TableId},
+    data_types::{CollectionId, DatabaseId, TableId},
     schema::Schema,
 };
 
-#[derive(sqlx::FromRow)]
+static MIGRATOR: Migrator = sqlx::migrate!();
+
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct AllDatabaseColumnsResult {
     pub collection_name: String,
     pub table_name: String,
@@ -22,6 +29,8 @@ pub struct AllDatabaseColumnsResult {
 
 #[async_trait]
 pub trait Repository: Send + Sync {
+    async fn setup(&self);
+
     async fn get_collections_in_database(
         &self,
         database_id: DatabaseId,
@@ -55,10 +64,50 @@ pub trait Repository: Send + Sync {
 
 pub struct PostgresRepository {
     executor: PgPool,
+    schema_name: String,
+}
+
+impl PostgresRepository {
+    pub async fn connect(dsn: String, schema_name: String) -> Result<Self, Error> {
+        let schema_name_2 = schema_name.clone();
+
+        let pool = PgPoolOptions::new()
+            .min_connections(1)
+            .max_connections(16)
+            .idle_timeout(Duration::from_millis(30000))
+            .test_before_acquire(true)
+            .after_connect(move |c| {
+                let schema_name = schema_name.to_owned();
+                Box::pin(async move {
+                    let query = format!("SET search_path TO {},public;", schema_name);
+                    c.execute(sqlx::query(&query)).await?;
+                    Ok(())
+                })
+            })
+            .connect(&dsn)
+            .await?;
+
+        Ok(Self {
+            executor: pool,
+            schema_name: schema_name_2,
+        })
+    }
 }
 
 #[async_trait]
 impl Repository for PostgresRepository {
+    async fn setup(&self) {
+        let query = format!("CREATE SCHEMA IF NOT EXISTS {};", &self.schema_name);
+        self.executor
+            .execute(sqlx::query(&query))
+            .await
+            .expect("error creating schema");
+
+        MIGRATOR
+            .run(&self.executor)
+            .await
+            .expect("error running migrations");
+    }
     async fn get_collections_in_database(
         &self,
         database_id: DatabaseId,
@@ -97,8 +146,8 @@ impl Repository for PostgresRepository {
         INNER JOIN "table" ON collection.id = "table".collection_id
         INNER JOIN latest_table_version ON "table".id = latest_table_version.table_id
         INNER JOIN table_column ON table_column.table_version_id = latest_table_version.id
-        INNER JOIN table_region ON table_region.table_version_id = latest_table_version.id
-        INNER JOIN physical_region ON physical_region.id = table_region.physical_region_id
+        LEFT JOIN table_region ON table_region.table_version_id = latest_table_version.id
+        LEFT JOIN physical_region ON physical_region.id = table_region.physical_region_id
         LEFT JOIN physical_region_column
             ON physical_region_column.physical_region_id = physical_region.id
             AND physical_region_column.name = table_column.name
@@ -214,4 +263,104 @@ impl Repository for PostgresRepository {
     // Create a table with regions
     // Append a region to a table
     // Replace / delete a region (in a copy?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{
+        DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
+    };
+    use rand::Rng;
+    use sqlx::migrate::MigrateDatabase;
+
+    use super::*;
+
+    // TODO use envvars or something
+    const DEV_DB_DSN: &str = "postgresql://sgr:password@localhost:7432/seafowl";
+
+    async fn create_db(dsn: &str) {
+        if !Postgres::database_exists(dsn).await.unwrap() {
+            let _ = Postgres::create_database(dsn).await;
+        }
+    }
+
+    async fn make_repository() -> PostgresRepository {
+        // Generate a random schema (taken from IOx)
+
+        let schema_name = {
+            let mut rng = rand::thread_rng();
+            (&mut rng)
+                .sample_iter(rand::distributions::Alphanumeric)
+                .filter(|c| c.is_ascii_alphabetic())
+                .take(20)
+                .map(char::from)
+                .collect::<String>()
+        };
+
+        // let dsn = std::env::var("DATABASE_URL").unwrap();
+        let dsn = DEV_DB_DSN;
+        create_db(dsn).await;
+
+        let repo = PostgresRepository::connect(dsn.to_string(), schema_name.clone())
+            .await
+            .expect("failed to connect to the db");
+
+        repo.executor
+            .execute(format!("CREATE SCHEMA {};", schema_name).as_str())
+            .await
+            .expect("failed to create test schema");
+
+        // Setup the schema
+        repo.setup().await;
+        repo
+    }
+
+    #[tokio::test]
+    async fn test_make_repository() {
+        let repository = make_repository().await;
+        assert_eq!(
+            repository
+                .get_collections_in_database(0)
+                .await
+                .expect("error getting collections"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_database_collection_table() {
+        let repository = make_repository().await;
+
+        let database_id = repository
+            .create_database("testdb")
+            .await
+            .expect("Error creating database");
+        let collection_id = repository
+            .create_collection(database_id, "testcol")
+            .await
+            .expect("Error creating collection");
+
+        let arrow_schema = ArrowSchema::new(vec![
+            ArrowField::new("date", ArrowDataType::Date64, false),
+            ArrowField::new("value", ArrowDataType::Float64, false),
+        ]);
+        let schema = Schema {
+            arrow_schema: Arc::new(arrow_schema),
+        };
+
+        let table_id = repository
+            .create_table(collection_id, "testtable", schema)
+            .await
+            .expect("Error creating table");
+        dbg!(table_id);
+
+        // Test loading all columns
+        let all_columns = repository
+            .get_all_columns_in_database(database_id)
+            .await
+            .expect("Error getting all columns");
+        assert_eq!(all_columns, Vec::<AllDatabaseColumnsResult>::new());
+    }
 }

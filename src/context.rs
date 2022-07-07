@@ -31,7 +31,7 @@ use datafusion::{
 
 use crate::{
     catalog::Catalog,
-    data_types::{PhysicalRegion, PhysicalRegionColumn, TableRegion},
+    data_types::{PhysicalRegion, PhysicalRegionColumn},
     nodes::{Assignment, CreateTable, Delete, Insert, Update},
     schema::Schema as SeafowlSchema,
 };
