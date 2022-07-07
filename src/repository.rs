@@ -31,6 +31,14 @@ pub trait Repository: Send + Sync {
         database_id: DatabaseId,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
+    async fn create_database(mut self, database_name: &String) -> Result<DatabaseId, Error>;
+
+    async fn create_collection(
+        mut self,
+        database_id: DatabaseId,
+        collection_name: &String,
+    ) -> Result<CollectionId, Error>;
+
     async fn create_table(
         mut self,
         collection_id: CollectionId,
@@ -97,6 +105,40 @@ impl Repository for PostgresRepository {
         .await?;
         Ok(columns)
     }
+
+    async fn create_database(mut self, database_name: &String) -> Result<DatabaseId, Error> {
+        let id = sqlx::query!(
+            r#"
+        INSERT INTO database (name) VALUES ($1) RETURNING (id)
+        "#,
+            database_name
+        )
+        .fetch_one(&self.executor)
+        .await?
+        .id;
+
+        Ok(id)
+    }
+
+    async fn create_collection(
+        mut self,
+        database_id: DatabaseId,
+        collection_name: &String,
+    ) -> Result<CollectionId, Error> {
+        let id = sqlx::query!(
+            r#"
+        INSERT INTO "collection" (database_id, name) VALUES ($1, $2) RETURNING (id)
+        "#,
+            database_id,
+            collection_name
+        )
+        .fetch_one(&self.executor)
+        .await?
+        .id;
+
+        Ok(id)
+    }
+
     async fn create_table(
         mut self,
         collection_id: CollectionId,
