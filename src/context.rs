@@ -177,6 +177,7 @@ struct SeafowlContext {
     inner: SessionContext,
     catalog: Arc<dyn Catalog>,
     database: String,
+    database_id: DatabaseId,
 }
 
 /// Create an ExecutionPlan that doesn't produce any results.
@@ -350,15 +351,28 @@ impl SeafowlContext {
                 // We're not supposed to reach this since we filtered it out above
                 panic!("No plan for CreateExternalTable");
             }
-            LogicalPlan::CreateCatalogSchema(_) => {
+            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
+                schema_name,
+                if_not_exists: _,
+                schema: _,
+            }) => {
                 // CREATE SCHEMA
                 // Create a schema and register it
+                self.catalog
+                    .create_collection(self.database_id, &schema_name)
+                    .await;
                 Ok(make_dummy_exec())
             }
-            LogicalPlan::CreateCatalog(_) => {
+            LogicalPlan::CreateCatalog(CreateCatalog {
+                catalog_name,
+                if_not_exists: _,
+                schema: _,
+            }) => {
                 // CREATE DATABASE
+                self.catalog.create_database(&catalog_name).await;
                 Ok(make_dummy_exec())
             }
+            // TODO DROP TABLE / DATABASE / SCHEMA
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name: _,
                 input,
