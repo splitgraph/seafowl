@@ -1,12 +1,14 @@
 // DataFusion bindings
 
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 use hashbrown::HashMap;
+use object_store::{local::LocalFileSystem, path::Path, ObjectStore};
 use sqlparser::ast::{
     ColumnDef as SQLColumnDef, ColumnOption, DataType as SQLDataType, Ident, Statement,
     TableFactor, TableWithJoins,
 };
+use std::path::Path as OSPath;
 use std::sync::Arc;
 
 pub use datafusion::error::{DataFusionError as Error, Result};
@@ -18,12 +20,17 @@ use datafusion::{
         },
         record_batch::RecordBatch,
     },
+    datasource::file_format::{parquet::ParquetFormat, FileFormat},
     error::DataFusionError,
     execution::context::TaskContext,
-    logical_plan::{plan::Extension, Column, CreateMemoryTable, DFSchema, LogicalPlan, ToDFSchema},
+    logical_plan::{
+        plan::Extension, Column, CreateCatalog, CreateCatalogSchema, CreateMemoryTable, DFSchema,
+        LogicalPlan, ToDFSchema,
+    },
+    parquet::{arrow::ArrowWriter, file::properties::WriterProperties},
     physical_plan::{
         coalesce_partitions::CoalescePartitionsExec, empty::EmptyExec, EmptyRecordBatchStream,
-        ExecutionPlan, SendableRecordBatchStream,
+        ExecutionPlan, SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
     sql::{parser::DFParser, planner::SqlToRel, TableReference},
@@ -31,7 +38,7 @@ use datafusion::{
 
 use crate::{
     catalog::Catalog,
-    data_types::{PhysicalRegion, PhysicalRegionColumn},
+    data_types::{DatabaseId, PhysicalRegion, PhysicalRegionColumn},
     nodes::{Assignment, CreateTable, Delete, Insert, Update},
     schema::Schema as SeafowlSchema,
 };
@@ -129,6 +136,41 @@ fn compound_identifier_to_column(ids: &[Ident]) -> Result<Column> {
             var_names,
         ))),
     }
+}
+
+/// Load the Statistics for a Parquet file at a certain path
+async fn get_parquet_file_statistics(path: &OSPath, schema: SchemaRef) -> Result<Statistics> {
+    // DataFusion's methods for this are all private (see fetch_statistics / summarize_min_max)
+    // and require the ObjectStore abstraction since they are normally used in the context
+    // of a TableProvider sending a Range request to object storage to get min/max values
+    // for a Parquet file. We are currently interested in getting statistics for a temporary
+    // file we just wrote out, before uploading it to object storage.
+
+    // A more fancy way to get this working would be making an ObjectStore
+    // that serves as a write-through cache so that we can use it both when downloading and uploading
+    // Parquet files.
+    let directory = path
+        .parent()
+        .expect("Temporary object store path is a directory / root");
+    let file_name = path
+        .file_name()
+        .expect("Temporary object store path is a root")
+        .to_str()
+        .expect("Temporary object path isn't Unicode");
+
+    // Create a dummy object store pointing to our temporary directory (we don't know if
+    // DiskManager will always put all files in the same dir)
+    let dummy_object_store: Arc<dyn ObjectStore> =
+        Arc::from(LocalFileSystem::new_with_prefix(directory).expect("creating object store"));
+    let parquet = ParquetFormat::default();
+    let meta = dummy_object_store
+        .head(&Path::from(file_name))
+        .await
+        .expect("Temporary object not found");
+    let stats = parquet
+        .infer_stats(&dummy_object_store, schema, &meta)
+        .await?;
+    Ok(stats)
 }
 
 struct SeafowlContext {
