@@ -378,26 +378,52 @@ impl SeafowlContext {
                 //     - write out: physical_region_column, physical_region (get id)
                 //     - make a table_region entry; attach to existing version
 
-                for partition_id in 0..physical.output_partitioning().partition_count() {
-                    let _batch = self
-                        .execute_stream_partitioned(&physical, partition_id)
-                        .await?;
+                // Execute the plan and write it out to temporary Parquet files.
+                let disk_manager = &self.inner.runtime_env().disk_manager;
 
-                    // TODO grab something from plan_to_parquet
-                    let _reg = PhysicalRegion {
-                        id: todo!(),
-                        row_count: todo!(),
-                        object_storage_id: todo!(),
-                    };
-                    let _col = PhysicalRegionColumn {
-                        id: todo!(),
-                        physical_region_id: todo!(),
-                        name: todo!(),
-                        r#type: todo!(),
-                        min_value: todo!(),
-                        max_value: todo!(),
-                    };
+                let writer_properties = WriterProperties::builder().build();
+
+                // This is partially taken from DataFusion's plan_to_parquet.
+
+                let mut tasks = vec![];
+                for i in 0..physical.output_partitioning().partition_count() {
+                    let physical = physical.clone();
+                    let partition_file = disk_manager.create_tmp_file()?;
+
+                    let mut writer = ArrowWriter::try_new(
+                        partition_file,
+                        physical.schema(),
+                        Some(writer_properties.clone()),
+                    )?;
+                    let task_ctx = Arc::new(TaskContext::from(&self.inner.state()));
+                    let stream = physical.execute(i, task_ctx)?;
+                    let handle: tokio::task::JoinHandle<Result<()>> =
+                        tokio::task::spawn(async move {
+                            stream
+                                .map(|batch| writer.write(&batch?))
+                                .try_collect()
+                                .await
+                                .map_err(DataFusionError::from)?;
+                            writer.close().map_err(DataFusionError::from).map(|_| ())
+                        });
+                    tasks.push(handle);
                 }
+                futures::future::join_all(tasks).await;
+
+                // TODO grab something from plan_to_parquet
+                let _reg = PhysicalRegion {
+                    id: todo!(),
+                    row_count: todo!(),
+                    object_storage_id: todo!(),
+                };
+                let _col = PhysicalRegionColumn {
+                    id: todo!(),
+                    physical_region_id: todo!(),
+                    name: todo!(),
+                    r#type: todo!(),
+                    min_value: todo!(),
+                    max_value: todo!(),
+                };
 
                 Ok(make_dummy_exec())
             }
