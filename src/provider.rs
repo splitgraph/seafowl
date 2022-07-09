@@ -26,7 +26,7 @@ use futures::future;
 
 use object_store::path::Path;
 
-use url::Url;
+
 
 use crate::{catalog::Catalog, data_types::TableVersionId, schema::Schema};
 
@@ -101,16 +101,6 @@ pub struct SeafowlTable {
     pub catalog: Arc<dyn Catalog>,
 }
 
-pub struct UrlWrapper {
-    pub url: Url,
-}
-
-impl AsRef<Url> for UrlWrapper {
-    fn as_ref(&self) -> &Url {
-        &self.url
-    }
-}
-
 #[async_trait]
 impl TableProvider for SeafowlTable {
     fn as_any(&self) -> &dyn Any {
@@ -134,12 +124,14 @@ impl TableProvider for SeafowlTable {
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let regions = self.catalog.load_table_regions(self.table_version_id).await;
 
-        // This is partially taken from ListingTable.
-        let _region_path = regions.get(0).unwrap().object_storage_id.to_string();
-        // let url = Url::parse(&region_path).expect("URL parsing error");
-        let url = Url::parse("seafowl:///").expect("URL parsing error");
-        let store = ctx.runtime_env.object_store(UrlWrapper { url })?;
+        // This code is partially taken from ListingTable but adapted to use an arbitrary
+        // list of Parquet URLs rather than all files in a given directory.
 
+        // Get our object store (with a hardcoded schema)
+        let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
+        let store = ctx.runtime_env.object_store(object_store_url.clone())?;
+
+        // Build a list of lists of PartitionedFile groups (one file = one partition for the scan)
         // TODO: use filters and apply them to regions here (grab the code from list_files_for_scan)
         let partitioned_file_lists: Vec<Vec<PartitionedFile>> =
             future::try_join_all(regions.iter().map(|r| async {
@@ -155,12 +147,12 @@ impl TableProvider for SeafowlTable {
             .expect("general error with partitioned file lists");
 
         let config = FileScanConfig {
-            object_store_url: ObjectStoreUrl::parse("seafowl://").expect("TODO parse error"),
+            object_store_url,
             file_schema: self.schema(),
             file_groups: partitioned_file_lists,
             statistics: Statistics::default(),
             projection: projection.clone(),
-            limit: limit,
+            limit,
             table_partition_cols: vec![],
         };
 
