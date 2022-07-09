@@ -10,21 +10,34 @@ use crate::{
     schema::Schema,
 };
 
+// TODO: this trait is basically a wrapper around Repository, apart from the custom logic
+// for converting rows of database / region results into SeafowlDatabase/Region structs;
+// merge the two? Will a different database than PG still use the AllDatabaseColumnsResult /
+// AllTableRegionsResult structs?
 #[async_trait]
 pub trait Catalog: Sync + Send {
     async fn load_database(&self, id: DatabaseId) -> SeafowlDatabase;
-    async fn create_table(
-        &self,
-        collection_id: CollectionId,
-        table_name: &str,
-        schema: Schema,
-    ) -> TableId;
     async fn load_table_regions(&self, table_version_id: TableVersionId) -> Vec<SeafowlRegion>;
     async fn get_collection_id_by_name(
         &self,
         database_name: &str,
         collection_name: &str,
     ) -> Option<CollectionId>;
+
+    async fn create_database(&self, database_name: &str) -> DatabaseId;
+
+    async fn create_collection(
+        &self,
+        database_id: DatabaseId,
+        collection_name: &str,
+    ) -> CollectionId;
+
+    async fn create_table(
+        &self,
+        collection_id: CollectionId,
+        table_name: &str,
+        schema: Schema,
+    ) -> TableId;
 }
 
 #[derive(Clone)]
@@ -182,5 +195,23 @@ impl Catalog for PostgresCatalog {
             Err(sqlx::error::Error::RowNotFound) => None,
             Err(e) => panic!("TODO SQL error: {:?}", e),
         }
+    }
+
+    async fn create_database(&self, database_name: &str) -> DatabaseId {
+        self.repository
+            .create_database(database_name)
+            .await
+            .expect("TODO create database error")
+    }
+
+    async fn create_collection(
+        &self,
+        database_id: DatabaseId,
+        collection_name: &str,
+    ) -> CollectionId {
+        self.repository
+            .create_collection(database_id, collection_name)
+            .await
+            .expect("TODO create collection error")
     }
 }

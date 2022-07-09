@@ -305,6 +305,18 @@ mod tests {
             }
             Some(1)
         }
+
+        async fn create_database(&self, _database_name: &str) -> DatabaseId {
+            1
+        }
+
+        async fn create_collection(
+            &self,
+            _database_id: DatabaseId,
+            _collection_name: &str,
+        ) -> CollectionId {
+            1
+        }
     }
 
     #[tokio::test]
