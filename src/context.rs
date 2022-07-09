@@ -435,49 +435,56 @@ impl SeafowlContext {
                 // Execute the plan and write it out to temporary Parquet files.
                 let disk_manager = &self.inner.runtime_env().disk_manager;
 
-                let writer_properties = WriterProperties::builder().build();
-
                 // This is partially taken from DataFusion's plan_to_parquet.
 
                 let mut tasks = vec![];
                 for i in 0..physical.output_partitioning().partition_count() {
                     let physical = physical.clone();
-                    let partition_file = disk_manager.create_tmp_file()?;
+                    let task_ctx = Arc::new(TaskContext::from(&self.inner.state()));
 
+                    let partition_file = disk_manager.create_tmp_file()?;
+                    let partition_file_path = partition_file.path().to_owned();
+
+                    let writer_properties = WriterProperties::builder().build();
                     let mut writer = ArrowWriter::try_new(
                         partition_file,
                         physical.schema(),
                         Some(writer_properties.clone()),
                     )?;
-                    let task_ctx = Arc::new(TaskContext::from(&self.inner.state()));
                     let stream = physical.execute(i, task_ctx)?;
-                    let handle: tokio::task::JoinHandle<Result<()>> =
-                        tokio::task::spawn(async move {
-                            stream
-                                .map(|batch| writer.write(&batch?))
-                                .try_collect()
-                                .await
-                                .map_err(DataFusionError::from)?;
-                            writer.close().map_err(DataFusionError::from).map(|_| ())
-                        });
+
+                    let handle: tokio::task::JoinHandle<
+                        Result<(Vec<PhysicalRegionColumn>, PhysicalRegion)>,
+                    > = tokio::task::spawn(async move {
+                        stream
+                            .map(|batch| writer.write(&batch?))
+                            .try_collect()
+                            .await
+                            .map_err(DataFusionError::from)?;
+                        writer.close().map_err(DataFusionError::from).map(|_| ())?;
+
+                        // Index the Parquet file (get its min-max values)
+                        let region_stats =
+                            get_parquet_file_statistics(&partition_file_path, physical.schema())
+                                .await?;
+
+                        let columns = build_region_columns(&region_stats, physical.schema());
+
+                        let region = PhysicalRegion {
+                            id: 0,
+                            object_storage_id: "".to_string(),
+                            row_count: region_stats
+                                .num_rows
+                                .expect("Error counting rows in the written file")
+                                .try_into()
+                                .expect("row count greater than 2147483647"),
+                        };
+
+                        Ok((columns, region))
+                    });
                     tasks.push(handle);
                 }
-                futures::future::join_all(tasks).await;
-
-                // TODO grab something from plan_to_parquet
-                let _reg = PhysicalRegion {
-                    id: todo!(),
-                    row_count: todo!(),
-                    object_storage_id: todo!(),
-                };
-                let _col = PhysicalRegionColumn {
-                    id: todo!(),
-                    physical_region_id: todo!(),
-                    name: todo!(),
-                    r#type: todo!(),
-                    min_value: todo!(),
-                    max_value: todo!(),
-                };
+                let _regions = futures::future::join_all(tasks).await;
 
                 Ok(make_dummy_exec())
             }
