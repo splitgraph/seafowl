@@ -8,8 +8,8 @@ use sqlparser::ast::{
     ColumnDef as SQLColumnDef, ColumnOption, DataType as SQLDataType, Ident, Statement,
     TableFactor, TableWithJoins,
 };
-use std::path::Path as OSPath;
 use std::sync::Arc;
+use std::{iter::zip, path::Path as OSPath};
 
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::{
@@ -171,6 +171,46 @@ async fn get_parquet_file_statistics(path: &OSPath, schema: SchemaRef) -> Result
         .infer_stats(&dummy_object_store, schema, &meta)
         .await?;
     Ok(stats)
+}
+
+/// Serialize data for the physical region index from Parquet file statistics
+fn build_region_columns(region_stats: &Statistics, schema: SchemaRef) -> Vec<PhysicalRegionColumn> {
+    // TODO PhysicalRegionColumn might not be the right data structure here (lacks ID etc)
+    match &region_stats.column_statistics {
+        Some(column_statistics) => zip(column_statistics, schema.fields())
+            .map(|(stats, column)| {
+                let min_value = stats
+                    .min_value
+                    .as_ref()
+                    .map(|m| m.to_string().as_bytes().into());
+                let max_value = stats
+                    .max_value
+                    .as_ref()
+                    .map(|m| m.to_string().as_bytes().into());
+
+                PhysicalRegionColumn {
+                    id: 0,
+                    physical_region_id: 0,
+                    name: column.name().to_string(),
+                    r#type: column.data_type().to_json().to_string(),
+                    min_value,
+                    max_value,
+                }
+            })
+            .collect(),
+        None => schema
+            .fields()
+            .iter()
+            .map(|column| PhysicalRegionColumn {
+                id: 0,
+                physical_region_id: 0,
+                name: column.name().to_string(),
+                r#type: column.data_type().to_json().to_string(),
+                min_value: None,
+                max_value: None,
+            })
+            .collect(),
+    }
 }
 
 struct SeafowlContext {
