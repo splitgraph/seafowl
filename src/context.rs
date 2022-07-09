@@ -137,12 +137,19 @@ struct SeafowlContext {
     database: String,
 }
 
+/// Create an ExecutionPlan that doesn't produce any results.
+/// This is used for queries that are actually run before we produce the plan,
+/// since they have to manipulate catalog metadata or use async to write to it.
+fn make_dummy_exec() -> Arc<dyn ExecutionPlan> {
+    Arc::new(EmptyExec::new(false, SchemaRef::new(Schema::empty())))
+}
+
 impl SeafowlContext {
     pub fn inner(&self) -> &SessionContext {
         &self.inner
     }
 
-    pub async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
+    pub async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
         let mut statements = DFParser::parse_sql(sql)?;
 
         if statements.len() != 1 {
@@ -154,7 +161,7 @@ impl SeafowlContext {
         let state = self.inner.state.read().clone();
         let query_planner = SqlToRel::new(&state);
 
-        let logical_plan = match statements.pop_front().unwrap() {
+        match statements.pop_front().unwrap() {
             datafusion::sql::parser::Statement::Statement(s) => match *s {
                 // Delegate SELECT / EXPLAIN to the basic DataFusion logical planner
                 // (though note EXPLAIN [our custom query] will mean we have to implement EXPLAIN ourselves)
@@ -219,9 +226,6 @@ impl SeafowlContext {
                             input: Arc::new(plan),
                         }),
                     }))
-                    // Add a new partition to the table
-                    // Index the partitions
-                    // Create a new table version
                 }
                 Statement::Update {
                     table: TableWithJoins {relation: TableFactor::Table { name, alias: None, args: None, with_hints }, joins },
@@ -291,7 +295,11 @@ impl SeafowlContext {
                     sql
                 )))
             }
-        }?;
+        }
+    }
+
+    pub async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
+        let logical_plan = self.create_logical_plan(sql).await?;
 
         // Similarly to DataFrame::sql, run certain logical plans outside of the actual execution flow
         // and produce a dummy physical plan instead
@@ -303,38 +311,61 @@ impl SeafowlContext {
             LogicalPlan::CreateCatalogSchema(_) => {
                 // CREATE SCHEMA
                 // Create a schema and register it
-                Ok(Arc::new(EmptyExec::new(
-                    false,
-                    SchemaRef::new(Schema::empty()),
-                )))
+                Ok(make_dummy_exec())
             }
             LogicalPlan::CreateCatalog(_) => {
                 // CREATE DATABASE
-                Ok(Arc::new(EmptyExec::new(
-                    false,
-                    SchemaRef::new(Schema::empty()),
-                )))
+                Ok(make_dummy_exec())
             }
-            LogicalPlan::CreateMemoryTable(_) => {
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                name: _,
+                input,
+                if_not_exists: _,
+                or_replace: _,
+            }) => {
                 // This is actually CREATE TABLE AS
-                Ok(Arc::new(EmptyExec::new(
-                    false,
-                    SchemaRef::new(Schema::empty()),
-                )))
+                let physical = self.create_physical_plan(&input).await?;
+
+                // TODO:
+                //   - create a new table; get the table version ID
+                //   - execute the physical plan
+                //   - for each resulting partition:
+                //     - write out to parquet
+                //     - index (min-max values)
+                //     - upload
+                //     - write out: physical_region_column, physical_region (get id)
+                //     - make a table_region entry; attach to existing version
+
+                for partition_id in 0..physical.output_partitioning().partition_count() {
+                    let _batch = self
+                        .execute_stream_partitioned(&physical, partition_id)
+                        .await?;
+
+                    // TODO grab something from plan_to_parquet
+                    let _reg = PhysicalRegion {
+                        id: todo!(),
+                        row_count: todo!(),
+                        object_storage_id: todo!(),
+                    };
+                    let _col = PhysicalRegionColumn {
+                        id: todo!(),
+                        physical_region_id: todo!(),
+                        name: todo!(),
+                        r#type: todo!(),
+                        min_value: todo!(),
+                        max_value: todo!(),
+                    };
+                }
+
+                Ok(make_dummy_exec())
             }
             LogicalPlan::DropTable(_) => {
                 // DROP TABLE
-                Ok(Arc::new(EmptyExec::new(
-                    false,
-                    SchemaRef::new(Schema::empty()),
-                )))
+                Ok(make_dummy_exec())
             }
             LogicalPlan::CreateView(_) => {
                 // CREATE VIEW
-                Ok(Arc::new(EmptyExec::new(
-                    false,
-                    SchemaRef::new(Schema::empty()),
-                )))
+                Ok(make_dummy_exec())
             }
             LogicalPlan::Extension(Extension { ref node }) => {
                 // Other custom nodes we made like CREATE TABLE/INSERT/UPDATE/DELETE/ALTER
@@ -343,7 +374,7 @@ impl SeafowlContext {
                 if let Some(CreateTable {
                     schema,
                     name,
-                    if_not_exists,
+                    if_not_exists: _,
                 }) = any.downcast_ref::<CreateTable>()
                 {
                     let table_ref = TableReference::from(name.as_str());
@@ -375,10 +406,75 @@ impl SeafowlContext {
                         .create_table(collection_id, table_name, sf_schema)
                         .await;
 
-                    Ok(Arc::new(EmptyExec::new(
-                        false,
-                        SchemaRef::new(Schema::empty()),
-                    )))
+                    Ok(make_dummy_exec())
+                } else if let Some(Insert {
+                    name: _,
+                    columns: _,
+                    input: _,
+                }) = any.downcast_ref::<Insert>()
+                {
+                    // Duplicate the existing latest version into a new table
+                    // (new table_version, same columns, same table_region)
+                    // Proceed as in CREATE TABLE AS
+                    Ok(make_dummy_exec())
+                } else if let Some(Update {
+                    name: _,
+                    selection: _,
+                    assignments: _,
+                }) = any.downcast_ref::<Update>()
+                {
+                    // Some kind of a node that combines Filter + Projection?
+                    //
+                    //
+                    //
+                    //    Union
+                    //     |  |
+                    // Filter Projection
+                    //    |    |
+                    //    |   Filter
+                    //    |    |
+                    // TableScan
+
+                    // Pass an "initial partition id" in the batch (or ask our TableScan for what each
+                    // partition is pointing to)
+                    //
+                    // If a partition is missing: it stayed the same
+                    // If a partition didn't change (the filter didn't match anything): it stayed the same
+                    //    - but how do we find that out? we need to read through the whole partition to
+                    //      make sure nothing get updated, so that means we need to buffer the result
+                    //      on disk; could we just hash it at the end to see if it changed?
+                    // If a partition is empty: delete it
+                    //
+                    // So:
+                    //
+                    //   - do a scan through Case (projection) around TableScan (with the filter)
+                    //   - for each output partition:
+                    //     - gather it in a temporary file and hash it
+                    //     - find out from the ExecutionPlan which original file it belonged to
+                    //     - if it's the same: do nothing
+                    //     - if it's changed: replace that table version object; upload it
+                    //     - files corresponding to partitions that never got output won't get updated
+                    //
+                    // This also assumes one Parquet file <> one partition
+
+                    // - Duplicate the table (new version)
+                    // - replace regions that are changed (but we don't know the table_region i.e. which entry to
+                    // repoint to our new region)?
+                    Ok(make_dummy_exec())
+                } else if let Some(Delete {
+                    name: _,
+                    selection: _,
+                }) = any.downcast_ref::<Delete>()
+                {
+                    // - Duplicate the table (new version)
+                    // - Similar to UPDATE, but just a filter
+
+                    // upload new files
+                    // replace regions (sometimes we delete them)
+
+                    // really we want to be able to load all regions + cols for a table and then
+                    // write that thing back to the db (set table regions)
+                    Ok(make_dummy_exec())
                 } else {
                     self.inner.create_physical_plan(&logical_plan).await
                 }

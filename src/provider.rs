@@ -26,8 +26,6 @@ use futures::future;
 
 use object_store::path::Path;
 
-
-
 use crate::{catalog::Catalog, data_types::TableVersionId, schema::Schema};
 
 pub struct SeafowlDatabase {
