@@ -8,7 +8,7 @@ use sqlx::{
 };
 
 use crate::{
-    data_types::{CollectionId, DatabaseId, TableId},
+    data_types::{CollectionId, DatabaseId, TableId, TableVersionId},
     schema::Schema,
 };
 
@@ -18,10 +18,17 @@ static MIGRATOR: Migrator = sqlx::migrate!();
 pub struct AllDatabaseColumnsResult {
     pub collection_name: String,
     pub table_name: String,
+    pub table_version_id: TableVersionId,
     pub column_name: String,
     pub column_type: String,
+}
+
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
+pub struct AllTableRegionsResult {
     pub table_region_id: i64,
     pub object_storage_id: String,
+    pub column_name: String,
+    pub column_type: String,
     pub row_count: i32,
     pub min_value: Option<Vec<u8>>,
     pub max_value: Option<Vec<u8>>,
@@ -35,10 +42,16 @@ pub trait Repository: Send + Sync {
         &self,
         database_id: DatabaseId,
     ) -> Result<Vec<String>, Error>;
+
     async fn get_all_columns_in_database(
         &self,
         database_id: DatabaseId,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
+
+    async fn get_all_regions_in_table(
+        &self,
+        table_version_id: TableVersionId,
+    ) -> Result<Vec<AllTableRegionsResult>, Error>;
 
     async fn get_collection_id_by_name(
         &self,
@@ -135,30 +148,49 @@ impl Repository for PostgresRepository {
         SELECT
             collection.name AS collection_name,
             "table".name AS table_name,
+            latest_table_version.id AS table_version_id,
             table_column.name AS column_name,
-            table_column.type AS column_type,
-            physical_region.id AS table_region_id,
-            physical_region.object_storage_id,
-            physical_region.row_count,
-            physical_region_column.min_value,
-            physical_region_column.max_value
+            table_column.type AS column_type
         FROM collection
         INNER JOIN "table" ON collection.id = "table".collection_id
         INNER JOIN latest_table_version ON "table".id = latest_table_version.table_id
         INNER JOIN table_column ON table_column.table_version_id = latest_table_version.id
         LEFT JOIN table_region ON table_region.table_version_id = latest_table_version.id
-        LEFT JOIN physical_region ON physical_region.id = table_region.physical_region_id
-        LEFT JOIN physical_region_column
-            ON physical_region_column.physical_region_id = physical_region.id
-            AND physical_region_column.name = table_column.name
         WHERE collection.database_id = $1
-        ORDER BY collection_name, table_name, table_region_id
+        ORDER BY collection_name, table_name
         "#,
             database_id
         )
         .fetch_all(&self.executor)
         .await?;
         Ok(columns)
+    }
+
+    async fn get_all_regions_in_table(
+        &self,
+        table_version_id: TableVersionId,
+    ) -> Result<Vec<AllTableRegionsResult>, Error> {
+        let regions = sqlx::query_as!(
+            AllTableRegionsResult,
+            r#"SELECT
+            physical_region.id AS table_region_id,
+            physical_region.object_storage_id,
+            physical_region.row_count,
+            physical_region_column.name AS column_name,
+            physical_region_column.type AS column_type,
+            physical_region_column.min_value,
+            physical_region_column.max_value
+        FROM table_region
+        INNER JOIN physical_region ON physical_region.id = table_region.physical_region_id
+        LEFT JOIN physical_region_column ON physical_region_column.physical_region_id = physical_region.id
+        WHERE table_region.table_version_id = $1
+        ORDER BY table_region_id
+        "#,
+            table_version_id
+        )
+        .fetch_all(&self.executor)
+        .await?;
+        Ok(regions)
     }
 
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error> {
@@ -357,10 +389,11 @@ mod tests {
         dbg!(table_id);
 
         // Test loading all columns
+
         let all_columns = repository
             .get_all_columns_in_database(database_id)
             .await
             .expect("Error getting all columns");
-        assert_eq!(all_columns, Vec::<AllDatabaseColumnsResult>::new());
+        assert_eq!(all_columns, [AllDatabaseColumnsResult { collection_name: "testcol".to_string(), table_name: "testtable".to_string(), table_version_id: 1, column_name: "date".to_string(), column_type: "{\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"},\"children\":[]}".to_string() }, AllDatabaseColumnsResult { collection_name: "testcol".to_string(), table_name: "testtable".to_string(), table_version_id: 1, column_name: "value".to_string(), column_type: "{\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"},\"children\":[]}".to_string() }]);
     }
 }

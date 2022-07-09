@@ -4,14 +4,14 @@ use async_trait::async_trait;
 use itertools::Itertools;
 
 use crate::{
-    data_types::{CollectionId, DatabaseId, TableId},
+    data_types::{CollectionId, DatabaseId, TableId, TableVersionId},
     provider::{RegionColumn, SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable},
-    repository::{AllDatabaseColumnsResult, PostgresRepository, Repository},
+    repository::{AllDatabaseColumnsResult, AllTableRegionsResult, PostgresRepository, Repository},
     schema::Schema,
 };
 
 #[async_trait]
-pub trait Catalog {
+pub trait Catalog: Sync + Send {
     async fn load_database(&self, id: DatabaseId) -> SeafowlDatabase;
     async fn create_table(
         &self,
@@ -19,6 +19,7 @@ pub trait Catalog {
         table_name: &str,
         schema: Schema,
     ) -> TableId;
+    async fn load_table_regions(&self, table_version_id: TableVersionId) -> Vec<SeafowlRegion>;
     async fn get_collection_id_by_name(
         &self,
         database_name: &str,
@@ -26,14 +27,15 @@ pub trait Catalog {
     ) -> Option<CollectionId>;
 }
 
+#[derive(Clone)]
 pub struct PostgresCatalog {
-    repository: PostgresRepository,
+    repository: Arc<PostgresRepository>,
 }
 
 impl PostgresCatalog {
     fn build_region<'a, I>(&self, region_columns: I) -> SeafowlRegion
     where
-        I: Iterator<Item = &'a &'a AllDatabaseColumnsResult>,
+        I: Iterator<Item = &'a AllTableRegionsResult>,
     {
         let mut iter = region_columns.peekable();
 
@@ -68,22 +70,22 @@ impl PostgresCatalog {
         // collect all columns into a vector.
         let table_columns_vec = table_columns.collect_vec();
 
+        // Recover the table version ID (this is going to be the same for all columns).
+        // TODO: if the table has no columns, the result set will be empty, so we use a fake version ID.
+        let table_version_id = table_columns_vec
+            .get(0)
+            .map_or_else(|| 0, |v| v.table_version_id);
+
         let table = SeafowlTable {
             name: Arc::from(table_name.to_string()),
+            table_version_id,
             schema: Arc::new(Schema::from_column_names_types(
                 table_columns_vec
                     .iter()
-                    .map(|col| (&col.column_name, &col.column_type))
-                    .dedup(),
+                    .map(|col| (&col.column_name, &col.column_type)),
             )),
-            regions: Arc::new(
-                table_columns_vec
-                    .iter()
-                    .group_by(|col| col.table_region_id)
-                    .into_iter()
-                    .map(|(_, r)| self.build_region(r))
-                    .collect(),
-            ),
+
+            catalog: Arc::new(self.clone()),
         };
 
         (Arc::from(table_name.to_string()), Arc::new(table))
@@ -138,6 +140,20 @@ impl Catalog for PostgresCatalog {
             name: Arc::from("database"),
             collections,
         }
+    }
+
+    async fn load_table_regions(&self, table_version_id: TableVersionId) -> Vec<SeafowlRegion> {
+        let all_regions = self
+            .repository
+            .get_all_regions_in_table(table_version_id)
+            .await
+            .expect("TODO db load error");
+        all_regions
+            .iter()
+            .group_by(|col| col.table_region_id)
+            .into_iter()
+            .map(|(_, cs)| self.build_region(cs))
+            .collect()
     }
 
     async fn create_table(

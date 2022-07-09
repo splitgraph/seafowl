@@ -28,7 +28,7 @@ use object_store::path::Path;
 
 use url::Url;
 
-use crate::schema::Schema;
+use crate::{catalog::Catalog, data_types::TableVersionId, schema::Schema};
 
 pub struct SeafowlDatabase {
     pub name: Arc<str>,
@@ -90,7 +90,15 @@ pub struct RegionColumn {
 pub struct SeafowlTable {
     pub name: Arc<str>,
     pub schema: Arc<Schema>,
-    pub regions: Arc<Vec<SeafowlRegion>>,
+    pub table_version_id: TableVersionId,
+
+    // We have to keep a reference to the original catalog here. This is
+    // because we need it to load the regions for a given table at query plan
+    // time (instead of loading the regions for _all_ tables in the database
+    // when we build the DataFusion CatalogProvider). But we can't actually
+    // load the regions somewhere in the SchemaProvider because none of the functions
+    // there are async.
+    pub catalog: Arc<dyn Catalog>,
 }
 
 pub struct UrlWrapper {
@@ -124,17 +132,17 @@ impl TableProvider for SeafowlTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+        let regions = self.catalog.load_table_regions(self.table_version_id).await;
+
         // This is partially taken from ListingTable.
-        let _region_path = self.regions.get(0).unwrap().object_storage_id.to_string();
+        let _region_path = regions.get(0).unwrap().object_storage_id.to_string();
         // let url = Url::parse(&region_path).expect("URL parsing error");
         let url = Url::parse("seafowl:///").expect("URL parsing error");
         let store = ctx.runtime_env.object_store(UrlWrapper { url })?;
 
-        // TODO: we can load the regions dynamically here, since we're async
-
         // TODO: use filters and apply them to regions here (grab the code from list_files_for_scan)
         let partitioned_file_lists: Vec<Vec<PartitionedFile>> =
-            future::try_join_all(self.regions.iter().map(|r| async {
+            future::try_join_all(regions.iter().map(|r| async {
                 let path = Path::parse(&r.object_storage_id)?;
                 let meta = store.head(&path).await?;
                 Ok(vec![PartitionedFile {
@@ -162,7 +170,7 @@ impl TableProvider for SeafowlTable {
         Ok(Arc::new(SeafowlBaseTableScanNode {
             name: self.name.to_owned(),
             schema: self.schema.to_owned(),
-            regions: self.regions.to_owned(),
+            regions: Arc::new(regions),
             inner: plan,
         }))
     }
@@ -219,14 +227,17 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
+    use async_trait::async_trait;
     use bytes::{BufMut, Bytes, BytesMut};
     use datafusion::{
+        arrow::datatypes::SchemaRef as ArrowSchemaRef,
         arrow::{
             array::{ArrayRef, Int64Array},
             record_batch::RecordBatch,
         },
+        catalog::catalog::CatalogProvider,
         datasource::TableProvider,
         parquet::{arrow::ArrowWriter, file::properties::WriterProperties},
         physical_plan::collect,
@@ -234,9 +245,77 @@ mod tests {
     };
     use object_store::{memory::InMemory, path::Path, ObjectStore};
 
-    use crate::schema::Schema;
+    use crate::{
+        catalog::Catalog,
+        data_types::{CollectionId, DatabaseId, TableId, TableVersionId},
+        schema::Schema,
+    };
 
-    use super::{SeafowlRegion, SeafowlTable};
+    use super::{SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable};
+
+    #[derive(Clone)]
+    struct MockCatalog {
+        pub singleton_table_name: String,
+        pub singleton_table_schema: ArrowSchemaRef,
+    }
+
+    #[async_trait]
+    impl Catalog for MockCatalog {
+        async fn load_database(&self, _id: DatabaseId) -> SeafowlDatabase {
+            let singleton_table = SeafowlTable {
+                name: Arc::from(self.singleton_table_name.clone()),
+                schema: Arc::new(Schema {
+                    arrow_schema: self.singleton_table_schema.clone(),
+                }),
+                table_version_id: 0,
+                catalog: Arc::new(self.clone()),
+            };
+            let tables = HashMap::from([(
+                Arc::from(self.singleton_table_name.clone()),
+                Arc::from(singleton_table),
+            )]);
+            let collections = HashMap::from([(
+                Arc::from("testcol"),
+                Arc::from(SeafowlCollection {
+                    name: Arc::from("testcol"),
+                    tables,
+                }),
+            )]);
+
+            SeafowlDatabase {
+                name: Arc::from("testdb"),
+                collections,
+            }
+        }
+        async fn create_table(
+            &self,
+            _collection_id: CollectionId,
+            _table_name: &str,
+            _schema: Schema,
+        ) -> TableId {
+            1
+        }
+        async fn load_table_regions(
+            &self,
+            _table_version_id: TableVersionId,
+        ) -> Vec<SeafowlRegion> {
+            vec![SeafowlRegion {
+                object_storage_id: Arc::from("some-file.parquet"),
+                row_count: 3,
+                columns: Arc::new(vec![]),
+            }]
+        }
+        async fn get_collection_id_by_name(
+            &self,
+            database_name: &str,
+            collection_name: &str,
+        ) -> Option<CollectionId> {
+            if database_name != "testdb" && collection_name != "testcol" {
+                panic!("unexpected database / collection name")
+            }
+            Some(1)
+        }
+    }
 
     #[tokio::test]
     async fn test_scan_plan() {
@@ -269,18 +348,12 @@ mod tests {
             .runtime_env()
             .register_object_store("seafowl", "", Arc::new(object_store));
 
-        // Try planning the query
-        let table = SeafowlTable {
-            name: Arc::from("table"),
-            regions: Arc::from(vec![SeafowlRegion {
-                object_storage_id: Arc::from("some-file.parquet"),
-                row_count: 3,
-                columns: Arc::new(vec![]),
-            }]),
-            schema: Arc::new(Schema {
-                arrow_schema: batch1.schema(),
-            }),
+        let catalog = MockCatalog {
+            singleton_table_name: "table".to_string(),
+            singleton_table_schema: batch1.schema(),
         };
+        let db = catalog.load_database(1).await;
+        let table = db.schema("testcol").unwrap().table("table").unwrap();
 
         let state = context.state.read().clone();
         let plan = table

@@ -116,9 +116,9 @@ fn make_data_type(sql_type: &SQLDataType) -> Result<DataType> {
 
 /// End copied functions
 
-fn compound_identifier_to_column(ids: &Vec<Ident>) -> Result<Column> {
+fn compound_identifier_to_column(ids: &[Ident]) -> Result<Column> {
     // OK, this one is partially taken from the planner for SQLExpr::CompoundIdentifier
-    let mut var_names: Vec<_> = ids.into_iter().map(|s| normalize_ident(&s)).collect();
+    let mut var_names: Vec<_> = ids.iter().map(normalize_ident).collect();
     match (var_names.pop(), var_names.pop()) {
         (Some(name), Some(relation)) if var_names.is_empty() => Ok(Column {
             relation: Some(relation),
