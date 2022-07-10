@@ -541,13 +541,8 @@ impl SeafowlContext {
 
                 // TODO:
                 //   - create a new table; get the table version ID
-                //   - execute the physical plan
-                //   - for each resulting partition:
-                //     - write out to parquet
-                //     - index (min-max values)
-                //     - upload
-                //     - write out: physical_region_column, physical_region (get id)
-                //     - make a table_region entry; attach to existing version
+                //   - make a table_region entry; attach to existing version
+                //   - different data structure for the regions (e.g. we don't have the ID yet)
 
                 // Execute the plan and write it out to temporary Parquet files.
                 let disk_manager = self.inner.runtime_env().disk_manager.clone();
