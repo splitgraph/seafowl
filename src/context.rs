@@ -8,6 +8,7 @@ use futures::{StreamExt, TryStreamExt};
 
 use hashbrown::HashMap;
 use hex::encode;
+use object_store::memory::InMemory;
 use object_store::{local::LocalFileSystem, path::Path, ObjectStore};
 use sha2::Digest;
 use sha2::Sha256;
@@ -19,7 +20,6 @@ use std::io::Read;
 
 use std::sync::Arc;
 use std::{iter::zip, path::Path as OSPath};
-use tokio::fs::read;
 
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::{
@@ -183,6 +183,23 @@ async fn get_parquet_file_statistics(path: &OSPath, schema: SchemaRef) -> Result
     Ok(stats)
 }
 
+/// Load the Statistics for a Parquet file in memory
+async fn get_parquet_file_statistics_bytes(data: Bytes, schema: SchemaRef) -> Result<Statistics> {
+    let dummy_object_store: Arc<dyn ObjectStore> = Arc::from(InMemory::new());
+    let dummy_path = Path::from("data");
+    dummy_object_store.put(&dummy_path, data).await.unwrap();
+
+    let parquet = ParquetFormat::default();
+    let meta = dummy_object_store
+        .head(&dummy_path)
+        .await
+        .expect("Temporary object not found");
+    let stats = parquet
+        .infer_stats(&dummy_object_store, schema, &meta)
+        .await?;
+    Ok(stats)
+}
+
 /// Serialize data for the physical region index from Parquet file statistics
 fn build_region_columns(region_stats: &Statistics, schema: SchemaRef) -> Vec<PhysicalRegionColumn> {
     // TODO PhysicalRegionColumn might not be the right data structure here (lacks ID etc)
@@ -252,7 +269,13 @@ pub async fn plan_to_object_store(
         let store = store.clone();
 
         let partition_file = disk_manager.create_tmp_file()?;
-        let partition_file_path = partition_file.path().to_owned();
+        // Maintain a second handle to the file (the first one is consumed by ArrowWriter)
+        // We'll close this handle at the end of the task, dropping the file.
+        let mut partition_file_handle = partition_file.reopen().map_err(|_| {
+            DataFusionError::Execution("Error with temporary Parquet file".to_string())
+        })?;
+
+        // let partition_file_path = partition_file.path().to_owned();
 
         let writer_properties = WriterProperties::builder().build();
         let mut writer = ArrowWriter::try_new(
@@ -271,12 +294,6 @@ pub async fn plan_to_object_store(
                     .map_err(DataFusionError::from)?;
                 writer.close().map_err(DataFusionError::from).map(|_| ())?;
 
-                // Index the Parquet file (get its min-max values)
-                let region_stats =
-                    get_parquet_file_statistics(&partition_file_path, physical.schema()).await?;
-
-                let columns = build_region_columns(&region_stats, physical.schema());
-
                 // TODO: the object_store crate doesn't support multi-part uploads / uploading a file
                 // from a local path. This means we have to read the file back into memory in full.
                 // https://github.com/influxdata/object_store_rs/issues/9
@@ -285,7 +302,18 @@ pub async fn plan_to_object_store(
                 // call get_parquet_file_statistics on that, upload the file) and run the output routine for each partition
                 // sequentially.
 
-                let data = Bytes::from(read(partition_file_path).await?);
+                let mut buf = Vec::new();
+                partition_file_handle
+                    .read_to_end(&mut buf)
+                    .expect("Error reading the temporary file");
+                let data = Bytes::from(buf);
+
+                // Index the Parquet file (get its min-max values)
+                let region_stats =
+                    get_parquet_file_statistics_bytes(data.clone(), physical.schema()).await?;
+
+                let columns = build_region_columns(&region_stats, physical.schema());
+
                 let mut hasher = Sha256::new();
                 hasher.update(&data);
                 let hash_str = encode(hasher.finalize());
