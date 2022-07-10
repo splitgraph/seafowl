@@ -1,15 +1,23 @@
 // DataFusion bindings
 
+use bytes::Bytes;
+use datafusion::datasource::object_store::ObjectStoreUrl;
 use futures::{StreamExt, TryStreamExt};
 
 use hashbrown::HashMap;
+use hex::encode;
 use object_store::{local::LocalFileSystem, path::Path, ObjectStore};
+use sha2::Digest;
+use sha2::Sha256;
 use sqlparser::ast::{
     ColumnDef as SQLColumnDef, ColumnOption, DataType as SQLDataType, Ident, Statement,
     TableFactor, TableWithJoins,
 };
+use std::io::Read;
+
 use std::sync::Arc;
 use std::{iter::zip, path::Path as OSPath};
+use tokio::fs::read;
 
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::{
@@ -435,13 +443,22 @@ impl SeafowlContext {
                 // Execute the plan and write it out to temporary Parquet files.
                 let disk_manager = &self.inner.runtime_env().disk_manager;
 
+                let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
+                let store = self
+                    .inner
+                    .runtime_env()
+                    .object_store(object_store_url.clone())?;
+
                 // This is partially taken from DataFusion's plan_to_parquet.
 
                 let mut tasks = vec![];
                 for i in 0..physical.output_partitioning().partition_count() {
                     let physical = physical.clone();
                     let task_ctx = Arc::new(TaskContext::from(&self.inner.state()));
+                    let store = store.clone();
 
+                    // Use a shared ownership pointer to the temporary file since ArrowWriter steals the reference
+                    // and we still need to use the file after that in order to upload it.
                     let partition_file = disk_manager.create_tmp_file()?;
                     let partition_file_path = partition_file.path().to_owned();
 
@@ -470,9 +487,26 @@ impl SeafowlContext {
 
                         let columns = build_region_columns(&region_stats, physical.schema());
 
+                        // TODO: the object_store crate doesn't support multi-part uploads / uploading a file
+                        // from a local path. This means we have to read the file back into memory in full.
+                        // https://github.com/influxdata/object_store_rs/issues/9
+                        //
+                        // Another implication is that we could just keep everything in memory (point ArrowWriter to a byte buffer,
+                        // call get_parquet_file_statistics on that, upload the file) and run the output routine for each partition
+                        // sequentially.
+
+                        let data = Bytes::from(read(partition_file_path).await?);
+                        let mut hasher = Sha256::new();
+                        hasher.update(&data);
+                        let hash_str = encode(hasher.finalize());
+                        let object_storage_id = hash_str + ".parquet";
+                        store
+                            .put(&Path::from(object_storage_id.clone()), data)
+                            .await?;
+
                         let region = PhysicalRegion {
                             id: 0,
-                            object_storage_id: "".to_string(),
+                            object_storage_id,
                             row_count: region_stats
                                 .num_rows
                                 .expect("Error counting rows in the written file")
