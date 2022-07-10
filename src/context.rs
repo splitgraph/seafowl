@@ -723,3 +723,97 @@ impl SeafowlContext {
         physical_plan.execute(partition, task_context)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::execution::disk_manager::DiskManagerConfig;
+    use object_store::memory::InMemory;
+
+    use crate::session::make_session;
+    use crate::testutils::MockCatalog;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_plan_to_object_storage() {
+        // Make a session
+        let session = make_session();
+        let state = session.state();
+
+        let catalog = MockCatalog {
+            singleton_table_name: "table".to_string(),
+            singleton_table_schema: Arc::new(Schema::empty()),
+        };
+
+        let sf_context = SeafowlContext {
+            inner: session,
+            catalog: Arc::new(catalog),
+            database: "testdb".to_string(),
+            database_id: 1,
+        };
+
+        // Make a SELECT VALUES(...) query
+        let execution_plan = sf_context
+            .plan_query(
+                r#"
+                SELECT * FROM (VALUES
+                    ('2022-01-01', 42, 'one'),
+                    ('2022-01-02', 12, 'two'))
+                AS t(timestamp, integer, varchar);"#,
+            )
+            .await
+            .unwrap();
+
+        let object_store = Arc::new(InMemory::new());
+        let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
+        let regions = plan_to_object_store(&state, execution_plan, object_store, disk_manager)
+            .await
+            .unwrap();
+
+        assert_eq!(regions.len(), 1);
+
+        let (columns, region) = regions.get(0).unwrap();
+        // TODO figure out why:
+        //   - timestamp didn't get converted
+        //   - utf8 didn't get indexed
+        assert_eq!(
+            *columns,
+            vec![
+                PhysicalRegionColumn {
+                    id: 0,
+                    physical_region_id: 0,
+                    name: "timestamp".to_string(),
+                    r#type: "{\"name\":\"utf8\"}".to_string(),
+                    min_value: None,
+                    max_value: None
+                },
+                PhysicalRegionColumn {
+                    id: 0,
+                    physical_region_id: 0,
+                    name: "integer".to_string(),
+                    r#type: "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string(),
+                    min_value: Some([49, 50].to_vec()),
+                    max_value: Some([52, 50].to_vec())
+                },
+                PhysicalRegionColumn {
+                    id: 0,
+                    physical_region_id: 0,
+                    name: "varchar".to_string(),
+                    r#type: "{\"name\":\"utf8\"}".to_string(),
+                    min_value: None,
+                    max_value: None
+                }
+            ]
+        );
+        assert_eq!(
+            *region,
+            PhysicalRegion {
+                id: 0,
+                row_count: 2,
+                object_storage_id:
+                    "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
+                        .to_string()
+            }
+        );
+    }
+}

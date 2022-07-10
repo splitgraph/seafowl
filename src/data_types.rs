@@ -40,12 +40,14 @@ pub struct TableColumn {
     // TODO ordinal?
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct PhysicalRegion {
     pub id: PhysicalRegionId,
     pub row_count: i32,
     pub object_storage_id: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct PhysicalRegionColumn {
     pub id: PhysicalRegionColumnId,
     pub physical_region_id: PhysicalRegionId,
