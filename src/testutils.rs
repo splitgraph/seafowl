@@ -1,20 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use bytes::{BufMut, Bytes, BytesMut};
-use datafusion::{
-    arrow::datatypes::SchemaRef as ArrowSchemaRef,
-    arrow::{
-        array::{ArrayRef, Int64Array},
-        record_batch::RecordBatch,
-    },
-    catalog::catalog::CatalogProvider,
-    datasource::TableProvider,
-    parquet::{arrow::ArrowWriter, file::properties::WriterProperties},
-    physical_plan::collect,
-    prelude::{SessionConfig, SessionContext},
-};
-use object_store::{memory::InMemory, path::Path, ObjectStore};
+
+use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 
 use crate::{
     catalog::Catalog,

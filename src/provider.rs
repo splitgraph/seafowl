@@ -218,12 +218,10 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
 #[cfg(test)]
 mod tests {
     use crate::testutils::MockCatalog;
-    use std::{collections::HashMap, sync::Arc};
+    use std::sync::Arc;
 
-    use async_trait::async_trait;
     use bytes::{BufMut, Bytes, BytesMut};
     use datafusion::{
-        arrow::datatypes::SchemaRef as ArrowSchemaRef,
         arrow::{
             array::{ArrayRef, Int64Array},
             record_batch::RecordBatch,
@@ -236,13 +234,7 @@ mod tests {
     };
     use object_store::{memory::InMemory, path::Path, ObjectStore};
 
-    use crate::{
-        catalog::Catalog,
-        data_types::{CollectionId, DatabaseId, TableId, TableVersionId},
-        schema::Schema,
-    };
-
-    use super::{SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable};
+    use crate::catalog::Catalog;
 
     #[tokio::test]
     async fn test_scan_plan() {
