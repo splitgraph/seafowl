@@ -1,0 +1,97 @@
+use std::{collections::HashMap, sync::Arc};
+
+use async_trait::async_trait;
+use bytes::{BufMut, Bytes, BytesMut};
+use datafusion::{
+    arrow::datatypes::SchemaRef as ArrowSchemaRef,
+    arrow::{
+        array::{ArrayRef, Int64Array},
+        record_batch::RecordBatch,
+    },
+    catalog::catalog::CatalogProvider,
+    datasource::TableProvider,
+    parquet::{arrow::ArrowWriter, file::properties::WriterProperties},
+    physical_plan::collect,
+    prelude::{SessionConfig, SessionContext},
+};
+use object_store::{memory::InMemory, path::Path, ObjectStore};
+
+use crate::{
+    catalog::Catalog,
+    data_types::{CollectionId, DatabaseId, TableId, TableVersionId},
+    provider::{SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable},
+    schema::Schema,
+};
+
+#[derive(Clone)]
+pub struct MockCatalog {
+    pub singleton_table_name: String,
+    pub singleton_table_schema: ArrowSchemaRef,
+}
+
+#[async_trait]
+impl Catalog for MockCatalog {
+    async fn load_database(&self, _id: DatabaseId) -> SeafowlDatabase {
+        let singleton_table = SeafowlTable {
+            name: Arc::from(self.singleton_table_name.clone()),
+            schema: Arc::new(Schema {
+                arrow_schema: self.singleton_table_schema.clone(),
+            }),
+            table_version_id: 0,
+            catalog: Arc::new(self.clone()),
+        };
+        let tables = HashMap::from([(
+            Arc::from(self.singleton_table_name.clone()),
+            Arc::from(singleton_table),
+        )]);
+        let collections = HashMap::from([(
+            Arc::from("testcol"),
+            Arc::from(SeafowlCollection {
+                name: Arc::from("testcol"),
+                tables,
+            }),
+        )]);
+
+        SeafowlDatabase {
+            name: Arc::from("testdb"),
+            collections,
+        }
+    }
+    async fn create_table(
+        &self,
+        _collection_id: CollectionId,
+        _table_name: &str,
+        _schema: Schema,
+    ) -> TableId {
+        1
+    }
+    async fn load_table_regions(&self, _table_version_id: TableVersionId) -> Vec<SeafowlRegion> {
+        vec![SeafowlRegion {
+            object_storage_id: Arc::from("some-file.parquet"),
+            row_count: 3,
+            columns: Arc::new(vec![]),
+        }]
+    }
+    async fn get_collection_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+    ) -> Option<CollectionId> {
+        if database_name != "testdb" && collection_name != "testcol" {
+            panic!("unexpected database / collection name")
+        }
+        Some(1)
+    }
+
+    async fn create_database(&self, _database_name: &str) -> DatabaseId {
+        1
+    }
+
+    async fn create_collection(
+        &self,
+        _database_id: DatabaseId,
+        _collection_name: &str,
+    ) -> CollectionId {
+        1
+    }
+}
