@@ -50,8 +50,8 @@ impl Catalog for MockCatalog {
         _collection_id: CollectionId,
         _table_name: &str,
         _schema: Schema,
-    ) -> TableId {
-        1
+    ) -> (TableId, TableVersionId) {
+        (1, 1)
     }
     async fn load_table_regions(&self, _table_version_id: TableVersionId) -> Vec<SeafowlRegion> {
         vec![SeafowlRegion {

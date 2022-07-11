@@ -72,7 +72,7 @@ pub trait Repository: Send + Sync {
         collection_id: CollectionId,
         table_name: &str,
         schema: Schema,
-    ) -> Result<TableId, Error>;
+    ) -> Result<(TableId, TableVersionId), Error>;
 }
 
 pub struct PostgresRepository {
@@ -252,7 +252,7 @@ impl Repository for PostgresRepository {
         collection_id: CollectionId,
         table_name: &str,
         schema: Schema,
-    ) -> Result<TableId, Error> {
+    ) -> Result<(TableId, TableVersionId), Error> {
         // Create new (empty) table
         let new_table_id: i64 = sqlx::query!(
             r#"
@@ -289,7 +289,7 @@ impl Repository for PostgresRepository {
         let query = builder.build();
         query.execute(&self.executor).await?;
 
-        Ok(new_table_id)
+        Ok((new_table_id, new_version_id))
     }
 
     // Create a table with regions

@@ -37,7 +37,7 @@ pub trait Catalog: Sync + Send {
         collection_id: CollectionId,
         table_name: &str,
         schema: Schema,
-    ) -> TableId;
+    ) -> (TableId, TableVersionId);
 }
 
 #[derive(Clone)]
@@ -174,7 +174,7 @@ impl Catalog for PostgresCatalog {
         collection_id: CollectionId,
         table_name: &str,
         schema: Schema,
-    ) -> TableId {
+    ) -> (TableId, TableVersionId) {
         self.repository
             .create_table(collection_id, table_name, schema)
             .await
