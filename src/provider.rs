@@ -70,14 +70,14 @@ impl SchemaProvider for SeafowlCollection {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct SeafowlRegion {
     pub object_storage_id: Arc<str>,
     pub row_count: i32,
     pub columns: Arc<Vec<RegionColumn>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct RegionColumn {
     pub name: Arc<str>,
     pub r#type: Arc<str>,

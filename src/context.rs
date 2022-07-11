@@ -46,9 +46,10 @@ use datafusion::{
     sql::{parser::DFParser, planner::SqlToRel, TableReference},
 };
 
+use crate::provider::{RegionColumn, SeafowlRegion};
 use crate::{
     catalog::Catalog,
-    data_types::{DatabaseId, PhysicalRegion, PhysicalRegionColumn},
+    data_types::{DatabaseId},
     nodes::{Assignment, CreateTable, Delete, Insert, Update},
     schema::Schema as SeafowlSchema,
 };
@@ -201,7 +202,7 @@ async fn get_parquet_file_statistics_bytes(data: Bytes, schema: SchemaRef) -> Re
 }
 
 /// Serialize data for the physical region index from Parquet file statistics
-fn build_region_columns(region_stats: &Statistics, schema: SchemaRef) -> Vec<PhysicalRegionColumn> {
+fn build_region_columns(region_stats: &Statistics, schema: SchemaRef) -> Vec<RegionColumn> {
     // TODO PhysicalRegionColumn might not be the right data structure here (lacks ID etc)
     match &region_stats.column_statistics {
         Some(column_statistics) => zip(column_statistics, schema.fields())
@@ -215,26 +216,22 @@ fn build_region_columns(region_stats: &Statistics, schema: SchemaRef) -> Vec<Phy
                     .as_ref()
                     .map(|m| m.to_string().as_bytes().into());
 
-                PhysicalRegionColumn {
-                    id: 0,
-                    physical_region_id: 0,
-                    name: column.name().to_string(),
-                    r#type: column.data_type().to_json().to_string(),
-                    min_value,
-                    max_value,
+                RegionColumn {
+                    name: Arc::from(column.name().to_string()),
+                    r#type: Arc::from(column.data_type().to_json().to_string()),
+                    min_value: Arc::new(min_value),
+                    max_value: Arc::new(max_value),
                 }
             })
             .collect(),
         None => schema
             .fields()
             .iter()
-            .map(|column| PhysicalRegionColumn {
-                id: 0,
-                physical_region_id: 0,
-                name: column.name().to_string(),
-                r#type: column.data_type().to_json().to_string(),
-                min_value: None,
-                max_value: None,
+            .map(|column| RegionColumn {
+                name: Arc::from(column.name().to_string()),
+                r#type: Arc::from(column.data_type().to_json().to_string()),
+                min_value: Arc::new(None),
+                max_value: Arc::new(None),
             })
             .collect(),
     }
@@ -258,10 +255,10 @@ fn make_dummy_exec() -> Arc<dyn ExecutionPlan> {
 /// Partially taken from DataFusion's plan_to_parquet with some additions (file stats, using a DiskManager)
 pub async fn plan_to_object_store(
     state: &SessionState,
-    plan: Arc<dyn ExecutionPlan>,
+    plan: &Arc<dyn ExecutionPlan>,
     store: Arc<dyn ObjectStore>,
     disk_manager: Arc<DiskManager>,
-) -> Result<Vec<(Vec<PhysicalRegionColumn>, PhysicalRegion)>> {
+) -> Result<Vec<SeafowlRegion>> {
     let mut tasks = vec![];
     for i in 0..plan.output_partitioning().partition_count() {
         let physical = plan.clone();
@@ -285,7 +282,7 @@ pub async fn plan_to_object_store(
         )?;
         let stream = physical.execute(i, task_ctx)?;
 
-        let handle: tokio::task::JoinHandle<Result<(Vec<PhysicalRegionColumn>, PhysicalRegion)>> =
+        let handle: tokio::task::JoinHandle<Result<SeafowlRegion>> =
             tokio::task::spawn(async move {
                 stream
                     .map(|batch| writer.write(&batch?))
@@ -322,17 +319,17 @@ pub async fn plan_to_object_store(
                     .put(&Path::from(object_storage_id.clone()), data)
                     .await?;
 
-                let region = PhysicalRegion {
-                    id: 0,
-                    object_storage_id,
+                let region = SeafowlRegion {
+                    object_storage_id: Arc::from(object_storage_id),
                     row_count: region_stats
                         .num_rows
                         .expect("Error counting rows in the written file")
                         .try_into()
                         .expect("row count greater than 2147483647"),
+                    columns: Arc::new(columns),
                 };
 
-                Ok((columns, region))
+                Ok(region)
             });
         tasks.push(handle);
     }
@@ -721,6 +718,8 @@ impl SeafowlContext {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use datafusion::execution::disk_manager::DiskManagerConfig;
     use object_store::memory::InMemory;
 
@@ -761,53 +760,46 @@ mod tests {
 
         let object_store = Arc::new(InMemory::new());
         let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
-        let regions = plan_to_object_store(&state, execution_plan, object_store, disk_manager)
+        let regions = plan_to_object_store(&state, &execution_plan, object_store, disk_manager)
             .await
             .unwrap();
 
         assert_eq!(regions.len(), 1);
 
-        let (columns, region) = regions.get(0).unwrap();
+        let region = regions.get(0).unwrap();
         // TODO figure out why:
         //   - timestamp didn't get converted
         //   - utf8 didn't get indexed
         assert_eq!(
-            *columns,
-            vec![
-                PhysicalRegionColumn {
-                    id: 0,
-                    physical_region_id: 0,
-                    name: "timestamp".to_string(),
-                    r#type: "{\"name\":\"utf8\"}".to_string(),
-                    min_value: None,
-                    max_value: None
-                },
-                PhysicalRegionColumn {
-                    id: 0,
-                    physical_region_id: 0,
-                    name: "integer".to_string(),
-                    r#type: "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string(),
-                    min_value: Some([49, 50].to_vec()),
-                    max_value: Some([52, 50].to_vec())
-                },
-                PhysicalRegionColumn {
-                    id: 0,
-                    physical_region_id: 0,
-                    name: "varchar".to_string(),
-                    r#type: "{\"name\":\"utf8\"}".to_string(),
-                    min_value: None,
-                    max_value: None
-                }
-            ]
-        );
-        assert_eq!(
             *region,
-            PhysicalRegion {
-                id: 0,
-                row_count: 2,
-                object_storage_id:
+            SeafowlRegion {
+                object_storage_id: Arc::from(
                     "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
                         .to_string()
+                ),
+                row_count: 2,
+                columns: Arc::new(vec![
+                    RegionColumn {
+                        name: Arc::from("timestamp".to_string()),
+                        r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                        min_value: Arc::new(None),
+                        max_value: Arc::new(None)
+                    },
+                    RegionColumn {
+                        name: Arc::from("integer".to_string()),
+                        r#type: Arc::from(
+                            "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string()
+                        ),
+                        min_value: Arc::new(Some([49, 50].to_vec())),
+                        max_value: Arc::new(Some([52, 50].to_vec()))
+                    },
+                    RegionColumn {
+                        name: Arc::from("varchar".to_string()),
+                        r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                        min_value: Arc::new(None),
+                        max_value: Arc::new(None)
+                    }
+                ])
             }
         );
     }
