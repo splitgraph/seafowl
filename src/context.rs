@@ -46,6 +46,7 @@ use datafusion::{
     sql::{parser::DFParser, planner::SqlToRel, TableReference},
 };
 
+use crate::data_types::{TableId, TableVersionId};
 use crate::provider::{RegionColumn, SeafowlRegion};
 use crate::{
     catalog::Catalog,
@@ -528,7 +529,7 @@ impl SeafowlContext {
             }
             // TODO DROP TABLE / DATABASE / SCHEMA
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                name: _,
+                name,
                 input,
                 if_not_exists: _,
                 or_replace: _,
@@ -537,10 +538,7 @@ impl SeafowlContext {
                 let physical = self.create_physical_plan(&input).await?;
 
                 // TODO:
-                //   - create a new table; get the table version ID
                 //   - make a table_region entry; attach to existing version
-                //   - different data structure for the regions (e.g. we don't have the ID yet)
-
                 // Execute the plan and write it out to temporary Parquet files.
                 let disk_manager = self.inner.runtime_env().disk_manager.clone();
 
@@ -550,7 +548,13 @@ impl SeafowlContext {
                     .runtime_env()
                     .object_store(object_store_url.clone())?;
 
-                plan_to_object_store(&self.inner.state(), physical, store, disk_manager).await?;
+                let _regions =
+                    plan_to_object_store(&self.inner.state(), &physical, store, disk_manager)
+                        .await?;
+
+                let (_table_id, _table_version_id) = self
+                    .exec_create_table(&name, &physical.schema().to_dfschema_ref()?)
+                    .await?;
 
                 Ok(make_dummy_exec())
             }
