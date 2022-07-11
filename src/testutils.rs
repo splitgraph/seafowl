@@ -6,7 +6,7 @@ use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 
 use crate::{
     catalog::Catalog,
-    data_types::{CollectionId, DatabaseId, TableId, TableVersionId},
+    data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
     provider::{SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable},
     schema::Schema,
 };
@@ -81,5 +81,16 @@ impl Catalog for MockCatalog {
         _collection_name: &str,
     ) -> CollectionId {
         1
+    }
+
+    async fn create_regions(&self, regions: Vec<SeafowlRegion>) -> Vec<PhysicalRegionId> {
+        (0..regions.len() as i64).collect()
+    }
+
+    async fn append_regions_to_table(
+        &self,
+        _region_ids: Vec<PhysicalRegionId>,
+        _table_version_id: TableVersionId,
+    ) {
     }
 }

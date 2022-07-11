@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{iter::zip, time::Duration};
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -8,7 +8,8 @@ use sqlx::{
 };
 
 use crate::{
-    data_types::{CollectionId, DatabaseId, TableId, TableVersionId},
+    data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
+    provider::{RegionColumn, SeafowlRegion},
     schema::Schema,
 };
 
@@ -73,6 +74,17 @@ pub trait Repository: Send + Sync {
         table_name: &str,
         schema: Schema,
     ) -> Result<(TableId, TableVersionId), Error>;
+
+    async fn create_regions(
+        &self,
+        region: Vec<SeafowlRegion>,
+    ) -> Result<Vec<PhysicalRegionId>, Error>;
+
+    async fn append_regions_to_table(
+        &self,
+        region_ids: Vec<PhysicalRegionId>,
+        table_version_id: TableVersionId,
+    ) -> Result<(), Error>;
 }
 
 pub struct PostgresRepository {
@@ -292,8 +304,70 @@ impl Repository for PostgresRepository {
         Ok((new_table_id, new_version_id))
     }
 
-    // Create a table with regions
-    // Append a region to a table
+    async fn create_regions(
+        &self,
+        regions: Vec<SeafowlRegion>,
+    ) -> Result<Vec<PhysicalRegionId>, Error> {
+        // Create regions
+
+        let mut builder: QueryBuilder<Postgres> =
+            QueryBuilder::new("INSERT INTO physical_region(row_count, object_storage_id) ");
+        builder.push_values(&regions, |mut b, r| {
+            b.push_bind(r.row_count)
+                .push_bind(r.object_storage_id.as_ref());
+        });
+        builder.push("RETURNING id");
+
+        let query = builder.build();
+        let region_ids: Vec<PhysicalRegionId> = query
+            .fetch_all(&self.executor)
+            .await?
+            .iter()
+            .map(|r| r.get("id"))
+            .collect();
+
+        // Create region columns
+
+        // Make an vector of (region_id, column)
+        let columns: Vec<(PhysicalRegionId, &RegionColumn)> = zip(&region_ids, &regions)
+            .flat_map(|(region_id, region)| {
+                region.columns.iter().map(|c| (region_id.to_owned(), c))
+            })
+            .collect();
+
+        let mut builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("INSERT INTO physical_region_column(physical_region_id, name, type, min_value, max_value) ");
+        builder.push_values(columns, |mut b, (rid, c)| {
+            b.push_bind(rid)
+                .push_bind(c.name.as_ref())
+                .push_bind(c.r#type.as_ref())
+                .push_bind(c.min_value.as_ref())
+                .push_bind(c.max_value.as_ref());
+        });
+
+        let query = builder.build();
+        query.execute(&self.executor).await?;
+
+        Ok(region_ids)
+    }
+
+    async fn append_regions_to_table(
+        &self,
+        region_ids: Vec<PhysicalRegionId>,
+        table_version_id: TableVersionId,
+    ) -> Result<(), Error> {
+        let mut builder: QueryBuilder<Postgres> =
+            QueryBuilder::new("INSERT INTO table_region(table_version_id, physical_region_id) ");
+        builder.push_values(region_ids, |mut b, rid| {
+            b.push_bind(table_version_id).push_bind(rid);
+        });
+
+        let query = builder.build();
+        query.execute(&self.executor).await?;
+
+        Ok(())
+    }
+
     // Replace / delete a region (in a copy?)
 }
 
@@ -349,22 +423,9 @@ mod tests {
         repo
     }
 
-    #[tokio::test]
-    async fn test_make_repository() {
-        let repository = make_repository().await;
-        assert_eq!(
-            repository
-                .get_collections_in_database(0)
-                .await
-                .expect("error getting collections"),
-            Vec::<String>::new()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_create_database_collection_table() {
-        let repository = make_repository().await;
-
+    async fn make_database_with_single_table(
+        repository: &PostgresRepository,
+    ) -> (DatabaseId, CollectionId, TableId, TableVersionId) {
         let database_id = repository
             .create_database("testdb")
             .await
@@ -382,11 +443,31 @@ mod tests {
             arrow_schema: Arc::new(arrow_schema),
         };
 
-        let table_id = repository
+        let (table_id, table_version_id) = repository
             .create_table(collection_id, "testtable", schema)
             .await
             .expect("Error creating table");
-        dbg!(table_id);
+
+        (database_id, collection_id, table_id, table_version_id)
+    }
+
+    #[tokio::test]
+    async fn test_make_repository() {
+        let repository = make_repository().await;
+        assert_eq!(
+            repository
+                .get_collections_in_database(0)
+                .await
+                .expect("error getting collections"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_database_collection_table() {
+        let repository = make_repository().await;
+
+        let (database_id, _, _, _) = make_database_with_single_table(&repository).await;
 
         // Test loading all columns
 
@@ -395,5 +476,103 @@ mod tests {
             .await
             .expect("Error getting all columns");
         assert_eq!(all_columns, [AllDatabaseColumnsResult { collection_name: "testcol".to_string(), table_name: "testtable".to_string(), table_version_id: 1, column_name: "date".to_string(), column_type: "{\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"},\"children\":[]}".to_string() }, AllDatabaseColumnsResult { collection_name: "testcol".to_string(), table_name: "testtable".to_string(), table_version_id: 1, column_name: "value".to_string(), column_type: "{\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"},\"children\":[]}".to_string() }]);
+    }
+
+    #[tokio::test]
+    async fn test_create_append_region() {
+        let repository = make_repository().await;
+
+        let (_, _, _, table_version_id) = make_database_with_single_table(&repository).await;
+
+        let region = SeafowlRegion {
+            object_storage_id: Arc::from(
+                "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
+                    .to_string(),
+            ),
+            row_count: 2,
+            columns: Arc::new(vec![
+                RegionColumn {
+                    name: Arc::from("timestamp".to_string()),
+                    r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                    min_value: Arc::new(None),
+                    max_value: Arc::new(None),
+                },
+                RegionColumn {
+                    name: Arc::from("integer".to_string()),
+                    r#type: Arc::from(
+                        "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string(),
+                    ),
+                    min_value: Arc::new(Some([49, 50].to_vec())),
+                    max_value: Arc::new(Some([52, 50].to_vec())),
+                },
+                RegionColumn {
+                    name: Arc::from("varchar".to_string()),
+                    r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                    min_value: Arc::new(None),
+                    max_value: Arc::new(None),
+                },
+            ]),
+        };
+
+        // Create a region; since we're in a separated schema, it gets ID=1
+        let region_ids = repository.create_regions(vec![region]).await.unwrap();
+        assert_eq!(region_ids, vec![1]);
+
+        // Test loading all table regions when the region is not yet attached
+        let all_regions = repository
+            .get_all_regions_in_table(table_version_id)
+            .await
+            .unwrap();
+        assert_eq!(all_regions, Vec::<AllTableRegionsResult>::new());
+
+        // Attach the region to the table
+        repository
+            .append_regions_to_table(region_ids, table_version_id)
+            .await
+            .unwrap();
+
+        // Load again
+        let all_regions = repository
+            .get_all_regions_in_table(table_version_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            all_regions,
+            vec![
+                AllTableRegionsResult {
+                    table_region_id: 1,
+                    object_storage_id:
+                        "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
+                            .to_string(),
+                    column_name: "timestamp".to_string(),
+                    column_type: "{\"name\":\"utf8\"}".to_string(),
+                    row_count: 2,
+                    min_value: None,
+                    max_value: None
+                },
+                AllTableRegionsResult {
+                    table_region_id: 1,
+                    object_storage_id:
+                        "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
+                            .to_string(),
+                    column_name: "integer".to_string(),
+                    column_type: "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string(),
+                    row_count: 2,
+                    min_value: Some([49, 50].to_vec()),
+                    max_value: Some([52, 50].to_vec())
+                },
+                AllTableRegionsResult {
+                    table_region_id: 1,
+                    object_storage_id:
+                        "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
+                            .to_string(),
+                    column_name: "varchar".to_string(),
+                    column_type: "{\"name\":\"utf8\"}".to_string(),
+                    row_count: 2,
+                    min_value: None,
+                    max_value: None
+                }
+            ]
+        );
     }
 }

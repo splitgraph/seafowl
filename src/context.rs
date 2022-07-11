@@ -50,7 +50,7 @@ use crate::data_types::{TableId, TableVersionId};
 use crate::provider::{RegionColumn, SeafowlRegion};
 use crate::{
     catalog::Catalog,
-    data_types::{DatabaseId},
+    data_types::DatabaseId,
     nodes::{Assignment, CreateTable, Delete, Insert, Update},
     schema::Schema as SeafowlSchema,
 };

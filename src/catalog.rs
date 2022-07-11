@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use itertools::Itertools;
 
 use crate::{
-    data_types::{CollectionId, DatabaseId, TableId, TableVersionId},
+    data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
     provider::{RegionColumn, SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable},
     repository::{AllDatabaseColumnsResult, AllTableRegionsResult, PostgresRepository, Repository},
     schema::Schema,
@@ -38,6 +38,16 @@ pub trait Catalog: Sync + Send {
         table_name: &str,
         schema: Schema,
     ) -> (TableId, TableVersionId);
+
+    // TODO: figure out content addressability (currently we'll create new region meta records
+    // even if the same region already exists)
+    async fn create_regions(&self, regions: Vec<SeafowlRegion>) -> Vec<PhysicalRegionId>;
+
+    async fn append_regions_to_table(
+        &self,
+        region_ids: Vec<PhysicalRegionId>,
+        table_version_id: TableVersionId,
+    );
 }
 
 #[derive(Clone)]
@@ -213,5 +223,22 @@ impl Catalog for PostgresCatalog {
             .create_collection(database_id, collection_name)
             .await
             .expect("TODO create collection error")
+    }
+    async fn create_regions(&self, regions: Vec<SeafowlRegion>) -> Vec<PhysicalRegionId> {
+        self.repository
+            .create_regions(regions)
+            .await
+            .expect("TODO create region error")
+    }
+
+    async fn append_regions_to_table(
+        &self,
+        region_ids: Vec<PhysicalRegionId>,
+        table_version_id: TableVersionId,
+    ) {
+        self.repository
+            .append_regions_to_table(region_ids, table_version_id)
+            .await
+            .expect("TODO attach region error")
     }
 }
