@@ -572,34 +572,7 @@ impl SeafowlContext {
                     if_not_exists: _,
                 }) = any.downcast_ref::<CreateTable>()
                 {
-                    let table_ref = TableReference::from(name.as_str());
-                    let (schema_name, table_name) = match table_ref {
-                        TableReference::Bare { table: _ } => Err(Error::NotImplemented(
-                            "Cannot CREATE TABLE without a schema qualifier!".to_string(),
-                        )),
-                        TableReference::Partial { schema, table } => Ok((schema, table)),
-                        TableReference::Full {
-                            catalog: _,
-                            schema,
-                            table,
-                        } => Ok((schema, table)),
-                    }?;
-
-                    let sf_schema = SeafowlSchema {
-                        arrow_schema: Arc::new(schema.as_ref().into()),
-                    };
-
-                    let collection_id = self
-                        .catalog
-                        .get_collection_id_by_name(&self.database, schema_name)
-                        .await
-                        .ok_or_else(|| {
-                            Error::Plan(format!("Schema {:?} does not exist!", schema_name))
-                        })?;
-
-                    self.catalog
-                        .create_table(collection_id, table_name, sf_schema)
-                        .await;
+                    self.exec_create_table(name, schema).await?;
 
                     Ok(make_dummy_exec())
                 } else if let Some(Insert {
@@ -676,6 +649,37 @@ impl SeafowlContext {
             }
             _ => self.inner.create_physical_plan(&logical_plan).await,
         }
+    }
+
+    async fn exec_create_table(
+        &self,
+        name: &String,
+        schema: &Arc<DFSchema>,
+    ) -> Result<(TableId, TableVersionId)> {
+        let table_ref = TableReference::from(name.as_str());
+        let (schema_name, table_name) = match table_ref {
+            TableReference::Bare { table: _ } => Err(Error::NotImplemented(
+                "Cannot CREATE TABLE without a schema qualifier!".to_string(),
+            )),
+            TableReference::Partial { schema, table } => Ok((schema, table)),
+            TableReference::Full {
+                catalog: _,
+                schema,
+                table,
+            } => Ok((schema, table)),
+        }?;
+        let sf_schema = SeafowlSchema {
+            arrow_schema: Arc::new(schema.as_ref().into()),
+        };
+        let collection_id = self
+            .catalog
+            .get_collection_id_by_name(&self.database, schema_name)
+            .await
+            .ok_or_else(|| Error::Plan(format!("Schema {:?} does not exist!", schema_name)))?;
+        Ok(self
+            .catalog
+            .create_table(collection_id, table_name, sf_schema)
+            .await)
     }
 
     pub async fn create_physical_plan(&self, plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
