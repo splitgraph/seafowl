@@ -85,7 +85,7 @@ pub struct RegionColumn {
     pub max_value: Arc<Option<Vec<u8>>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SeafowlTable {
     pub name: Arc<str>,
     pub schema: Arc<Schema>,

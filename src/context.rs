@@ -8,7 +8,7 @@ use datafusion::execution::DiskManager;
 
 use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::{DFField, Expr};
-use datafusion::sql::planner::ContextProvider;
+
 use futures::{StreamExt, TryStreamExt};
 
 use hashbrown::HashMap;
@@ -414,10 +414,30 @@ impl SeafowlContext {
                     ..
                 } => {
                     let table_name = table_name.to_string();
-                    let table_ref = TableReference::from(table_name.as_str());
-                    let table_provider = self.inner.state().get_table_provider(table_ref)?;
 
-                    let seafowl_table = match table_provider.as_any().downcast_ref::<Arc<SeafowlTable>>() {
+                    // Replace the default catalog name with this session's database name
+                    // TODO: figure out the exact default and when to hook into the get_table_provider
+                    let table_ref = TableReference::from(table_name.as_str());
+                    let resolved_ref = table_ref.resolve(&self.database, "public");
+
+                    // Partially taken from schema_for_ref (private)
+                    let table_provider = self.inner.catalog(resolved_ref.catalog).ok_or_else(|| {
+                        Error::Plan(format!(
+                            "failed to resolve catalog: {}",
+                            resolved_ref.catalog
+                        ))
+                    })?.schema(resolved_ref.schema)
+                    .ok_or_else(|| {
+                        Error::Plan(format!(
+                            "failed to resolve schema: {}",
+                            resolved_ref.schema
+                        ))
+                    })?.table(resolved_ref.table).ok_or_else(|| Error::Plan(format!(
+                        "'{}.{}.{}' not found",
+                        resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+                    )))?;
+
+                    let seafowl_table = match table_provider.as_any().downcast_ref::<SeafowlTable>() {
                         Some(seafowl_table) => Ok(seafowl_table),
                         None => Err(Error::Plan(format!(
                             "'{:?}' is a read-only table",
@@ -465,7 +485,8 @@ impl SeafowlContext {
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(Insert {
-                            table: seafowl_table.clone(),
+                            // TODO we might not need the whole table (we're currently cloning it)
+                            table: Arc::new(seafowl_table.to_owned()),
                             input: Arc::new(plan),
                         }),
                     }))
@@ -799,25 +820,36 @@ mod tests {
     use crate::session::make_session;
     use crate::testutils::MockCatalog;
 
+    use datafusion::arrow::datatypes::{
+        DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
+    };
+
     use super::*;
 
-    #[tokio::test]
-    async fn test_plan_to_object_storage() {
-        // Make a session
+    async fn mock_context() -> SeafowlContext {
         let session = make_session();
-        let state = session.state();
+        let arrow_schema = ArrowSchema::new(vec![
+            ArrowField::new("date", ArrowDataType::Date64, false),
+            ArrowField::new("value", ArrowDataType::Float64, false),
+        ]);
 
         let catalog = MockCatalog {
-            singleton_table_name: "table".to_string(),
-            singleton_table_schema: Arc::new(Schema::empty()),
+            singleton_table_name: "some_table".to_string(),
+            singleton_table_schema: Arc::new(arrow_schema),
         };
+        session.register_catalog("testdb", Arc::new(catalog.load_database(0).await));
 
-        let sf_context = SeafowlContext {
+        SeafowlContext {
             inner: session,
             catalog: Arc::new(catalog),
             database: "testdb".to_string(),
             database_id: 1,
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn test_plan_to_object_storage() {
+        let sf_context = mock_context().await;
 
         // Make a SELECT VALUES(...) query
         let execution_plan = sf_context
@@ -833,9 +865,14 @@ mod tests {
 
         let object_store = Arc::new(InMemory::new());
         let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
-        let regions = plan_to_object_store(&state, &execution_plan, object_store, disk_manager)
-            .await
-            .unwrap();
+        let regions = plan_to_object_store(
+            &sf_context.inner.state(),
+            &execution_plan,
+            object_store,
+            disk_manager,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(regions.len(), 1);
 
@@ -875,5 +912,22 @@ mod tests {
                 ])
             }
         );
+    }
+
+    #[tokio::test]
+    async fn test_plan_insert_normal() -> Result<()> {
+        let sf_context = mock_context().await;
+
+        let plan = sf_context
+            .create_logical_plan(
+                "INSERT INTO testcol.some_table (date, value) VALUES('2022-01-01', 42)",
+            )
+            .await?;
+
+        assert_eq!(format!("{:?}", plan), "Insert: some_table\
+        \n  Projection: #date, #value\
+        \n    Values: (Utf8(\"2022-01-01\"), Int64(42))");
+
+        Ok(())
     }
 }

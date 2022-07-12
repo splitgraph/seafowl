@@ -2,6 +2,7 @@ use std::{
     any::Any,
     fmt::{self, Formatter},
     sync::Arc,
+    vec,
 };
 
 use datafusion::logical_plan::{Column, DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode};
@@ -66,7 +67,7 @@ impl UserDefinedLogicalNode for Insert {
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
-        todo!()
+        vec![self.input.as_ref()]
     }
 
     fn schema(&self) -> &DFSchemaRef {
@@ -77,8 +78,8 @@ impl UserDefinedLogicalNode for Insert {
         todo!()
     }
 
-    fn fmt_for_explain(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        todo!()
+    fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Insert: {}", self.table.name)
     }
 
     fn from_template(
