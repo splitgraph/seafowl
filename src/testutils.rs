@@ -11,7 +11,7 @@ use crate::{
     schema::Schema,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MockCatalog {
     pub singleton_table_name: String,
     pub singleton_table_schema: ArrowSchemaRef,

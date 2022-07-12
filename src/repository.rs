@@ -1,4 +1,4 @@
-use std::{iter::zip, time::Duration};
+use std::{fmt::Debug, iter::zip, time::Duration};
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -36,7 +36,7 @@ pub struct AllTableRegionsResult {
 }
 
 #[async_trait]
-pub trait Repository: Send + Sync {
+pub trait Repository: Send + Sync + Debug {
     async fn setup(&self);
 
     async fn get_collections_in_database(
@@ -87,6 +87,7 @@ pub trait Repository: Send + Sync {
     ) -> Result<(), Error>;
 }
 
+#[derive(Debug)]
 pub struct PostgresRepository {
     executor: PgPool,
     schema_name: String,

@@ -6,6 +6,8 @@ use std::{
 
 use datafusion::logical_plan::{Column, DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode};
 
+use crate::provider::SeafowlTable;
+
 #[derive(Debug)]
 pub struct CreateTable {
     /// The table schema
@@ -49,11 +51,12 @@ impl UserDefinedLogicalNode for CreateTable {
 
 #[derive(Debug)]
 pub struct Insert {
-    /// The table name (TODO: should this be a table ref?)
-    pub name: String,
+    /// The table to insert into
+    pub table: Arc<SeafowlTable>,
     /// List of columns to set
-    pub columns: Vec<Column>,
-    /// Result of a query to insert
+    // TODO might not be needed
+    // pub columns: Vec<Column>,
+    /// Result of a query to insert (with a type-compatible schema that is a subset of the target table)
     pub input: Arc<LogicalPlan>,
 }
 

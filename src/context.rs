@@ -1,9 +1,14 @@
 // DataFusion bindings
 
 use bytes::Bytes;
+
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
+
+use datafusion::logical_plan::plan::Projection;
+use datafusion::logical_plan::{DFField, Expr};
+use datafusion::sql::planner::ContextProvider;
 use futures::{StreamExt, TryStreamExt};
 
 use hashbrown::HashMap;
@@ -47,7 +52,7 @@ use datafusion::{
 };
 
 use crate::data_types::{TableId, TableVersionId};
-use crate::provider::{RegionColumn, SeafowlRegion};
+use crate::provider::{RegionColumn, SeafowlRegion, SeafowlTable};
 use crate::{
     catalog::Catalog,
     data_types::DatabaseId,
@@ -408,19 +413,59 @@ impl SeafowlContext {
                     source,
                     ..
                 } => {
-                    let plan = query_planner.query_to_plan(*source, &mut HashMap::new())?;
+                    let table_name = table_name.to_string();
+                    let table_ref = TableReference::from(table_name.as_str());
+                    let table_provider = self.inner.state().get_table_provider(table_ref)?;
 
-                    let column_exprs = columns
+                    let seafowl_table = match table_provider.as_any().downcast_ref::<Arc<SeafowlTable>>() {
+                        Some(seafowl_table) => Ok(seafowl_table),
+                        None => Err(Error::Plan(format!(
+                            "'{:?}' is a read-only table",
+                            table_name
+                        ))),
+                    }?;
+
+                    // Get a list of columns we're inserting into
+                    let column_exprs: Vec<_> = columns
                         .iter()
                         .map(|id| {
                             Column::from_name(normalize_ident(id))
                         })
                         .collect();
 
+                    // Get the schema we have to cast `source` into
+                    // INSERT INTO table (col_3, col_4) VALUES (1, 2)
+                    let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
+
+                    let target_schema = if column_exprs.is_empty() {
+                        // Empty means we're inserting into all columns of the table
+                        table_schema
+                    } else {
+                        let fields = column_exprs.iter().map(|c| Ok(table_schema.field_from_column(c)?.clone())).collect::<Result<Vec<DFField>>>()?;
+                        DFSchema::new_with_metadata(fields, table_schema.metadata().clone())?
+                    };
+
+                    let plan = query_planner.query_to_plan(*source, &mut HashMap::new())?;
+
+                    // TODO check the length too
+                    target_schema.check_arrow_schema_type_compatible(&((**plan.schema()).clone().into()))?;
+
+                    // Make a projection around the input plan to rename the columns / change the schema
+                    // (it doesn't seem to actually do casts at runtime, but ArrowWriter should forcefully
+                    // cast the columns when we're writing to Parquet)
+
+                    // TODO: we might need to pad out the result with NULL columns so that it has _exactly_
+                    // the same shape as the rest of the table
+                    let plan = LogicalPlan::Projection(Projection {
+                        expr: column_exprs.iter().map(|c| Expr::Column(c.clone())).collect(),
+                        input: Arc::new(plan),
+                        schema: Arc::new(target_schema),
+                        alias: None,
+                    });
+
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(Insert {
-                            name: table_name.to_string(),
-                            columns: column_exprs,
+                            table: seafowl_table.clone(),
                             input: Arc::new(plan),
                         }),
                     }))
@@ -537,8 +582,6 @@ impl SeafowlContext {
                 // This is actually CREATE TABLE AS
                 let physical = self.create_physical_plan(&input).await?;
 
-                // TODO:
-                //   - make a table_region entry; attach to existing version
                 // Execute the plan and write it out to temporary Parquet files.
                 let disk_manager = self.inner.runtime_env().disk_manager.clone();
 
@@ -548,13 +591,20 @@ impl SeafowlContext {
                     .runtime_env()
                     .object_store(object_store_url.clone())?;
 
-                let _regions =
+                let regions =
                     plan_to_object_store(&self.inner.state(), &physical, store, disk_manager)
                         .await?;
 
-                let (_table_id, _table_version_id) = self
+                // Create an empty table with an empty version
+                let (_, table_version_id) = self
                     .exec_create_table(&name, &physical.schema().to_dfschema_ref()?)
                     .await?;
+
+                // Attach the regions to the empty table
+                let region_ids = self.catalog.create_regions(regions).await;
+                self.catalog
+                    .append_regions_to_table(region_ids, table_version_id)
+                    .await;
 
                 Ok(make_dummy_exec())
             }
@@ -579,15 +629,30 @@ impl SeafowlContext {
                     self.exec_create_table(name, schema).await?;
 
                     Ok(make_dummy_exec())
-                } else if let Some(Insert {
-                    name: _,
-                    columns: _,
-                    input: _,
-                }) = any.downcast_ref::<Insert>()
-                {
-                    // Duplicate the existing latest version into a new table
-                    // (new table_version, same columns, same table_region)
-                    // Proceed as in CREATE TABLE AS
+                } else if let Some(Insert { table, input }) = any.downcast_ref::<Insert>() {
+                    let physical = self.create_physical_plan(input).await?;
+
+                    // Execute the plan and write it out to temporary Parquet files.
+                    let disk_manager = self.inner.runtime_env().disk_manager.clone();
+
+                    let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
+                    let store = self
+                        .inner
+                        .runtime_env()
+                        .object_store(object_store_url.clone())?;
+
+                    let regions =
+                        plan_to_object_store(&self.inner.state(), &physical, store, disk_manager)
+                            .await?;
+
+                    let table_version_id = table.table_version_id;
+
+                    // Attach the regions to the empty table
+                    let region_ids = self.catalog.create_regions(regions).await;
+                    self.catalog
+                        .append_regions_to_table(region_ids, table_version_id)
+                        .await;
+
                     Ok(make_dummy_exec())
                 } else if let Some(Update {
                     name: _,
@@ -657,10 +722,10 @@ impl SeafowlContext {
 
     async fn exec_create_table(
         &self,
-        name: &String,
+        name: &str,
         schema: &Arc<DFSchema>,
     ) -> Result<(TableId, TableVersionId)> {
-        let table_ref = TableReference::from(name.as_str());
+        let table_ref = TableReference::from(name);
         let (schema_name, table_name) = match table_ref {
             TableReference::Bare { table: _ } => Err(Error::NotImplemented(
                 "Cannot CREATE TABLE without a schema qualifier!".to_string(),

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 use itertools::Itertools;
@@ -15,7 +15,7 @@ use crate::{
 // merge the two? Will a different database than PG still use the AllDatabaseColumnsResult /
 // AllTableRegionsResult structs?
 #[async_trait]
-pub trait Catalog: Sync + Send {
+pub trait Catalog: Sync + Send + Debug {
     async fn load_database(&self, id: DatabaseId) -> SeafowlDatabase;
     async fn load_table_regions(&self, table_version_id: TableVersionId) -> Vec<SeafowlRegion>;
     async fn get_collection_id_by_name(
@@ -50,7 +50,7 @@ pub trait Catalog: Sync + Send {
     );
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PostgresCatalog {
     repository: Arc<PostgresRepository>,
 }
