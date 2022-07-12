@@ -445,24 +445,24 @@ impl SeafowlContext {
                         ))),
                     }?;
 
-                    // Get a list of columns we're inserting into
-                    let column_exprs: Vec<_> = columns
+                    // Get a list of columns we're inserting into and schema we
+                    // have to cast `source` into
+                    // INSERT INTO table (col_3, col_4) VALUES (1, 2)
+                    let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
+
+                    let (column_exprs, target_schema) = if columns.is_empty() {
+                        // Empty means we're inserting into all columns of the table
+                        (table_schema.fields().iter().map(|f| Column::from_name(f.name())).collect(),
+                        seafowl_table.schema.arrow_schema.clone().to_dfschema()?)
+                    } else {
+                        let exprs: Vec<_> = columns
                         .iter()
                         .map(|id| {
                             Column::from_name(normalize_ident(id))
                         })
                         .collect();
-
-                    // Get the schema we have to cast `source` into
-                    // INSERT INTO table (col_3, col_4) VALUES (1, 2)
-                    let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
-
-                    let target_schema = if column_exprs.is_empty() {
-                        // Empty means we're inserting into all columns of the table
-                        table_schema
-                    } else {
-                        let fields = column_exprs.iter().map(|c| Ok(table_schema.field_from_column(c)?.clone())).collect::<Result<Vec<DFField>>>()?;
-                        DFSchema::new_with_metadata(fields, table_schema.metadata().clone())?
+                        let fields = exprs.iter().map(|c| Ok(table_schema.field_from_column(c)?.clone())).collect::<Result<Vec<DFField>>>()?;
+                        (exprs, DFSchema::new_with_metadata(fields, table_schema.metadata().clone())?)
                     };
 
                     let plan = query_planner.query_to_plan(*source, &mut HashMap::new())?;
@@ -915,19 +915,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plan_insert_normal() -> Result<()> {
+    async fn test_plan_insert_normal() {
         let sf_context = mock_context().await;
 
         let plan = sf_context
             .create_logical_plan(
                 "INSERT INTO testcol.some_table (date, value) VALUES('2022-01-01', 42)",
             )
-            .await?;
+            .await
+            .unwrap();
+
+        assert_eq!(
+            format!("{:?}", plan),
+            "Insert: some_table\
+        \n  Projection: #date, #value\
+        \n    Values: (Utf8(\"2022-01-01\"), Int64(42))"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_insert_renaming() {
+        let sf_context = mock_context().await;
+
+        let plan = sf_context
+            // TODO: we need to do FROM testdb since it's not set as a default?
+            .create_logical_plan(
+                "INSERT INTO testcol.some_table (date, value)
+                SELECT \"date\" AS my_date, \"value\" AS my_value FROM testdb.testcol.some_table",
+            )
+            .await
+            .unwrap();
 
         assert_eq!(format!("{:?}", plan), "Insert: some_table\
         \n  Projection: #date, #value\
-        \n    Values: (Utf8(\"2022-01-01\"), Int64(42))");
+        \n    Projection: #testdb.testcol.some_table.date AS my_date, #testdb.testcol.some_table.value AS my_value\
+        \n      TableScan: testdb.testcol.some_table");
+    }
 
-        Ok(())
+    #[tokio::test]
+    async fn test_plan_insert_all() {
+        let sf_context = mock_context().await;
+
+        let plan = sf_context
+            .create_logical_plan("INSERT INTO testcol.some_table VALUES('2022-01-01', 42)")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            format!("{:?}", plan),
+            "Insert: some_table\
+        \n  Projection: #date, #value\
+        \n    Values: (Utf8(\"2022-01-01\"), Int64(42))"
+        );
     }
 }
