@@ -468,6 +468,7 @@ impl SeafowlContext {
                     let plan = query_planner.query_to_plan(*source, &mut HashMap::new())?;
 
                     // TODO check the length too
+                    // Check we can cast from the values in the INSERT to the actual table schema
                     target_schema.check_arrow_schema_type_compatible(&((**plan.schema()).clone().into()))?;
 
                     // Make a projection around the input plan to rename the columns / change the schema
@@ -967,5 +968,18 @@ mod tests {
         \n  Projection: #date, #value\
         \n    Values: (Utf8(\"2022-01-01\"), Int64(42))"
         );
+    }
+
+    #[tokio::test]
+    async fn test_plan_insert_type_mismatch() {
+        let sf_context = mock_context().await;
+
+        // Try inserting a timestamp into a number (note this will work fine for inserting
+        // e.g. Utf-8 into numbers at plan time but should fail at execution time if the value
+        // doesn't convert)
+        let err = sf_context
+            .create_logical_plan("INSERT INTO testcol.some_table SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')")
+            .await.unwrap_err();
+        assert_eq!(err.to_string(), "Error during planning: Column totimestamp(Utf8(\"2022-01-01T12:00:00\")) (type: Timestamp(Nanosecond, None)) is not compatible with column value (type: Float64)");
     }
 }
