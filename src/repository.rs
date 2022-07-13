@@ -472,6 +472,38 @@ mod tests {
     // TODO use envvars or something
     const DEV_DB_DSN: &str = "postgresql://sgr:password@localhost:7432/seafowl";
 
+    fn get_test_region() -> SeafowlRegion {
+        SeafowlRegion {
+            object_storage_id: Arc::from(
+                "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
+                    .to_string(),
+            ),
+            row_count: 2,
+            columns: Arc::new(vec![
+                RegionColumn {
+                    name: Arc::from("timestamp".to_string()),
+                    r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                    min_value: Arc::new(None),
+                    max_value: Arc::new(None),
+                },
+                RegionColumn {
+                    name: Arc::from("integer".to_string()),
+                    r#type: Arc::from(
+                        "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string(),
+                    ),
+                    min_value: Arc::new(Some([49, 50].to_vec())),
+                    max_value: Arc::new(Some([52, 50].to_vec())),
+                },
+                RegionColumn {
+                    name: Arc::from("varchar".to_string()),
+                    r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                    min_value: Arc::new(None),
+                    max_value: Arc::new(None),
+                },
+            ]),
+        }
+    }
+
     async fn make_database_with_single_table(
         repository: &PostgresRepository,
     ) -> (DatabaseId, CollectionId, TableId, TableVersionId) {
@@ -516,7 +548,8 @@ mod tests {
     async fn test_create_database_collection_table() {
         let repository = make_repository(DEV_DB_DSN).await;
 
-        let (database_id, _, _, _) = make_database_with_single_table(&repository).await;
+        let (database_id, _, _, table_version_id) =
+            make_database_with_single_table(&repository).await;
 
         // Test loading all columns
 
@@ -544,6 +577,39 @@ mod tests {
                 }
             ]
         );
+
+        // Duplicate the table
+        let new_version_id = repository
+            .create_new_table_version(table_version_id)
+            .await
+            .unwrap();
+
+        // Test all columns again: we should have the schema for the latest table version
+        let all_columns = repository
+            .get_all_columns_in_database(database_id)
+            .await
+            .expect("Error getting all columns");
+
+        assert_eq!(
+            all_columns,
+            [
+                AllDatabaseColumnsResult {
+                    collection_name: "testcol".to_string(),
+                    table_name: "testtable".to_string(),
+                    table_version_id: new_version_id,
+                    column_name: "date".to_string(),
+                    column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}".to_string()
+                },
+                AllDatabaseColumnsResult {
+                    collection_name: "testcol".to_string(),
+                    table_name: "testtable".to_string(),
+                    table_version_id: new_version_id,
+                    column_name: "value".to_string(),
+                    column_type: "{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"
+                        .to_string()
+                }
+            ]
+        );
     }
 
     #[tokio::test]
@@ -552,35 +618,7 @@ mod tests {
 
         let (_, _, _, table_version_id) = make_database_with_single_table(&repository).await;
 
-        let region = SeafowlRegion {
-            object_storage_id: Arc::from(
-                "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
-                    .to_string(),
-            ),
-            row_count: 2,
-            columns: Arc::new(vec![
-                RegionColumn {
-                    name: Arc::from("timestamp".to_string()),
-                    r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
-                    min_value: Arc::new(None),
-                    max_value: Arc::new(None),
-                },
-                RegionColumn {
-                    name: Arc::from("integer".to_string()),
-                    r#type: Arc::from(
-                        "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string(),
-                    ),
-                    min_value: Arc::new(Some([49, 50].to_vec())),
-                    max_value: Arc::new(Some([52, 50].to_vec())),
-                },
-                RegionColumn {
-                    name: Arc::from("varchar".to_string()),
-                    r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
-                    min_value: Arc::new(None),
-                    max_value: Arc::new(None),
-                },
-            ]),
-        };
+        let region = get_test_region();
 
         // Create a region; since we're in a separated schema, it gets ID=1
         let region_ids = repository.create_regions(vec![region]).await.unwrap();
@@ -604,43 +642,55 @@ mod tests {
             .get_all_regions_in_table(table_version_id)
             .await
             .unwrap();
-        assert_eq!(
-            all_regions,
-            vec![
-                AllTableRegionsResult {
-                    table_region_id: 1,
-                    object_storage_id:
-                        "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
-                            .to_string(),
-                    column_name: "timestamp".to_string(),
-                    column_type: "{\"name\":\"utf8\"}".to_string(),
-                    row_count: 2,
-                    min_value: None,
-                    max_value: None
-                },
-                AllTableRegionsResult {
-                    table_region_id: 1,
-                    object_storage_id:
-                        "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
-                            .to_string(),
-                    column_name: "integer".to_string(),
-                    column_type: "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string(),
-                    row_count: 2,
-                    min_value: Some([49, 50].to_vec()),
-                    max_value: Some([52, 50].to_vec())
-                },
-                AllTableRegionsResult {
-                    table_region_id: 1,
-                    object_storage_id:
-                        "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
-                            .to_string(),
-                    column_name: "varchar".to_string(),
-                    column_type: "{\"name\":\"utf8\"}".to_string(),
-                    row_count: 2,
-                    min_value: None,
-                    max_value: None
-                }
-            ]
-        );
+
+        let expected_regions = vec![
+            AllTableRegionsResult {
+                table_region_id: 1,
+                object_storage_id:
+                    "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
+                        .to_string(),
+                column_name: "timestamp".to_string(),
+                column_type: "{\"name\":\"utf8\"}".to_string(),
+                row_count: 2,
+                min_value: None,
+                max_value: None,
+            },
+            AllTableRegionsResult {
+                table_region_id: 1,
+                object_storage_id:
+                    "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
+                        .to_string(),
+                column_name: "integer".to_string(),
+                column_type: "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string(),
+                row_count: 2,
+                min_value: Some([49, 50].to_vec()),
+                max_value: Some([52, 50].to_vec()),
+            },
+            AllTableRegionsResult {
+                table_region_id: 1,
+                object_storage_id:
+                    "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
+                        .to_string(),
+                column_name: "varchar".to_string(),
+                column_type: "{\"name\":\"utf8\"}".to_string(),
+                row_count: 2,
+                min_value: None,
+                max_value: None,
+            },
+        ];
+        assert_eq!(all_regions, expected_regions);
+
+        // Duplicate the table, check it has the same regions
+        let new_version_id = repository
+            .create_new_table_version(table_version_id)
+            .await
+            .unwrap();
+
+        let all_regions = repository
+            .get_all_regions_in_table(new_version_id)
+            .await
+            .unwrap();
+
+        assert_eq!(all_regions, expected_regions);
     }
 }
