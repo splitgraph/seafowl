@@ -25,6 +25,11 @@ hashbrown = { version = "0.12", features = ["raw"] }
 parquet = { version = "16.0.0", features = ["arrow"] }
 bytes = "1.1.0"
 
-[dev-dependencies]
+# Needs to be in non-dev because repository::testutils can't be
+# imported by tests::end_to_end if it's cfg(test).
 rand = "0.8"
+
+[dev-dependencies]
 mockall = "0.11.1"
+# for test assertions (assert_batches_eq! doesn't work without it)
+arrow = { version = "17.0.0", features = ["prettyprint"] }

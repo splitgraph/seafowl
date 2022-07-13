@@ -94,8 +94,8 @@ pub trait Repository: Send + Sync + Debug {
 
 #[derive(Debug)]
 pub struct PostgresRepository {
-    executor: PgPool,
-    schema_name: String,
+    pub executor: PgPool,
+    pub schema_name: String,
 }
 
 impl PostgresRepository {
@@ -412,20 +412,13 @@ impl Repository for PostgresRepository {
     // Replace / delete a region (in a copy?)
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use datafusion::arrow::datatypes::{
-        DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
-    };
+pub mod testutils {
+    use crate::repository::Repository;
     use rand::Rng;
-    use sqlx::migrate::MigrateDatabase;
+    use sqlx::Executor;
+    use sqlx::{migrate::MigrateDatabase, Postgres};
 
-    use super::*;
-
-    // TODO use envvars or something
-    const DEV_DB_DSN: &str = "postgresql://sgr:password@localhost:7432/seafowl";
+    use crate::repository::PostgresRepository;
 
     async fn create_db(dsn: &str) {
         if !Postgres::database_exists(dsn).await.unwrap() {
@@ -433,7 +426,7 @@ mod tests {
         }
     }
 
-    async fn make_repository() -> PostgresRepository {
+    pub async fn make_repository(dsn: &str) -> PostgresRepository {
         // Generate a random schema (taken from IOx)
 
         let schema_name = {
@@ -447,7 +440,6 @@ mod tests {
         };
 
         // let dsn = std::env::var("DATABASE_URL").unwrap();
-        let dsn = DEV_DB_DSN;
         create_db(dsn).await;
 
         let repo = PostgresRepository::connect(dsn.to_string(), schema_name.clone())
@@ -463,6 +455,22 @@ mod tests {
         repo.setup().await;
         repo
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{
+        DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
+    };
+
+    use crate::repository::testutils::make_repository;
+
+    use super::*;
+
+    // TODO use envvars or something
+    const DEV_DB_DSN: &str = "postgresql://sgr:password@localhost:7432/seafowl";
 
     async fn make_database_with_single_table(
         repository: &PostgresRepository,
@@ -494,7 +502,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_make_repository() {
-        let repository = make_repository().await;
+        let repository = make_repository(DEV_DB_DSN).await;
         assert_eq!(
             repository
                 .get_collections_in_database(0)
@@ -506,7 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_database_collection_table() {
-        let repository = make_repository().await;
+        let repository = make_repository(DEV_DB_DSN).await;
 
         let (database_id, _, _, _) = make_database_with_single_table(&repository).await;
 
@@ -521,7 +529,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_append_region() {
-        let repository = make_repository().await;
+        let repository = make_repository(DEV_DB_DSN).await;
 
         let (_, _, _, table_version_id) = make_database_with_single_table(&repository).await;
 

@@ -6,7 +6,6 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
 
-
 use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::{DFField, Expr};
 
@@ -245,12 +244,12 @@ fn build_region_columns(region_stats: &Statistics, schema: SchemaRef) -> Vec<Reg
     }
 }
 
-struct SeafowlContext {
-    inner: SessionContext,
-    table_catalog: Arc<dyn TableCatalog>,
-    region_catalog: Arc<dyn RegionCatalog>,
-    database: String,
-    database_id: DatabaseId,
+pub struct SeafowlContext {
+    pub inner: SessionContext,
+    pub table_catalog: Arc<dyn TableCatalog>,
+    pub region_catalog: Arc<dyn RegionCatalog>,
+    pub database: String,
+    pub database_id: DatabaseId,
 }
 
 /// Create an ExecutionPlan that doesn't produce any results.

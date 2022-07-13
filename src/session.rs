@@ -10,6 +10,6 @@ pub fn make_session() -> SessionContext {
     let object_store = Arc::new(InMemory::new());
     context
         .runtime_env()
-        .register_object_store("seafowl", "seafowl", object_store);
+        .register_object_store("seafowl", "", object_store);
     context
 }

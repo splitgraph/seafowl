@@ -63,7 +63,7 @@ pub trait RegionCatalog: Sync + Send + Debug {
 
 #[derive(Clone, Debug)]
 pub struct PostgresCatalog {
-    repository: Arc<PostgresRepository>,
+    pub repository: Arc<PostgresRepository>,
 }
 
 impl PostgresCatalog {
