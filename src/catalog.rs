@@ -42,6 +42,7 @@ pub trait TableCatalog: Sync + Send + Debug {
         schema: Schema,
     ) -> (TableId, TableVersionId);
 
+    async fn create_new_table_version(&self, from_version: TableVersionId) -> TableVersionId;
 }
 
 #[cfg_attr(test, automock)]
@@ -220,6 +221,17 @@ impl TableCatalog for PostgresCatalog {
             .await
             .expect("TODO create collection error")
     }
+
+    async fn create_new_table_version(&self, from_version: TableVersionId) -> TableVersionId {
+        self.repository
+            .create_new_table_version(from_version)
+            .await
+            .expect("TODO create version error")
+    }
+}
+
+#[async_trait]
+impl RegionCatalog for PostgresCatalog {
     async fn create_regions(&self, regions: Vec<SeafowlRegion>) -> Vec<PhysicalRegionId> {
         self.repository
             .create_regions(regions)

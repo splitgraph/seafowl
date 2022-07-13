@@ -669,12 +669,16 @@ impl SeafowlContext {
                         plan_to_object_store(&self.inner.state(), &physical, store, disk_manager)
                             .await?;
 
-                    let table_version_id = table.table_version_id;
+                    // Duplicate the table version into a new one
+                    let new_version_id = self
+                        .table_catalog
+                        .create_new_table_version(table.table_version_id)
+                        .await;
 
                     // Attach the regions to the table
                     let region_ids = self.region_catalog.create_regions(regions).await;
                     self.region_catalog
-                        .append_regions_to_table(region_ids, table_version_id)
+                        .append_regions_to_table(region_ids, new_version_id)
                         .await;
 
                     Ok(make_dummy_exec())

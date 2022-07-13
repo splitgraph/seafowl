@@ -85,6 +85,11 @@ pub trait Repository: Send + Sync + Debug {
         region_ids: Vec<PhysicalRegionId>,
         table_version_id: TableVersionId,
     ) -> Result<(), Error>;
+
+    async fn create_new_table_version(
+        &self,
+        from_version: TableVersionId,
+    ) -> Result<TableVersionId, Error>;
 }
 
 #[derive(Debug)]
@@ -367,6 +372,41 @@ impl Repository for PostgresRepository {
         query.execute(&self.executor).await?;
 
         Ok(())
+    }
+
+    async fn create_new_table_version(
+        &self,
+        from_version: TableVersionId,
+    ) -> Result<TableVersionId, Error> {
+        let new_version = sqlx::query!(
+            "INSERT INTO table_version (table_id)
+            SELECT table_id FROM table_version WHERE id = $1
+            RETURNING (id)",
+            from_version
+        )
+        .fetch_one(&self.executor)
+        .await?
+        .id;
+
+        sqlx::query!(
+            "INSERT INTO table_column (table_version_id, name, type)
+            SELECT $2, name, type FROM table_column WHERE table_version_id = $1;",
+            from_version,
+            new_version
+        )
+        .execute(&self.executor)
+        .await?;
+
+        sqlx::query!(
+            "INSERT INTO table_region (table_version_id, physical_region_id)
+            SELECT $2, physical_region_id FROM table_region WHERE table_version_id = $1;",
+            from_version,
+            new_version
+        )
+        .execute(&self.executor)
+        .await?;
+
+        Ok(new_version)
     }
 
     // Replace / delete a region (in a copy?)
