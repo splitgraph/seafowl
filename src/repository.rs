@@ -173,7 +173,6 @@ impl Repository for PostgresRepository {
         INNER JOIN "table" ON collection.id = "table".collection_id
         INNER JOIN latest_table_version ON "table".id = latest_table_version.table_id
         INNER JOIN table_column ON table_column.table_version_id = latest_table_version.id
-        LEFT JOIN table_region ON table_region.table_version_id = latest_table_version.id
         WHERE collection.database_id = $1
         ORDER BY collection_name, table_name
         "#,
