@@ -2,6 +2,8 @@ use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 use itertools::Itertools;
+#[cfg(test)]
+use mockall::automock;
 
 use crate::{
     data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
@@ -14,10 +16,11 @@ use crate::{
 // for converting rows of database / region results into SeafowlDatabase/Region structs;
 // merge the two? Will a different database than PG still use the AllDatabaseColumnsResult /
 // AllTableRegionsResult structs?
+
+#[cfg_attr(test, automock)]
 #[async_trait]
-pub trait Catalog: Sync + Send + Debug {
+pub trait TableCatalog: Sync + Send + Debug {
     async fn load_database(&self, id: DatabaseId) -> SeafowlDatabase;
-    async fn load_table_regions(&self, table_version_id: TableVersionId) -> Vec<SeafowlRegion>;
     async fn get_collection_id_by_name(
         &self,
         database_name: &str,
@@ -39,9 +42,16 @@ pub trait Catalog: Sync + Send + Debug {
         schema: Schema,
     ) -> (TableId, TableVersionId);
 
+}
+
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait RegionCatalog: Sync + Send + Debug {
     // TODO: figure out content addressability (currently we'll create new region meta records
     // even if the same region already exists)
     async fn create_regions(&self, regions: Vec<SeafowlRegion>) -> Vec<PhysicalRegionId>;
+
+    async fn load_table_regions(&self, table_version_id: TableVersionId) -> Vec<SeafowlRegion>;
 
     async fn append_regions_to_table(
         &self,
@@ -139,7 +149,7 @@ impl PostgresCatalog {
 }
 
 #[async_trait]
-impl Catalog for PostgresCatalog {
+impl TableCatalog for PostgresCatalog {
     async fn load_database(&self, database_id: DatabaseId) -> SeafowlDatabase {
         let all_columns = self
             .repository
@@ -163,20 +173,6 @@ impl Catalog for PostgresCatalog {
             name: Arc::from("database"),
             collections,
         }
-    }
-
-    async fn load_table_regions(&self, table_version_id: TableVersionId) -> Vec<SeafowlRegion> {
-        let all_regions = self
-            .repository
-            .get_all_regions_in_table(table_version_id)
-            .await
-            .expect("TODO db load error");
-        all_regions
-            .iter()
-            .group_by(|col| col.table_region_id)
-            .into_iter()
-            .map(|(_, cs)| self.build_region(cs))
-            .collect()
     }
 
     async fn create_table(
@@ -229,6 +225,20 @@ impl Catalog for PostgresCatalog {
             .create_regions(regions)
             .await
             .expect("TODO create region error")
+    }
+
+    async fn load_table_regions(&self, table_version_id: TableVersionId) -> Vec<SeafowlRegion> {
+        let all_regions = self
+            .repository
+            .get_all_regions_in_table(table_version_id)
+            .await
+            .expect("TODO db load error");
+        all_regions
+            .iter()
+            .group_by(|col| col.table_region_id)
+            .into_iter()
+            .map(|(_, cs)| self.build_region(cs))
+            .collect()
     }
 
     async fn append_regions_to_table(

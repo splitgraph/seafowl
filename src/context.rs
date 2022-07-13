@@ -51,10 +51,11 @@ use datafusion::{
     sql::{parser::DFParser, planner::SqlToRel, TableReference},
 };
 
+use crate::catalog::RegionCatalog;
 use crate::data_types::{TableId, TableVersionId};
 use crate::provider::{RegionColumn, SeafowlRegion, SeafowlTable};
 use crate::{
-    catalog::Catalog,
+    catalog::TableCatalog,
     data_types::DatabaseId,
     nodes::{Assignment, CreateTable, Delete, Insert, Update},
     schema::Schema as SeafowlSchema,
@@ -245,7 +246,8 @@ fn build_region_columns(region_stats: &Statistics, schema: SchemaRef) -> Vec<Reg
 
 struct SeafowlContext {
     inner: SessionContext,
-    catalog: Arc<dyn Catalog>,
+    table_catalog: Arc<dyn TableCatalog>,
+    region_catalog: Arc<dyn RegionCatalog>,
     database: String,
     database_id: DatabaseId,
 }
@@ -580,7 +582,7 @@ impl SeafowlContext {
             }) => {
                 // CREATE SCHEMA
                 // Create a schema and register it
-                self.catalog
+                self.table_catalog
                     .create_collection(self.database_id, &schema_name)
                     .await;
                 Ok(make_dummy_exec())
@@ -591,7 +593,7 @@ impl SeafowlContext {
                 schema: _,
             }) => {
                 // CREATE DATABASE
-                self.catalog.create_database(&catalog_name).await;
+                self.table_catalog.create_database(&catalog_name).await;
                 Ok(make_dummy_exec())
             }
             // TODO DROP TABLE / DATABASE / SCHEMA
@@ -623,8 +625,8 @@ impl SeafowlContext {
                     .await?;
 
                 // Attach the regions to the empty table
-                let region_ids = self.catalog.create_regions(regions).await;
-                self.catalog
+                let region_ids = self.region_catalog.create_regions(regions).await;
+                self.region_catalog
                     .append_regions_to_table(region_ids, table_version_id)
                     .await;
 
@@ -669,9 +671,9 @@ impl SeafowlContext {
 
                     let table_version_id = table.table_version_id;
 
-                    // Attach the regions to the empty table
-                    let region_ids = self.catalog.create_regions(regions).await;
-                    self.catalog
+                    // Attach the regions to the table
+                    let region_ids = self.region_catalog.create_regions(regions).await;
+                    self.region_catalog
                         .append_regions_to_table(region_ids, table_version_id)
                         .await;
 
@@ -763,12 +765,12 @@ impl SeafowlContext {
             arrow_schema: Arc::new(schema.as_ref().into()),
         };
         let collection_id = self
-            .catalog
+            .table_catalog
             .get_collection_id_by_name(&self.database, schema_name)
             .await
             .ok_or_else(|| Error::Plan(format!("Schema {:?} does not exist!", schema_name)))?;
         Ok(self
-            .catalog
+            .table_catalog
             .create_table(collection_id, table_name, sf_schema)
             .await)
     }
@@ -816,14 +818,19 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::execution::disk_manager::DiskManagerConfig;
+    use mockall::predicate;
     use object_store::memory::InMemory;
 
-    use crate::session::make_session;
-    use crate::testutils::MockCatalog;
+    use crate::{
+        catalog::{MockRegionCatalog, MockTableCatalog, TableCatalog},
+        provider::{SeafowlCollection, SeafowlDatabase},
+        session::make_session,
+    };
 
     use datafusion::arrow::datatypes::{
         DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     };
+    use std::collections::HashMap as StdHashMap;
 
     use super::*;
 
@@ -834,17 +841,55 @@ mod tests {
             ArrowField::new("value", ArrowDataType::Float64, false),
         ]);
 
-        let catalog = MockCatalog {
-            singleton_table_name: "some_table".to_string(),
-            singleton_table_schema: Arc::new(arrow_schema),
+        let mut region_catalog = MockRegionCatalog::new();
+
+        region_catalog
+            .expect_load_table_regions()
+            .with(predicate::eq(1))
+            .returning(|_| {
+                vec![SeafowlRegion {
+                    object_storage_id: Arc::from("some-file.parquet"),
+                    row_count: 3,
+                    columns: Arc::new(vec![]),
+                }]
+            });
+
+        let region_catalog_ptr = Arc::new(region_catalog);
+
+        let singleton_table = SeafowlTable {
+            name: Arc::from("some_table"),
+            schema: Arc::new(SeafowlSchema {
+                arrow_schema: Arc::new(arrow_schema.clone()),
+            }),
+            table_version_id: 0,
+            catalog: region_catalog_ptr.clone(),
         };
-        session.register_catalog("testdb", Arc::new(catalog.load_database(0).await));
+        let tables = StdHashMap::from([(Arc::from("some_table"), Arc::from(singleton_table))]);
+        let collections = StdHashMap::from([(
+            Arc::from("testcol"),
+            Arc::from(SeafowlCollection {
+                name: Arc::from("testcol"),
+                tables,
+            }),
+        )]);
+
+        let mut table_catalog = MockTableCatalog::new();
+        table_catalog
+            .expect_load_database()
+            .with(predicate::eq(0))
+            .returning(move |_| SeafowlDatabase {
+                name: Arc::from("testdb"),
+                collections: collections.clone(),
+            });
+
+        session.register_catalog("testdb", Arc::new(table_catalog.load_database(0).await));
 
         SeafowlContext {
             inner: session,
-            catalog: Arc::new(catalog),
+            table_catalog: Arc::new(table_catalog),
+            region_catalog: region_catalog_ptr,
             database: "testdb".to_string(),
-            database_id: 1,
+            database_id: 0,
         }
     }
 

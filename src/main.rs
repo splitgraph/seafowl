@@ -7,9 +7,6 @@ pub mod repository;
 pub mod schema;
 pub mod session;
 
-#[cfg(test)]
-pub(crate) mod testutils;
-
 fn main() {
     println!("Hello, world!");
 }
