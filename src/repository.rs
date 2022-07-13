@@ -557,26 +557,28 @@ mod tests {
             .get_all_columns_in_database(database_id)
             .await
             .expect("Error getting all columns");
-        assert_eq!(
-            all_columns,
-            [
+
+        fn expected(version: TableVersionId) -> Vec<AllDatabaseColumnsResult> {
+            vec![
                 AllDatabaseColumnsResult {
                     collection_name: "testcol".to_string(),
                     table_name: "testtable".to_string(),
-                    table_version_id: 1,
+                    table_version_id: version,
                     column_name: "date".to_string(),
-                    column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}".to_string()
+                    column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}".to_string(),
                 },
                 AllDatabaseColumnsResult {
                     collection_name: "testcol".to_string(),
                     table_name: "testtable".to_string(),
-                    table_version_id: 1,
+                    table_version_id: version,
                     column_name: "value".to_string(),
                     column_type: "{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"
-                        .to_string()
-                }
+                        .to_string(),
+                },
             ]
-        );
+        }
+
+        assert_eq!(all_columns, expected(1));
 
         // Duplicate the table
         let new_version_id = repository
@@ -590,26 +592,7 @@ mod tests {
             .await
             .expect("Error getting all columns");
 
-        assert_eq!(
-            all_columns,
-            [
-                AllDatabaseColumnsResult {
-                    collection_name: "testcol".to_string(),
-                    table_name: "testtable".to_string(),
-                    table_version_id: new_version_id,
-                    column_name: "date".to_string(),
-                    column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}".to_string()
-                },
-                AllDatabaseColumnsResult {
-                    collection_name: "testcol".to_string(),
-                    table_name: "testtable".to_string(),
-                    table_version_id: new_version_id,
-                    column_name: "value".to_string(),
-                    column_type: "{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"
-                        .to_string()
-                }
-            ]
-        );
+        assert_eq!(all_columns, expected(new_version_id));
     }
 
     #[tokio::test]
