@@ -524,7 +524,26 @@ mod tests {
             .get_all_columns_in_database(database_id)
             .await
             .expect("Error getting all columns");
-        assert_eq!(all_columns, [AllDatabaseColumnsResult { collection_name: "testcol".to_string(), table_name: "testtable".to_string(), table_version_id: 1, column_name: "date".to_string(), column_type: "{\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"},\"children\":[]}".to_string() }, AllDatabaseColumnsResult { collection_name: "testcol".to_string(), table_name: "testtable".to_string(), table_version_id: 1, column_name: "value".to_string(), column_type: "{\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"},\"children\":[]}".to_string() }]);
+        assert_eq!(
+            all_columns,
+            [
+                AllDatabaseColumnsResult {
+                    collection_name: "testcol".to_string(),
+                    table_name: "testtable".to_string(),
+                    table_version_id: 1,
+                    column_name: "date".to_string(),
+                    column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}".to_string()
+                },
+                AllDatabaseColumnsResult {
+                    collection_name: "testcol".to_string(),
+                    table_name: "testtable".to_string(),
+                    table_version_id: 1,
+                    column_name: "value".to_string(),
+                    column_type: "{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"
+                        .to_string()
+                }
+            ]
+        );
     }
 
     #[tokio::test]
