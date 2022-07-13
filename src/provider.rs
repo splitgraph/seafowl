@@ -223,11 +223,11 @@ mod tests {
     use arrow::array::StringArray;
     use bytes::{BufMut, Bytes, BytesMut};
     use datafusion::{
-        assert_batches_eq,
         arrow::{
             array::{ArrayRef, Int64Array},
             record_batch::RecordBatch,
         },
+        assert_batches_eq,
         datasource::TableProvider,
         parquet::{arrow::ArrowWriter, file::properties::WriterProperties},
         physical_plan::collect,
@@ -247,7 +247,8 @@ mod tests {
         // Make a batch
         let c1: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
         let c2: ArrayRef = Arc::new(StringArray::from(vec!["one", "two", "none"]));
-        let batch = RecordBatch::try_from_iter(vec![("c1", c1.clone()), ("c2", c2.clone())]).unwrap();
+        let batch =
+            RecordBatch::try_from_iter(vec![("c1", c1.clone()), ("c2", c2.clone())]).unwrap();
 
         // Write a Parquet file to the object store
         let buf = BytesMut::new();
@@ -296,7 +297,6 @@ mod tests {
             catalog: Arc::new(catalog),
         };
 
-
         (context, table)
     }
 
@@ -309,7 +309,9 @@ mod tests {
             .scan(&state, &None, &[], None)
             .await
             .expect("error creating plan");
-        let results = collect(plan, context.task_ctx()).await.expect("error running");
+        let results = collect(plan, context.task_ctx())
+            .await
+            .expect("error running");
         let expected = vec![
             "+----+------+",
             "| c1 | c2   |",
@@ -323,7 +325,6 @@ mod tests {
         assert_batches_eq!(expected, &results);
     }
 
-
     #[tokio::test]
     async fn test_scan_plan_projection() {
         let (context, table) = make_table_with_batch().await;
@@ -333,16 +334,12 @@ mod tests {
             .scan(&state, &Some(vec![1]), &[], None)
             .await
             .expect("error creating plan");
-        let results = collect(plan, context.task_ctx()).await.expect("error running");
+        let results = collect(plan, context.task_ctx())
+            .await
+            .expect("error running");
 
         let expected = vec![
-            "+------+",
-            "| c2   |",
-            "+------+",
-            "| one  |",
-            "| two  |",
-            "| none |",
-            "+------+",
+            "+------+", "| c2   |", "+------+", "| one  |", "| two  |", "| none |", "+------+",
         ];
 
         assert_batches_eq!(expected, &results);

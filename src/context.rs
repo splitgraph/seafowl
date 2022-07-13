@@ -9,7 +9,6 @@ use datafusion::execution::DiskManager;
 use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::{DFField, Expr};
 
-
 use futures::{StreamExt, TryStreamExt};
 
 use hashbrown::HashMap;
