@@ -120,6 +120,67 @@ async fn test_create_table() {
 async fn test_create_table_and_insert() {
     let context = make_context_with_pg().await;
 
+    // Need to reload the schema to pick up the new table version
+    context.reload_schema().await;
+
+    // Check table columns: make sure scanning through our file pads the rest with NULLs
+    let plan = context
+        .plan_query("SELECT * FROM test_table")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    // TODO why are we not seeing some_time (timestamp values here?)
+    let expected = vec![
+        "+-----------------+----------------+------------------+-----------+------------+",
+        "| some_bool_value | some_int_value | some_other_value | some_time | some_value |",
+        "+-----------------+----------------+------------------+-----------+------------+",
+        "|                 | 1111           |                  |           | 42         |",
+        "|                 | 2222           |                  |           | 43         |",
+        "|                 | 3333           |                  |           | 44         |",
+        "+-----------------+----------------+------------------+-----------+------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // Test some projections and aggregations
+    let plan = context
+        .plan_query("SELECT MAX(some_time) FROM test_table")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+---------------------------+",
+        "| MAX(test_table.some_time) |",
+        "+---------------------------+",
+        "|                           |",
+        "+---------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    let plan = context
+        .plan_query("SELECT MAX(some_int_value), COUNT(DISTINCT some_bool_value), MAX(some_value) FROM test_table")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+--------------------------------+--------------------------------------------+----------------------------+",
+        "| MAX(test_table.some_int_value) | COUNT(DISTINCT test_table.some_bool_value) | MAX(test_table.some_value) |",
+        "+--------------------------------+--------------------------------------------+----------------------------+",
+        "| 3333                           | 0                                          | 44                         |",
+        "+--------------------------------+--------------------------------------------+----------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
+async fn test_insert_two_different_schemas() {
+    let context = make_context_with_pg().await;
+
     let plan = context
         .plan_query(
             "CREATE TABLE test_table (
@@ -133,10 +194,8 @@ async fn test_create_table_and_insert() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    // reregister / reload the catalog
     context.reload_schema().await;
 
-    // Insert into the table
     let plan = context
         .plan_query(
             "INSERT INTO test_table (some_int_value, some_time, some_value) VALUES
@@ -148,28 +207,38 @@ async fn test_create_table_and_insert() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    // Need to reload the schema to pick up the new table version
     context.reload_schema().await;
 
-    // Check table columns
+    let plan = context
+        .plan_query(
+            "INSERT INTO test_table (some_value, some_bool_value, some_other_value) VALUES
+                (41, FALSE, 2.15),
+                (45, TRUE, 9.12),
+                (NULL, FALSE, 44.34)",
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    context.reload_schema().await;
+
     let plan = context
         .plan_query("SELECT * FROM test_table")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-
-    // TODO why are we not seeing some_time (timestamp values here?)
-    let expected =
-        vec![
+    let expected = vec![
         "+-----------------+----------------+------------------+-----------+------------+",
         "| some_bool_value | some_int_value | some_other_value | some_time | some_value |",
         "+-----------------+----------------+------------------+-----------+------------+",
         "|                 | 1111           |                  |           | 42         |",
         "|                 | 2222           |                  |           | 43         |",
         "|                 | 3333           |                  |           | 44         |",
+        "| false           |                | 2.1500000000     |           | 41         |",
+        "| true            |                | 9.1199999999     |           | 45         |",
+        "| false           |                | 44.3400000000    |           |            |",
         "+-----------------+----------------+------------------+-----------+------------+",
     ];
-
     assert_batches_eq!(expected, &results);
 }
