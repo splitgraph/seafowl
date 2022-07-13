@@ -181,7 +181,7 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
     }
 
     fn schema(&self) -> ArrowSchemaRef {
-        self.schema.arrow_schema.clone()
+        self.inner.schema()
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -220,8 +220,10 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
 mod tests {
     use std::sync::Arc;
 
+    use arrow::array::StringArray;
     use bytes::{BufMut, Bytes, BytesMut};
     use datafusion::{
+        assert_batches_eq,
         arrow::{
             array::{ArrayRef, Int64Array},
             record_batch::RecordBatch,
@@ -240,21 +242,22 @@ mod tests {
         schema::Schema,
     };
 
-    #[tokio::test]
-    async fn test_scan_plan() {
+    /// Helper function to make a SeafowlTable pointing to a small batch of data
+    async fn make_table_with_batch() -> (SessionContext, SeafowlTable) {
         // Make a batch
         let c1: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
-        let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())]).unwrap();
+        let c2: ArrayRef = Arc::new(StringArray::from(vec!["one", "two", "none"]));
+        let batch = RecordBatch::try_from_iter(vec![("c1", c1.clone()), ("c2", c2.clone())]).unwrap();
 
         // Write a Parquet file to the object store
         let buf = BytesMut::new();
         let mut writer = buf.writer();
 
         let props = WriterProperties::builder().build();
-        let mut arrow_writer = ArrowWriter::try_new(&mut writer, batch1.schema(), Some(props))
+        let mut arrow_writer = ArrowWriter::try_new(&mut writer, batch.schema(), Some(props))
             .expect("creating writer");
 
-        arrow_writer.write(&batch1).expect("Writing batch");
+        arrow_writer.write(&batch).expect("Writing batch");
         arrow_writer.close().unwrap();
 
         // Write the file to an in-memory store
@@ -287,19 +290,61 @@ mod tests {
         let table = SeafowlTable {
             name: Arc::from("table"),
             schema: Arc::new(Schema {
-                arrow_schema: batch1.schema(),
+                arrow_schema: batch.schema(),
             }),
             table_version_id: 1,
             catalog: Arc::new(catalog),
         };
 
+
+        (context, table)
+    }
+
+    #[tokio::test]
+    async fn test_scan_plan() {
+        let (context, table) = make_table_with_batch().await;
         let state = context.state.read().clone();
+
         let plan = table
             .scan(&state, &None, &[], None)
             .await
             .expect("error creating plan");
-        let task_ctx = context.task_ctx();
-        let result = collect(plan, task_ctx).await.expect("error running");
-        dbg!(result);
+        let results = collect(plan, context.task_ctx()).await.expect("error running");
+        let expected = vec![
+            "+----+------+",
+            "| c1 | c2   |",
+            "+----+------+",
+            "| 1  | one  |",
+            "| 2  | two  |",
+            "|    | none |",
+            "+----+------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+    }
+
+
+    #[tokio::test]
+    async fn test_scan_plan_projection() {
+        let (context, table) = make_table_with_batch().await;
+        let state = context.state.read().clone();
+
+        let plan = table
+            .scan(&state, &Some(vec![1]), &[], None)
+            .await
+            .expect("error creating plan");
+        let results = collect(plan, context.task_ctx()).await.expect("error running");
+
+        let expected = vec![
+            "+------+",
+            "| c2   |",
+            "+------+",
+            "| one  |",
+            "| two  |",
+            "| none |",
+            "+------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
     }
 }
