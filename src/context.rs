@@ -354,6 +354,16 @@ impl SeafowlContext {
         &self.inner
     }
 
+    /// Reload the context to apply / pick up new schema changes
+    pub async fn reload_schema(&self) {
+        // TODO: this loads all collection/table names into memory, so creating tables within the same
+        // session won't reflect the changes without recreating the context.
+        self.inner.register_catalog(
+            &self.database,
+            Arc::new(self.table_catalog.load_database(self.database_id).await),
+        );
+    }
+
     pub async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
         let mut statements = DFParser::parse_sql(sql)?;
 

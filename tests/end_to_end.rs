@@ -30,21 +30,17 @@ async fn make_context_with_pg() -> SeafowlContext {
     let database_id = catalog.create_database("default").await;
     catalog.create_collection(database_id, "public").await;
 
-    // Register our database with DataFusion
-    // TODO: this loads all collection/table names into memory, so creating tables within the same
-    // session won't reflect the changes without recreating the context.
-    context.register_catalog(
-        "default",
-        Arc::new(catalog.load_database(database_id).await),
-    );
-
-    SeafowlContext {
+    let result = SeafowlContext {
         inner: context,
         table_catalog: catalog.clone(),
         region_catalog: catalog.clone(),
         database: "default".to_string(),
         database_id,
-    }
+    };
+
+    // Register our database with DataFusion
+    result.reload_schema().await;
+    result
 }
 
 #[tokio::test]
