@@ -6,6 +6,7 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
 
+
 use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::{DFField, Expr};
 
@@ -480,7 +481,7 @@ impl SeafowlContext {
                     // TODO: we might need to pad out the result with NULL columns so that it has _exactly_
                     // the same shape as the rest of the table
                     let plan = LogicalPlan::Projection(Projection {
-                        expr: column_exprs.iter().map(|c| Expr::Column(c.clone())).collect(),
+                        expr: column_exprs.iter().zip(plan.schema().field_names()).map(|(c, f)| Expr::Column(Column::from_name(f)).alias(&c.name)).collect(),
                         input: Arc::new(plan),
                         schema: Arc::new(target_schema),
                         alias: None,
@@ -978,7 +979,7 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "Insert: some_table\
-        \n  Projection: #date, #value\
+        \n  Projection: #column1 AS date, #column2 AS value\
         \n    Values: (Utf8(\"2022-01-01\"), Int64(42))"
         );
     }
@@ -997,7 +998,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(format!("{:?}", plan), "Insert: some_table\
-        \n  Projection: #date, #value\
+        \n  Projection: #my_date AS date, #my_value AS value\
         \n    Projection: #testdb.testcol.some_table.date AS my_date, #testdb.testcol.some_table.value AS my_value\
         \n      TableScan: testdb.testcol.some_table");
     }
@@ -1014,7 +1015,7 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "Insert: some_table\
-        \n  Projection: #date, #value\
+        \n  Projection: #column1 AS date, #column2 AS value\
         \n    Values: (Utf8(\"2022-01-01\"), Int64(42))"
         );
     }
