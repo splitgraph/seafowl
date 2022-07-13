@@ -66,3 +66,48 @@ async fn test_information_schema() {
 
     assert_batches_eq!(expected, &results);
 }
+
+#[tokio::test]
+async fn test_create_table() {
+    let context = make_context_with_pg().await;
+
+    let plan = context
+        .plan_query(
+            "CREATE TABLE test_table (
+            some_time TIMESTAMP,
+            some_value REAL,
+            some_other_value NUMERIC,
+            some_bool_value BOOLEAN,
+            some_int_value BIGINT)",
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // reregister / reload the catalog
+    context.reload_schema().await;
+
+    // Check table columns
+    let plan = context
+        .plan_query("SELECT table_schema, table_name, column_name, data_type
+        FROM information_schema.columns
+        WHERE table_catalog = 'default'
+        ORDER BY table_name, column_name")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+--------------+------------+------------------+-----------------------------+",
+        "| table_schema | table_name | column_name      | data_type                   |",
+        "+--------------+------------+------------------+-----------------------------+",
+        "| public       | test_table | some_bool_value  | Boolean                     |",
+        "| public       | test_table | some_int_value   | Int64                       |",
+        "| public       | test_table | some_other_value | Decimal(38, 10)             |",
+        "| public       | test_table | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table | some_value       | Float32                     |",
+        "+--------------+------------+------------------+-----------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+}
