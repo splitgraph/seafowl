@@ -63,7 +63,7 @@ pub struct Insert {
 
 impl UserDefinedLogicalNode for Insert {
     fn as_any(&self) -> &dyn Any {
-        todo!()
+        self
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {

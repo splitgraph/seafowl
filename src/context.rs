@@ -840,6 +840,17 @@ mod tests {
     use super::*;
 
     async fn mock_context() -> SeafowlContext {
+        mock_context_with_catalog_assertions(|_| (), |_| ()).await
+    }
+
+    async fn mock_context_with_catalog_assertions<FR, FT>(
+        mut setup_region_catalog: FR,
+        mut setup_table_catalog: FT,
+    ) -> SeafowlContext
+    where
+        FR: FnMut(&mut MockRegionCatalog),
+        FT: FnMut(&mut MockTableCatalog),
+    {
         let session = make_session();
         let arrow_schema = ArrowSchema::new(vec![
             ArrowField::new("date", ArrowDataType::Date64, false),
@@ -858,6 +869,8 @@ mod tests {
                     columns: Arc::new(vec![]),
                 }]
             });
+
+        setup_region_catalog(&mut region_catalog);
 
         let region_catalog_ptr = Arc::new(region_catalog);
 
@@ -888,6 +901,13 @@ mod tests {
             });
 
         session.register_catalog("testdb", Arc::new(table_catalog.load_database(0).await));
+
+        setup_table_catalog(&mut table_catalog);
+
+        let object_store = Arc::new(InMemory::new());
+        session
+            .runtime_env()
+            .register_object_store("seafowl", "", object_store);
 
         SeafowlContext {
             inner: session,
@@ -1031,5 +1051,90 @@ mod tests {
             .create_logical_plan("INSERT INTO testcol.some_table SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')")
             .await.unwrap_err();
         assert_eq!(err.to_string(), "Error during planning: Column totimestamp(Utf8(\"2022-01-01T12:00:00\")) (type: Timestamp(Nanosecond, None)) is not compatible with column value (type: Float64)");
+    }
+
+    #[tokio::test]
+    async fn test_preexec_insert() {
+        let sf_context = mock_context_with_catalog_assertions(
+            |regions| {
+                regions
+                    .expect_create_regions()
+                    .withf(|regions| {
+                        // TODO: the ergonomics of these mocks are pretty bad, standard with(predicate::eq(...)) doesn't
+                        // show the actual value so we have to resort to this.
+                        dbg!(regions);
+                        *regions
+                            == vec![SeafowlRegion {
+                                object_storage_id: Arc::from("d870a122cdce63908b9d9017d78376be60b1fe1d4c562fd123ee2d76da1487ed.parquet"),
+                                row_count: 1,
+                                columns: Arc::new(vec![
+                                    RegionColumn {
+                                        name: Arc::from("date"),
+                                        r#type: Arc::from("{\"name\":\"utf8\"}"),
+                                        min_value: Arc::new(None),
+                                        max_value: Arc::new(None),
+                                    },
+                                    RegionColumn {
+                                        name: Arc::from("value"),
+                                        r#type: Arc::from("{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"),
+                                        min_value: Arc::new(Some(
+                                            vec![
+                                                52,
+                                                50,
+                                            ],
+                                        )),
+                                        max_value: Arc::new(Some(
+                                            vec![
+                                                52,
+                                                50,
+                                            ],
+                                        )),
+                                    },
+                                ],)
+                            },]
+                    })
+                    .return_const(vec![2]);
+
+                // NB: even though this result isn't consumed by the caller, we need
+                // to return a unit here, otherwise this will fail pretending the
+                // expectation failed.
+                regions
+                    .expect_append_regions_to_table()
+                    .with(predicate::eq(vec![2]), predicate::eq(1)).return_const(());
+            },
+            |tables| {
+                tables
+                    .expect_create_new_table_version()
+                    .with(predicate::eq(0))
+                    .return_const(1);
+            },
+        )
+        .await;
+
+        sf_context
+            .plan_query("INSERT INTO testcol.some_table (date, value) VALUES('2022-01-01', 42)")
+            .await
+            .unwrap();
+
+        let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
+        let store = sf_context
+            .inner
+            .runtime_env()
+            .object_store(object_store_url.clone())
+            .unwrap();
+        let uploaded_objects = store
+            .list(None)
+            .await
+            .unwrap()
+            .map_ok(|meta| meta.location)
+            .try_collect::<Vec<Path>>()
+            .await
+            .unwrap();
+        assert_eq!(
+            uploaded_objects,
+            vec![Path::from(
+                "d870a122cdce63908b9d9017d78376be60b1fe1d4c562fd123ee2d76da1487ed.parquet"
+            )]
+        );
     }
 }

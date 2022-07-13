@@ -26,11 +26,7 @@ use futures::future;
 
 use object_store::path::Path;
 
-use crate::{
-    catalog::{RegionCatalog},
-    data_types::TableVersionId,
-    schema::Schema,
-};
+use crate::{catalog::RegionCatalog, data_types::TableVersionId, schema::Schema};
 
 pub struct SeafowlDatabase {
     pub name: Arc<str>,
@@ -239,7 +235,7 @@ mod tests {
     use object_store::{memory::InMemory, path::Path, ObjectStore};
 
     use crate::{
-        catalog::{MockRegionCatalog},
+        catalog::MockRegionCatalog,
         provider::{SeafowlRegion, SeafowlTable},
         schema::Schema,
     };
