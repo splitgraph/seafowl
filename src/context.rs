@@ -754,17 +754,10 @@ impl SeafowlContext {
         schema: &Arc<DFSchema>,
     ) -> Result<(TableId, TableVersionId)> {
         let table_ref = TableReference::from(name);
-        let (schema_name, table_name) = match table_ref {
-            TableReference::Bare { table: _ } => Err(Error::NotImplemented(
-                "Cannot CREATE TABLE without a schema qualifier!".to_string(),
-            )),
-            TableReference::Partial { schema, table } => Ok((schema, table)),
-            TableReference::Full {
-                catalog: _,
-                schema,
-                table,
-            } => Ok((schema, table)),
-        }?;
+        let resolved_ref = table_ref.resolve(&self.database, "public");
+        let schema_name = resolved_ref.schema;
+        let table_name = resolved_ref.table;
+
         let sf_schema = SeafowlSchema {
             arrow_schema: Arc::new(schema.as_ref().into()),
         };
