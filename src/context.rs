@@ -1056,6 +1056,28 @@ mod tests {
         assert_eq!(err.to_string(), "Error during planning: Column totimestamp(Utf8(\"2022-01-01T12:00:00\")) (type: Timestamp(Nanosecond, None)) is not compatible with column value (type: Float64)");
     }
 
+    // TODO fix this test (error expected)
+    #[tokio::test]
+    async fn test_plan_insert_values_wrong_number() {
+        let sf_context = mock_context().await;
+
+        let err = sf_context
+            .create_logical_plan("INSERT INTO testcol.some_table VALUES('2022-01-01')")
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "TODO");
+    }
+
+    #[tokio::test]
+    async fn test_plan_insert_values_duplicate_columns() {
+        let sf_context = mock_context().await;
+
+        let err = sf_context
+            .create_logical_plan("INSERT INTO testcol.some_table(date, date, value) VALUES('2022-01-01', '2022-01-01', 42)")
+            .await.unwrap_err();
+        assert_eq!(err.to_string(), "Schema error: Schema contains duplicate unqualified field name 'date'");
+    }
+
     #[tokio::test]
     async fn test_preexec_insert() {
         let sf_context = mock_context_with_catalog_assertions(
@@ -1068,7 +1090,7 @@ mod tests {
                         dbg!(regions);
                         *regions
                             == vec![SeafowlRegion {
-                                object_storage_id: Arc::from("d870a122cdce63908b9d9017d78376be60b1fe1d4c562fd123ee2d76da1487ed.parquet"),
+                                object_storage_id: Arc::from("64b975479d64f5c4d27be2a743f259b0fc613bc9fba19120953645a76c687fd2.parquet"),
                                 row_count: 1,
                                 columns: Arc::new(vec![
                                     RegionColumn {
@@ -1136,7 +1158,7 @@ mod tests {
         assert_eq!(
             uploaded_objects,
             vec![Path::from(
-                "d870a122cdce63908b9d9017d78376be60b1fe1d4c562fd123ee2d76da1487ed.parquet"
+                "64b975479d64f5c4d27be2a743f259b0fc613bc9fba19120953645a76c687fd2.parquet"
             )]
         );
     }
