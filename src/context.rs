@@ -9,6 +9,7 @@ use datafusion::execution::DiskManager;
 use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::{DFField, Expr};
 
+
 use futures::{StreamExt, TryStreamExt};
 
 use hashbrown::HashMap;
@@ -462,19 +463,13 @@ impl SeafowlContext {
                     // INSERT INTO table (col_3, col_4) VALUES (1, 2)
                     let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
 
-                    let (column_exprs, target_schema) = if columns.is_empty() {
+                    let target_schema = if columns.is_empty() {
                         // Empty means we're inserting into all columns of the table
-                        (table_schema.fields().iter().map(|f| Column::from_name(f.name())).collect(),
-                        seafowl_table.schema.arrow_schema.clone().to_dfschema()?)
+                        seafowl_table.schema.arrow_schema.clone().to_dfschema()?
                     } else {
-                        let exprs: Vec<_> = columns
-                        .iter()
-                        .map(|id| {
-                            Column::from_name(normalize_ident(id))
-                        })
-                        .collect();
-                        let fields = exprs.iter().map(|c| Ok(table_schema.field_from_column(c)?.clone())).collect::<Result<Vec<DFField>>>()?;
-                        (exprs, DFSchema::new_with_metadata(fields, table_schema.metadata().clone())?)
+                        let fields = columns.iter().map(|c|
+                            Ok(table_schema.field_with_unqualified_name(&normalize_ident(c))?.clone())).collect::<Result<Vec<DFField>>>()?;
+                        DFSchema::new_with_metadata(fields, table_schema.metadata().clone())?
                     };
 
                     let plan = query_planner.query_to_plan(*source, &mut HashMap::new())?;
@@ -490,7 +485,14 @@ impl SeafowlContext {
                     // TODO: we might need to pad out the result with NULL columns so that it has _exactly_
                     // the same shape as the rest of the table
                     let plan = LogicalPlan::Projection(Projection {
-                        expr: column_exprs.iter().zip(plan.schema().field_names()).map(|(c, f)| Expr::Column(Column::from_name(f)).alias(&c.name)).collect(),
+                        expr: target_schema.fields().iter().zip(plan.schema().field_names()).map(|(table_field, query_field_name)| {
+                            // Generate CAST (source_col AS table_col_type) AS table_col
+                            // If the type is the same, this will be optimized out.
+                            Expr::TryCast{
+                                expr: Box::new(Expr::Column(Column::from_name(query_field_name))),
+                                data_type: table_field.data_type().clone()
+                            }.alias(table_field.name())
+                        }).collect(),
                         input: Arc::new(plan),
                         schema: Arc::new(target_schema),
                         alias: None,
@@ -1001,8 +1003,8 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "Insert: some_table\
-        \n  Projection: #column1 AS date, #column2 AS value\
-        \n    Values: (Utf8(\"2022-01-01\"), Int64(42))"
+            \n  Projection: TRY_CAST(#column1 AS Date64) AS date, TRY_CAST(#column2 AS Float64) AS value\
+            \n    Values: (Utf8(\"2022-01-01\"), Int64(42))"
         );
     }
 
@@ -1020,7 +1022,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(format!("{:?}", plan), "Insert: some_table\
-        \n  Projection: #my_date AS date, #my_value AS value\
+        \n  Projection: TRY_CAST(#my_date AS Date64) AS date, TRY_CAST(#my_value AS Float64) AS value\
         \n    Projection: #testdb.testcol.some_table.date AS my_date, #testdb.testcol.some_table.value AS my_value\
         \n      TableScan: testdb.testcol.some_table");
     }
@@ -1037,8 +1039,8 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "Insert: some_table\
-        \n  Projection: #column1 AS date, #column2 AS value\
-        \n    Values: (Utf8(\"2022-01-01\"), Int64(42))"
+            \n  Projection: TRY_CAST(#column1 AS Date64) AS date, TRY_CAST(#column2 AS Float64) AS value\
+            \n    Values: (Utf8(\"2022-01-01\"), Int64(42))"
         );
     }
 
@@ -1072,13 +1074,13 @@ mod tests {
                                 columns: Arc::new(vec![
                                     RegionColumn {
                                         name: Arc::from("date"),
-                                        r#type: Arc::from("{\"name\":\"utf8\"}"),
+                                        r#type: Arc::from("{\"name\":\"date\",\"unit\":\"MILLISECOND\"}"),
                                         min_value: Arc::new(None),
                                         max_value: Arc::new(None),
                                     },
                                     RegionColumn {
                                         name: Arc::from("value"),
-                                        r#type: Arc::from("{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"),
+                                        r#type: Arc::from("{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"),
                                         min_value: Arc::new(Some(
                                             vec![
                                                 52,
