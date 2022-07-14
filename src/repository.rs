@@ -117,7 +117,7 @@ impl PostgresRepository {
         let repo = PostgresRepository::connect(dsn, schema_name.clone()).await?;
 
         repo.executor
-            .execute(format!("CREATE SCHEMA {};", schema_name).as_str())
+            .execute(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str())
             .await?;
 
         // Setup the schema

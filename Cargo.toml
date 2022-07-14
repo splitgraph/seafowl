@@ -27,6 +27,14 @@ bytes = "1.1.0"
 # imported by tests::end_to_end if it's cfg(test).
 rand = "0.8"
 
+# PG wire protocol support
+convergence = "0.5.0"
+convergence-arrow = "0.5.0"
+
+[patch.crates-io]
+# Get convergence-arrow to use the Git version of datafusion
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev="bf7564f62117487a9a397c25326fcda1ed22d08d", default-features = false, package = "datafusion" }
+
 [dev-dependencies]
 mockall = "0.11.1"
 # for test assertions (assert_batches_eq! doesn't work without it)
