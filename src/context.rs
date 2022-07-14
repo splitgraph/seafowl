@@ -473,7 +473,13 @@ impl SeafowlContext {
 
                     let plan = query_planner.query_to_plan(*source, &mut HashMap::new())?;
 
-                    // TODO check the length too
+                    // Check the length
+                    if plan.schema().fields().len() != target_schema.fields().len() {
+                        return Err(Error::Plan(
+                            format!("Unexpected number of columns in VALUES: expected {:?}, got {:?}", target_schema.fields().len(), plan.schema().fields().len())
+                        ))
+                    }
+
                     // Check we can cast from the values in the INSERT to the actual table schema
                     target_schema.check_arrow_schema_type_compatible(&((**plan.schema()).clone().into()))?;
 
@@ -1056,7 +1062,6 @@ mod tests {
         assert_eq!(err.to_string(), "Error during planning: Column totimestamp(Utf8(\"2022-01-01T12:00:00\")) (type: Timestamp(Nanosecond, None)) is not compatible with column value (type: Float64)");
     }
 
-    // TODO fix this test (error expected)
     #[tokio::test]
     async fn test_plan_insert_values_wrong_number() {
         let sf_context = mock_context().await;
@@ -1065,7 +1070,10 @@ mod tests {
             .create_logical_plan("INSERT INTO testcol.some_table VALUES('2022-01-01')")
             .await
             .unwrap_err();
-        assert_eq!(err.to_string(), "TODO");
+        assert_eq!(
+            err.to_string(),
+            "Error during planning: Unexpected number of columns in VALUES: expected 2, got 1"
+        );
     }
 
     #[tokio::test]
@@ -1075,7 +1083,10 @@ mod tests {
         let err = sf_context
             .create_logical_plan("INSERT INTO testcol.some_table(date, date, value) VALUES('2022-01-01', '2022-01-01', 42)")
             .await.unwrap_err();
-        assert_eq!(err.to_string(), "Schema error: Schema contains duplicate unqualified field name 'date'");
+        assert_eq!(
+            err.to_string(),
+            "Schema error: Schema contains duplicate unqualified field name 'date'"
+        );
     }
 
     #[tokio::test]
