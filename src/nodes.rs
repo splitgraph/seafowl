@@ -1,11 +1,8 @@
-use std::{
-    any::Any,
-    fmt::{self, Formatter},
-    sync::Arc,
-    vec,
-};
+use std::{any::Any, fmt, sync::Arc, vec};
 
-use datafusion::logical_plan::{Column, DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode};
+use datafusion::logical_plan::{
+    Column, DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode,
+};
 
 use crate::provider::SeafowlTable;
 
@@ -19,76 +16,12 @@ pub struct CreateTable {
     pub if_not_exists: bool,
 }
 
-impl UserDefinedLogicalNode for CreateTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![]
-    }
-
-    fn schema(&self) -> &DFSchemaRef {
-        // TODO or none?
-        &self.schema
-    }
-
-    fn expressions(&self) -> Vec<Expr> {
-        vec![]
-    }
-
-    fn fmt_for_explain(&self, _f: &mut Formatter) -> fmt::Result {
-        todo!()
-    }
-
-    fn from_template(
-        &self,
-        _exprs: &[Expr],
-        _inputs: &[LogicalPlan],
-    ) -> std::sync::Arc<dyn UserDefinedLogicalNode> {
-        todo!()
-    }
-}
-
 #[derive(Debug)]
 pub struct Insert {
     /// The table to insert into
     pub table: Arc<SeafowlTable>,
-    /// List of columns to set
-    // TODO might not be needed
-    // pub columns: Vec<Column>,
     /// Result of a query to insert (with a type-compatible schema that is a subset of the target table)
     pub input: Arc<LogicalPlan>,
-}
-
-impl UserDefinedLogicalNode for Insert {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![self.input.as_ref()]
-    }
-
-    fn schema(&self) -> &DFSchemaRef {
-        todo!()
-    }
-
-    fn expressions(&self) -> Vec<Expr> {
-        todo!()
-    }
-
-    fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Insert: {}", self.table.name)
-    }
-
-    fn from_template(
-        &self,
-        _exprs: &[Expr],
-        _inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode> {
-        todo!()
-    }
 }
 
 #[derive(Debug)]
@@ -107,36 +40,6 @@ pub struct Update {
     pub assignments: Vec<Assignment>,
 }
 
-impl UserDefinedLogicalNode for Update {
-    fn as_any(&self) -> &dyn Any {
-        todo!()
-    }
-
-    fn inputs(&self) -> Vec<&LogicalPlan> {
-        todo!()
-    }
-
-    fn schema(&self) -> &DFSchemaRef {
-        todo!()
-    }
-
-    fn expressions(&self) -> Vec<Expr> {
-        todo!()
-    }
-
-    fn fmt_for_explain(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        todo!()
-    }
-
-    fn from_template(
-        &self,
-        _exprs: &[Expr],
-        _inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode> {
-        todo!()
-    }
-}
-
 #[derive(Debug)]
 pub struct Delete {
     /// The table name (TODO: should this be a table ref?)
@@ -145,25 +48,55 @@ pub struct Delete {
     pub selection: Option<Expr>,
 }
 
-impl UserDefinedLogicalNode for Delete {
+#[derive(Debug)]
+pub enum SeafowlExtensionNode {
+    CreateTable(CreateTable),
+    Insert(Insert),
+    Update(Update),
+    Delete(Delete),
+}
+
+impl SeafowlExtensionNode {
+    pub fn from_dynamic(node: &Arc<dyn UserDefinedLogicalNode>) -> Option<&Self> {
+        node.as_any().downcast_ref::<Self>()
+    }
+}
+
+impl UserDefinedLogicalNode for SeafowlExtensionNode {
     fn as_any(&self) -> &dyn Any {
-        todo!()
+        self
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
-        todo!()
+        match self {
+            SeafowlExtensionNode::Insert(Insert { table: _, input }) => vec![input.as_ref()],
+            // TODO Update/Delete will probably have children
+            _ => vec![],
+        }
     }
 
     fn schema(&self) -> &DFSchemaRef {
-        todo!()
+        // These plans don't produce an output schema
+        todo!() //Arc::new(DFSchema::empty())
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        todo!()
+        vec![]
     }
 
-    fn fmt_for_explain(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        todo!()
+    fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SeafowlExtensionNode::Insert(Insert { table, .. }) => {
+                write!(f, "Insert: {}", table.name)
+            }
+            SeafowlExtensionNode::CreateTable(CreateTable { name, .. }) => {
+                write!(f, "Create: {}", name)
+            }
+            SeafowlExtensionNode::Update(Update { name, .. }) => write!(f, "Update: {}", name),
+            SeafowlExtensionNode::Delete(Delete { name, .. }) => {
+                write!(f, "Delete: {}", name)
+            }
+        }
     }
 
     fn from_template(

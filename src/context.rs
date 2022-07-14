@@ -53,6 +53,7 @@ use datafusion::{
 
 use crate::catalog::RegionCatalog;
 use crate::data_types::{TableId, TableVersionId};
+use crate::nodes::SeafowlExtensionNode;
 use crate::provider::{RegionColumn, SeafowlRegion, SeafowlTable};
 use crate::{
     catalog::TableCatalog,
@@ -406,11 +407,11 @@ impl SeafowlContext {
                 {
                     let cols = build_schema(columns)?;
                     Ok(LogicalPlan::Extension(Extension {
-                        node: Arc::new(CreateTable {
+                        node: Arc::new(SeafowlExtensionNode::CreateTable(CreateTable {
                             schema: cols.to_dfschema_ref()?,
                             name: name.to_string(),
                             if_not_exists,
-                        }),
+                        })),
                     }))
                 }
 
@@ -476,12 +477,12 @@ impl SeafowlContext {
                     });
 
                     Ok(LogicalPlan::Extension(Extension {
-                        node: Arc::new(Insert {
+                        node: Arc::new(SeafowlExtensionNode::Insert(Insert {
                             // TODO we might not need the whole table (we're currently cloning it in
                             // try_get_seafowl_table)
                             table: Arc::new(seafowl_table),
                             input: Arc::new(plan),
-                        }),
+                        })),
                     }))
                 }
                 Statement::Update {
@@ -511,11 +512,11 @@ impl SeafowlContext {
                     }).collect::<Result<Vec<Assignment>>>()?;
 
                     Ok(LogicalPlan::Extension(Extension {
-                        node: Arc::new(Update {
+                        node: Arc::new(SeafowlExtensionNode::Update(Update {
                             name: name.to_string(),
                             selection: selection_expr,
                             assignments: assignments_expr,
-                        }),
+                        })),
                     }))
                 }
                 Statement::Delete {
@@ -531,10 +532,10 @@ impl SeafowlContext {
                     };
 
                     Ok(LogicalPlan::Extension(Extension {
-                        node: Arc::new(Delete {
+                        node: Arc::new(SeafowlExtensionNode::Delete(Delete {
                             name: table_name.to_string(),
                             selection: selection_expr,
-                        }),
+                        })),
                     }))
                 }
                 _ => Err(Error::NotImplemented(format!(
@@ -676,106 +677,100 @@ impl SeafowlContext {
             }
             LogicalPlan::Extension(Extension { ref node }) => {
                 // Other custom nodes we made like CREATE TABLE/INSERT/UPDATE/DELETE/ALTER
-                let any = node.as_any();
+                match SeafowlExtensionNode::from_dynamic(node) {
+                    Some(sfe_node) => match sfe_node {
+                        SeafowlExtensionNode::CreateTable(CreateTable { schema, name, .. }) => {
+                            self.exec_create_table(name, schema).await?;
 
-                if let Some(CreateTable {
-                    schema,
-                    name,
-                    if_not_exists: _,
-                }) = any.downcast_ref::<CreateTable>()
-                {
-                    self.exec_create_table(name, schema).await?;
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::Insert(Insert { table, input }) => {
+                            let physical = self.create_physical_plan(input).await?;
 
-                    Ok(make_dummy_exec())
-                } else if let Some(Insert { table, input }) = any.downcast_ref::<Insert>() {
-                    let physical = self.create_physical_plan(input).await?;
+                            // Execute the plan and write it out to temporary Parquet files.
+                            let disk_manager = self.inner.runtime_env().disk_manager.clone();
 
-                    // Execute the plan and write it out to temporary Parquet files.
-                    let disk_manager = self.inner.runtime_env().disk_manager.clone();
+                            let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
+                            let store = self
+                                .inner
+                                .runtime_env()
+                                .object_store(object_store_url.clone())?;
 
-                    let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
-                    let store = self
-                        .inner
-                        .runtime_env()
-                        .object_store(object_store_url.clone())?;
-
-                    let regions =
-                        plan_to_object_store(&self.inner.state(), &physical, store, disk_manager)
+                            let regions = plan_to_object_store(
+                                &self.inner.state(),
+                                &physical,
+                                store,
+                                disk_manager,
+                            )
                             .await?;
 
-                    // Duplicate the table version into a new one
-                    let new_version_id = self
-                        .table_catalog
-                        .create_new_table_version(table.table_version_id)
-                        .await;
+                            // Duplicate the table version into a new one
+                            let new_version_id = self
+                                .table_catalog
+                                .create_new_table_version(table.table_version_id)
+                                .await;
 
-                    // Attach the regions to the table
-                    let region_ids = self.region_catalog.create_regions(regions).await;
-                    self.region_catalog
-                        .append_regions_to_table(region_ids, new_version_id)
-                        .await;
+                            // Attach the regions to the table
+                            let region_ids = self.region_catalog.create_regions(regions).await;
+                            self.region_catalog
+                                .append_regions_to_table(region_ids, new_version_id)
+                                .await;
 
-                    Ok(make_dummy_exec())
-                } else if let Some(Update {
-                    name: _,
-                    selection: _,
-                    assignments: _,
-                }) = any.downcast_ref::<Update>()
-                {
-                    // Some kind of a node that combines Filter + Projection?
-                    //
-                    //
-                    //
-                    //    Union
-                    //     |  |
-                    // Filter Projection
-                    //    |    |
-                    //    |   Filter
-                    //    |    |
-                    // TableScan
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::Update(_) => {
+                            // Some kind of a node that combines Filter + Projection?
+                            //
+                            //
+                            //
+                            //    Union
+                            //     |  |
+                            // Filter Projection
+                            //    |    |
+                            //    |   Filter
+                            //    |    |
+                            // TableScan
 
-                    // Pass an "initial partition id" in the batch (or ask our TableScan for what each
-                    // partition is pointing to)
-                    //
-                    // If a partition is missing: it stayed the same
-                    // If a partition didn't change (the filter didn't match anything): it stayed the same
-                    //    - but how do we find that out? we need to read through the whole partition to
-                    //      make sure nothing get updated, so that means we need to buffer the result
-                    //      on disk; could we just hash it at the end to see if it changed?
-                    // If a partition is empty: delete it
-                    //
-                    // So:
-                    //
-                    //   - do a scan through Case (projection) around TableScan (with the filter)
-                    //   - for each output partition:
-                    //     - gather it in a temporary file and hash it
-                    //     - find out from the ExecutionPlan which original file it belonged to
-                    //     - if it's the same: do nothing
-                    //     - if it's changed: replace that table version object; upload it
-                    //     - files corresponding to partitions that never got output won't get updated
-                    //
-                    // This also assumes one Parquet file <> one partition
+                            // Pass an "initial partition id" in the batch (or ask our TableScan for what each
+                            // partition is pointing to)
+                            //
+                            // If a partition is missing: it stayed the same
+                            // If a partition didn't change (the filter didn't match anything): it stayed the same
+                            //    - but how do we find that out? we need to read through the whole partition to
+                            //      make sure nothing get updated, so that means we need to buffer the result
+                            //      on disk; could we just hash it at the end to see if it changed?
+                            // If a partition is empty: delete it
+                            //
+                            // So:
+                            //
+                            //   - do a scan through Case (projection) around TableScan (with the filter)
+                            //   - for each output partition:
+                            //     - gather it in a temporary file and hash it
+                            //     - find out from the ExecutionPlan which original file it belonged to
+                            //     - if it's the same: do nothing
+                            //     - if it's changed: replace that table version object; upload it
+                            //     - files corresponding to partitions that never got output won't get updated
+                            //
+                            // This also assumes one Parquet file <> one partition
 
-                    // - Duplicate the table (new version)
-                    // - replace regions that are changed (but we don't know the table_region i.e. which entry to
-                    // repoint to our new region)?
-                    Ok(make_dummy_exec())
-                } else if let Some(Delete {
-                    name: _,
-                    selection: _,
-                }) = any.downcast_ref::<Delete>()
-                {
-                    // - Duplicate the table (new version)
-                    // - Similar to UPDATE, but just a filter
+                            // - Duplicate the table (new version)
+                            // - replace regions that are changed (but we don't know the table_region i.e. which entry to
+                            // repoint to our new region)?
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::Delete(_) => {
+                            // - Duplicate the table (new version)
+                            // - Similar to UPDATE, but just a filter
 
-                    // upload new files
-                    // replace regions (sometimes we delete them)
+                            // upload new files
+                            // replace regions (sometimes we delete them)
 
-                    // really we want to be able to load all regions + cols for a table and then
-                    // write that thing back to the db (set table regions)
-                    Ok(make_dummy_exec())
-                } else {
-                    self.inner.create_physical_plan(&logical_plan).await
+                            // really we want to be able to load all regions + cols for a table and then
+                            // write that thing back to the db (set table regions)
+                            Ok(make_dummy_exec())
+                        }
+                    },
+                    None => self.inner.create_physical_plan(&logical_plan).await,
                 }
             }
             _ => self.inner.create_physical_plan(&logical_plan).await,
