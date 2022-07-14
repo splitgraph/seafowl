@@ -21,8 +21,6 @@ hex = ">=0.4.0"
 # passing to DF's query planner
 hashbrown = { version = "0.12", features = ["raw"] }
 
-# TODO might not be necessary
-parquet = { version = "16.0.0", features = ["arrow"] }
 bytes = "1.1.0"
 
 # Needs to be in non-dev because repository::testutils can't be
