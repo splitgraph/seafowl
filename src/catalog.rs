@@ -45,6 +45,10 @@ pub trait TableCatalog: Sync + Send + Debug {
     async fn create_new_table_version(&self, from_version: TableVersionId) -> TableVersionId;
 
     async fn drop_table(&self, table_id: TableId);
+
+    async fn drop_collection(&self, collection_id: CollectionId);
+
+    async fn drop_database(&self, database_id: DatabaseId);
 }
 
 #[cfg_attr(test, automock)]
@@ -235,6 +239,20 @@ impl TableCatalog for PostgresCatalog {
             .drop_table(table_id)
             .await
             .expect("TODO drop table error")
+    }
+
+    async fn drop_collection(&self, collection_id: CollectionId) {
+        self.repository
+            .drop_collection(collection_id)
+            .await
+            .expect("TODO drop collection error")
+    }
+
+    async fn drop_database(&self, database_id: DatabaseId) {
+        self.repository
+            .drop_database(database_id)
+            .await
+            .expect("TODO drop database error")
     }
 }
 

@@ -93,6 +93,10 @@ pub trait Repository: Send + Sync + Debug {
     ) -> Result<TableVersionId, Error>;
 
     async fn drop_table(&self, table_id: TableId) -> Result<(), Error>;
+
+    async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error>;
+
+    async fn drop_database(&self, database_id: DatabaseId) -> Result<(), Error>;
 }
 
 #[derive(Debug)]
@@ -424,6 +428,27 @@ impl Repository for PostgresRepository {
             .await?;
         Ok(())
     }
+
+    async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error> {
+        sqlx::query!(
+            "DELETE FROM collection WHERE id = $1 RETURNING id",
+            collection_id
+        )
+        .fetch_one(&self.executor)
+        .await?;
+        Ok(())
+    }
+
+    async fn drop_database(&self, database_id: DatabaseId) -> Result<(), Error> {
+        sqlx::query!(
+            "DELETE FROM database WHERE id = $1 RETURNING id",
+            database_id
+        )
+        .fetch_one(&self.executor)
+        .await?;
+        Ok(())
+    }
+
     // Replace / delete a region (in a copy?)
 }
 
