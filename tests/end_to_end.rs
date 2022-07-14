@@ -269,6 +269,47 @@ async fn test_insert_two_different_schemas() {
 }
 
 #[tokio::test]
+async fn test_create_table_as() {
+    let context = make_context_with_pg().await;
+    create_table_and_insert(&context, "test_table").await;
+
+    let plan = context
+        .plan_query(
+            "
+    CREATE TABLE test_ctas AS (
+        WITH cte AS (SELECT
+            some_int_value,
+            some_value + 5 AS some_value,
+            EXTRACT(MINUTE FROM some_time) AS some_minute
+        FROM test_table)
+        SELECT some_value, some_int_value, some_minute
+        FROM cte
+        ORDER BY some_value DESC
+    )
+        ",
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    context.reload_schema().await;
+
+    let plan = context.plan_query("SELECT * FROM test_ctas").await.unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+----------------+-------------+------------+",
+        "| some_int_value | some_minute | some_value |",
+        "+----------------+-------------+------------+",
+        "| 3333           |             | 49         |",
+        "| 2222           |             | 48         |",
+        "| 1111           |             | 47         |",
+        "+----------------+-------------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
 async fn test_create_table_and_drop() {
     // Create two tables, insert some data into them
 
