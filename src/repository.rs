@@ -62,6 +62,8 @@ pub trait Repository: Send + Sync + Debug {
         collection_name: &str,
     ) -> Result<CollectionId, Error>;
 
+    async fn get_database_id_by_name(&self, database_name: &str) -> Result<DatabaseId, Error>;
+
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error>;
 
     async fn create_collection(
@@ -262,6 +264,20 @@ impl Repository for PostgresRepository {
         "#,
             database_name,
             collection_name
+        )
+        .fetch_one(&self.executor)
+        .await?
+        .id;
+
+        Ok(id)
+    }
+
+    async fn get_database_id_by_name(&self, database_name: &str) -> Result<DatabaseId, Error> {
+        let id = sqlx::query!(
+            r#"
+        SELECT id FROM database WHERE database.name = $1
+        "#,
+            database_name,
         )
         .fetch_one(&self.executor)
         .await?

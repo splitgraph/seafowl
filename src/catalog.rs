@@ -21,6 +21,7 @@ use crate::{
 #[async_trait]
 pub trait TableCatalog: Sync + Send + Debug {
     async fn load_database(&self, id: DatabaseId) -> SeafowlDatabase;
+    async fn get_database_id_by_name(&self, database_name: &str) -> Option<DatabaseId>;
     async fn get_collection_id_by_name(
         &self,
         database_name: &str,
@@ -203,6 +204,14 @@ impl TableCatalog for PostgresCatalog {
             .get_collection_id_by_name(database_name, collection_name)
             .await
         {
+            Ok(id) => Some(id),
+            Err(sqlx::error::Error::RowNotFound) => None,
+            Err(e) => panic!("TODO SQL error: {:?}", e),
+        }
+    }
+
+    async fn get_database_id_by_name(&self, database_name: &str) -> Option<DatabaseId> {
+        match self.repository.get_database_id_by_name(database_name).await {
             Ok(id) => Some(id),
             Err(sqlx::error::Error::RowNotFound) => None,
             Err(e) => panic!("TODO SQL error: {:?}", e),
