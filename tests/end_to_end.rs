@@ -252,3 +252,108 @@ async fn test_insert_two_different_schemas() {
     ];
     assert_batches_eq!(expected, &results);
 }
+
+#[tokio::test]
+async fn test_create_table_and_drop() {
+    // Create two tables, insert some data into them
+
+    let context = make_context_with_pg().await;
+    context.reload_schema().await;
+
+    for table_name in ["test_table_1", "test_table_2"] {
+        let plan = context
+            .plan_query(
+                format!(
+                    "CREATE TABLE {:} (
+                some_time TIMESTAMP,
+                some_value REAL,
+                some_other_value NUMERIC,
+                some_bool_value BOOLEAN,
+                some_int_value BIGINT)",
+                    table_name
+                )
+                .as_str(),
+            )
+            .await
+            .unwrap();
+        context.collect(plan).await.unwrap();
+
+        context.reload_schema().await;
+
+        let plan = context
+            .plan_query(
+                format!(
+                    "INSERT INTO {:} (some_int_value, some_time, some_value) VALUES
+                    (1111, '20:01:01', 42),
+                    (2222, '20:02:02', 43),
+                    (3333, '20:03:03', 44)",
+                    table_name
+                )
+                .as_str(),
+            )
+            .await
+            .unwrap();
+        context.collect(plan).await.unwrap();
+    }
+
+    context.reload_schema().await;
+
+    let results = list_columns_query(&context).await;
+
+    let expected = vec![
+        "+--------------+--------------+------------------+-----------------------------+",
+        "| table_schema | table_name   | column_name      | data_type                   |",
+        "+--------------+--------------+------------------+-----------------------------+",
+        "| public       | test_table_1 | some_bool_value  | Boolean                     |",
+        "| public       | test_table_1 | some_int_value   | Int64                       |",
+        "| public       | test_table_1 | some_other_value | Decimal(38, 10)             |",
+        "| public       | test_table_1 | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table_1 | some_value       | Float32                     |",
+        "| public       | test_table_2 | some_bool_value  | Boolean                     |",
+        "| public       | test_table_2 | some_int_value   | Int64                       |",
+        "| public       | test_table_2 | some_other_value | Decimal(38, 10)             |",
+        "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table_2 | some_value       | Float32                     |",
+        "+--------------+--------------+------------------+-----------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // Drop the first table
+
+    context.reload_schema().await;
+
+    let plan = context.plan_query("DROP TABLE test_table_1").await.unwrap();
+    context.collect(plan).await.unwrap();
+
+    context.reload_schema().await;
+
+    let results = list_columns_query(&context).await;
+
+    let expected = vec![
+        "+--------------+--------------+------------------+-----------------------------+",
+        "| table_schema | table_name   | column_name      | data_type                   |",
+        "+--------------+--------------+------------------+-----------------------------+",
+        "| public       | test_table_2 | some_bool_value  | Boolean                     |",
+        "| public       | test_table_2 | some_int_value   | Int64                       |",
+        "| public       | test_table_2 | some_other_value | Decimal(38, 10)             |",
+        "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table_2 | some_value       | Float32                     |",
+        "+--------------+--------------+------------------+-----------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // Drop the second table
+
+    let plan = context.plan_query("DROP TABLE test_table_2").await.unwrap();
+    context.collect(plan).await.unwrap();
+
+    context.reload_schema().await;
+
+    let results = list_columns_query(&context).await;
+
+    let expected = vec!["++", "++"];
+
+    assert_batches_eq!(expected, &results);
+}

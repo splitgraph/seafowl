@@ -43,6 +43,8 @@ pub trait TableCatalog: Sync + Send + Debug {
     ) -> (TableId, TableVersionId);
 
     async fn create_new_table_version(&self, from_version: TableVersionId) -> TableVersionId;
+
+    async fn drop_table(&self, table_id: TableId);
 }
 
 #[cfg_attr(test, automock)]
@@ -104,14 +106,15 @@ impl PostgresCatalog {
         // collect all columns into a vector.
         let table_columns_vec = table_columns.collect_vec();
 
-        // Recover the table version ID (this is going to be the same for all columns).
+        // Recover the table ID and version ID (this is going to be the same for all columns).
         // TODO: if the table has no columns, the result set will be empty, so we use a fake version ID.
-        let table_version_id = table_columns_vec
+        let (table_id, table_version_id) = table_columns_vec
             .get(0)
-            .map_or_else(|| 0, |v| v.table_version_id);
+            .map_or_else(|| (0, 0), |v| (v.table_id, v.table_version_id));
 
         let table = SeafowlTable {
             name: Arc::from(table_name.to_string()),
+            table_id,
             table_version_id,
             schema: Arc::new(Schema::from_column_names_types(
                 table_columns_vec
@@ -158,9 +161,7 @@ impl TableCatalog for PostgresCatalog {
             .await
             .expect("TODO db load error");
 
-        // This is a slight mess. We get a severely denormalized table of all collections, tables, regions,
-        // columns and column min-max values in the database, sorted by collection name, table name and region ID.
-        // Through some group_by, build a nested map of collections -> tables -> columns and regions with min/max values.
+        // Turn the list of all collections, tables and their columns into a nested map.
 
         let collections: HashMap<Arc<str>, Arc<SeafowlCollection>> = all_columns
             .iter()
@@ -227,6 +228,13 @@ impl TableCatalog for PostgresCatalog {
             .create_new_table_version(from_version)
             .await
             .expect("TODO create version error")
+    }
+
+    async fn drop_table(&self, table_id: TableId) {
+        self.repository
+            .drop_table(table_id)
+            .await
+            .expect("TODO drop table error")
     }
 }
 

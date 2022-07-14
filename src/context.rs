@@ -7,7 +7,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
 
 use datafusion::logical_plan::plan::Projection;
-use datafusion::logical_plan::{DFField, Expr};
+use datafusion::logical_plan::{DFField, DropTable, Expr};
 
 use futures::{StreamExt, TryStreamExt};
 
@@ -427,35 +427,7 @@ impl SeafowlContext {
                 } => {
                     let table_name = table_name.to_string();
 
-                    // Replace the default catalog name with this session's database name
-                    // TODO: figure out the exact default and when to hook into the get_table_provider
-                    let table_ref = TableReference::from(table_name.as_str());
-                    let resolved_ref = table_ref.resolve(&self.database, "public");
-
-                    // Partially taken from schema_for_ref (private)
-                    let table_provider = self.inner.catalog(resolved_ref.catalog).ok_or_else(|| {
-                        Error::Plan(format!(
-                            "failed to resolve catalog: {}",
-                            resolved_ref.catalog
-                        ))
-                    })?.schema(resolved_ref.schema)
-                    .ok_or_else(|| {
-                        Error::Plan(format!(
-                            "failed to resolve schema: {}",
-                            resolved_ref.schema
-                        ))
-                    })?.table(resolved_ref.table).ok_or_else(|| Error::Plan(format!(
-                        "'{}.{}.{}' not found",
-                        resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
-                    )))?;
-
-                    let seafowl_table = match table_provider.as_any().downcast_ref::<SeafowlTable>() {
-                        Some(seafowl_table) => Ok(seafowl_table),
-                        None => Err(Error::Plan(format!(
-                            "'{:?}' is a read-only table",
-                            table_name
-                        ))),
-                    }?;
+                    let seafowl_table = self.try_get_seafowl_table(table_name)?;
 
                     // Get a list of columns we're inserting into and schema we
                     // have to cast `source` into
@@ -505,8 +477,9 @@ impl SeafowlContext {
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(Insert {
-                            // TODO we might not need the whole table (we're currently cloning it)
-                            table: Arc::new(seafowl_table.to_owned()),
+                            // TODO we might not need the whole table (we're currently cloning it in
+                            // try_get_seafowl_table)
+                            table: Arc::new(seafowl_table),
                             input: Arc::new(plan),
                         }),
                     }))
@@ -582,6 +555,44 @@ impl SeafowlContext {
         }
     }
 
+    /// Resolve a table reference into a Seafowl table
+    fn try_get_seafowl_table(
+        &self,
+        table_name: impl Into<String> + std::fmt::Debug,
+    ) -> Result<SeafowlTable> {
+        let table_name = table_name.into();
+        let table_ref = TableReference::from(table_name.as_str());
+        let resolved_ref = table_ref.resolve(&self.database, "public");
+        let table_provider = self
+            .inner
+            .catalog(resolved_ref.catalog)
+            .ok_or_else(|| {
+                Error::Plan(format!(
+                    "failed to resolve catalog: {}",
+                    resolved_ref.catalog
+                ))
+            })?
+            .schema(resolved_ref.schema)
+            .ok_or_else(|| {
+                Error::Plan(format!("failed to resolve schema: {}", resolved_ref.schema))
+            })?
+            .table(resolved_ref.table)
+            .ok_or_else(|| {
+                Error::Plan(format!(
+                    "'{}.{}.{}' not found",
+                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+                ))
+            })?;
+        let seafowl_table = match table_provider.as_any().downcast_ref::<SeafowlTable>() {
+            Some(seafowl_table) => Ok(seafowl_table),
+            None => Err(Error::Plan(format!(
+                "'{:?}' is a read-only table",
+                table_name
+            ))),
+        }?;
+        Ok(seafowl_table.clone())
+    }
+
     pub async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.create_logical_plan(sql).await?;
 
@@ -613,7 +624,7 @@ impl SeafowlContext {
                 self.table_catalog.create_database(&catalog_name).await;
                 Ok(make_dummy_exec())
             }
-            // TODO DROP TABLE / DATABASE / SCHEMA
+            // TODO DROP DATABASE / SCHEMA
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name,
                 input,
@@ -649,8 +660,14 @@ impl SeafowlContext {
 
                 Ok(make_dummy_exec())
             }
-            LogicalPlan::DropTable(_) => {
+            LogicalPlan::DropTable(DropTable {
+                name,
+                if_exists: _,
+                schema: _,
+            }) => {
                 // DROP TABLE
+                let table = self.try_get_seafowl_table(name)?;
+                self.table_catalog.drop_table(table.table_id).await;
                 Ok(make_dummy_exec())
             }
             LogicalPlan::CreateView(_) => {
@@ -888,6 +905,7 @@ mod tests {
             schema: Arc::new(SeafowlSchema {
                 arrow_schema: Arc::new(arrow_schema.clone()),
             }),
+            table_id: 0,
             table_version_id: 0,
             catalog: region_catalog_ptr.clone(),
         };

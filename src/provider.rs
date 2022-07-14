@@ -26,7 +26,11 @@ use futures::future;
 
 use object_store::path::Path;
 
-use crate::{catalog::RegionCatalog, data_types::TableVersionId, schema::Schema};
+use crate::{
+    catalog::RegionCatalog,
+    data_types::{TableId, TableVersionId},
+    schema::Schema,
+};
 
 pub struct SeafowlDatabase {
     pub name: Arc<str>,
@@ -89,6 +93,7 @@ pub struct RegionColumn {
 pub struct SeafowlTable {
     pub name: Arc<str>,
     pub schema: Arc<Schema>,
+    pub table_id: TableId,
     pub table_version_id: TableVersionId,
 
     // We have to keep a reference to the original catalog here. This is
@@ -293,6 +298,7 @@ mod tests {
             schema: Arc::new(Schema {
                 arrow_schema: batch.schema(),
             }),
+            table_id: 1,
             table_version_id: 1,
             catalog: Arc::new(catalog),
         };

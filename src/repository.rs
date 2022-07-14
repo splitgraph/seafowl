@@ -19,6 +19,7 @@ static MIGRATOR: Migrator = sqlx::migrate!();
 pub struct AllDatabaseColumnsResult {
     pub collection_name: String,
     pub table_name: String,
+    pub table_id: TableId,
     pub table_version_id: TableVersionId,
     pub column_name: String,
     pub column_type: String,
@@ -90,6 +91,8 @@ pub trait Repository: Send + Sync + Debug {
         &self,
         from_version: TableVersionId,
     ) -> Result<TableVersionId, Error>;
+
+    async fn drop_table(&self, table_id: TableId) -> Result<(), Error>;
 }
 
 #[derive(Debug)]
@@ -166,6 +169,7 @@ impl Repository for PostgresRepository {
         SELECT
             collection.name AS collection_name,
             "table".name AS table_name,
+            "table".id AS table_id,
             latest_table_version.id AS table_version_id,
             table_column.name AS column_name,
             table_column.type AS column_type
@@ -408,6 +412,18 @@ impl Repository for PostgresRepository {
         Ok(new_version)
     }
 
+    // Drop table/collection/database
+    // Currently we actually delete these, though we could mark them as deleted
+    // to allow for undeletion
+
+    // In these methods, return the ID back so that we get an error if the
+    // table/collection/schema didn't actually exist
+    async fn drop_table(&self, table_id: TableId) -> Result<(), Error> {
+        sqlx::query!("DELETE FROM \"table\" WHERE id = $1 RETURNING id", table_id)
+            .fetch_one(&self.executor)
+            .await?;
+        Ok(())
+    }
     // Replace / delete a region (in a copy?)
 }
 
@@ -562,6 +578,7 @@ mod tests {
                 AllDatabaseColumnsResult {
                     collection_name: "testcol".to_string(),
                     table_name: "testtable".to_string(),
+                    table_id: 1,
                     table_version_id: version,
                     column_name: "date".to_string(),
                     column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}".to_string(),
@@ -569,6 +586,7 @@ mod tests {
                 AllDatabaseColumnsResult {
                     collection_name: "testcol".to_string(),
                     table_name: "testtable".to_string(),
+                    table_id: 1,
                     table_version_id: version,
                     column_name: "value".to_string(),
                     column_type: "{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"
