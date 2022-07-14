@@ -411,6 +411,7 @@ impl SeafowlContext {
                             schema: cols.to_dfschema_ref()?,
                             name: name.to_string(),
                             if_not_exists,
+                            output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
                 }
@@ -482,6 +483,7 @@ impl SeafowlContext {
                             // try_get_seafowl_table)
                             table: Arc::new(seafowl_table),
                             input: Arc::new(plan),
+                            output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
                 }
@@ -516,6 +518,7 @@ impl SeafowlContext {
                             name: name.to_string(),
                             selection: selection_expr,
                             assignments: assignments_expr,
+                            output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
                 }
@@ -535,6 +538,7 @@ impl SeafowlContext {
                         node: Arc::new(SeafowlExtensionNode::Delete(Delete {
                             name: table_name.to_string(),
                             selection: selection_expr,
+                            output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
                 }
@@ -684,7 +688,7 @@ impl SeafowlContext {
 
                             Ok(make_dummy_exec())
                         }
-                        SeafowlExtensionNode::Insert(Insert { table, input }) => {
+                        SeafowlExtensionNode::Insert(Insert { table, input, ..}) => {
                             let physical = self.create_physical_plan(input).await?;
 
                             // Execute the plan and write it out to temporary Parquet files.

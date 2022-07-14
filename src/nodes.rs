@@ -14,6 +14,9 @@ pub struct CreateTable {
     pub name: String,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
 }
 
 #[derive(Debug)]
@@ -22,6 +25,8 @@ pub struct Insert {
     pub table: Arc<SeafowlTable>,
     /// Result of a query to insert (with a type-compatible schema that is a subset of the target table)
     pub input: Arc<LogicalPlan>,
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
 }
 
 #[derive(Debug)]
@@ -38,6 +43,8 @@ pub struct Update {
     pub selection: Option<Expr>,
     /// Columns to update
     pub assignments: Vec<Assignment>,
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
 }
 
 #[derive(Debug)]
@@ -46,6 +53,8 @@ pub struct Delete {
     pub name: String,
     /// WHERE clause
     pub selection: Option<Expr>,
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
 }
 
 #[derive(Debug)]
@@ -69,15 +78,23 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
         match self {
-            SeafowlExtensionNode::Insert(Insert { table: _, input }) => vec![input.as_ref()],
+            SeafowlExtensionNode::Insert(Insert { input, .. }) => vec![input.as_ref()],
             // TODO Update/Delete will probably have children
             _ => vec![],
         }
     }
 
     fn schema(&self) -> &DFSchemaRef {
-        // These plans don't produce an output schema
-        todo!() //Arc::new(DFSchema::empty())
+        // These plans don't produce an output schema but we still
+        // need to write out the match arms here, as we can't create a &DFSchemaRef
+        // (& means it has to have been borrowed and we can't own anything, since this
+        // function will exit soon)
+        match self {
+            SeafowlExtensionNode::Insert(Insert { output_schema, .. }) => output_schema,
+            SeafowlExtensionNode::CreateTable(CreateTable { output_schema, .. }) => output_schema,
+            SeafowlExtensionNode::Update(Update { output_schema, .. }) => output_schema,
+            SeafowlExtensionNode::Delete(Delete { output_schema, .. }) => output_schema,
+        }
     }
 
     fn expressions(&self) -> Vec<Expr> {
