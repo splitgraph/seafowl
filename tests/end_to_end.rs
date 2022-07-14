@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use arrow::record_batch::RecordBatch;
 use datafusion::assert_batches_eq;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use object_store::memory::InMemory;
@@ -43,6 +44,24 @@ async fn make_context_with_pg() -> SeafowlContext {
     // Register our database with DataFusion
     result.reload_schema().await;
     result
+}
+
+/// Get a batch of results with all tables and columns in a database
+async fn list_columns_query(context: &SeafowlContext) -> Vec<RecordBatch> {
+    context
+        .collect(
+            context
+                .plan_query(
+                    "SELECT table_schema, table_name, column_name, data_type
+        FROM information_schema.columns
+        WHERE table_catalog = 'default'
+        ORDER BY table_name, ordinal_position",
+                )
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
@@ -90,16 +109,7 @@ async fn test_create_table() {
     context.reload_schema().await;
 
     // Check table columns
-    let plan = context
-        .plan_query(
-            "SELECT table_schema, table_name, column_name, data_type
-        FROM information_schema.columns
-        WHERE table_catalog = 'default'
-        ORDER BY table_name, column_name",
-        )
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
+    let results = list_columns_query(&context).await;
 
     let expected = vec![
         "+--------------+------------+------------------+-----------------------------+",
