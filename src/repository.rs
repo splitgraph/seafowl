@@ -3,8 +3,9 @@ use std::{fmt::Debug, iter::zip, time::Duration};
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use sqlx::{
-    migrate::Migrator, postgres::PgPoolOptions, Error, Executor, PgPool, Postgres, QueryBuilder,
-    Row,
+    migrate::{MigrateDatabase, Migrator},
+    postgres::PgPoolOptions,
+    Error, Executor, PgPool, Postgres, QueryBuilder, Row,
 };
 
 use crate::{
@@ -106,6 +107,22 @@ pub struct PostgresRepository {
 }
 
 impl PostgresRepository {
+    pub async fn try_new(dsn: String, schema_name: String) -> Result<Self, Error> {
+        if !Postgres::database_exists(&dsn).await? {
+            let _ = Postgres::create_database(&dsn).await;
+        }
+
+        let repo = PostgresRepository::connect(dsn, schema_name.clone()).await?;
+
+        repo.executor
+            .execute(format!("CREATE SCHEMA {};", schema_name).as_str())
+            .await?;
+
+        // Setup the schema
+        repo.setup().await;
+        Ok(repo)
+    }
+
     pub async fn connect(dsn: String, schema_name: String) -> Result<Self, Error> {
         let schema_name_2 = schema_name.clone();
 
@@ -453,18 +470,9 @@ impl Repository for PostgresRepository {
 }
 
 pub mod testutils {
-    use crate::repository::Repository;
     use rand::Rng;
-    use sqlx::Executor;
-    use sqlx::{migrate::MigrateDatabase, Postgres};
 
     use crate::repository::PostgresRepository;
-
-    async fn create_db(dsn: &str) {
-        if !Postgres::database_exists(dsn).await.unwrap() {
-            let _ = Postgres::create_database(dsn).await;
-        }
-    }
 
     pub async fn make_repository(dsn: &str) -> PostgresRepository {
         // Generate a random schema (taken from IOx)
@@ -480,20 +488,9 @@ pub mod testutils {
         };
 
         // let dsn = std::env::var("DATABASE_URL").unwrap();
-        create_db(dsn).await;
-
-        let repo = PostgresRepository::connect(dsn.to_string(), schema_name.clone())
+        PostgresRepository::try_new(dsn.to_string(), schema_name)
             .await
-            .expect("failed to connect to the db");
-
-        repo.executor
-            .execute(format!("CREATE SCHEMA {};", schema_name).as_str())
-            .await
-            .expect("failed to create test schema");
-
-        // Setup the schema
-        repo.setup().await;
-        repo
+            .expect("Error setting up the database")
     }
 }
 
