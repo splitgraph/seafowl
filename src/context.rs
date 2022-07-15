@@ -467,7 +467,7 @@ impl SeafowlContext {
                         expr: target_schema.fields().iter().zip(plan.schema().field_names()).map(|(table_field, query_field_name)| {
                             // Generate CAST (source_col AS table_col_type) AS table_col
                             // If the type is the same, this will be optimized out.
-                            Expr::TryCast{
+                            Expr::Cast{
                                 expr: Box::new(Expr::Column(Column::from_name(query_field_name))),
                                 data_type: table_field.data_type().clone()
                             }.alias(table_field.name())
@@ -688,7 +688,7 @@ impl SeafowlContext {
 
                             Ok(make_dummy_exec())
                         }
-                        SeafowlExtensionNode::Insert(Insert { table, input, ..}) => {
+                        SeafowlExtensionNode::Insert(Insert { table, input, .. }) => {
                             let physical = self.create_physical_plan(input).await?;
 
                             // Execute the plan and write it out to temporary Parquet files.
@@ -1017,7 +1017,7 @@ mod tests {
 
         let plan = sf_context
             .create_logical_plan(
-                "INSERT INTO testcol.some_table (date, value) VALUES('2022-01-01', 42)",
+                "INSERT INTO testcol.some_table (date, value) VALUES('2022-01-01T12:00:00', 42)",
             )
             .await
             .unwrap();
@@ -1025,8 +1025,8 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "Insert: some_table\
-            \n  Projection: TRY_CAST(#column1 AS Date64) AS date, TRY_CAST(#column2 AS Float64) AS value\
-            \n    Values: (Utf8(\"2022-01-01\"), Int64(42))"
+            \n  Projection: CAST(#column1 AS Date64) AS date, CAST(#column2 AS Float64) AS value\
+            \n    Values: (Utf8(\"2022-01-01T12:00:00\"), Int64(42))"
         );
     }
 
@@ -1044,7 +1044,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(format!("{:?}", plan), "Insert: some_table\
-        \n  Projection: TRY_CAST(#my_date AS Date64) AS date, TRY_CAST(#my_value AS Float64) AS value\
+        \n  Projection: CAST(#my_date AS Date64) AS date, CAST(#my_value AS Float64) AS value\
         \n    Projection: #testdb.testcol.some_table.date AS my_date, #testdb.testcol.some_table.value AS my_value\
         \n      TableScan: testdb.testcol.some_table");
     }
@@ -1054,15 +1054,15 @@ mod tests {
         let sf_context = mock_context().await;
 
         let plan = sf_context
-            .create_logical_plan("INSERT INTO testcol.some_table VALUES('2022-01-01', 42)")
+            .create_logical_plan("INSERT INTO testcol.some_table VALUES('2022-01-01T12:00:00', 42)")
             .await
             .unwrap();
 
         assert_eq!(
             format!("{:?}", plan),
             "Insert: some_table\
-            \n  Projection: TRY_CAST(#column1 AS Date64) AS date, TRY_CAST(#column2 AS Float64) AS value\
-            \n    Values: (Utf8(\"2022-01-01\"), Int64(42))"
+            \n  Projection: CAST(#column1 AS Date64) AS date, CAST(#column2 AS Float64) AS value\
+            \n    Values: (Utf8(\"2022-01-01T12:00:00\"), Int64(42))"
         );
     }
 
@@ -1084,7 +1084,7 @@ mod tests {
         let sf_context = mock_context().await;
 
         let err = sf_context
-            .create_logical_plan("INSERT INTO testcol.some_table VALUES('2022-01-01')")
+            .create_logical_plan("INSERT INTO testcol.some_table VALUES('2022-01-01T12:00:00')")
             .await
             .unwrap_err();
         assert_eq!(
@@ -1098,7 +1098,7 @@ mod tests {
         let sf_context = mock_context().await;
 
         let err = sf_context
-            .create_logical_plan("INSERT INTO testcol.some_table(date, date, value) VALUES('2022-01-01', '2022-01-01', 42)")
+            .create_logical_plan("INSERT INTO testcol.some_table(date, date, value) VALUES('2022-01-01T12:00:00', '2022-01-01T12:00:00', 42)")
             .await.unwrap_err();
         assert_eq!(
             err.to_string(),
@@ -1118,7 +1118,7 @@ mod tests {
                         dbg!(regions);
                         *regions
                             == vec![SeafowlRegion {
-                                object_storage_id: Arc::from("64b975479d64f5c4d27be2a743f259b0fc613bc9fba19120953645a76c687fd2.parquet"),
+                                object_storage_id: Arc::from("fadd2ca2b9675ebce722cddc4a4fc05159a644fdeb50893d411c49d58ab52778.parquet"),
                                 row_count: 1,
                                 columns: Arc::new(vec![
                                     RegionColumn {
@@ -1165,7 +1165,9 @@ mod tests {
         .await;
 
         sf_context
-            .plan_query("INSERT INTO testcol.some_table (date, value) VALUES('2022-01-01', 42)")
+            .plan_query(
+                "INSERT INTO testcol.some_table (date, value) VALUES('2022-01-01T12:00:00', 42)",
+            )
             .await
             .unwrap();
 
@@ -1186,7 +1188,7 @@ mod tests {
         assert_eq!(
             uploaded_objects,
             vec![Path::from(
-                "64b975479d64f5c4d27be2a743f259b0fc613bc9fba19120953645a76c687fd2.parquet"
+                "fadd2ca2b9675ebce722cddc4a4fc05159a644fdeb50893d411c49d58ab52778.parquet"
             )]
         );
     }

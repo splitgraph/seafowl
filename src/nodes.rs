@@ -1,8 +1,6 @@
 use std::{any::Any, fmt, sync::Arc, vec};
 
-use datafusion::logical_plan::{
-    Column, DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode,
-};
+use datafusion::logical_plan::{Column, DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode};
 
 use crate::provider::SeafowlTable;
 
