@@ -9,6 +9,7 @@ use datafusion::execution::DiskManager;
 use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::{DFField, DropTable, Expr};
 
+use crate::datafusion::parser::{DFParser, Statement as DFStatement};
 use futures::{StreamExt, TryStreamExt};
 
 use hashbrown::HashMap;
@@ -48,7 +49,7 @@ use datafusion::{
         ExecutionPlan, SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
-    sql::{parser::DFParser, planner::SqlToRel, TableReference},
+    sql::{planner::SqlToRel, TableReference},
 };
 
 use crate::catalog::RegionCatalog;
@@ -379,7 +380,7 @@ impl SeafowlContext {
         let query_planner = SqlToRel::new(&state);
 
         match statements.pop_front().unwrap() {
-            datafusion::sql::parser::Statement::Statement(s) => match *s {
+            DFStatement::Statement(s) => match *s {
                 // Delegate SELECT / EXPLAIN to the basic DataFusion logical planner
                 // (though note EXPLAIN [our custom query] will mean we have to implement EXPLAIN ourselves)
                 Statement::Explain { .. }
@@ -569,11 +570,9 @@ impl SeafowlContext {
                     sql
                 ))),
             },
-            datafusion::sql::parser::Statement::DescribeTable(s) => {
-                query_planner.describe_table_to_plan(s)
-            }
+            DFStatement::DescribeTable(s) => query_planner.describe_table_to_plan(s),
             // Stub out the standard DataFusion CREATE EXTERNAL TABLE statements since we don't support them
-            datafusion::sql::parser::Statement::CreateExternalTable(_) => {
+            DFStatement::CreateExternalTable(c) => {
                 return Err(Error::NotImplemented(format!(
                     "Unsupported SQL statement: {:?}",
                     sql
