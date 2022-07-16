@@ -17,8 +17,8 @@ use datafusion::{
     logical_plan::Expr,
     physical_expr::PhysicalSortExpr,
     physical_plan::{
-        file_format::FileScanConfig, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-        Statistics,
+        file_format::FileScanConfig, ExecutionPlan, Partitioning,
+        SendableRecordBatchStream, Statistics,
     },
 };
 
@@ -253,15 +253,17 @@ mod tests {
         let c1: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
         let c2: ArrayRef = Arc::new(StringArray::from(vec!["one", "two", "none"]));
         let batch =
-            RecordBatch::try_from_iter(vec![("c1", c1.clone()), ("c2", c2.clone())]).unwrap();
+            RecordBatch::try_from_iter(vec![("c1", c1.clone()), ("c2", c2.clone())])
+                .unwrap();
 
         // Write a Parquet file to the object store
         let buf = BytesMut::new();
         let mut writer = buf.writer();
 
         let props = WriterProperties::builder().build();
-        let mut arrow_writer = ArrowWriter::try_new(&mut writer, batch.schema(), Some(props))
-            .expect("creating writer");
+        let mut arrow_writer =
+            ArrowWriter::try_new(&mut writer, batch.schema(), Some(props))
+                .expect("creating writer");
 
         arrow_writer.write(&batch).expect("Writing batch");
         arrow_writer.close().unwrap();
@@ -276,9 +278,11 @@ mod tests {
 
         let session_config = SessionConfig::new().with_information_schema(true);
         let context = SessionContext::with_config(session_config);
-        context
-            .runtime_env()
-            .register_object_store("seafowl", "", Arc::new(object_store));
+        context.runtime_env().register_object_store(
+            "seafowl",
+            "",
+            Arc::new(object_store),
+        );
 
         let mut catalog = MockRegionCatalog::new();
 
@@ -345,7 +349,8 @@ mod tests {
             .expect("error running");
 
         let expected = vec![
-            "+------+", "| c2   |", "+------+", "| one  |", "| two  |", "| none |", "+------+",
+            "+------+", "| c2   |", "+------+", "| one  |", "| two  |", "| none |",
+            "+------+",
         ];
 
         assert_batches_eq!(expected, &results);

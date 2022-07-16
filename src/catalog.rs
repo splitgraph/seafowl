@@ -7,8 +7,12 @@ use mockall::automock;
 
 use crate::{
     data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
-    provider::{RegionColumn, SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable},
-    repository::{AllDatabaseColumnsResult, AllTableRegionsResult, PostgresRepository, Repository},
+    provider::{
+        RegionColumn, SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable,
+    },
+    repository::{
+        AllDatabaseColumnsResult, AllTableRegionsResult, PostgresRepository, Repository,
+    },
     schema::Schema,
 };
 
@@ -43,7 +47,10 @@ pub trait TableCatalog: Sync + Send + Debug {
         schema: Schema,
     ) -> (TableId, TableVersionId);
 
-    async fn create_new_table_version(&self, from_version: TableVersionId) -> TableVersionId;
+    async fn create_new_table_version(
+        &self,
+        from_version: TableVersionId,
+    ) -> TableVersionId;
 
     async fn drop_table(&self, table_id: TableId);
 
@@ -59,7 +66,10 @@ pub trait RegionCatalog: Sync + Send + Debug {
     // even if the same region already exists)
     async fn create_regions(&self, regions: Vec<SeafowlRegion>) -> Vec<PhysicalRegionId>;
 
-    async fn load_table_regions(&self, table_version_id: TableVersionId) -> Vec<SeafowlRegion>;
+    async fn load_table_regions(
+        &self,
+        table_version_id: TableVersionId,
+    ) -> Vec<SeafowlRegion>;
 
     async fn append_regions_to_table(
         &self,
@@ -236,7 +246,10 @@ impl TableCatalog for PostgresCatalog {
             .expect("TODO create collection error")
     }
 
-    async fn create_new_table_version(&self, from_version: TableVersionId) -> TableVersionId {
+    async fn create_new_table_version(
+        &self,
+        from_version: TableVersionId,
+    ) -> TableVersionId {
         self.repository
             .create_new_table_version(from_version)
             .await
@@ -274,7 +287,10 @@ impl RegionCatalog for PostgresCatalog {
             .expect("TODO create region error")
     }
 
-    async fn load_table_regions(&self, table_version_id: TableVersionId) -> Vec<SeafowlRegion> {
+    async fn load_table_regions(
+        &self,
+        table_version_id: TableVersionId,
+    ) -> Vec<SeafowlRegion> {
         let all_regions = self
             .repository
             .get_all_regions_in_table(table_version_id)

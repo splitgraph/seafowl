@@ -17,10 +17,9 @@ use object_store::memory::InMemory;
 use seafowl::{
     catalog::{PostgresCatalog, TableCatalog},
     context::SeafowlContext,
-    repository::{PostgresRepository},
+    repository::PostgresRepository,
 };
-use sqlparser::ast::{Statement};
-
+use sqlparser::ast::Statement;
 
 pub struct SeafowlPortal {
     plan: Arc<dyn ExecutionPlan>,
@@ -98,9 +97,10 @@ async fn build_context() -> SeafowlContext {
         .register_object_store("seafowl", "", object_store);
 
     // Initialize the repository
-    let repository = PostgresRepository::try_new(DEV_DB_DSN.to_string(), "public".to_string())
-        .await
-        .expect("Error setting up the database");
+    let repository =
+        PostgresRepository::try_new(DEV_DB_DSN.to_string(), "public".to_string())
+            .await
+            .expect("Error setting up the database");
 
     let catalog = Arc::new(PostgresCatalog {
         repository: Arc::new(repository),

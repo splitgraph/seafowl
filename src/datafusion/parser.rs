@@ -75,7 +75,10 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parse the specified tokens with dialect
-    pub fn new_with_dialect(sql: &str, dialect: &'a dyn Dialect) -> Result<Self, ParserError> {
+    pub fn new_with_dialect(
+        sql: &str,
+        dialect: &'a dyn Dialect,
+    ) -> Result<Self, ParserError> {
         let mut tokenizer = Tokenizer::new(dialect, sql);
         let tokens = tokenizer.tokenize()?;
 
@@ -185,7 +188,9 @@ impl<'a> DFParser<'a> {
 
     fn parse_partitions(&mut self) -> Result<Vec<String>, ParserError> {
         let mut partitions: Vec<String> = vec![];
-        if !self.parser.consume_token(&Token::LParen) || self.parser.consume_token(&Token::RParen) {
+        if !self.parser.consume_token(&Token::LParen)
+            || self.parser.consume_token(&Token::RParen)
+        {
             return Ok(partitions);
         }
 
@@ -211,10 +216,14 @@ impl<'a> DFParser<'a> {
     }
 
     // This is a copy of the equivalent implementation in sqlparser.
-    fn parse_columns(&mut self) -> Result<(Vec<ColumnDef>, Vec<TableConstraint>), ParserError> {
+    fn parse_columns(
+        &mut self,
+    ) -> Result<(Vec<ColumnDef>, Vec<TableConstraint>), ParserError> {
         let mut columns = vec![];
         let mut constraints = vec![];
-        if !self.parser.consume_token(&Token::LParen) || self.parser.consume_token(&Token::RParen) {
+        if !self.parser.consume_token(&Token::LParen)
+            || self.parser.consume_token(&Token::RParen)
+        {
             return Ok((columns, constraints));
         }
 

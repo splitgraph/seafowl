@@ -62,7 +62,10 @@ pub trait Repository: Send + Sync + Debug {
         collection_name: &str,
     ) -> Result<CollectionId, Error>;
 
-    async fn get_database_id_by_name(&self, database_name: &str) -> Result<DatabaseId, Error>;
+    async fn get_database_id_by_name(
+        &self,
+        database_name: &str,
+    ) -> Result<DatabaseId, Error>;
 
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error>;
 
@@ -272,7 +275,10 @@ impl Repository for PostgresRepository {
         Ok(id)
     }
 
-    async fn get_database_id_by_name(&self, database_name: &str) -> Result<DatabaseId, Error> {
+    async fn get_database_id_by_name(
+        &self,
+        database_name: &str,
+    ) -> Result<DatabaseId, Error> {
         let id = sqlx::query!(
             r#"
         SELECT id FROM database WHERE database.name = $1
@@ -356,8 +362,9 @@ impl Repository for PostgresRepository {
     ) -> Result<Vec<PhysicalRegionId>, Error> {
         // Create regions
 
-        let mut builder: QueryBuilder<Postgres> =
-            QueryBuilder::new("INSERT INTO physical_region(row_count, object_storage_id) ");
+        let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+            "INSERT INTO physical_region(row_count, object_storage_id) ",
+        );
         builder.push_values(&regions, |mut b, r| {
             b.push_bind(r.row_count)
                 .push_bind(r.object_storage_id.as_ref());
@@ -402,8 +409,9 @@ impl Repository for PostgresRepository {
         region_ids: Vec<PhysicalRegionId>,
         table_version_id: TableVersionId,
     ) -> Result<(), Error> {
-        let mut builder: QueryBuilder<Postgres> =
-            QueryBuilder::new("INSERT INTO table_region(table_version_id, physical_region_id) ");
+        let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+            "INSERT INTO table_region(table_version_id, physical_region_id) ",
+        );
         builder.push_values(region_ids, |mut b, rid| {
             b.push_bind(table_version_id).push_bind(rid);
         });
@@ -619,7 +627,8 @@ mod tests {
                     table_id: 1,
                     table_version_id: version,
                     column_name: "date".to_string(),
-                    column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}".to_string(),
+                    column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}"
+                        .to_string(),
                 },
                 AllDatabaseColumnsResult {
                     collection_name: "testcol".to_string(),
@@ -654,7 +663,8 @@ mod tests {
     async fn test_create_append_region() {
         let repository = make_repository(DEV_DB_DSN).await;
 
-        let (_, _, _, table_version_id) = make_database_with_single_table(&repository).await;
+        let (_, _, _, table_version_id) =
+            make_database_with_single_table(&repository).await;
 
         let region = get_test_region();
 

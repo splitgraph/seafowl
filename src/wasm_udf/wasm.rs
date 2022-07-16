@@ -37,17 +37,22 @@ fn make_scalar_function_from_wasm(
     return_type: ValType,
 ) -> Result<ScalarFunctionImplementation> {
     let mut store = Store::<()>::default();
-    let module = Module::from_binary(store.engine(), module_bytes)
-        .map_err(|e| DataFusionError::Internal(format!("Error loading module: {:?}", e)))?;
+    let module = Module::from_binary(store.engine(), module_bytes).map_err(|e| {
+        DataFusionError::Internal(format!("Error loading module: {:?}", e))
+    })?;
 
     // Pre-flight checks to make sure the function exists
-    let instance = Instance::new(&mut store, &module, &[])
-        .map_err(|e| DataFusionError::Internal(format!("Error instantiating module: {:?}", e)))?;
+    let instance = Instance::new(&mut store, &module, &[]).map_err(|e| {
+        DataFusionError::Internal(format!("Error instantiating module: {:?}", e))
+    })?;
 
     let _func = instance
         .get_func(&mut store, function_name)
         .ok_or_else(|| {
-            DataFusionError::Internal(format!("Error loading function {:?}", function_name))
+            DataFusionError::Internal(format!(
+                "Error loading function {:?}",
+                function_name
+            ))
         })?;
 
     // This function has to be of type Fn instead of FnMut. The function invocation (func.call)
@@ -62,8 +67,9 @@ fn make_scalar_function_from_wasm(
         // Load the function again
         let mut store = Store::<()>::default();
 
-        let module = Module::from_binary(store.engine(), &module_bytes)
-            .map_err(|e| DataFusionError::Internal(format!("Error loading module: {:?}", e)))?;
+        let module = Module::from_binary(store.engine(), &module_bytes).map_err(|e| {
+            DataFusionError::Internal(format!("Error loading module: {:?}", e))
+        })?;
 
         let instance = Instance::new(&mut store, &module, &[]).map_err(|e| {
             DataFusionError::Internal(format!("Error instantiating module: {:?}", e))
@@ -72,7 +78,10 @@ fn make_scalar_function_from_wasm(
         let func = instance
             .get_func(&mut store, &function_name)
             .ok_or_else(|| {
-                DataFusionError::Internal(format!("Error loading function {:?}", function_name))
+                DataFusionError::Internal(format!(
+                    "Error loading function {:?}",
+                    function_name
+                ))
             })?;
 
         // this is guaranteed by DataFusion based on the function's signature.
@@ -191,8 +200,12 @@ pub fn create_udf_from_wasm(
         .collect::<Result<_>>()?;
     let df_return_type = Arc::new(wasm_type_to_arrow_type(&return_type)?);
 
-    let function =
-        make_scalar_function_from_wasm(module_bytes, function_name, input_types, return_type)?;
+    let function = make_scalar_function_from_wasm(
+        module_bytes,
+        function_name,
+        input_types,
+        return_type,
+    )?;
 
     Ok(create_udf(
         name,

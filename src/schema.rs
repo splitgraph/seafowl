@@ -88,7 +88,8 @@ mod tests {
             ]
         );
 
-        let roundtrip_schema = Schema::from_column_names_types(cols.iter().map(|(n, t)| (n, t)));
+        let roundtrip_schema =
+            Schema::from_column_names_types(cols.iter().map(|(n, t)| (n, t)));
 
         assert_eq!(arrow_schema, roundtrip_schema.arrow_schema);
     }

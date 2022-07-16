@@ -42,13 +42,13 @@ use datafusion::{
     error::DataFusionError,
     execution::context::TaskContext,
     logical_plan::{
-        plan::Extension, Column, CreateCatalog, CreateCatalogSchema, CreateMemoryTable, DFSchema,
-        LogicalPlan, ToDFSchema,
+        plan::Extension, Column, CreateCatalog, CreateCatalogSchema, CreateMemoryTable,
+        DFSchema, LogicalPlan, ToDFSchema,
     },
     parquet::{arrow::ArrowWriter, file::properties::WriterProperties},
     physical_plan::{
-        coalesce_partitions::CoalescePartitionsExec, empty::EmptyExec, EmptyRecordBatchStream,
-        ExecutionPlan, SendableRecordBatchStream, Statistics,
+        coalesce_partitions::CoalescePartitionsExec, empty::EmptyExec,
+        EmptyRecordBatchStream, ExecutionPlan, SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
     sql::{planner::SqlToRel, TableReference},
@@ -128,7 +128,9 @@ fn make_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         SQLDataType::BigInt(_) => Ok(DataType::Int64),
         SQLDataType::Int(_) => Ok(DataType::Int32),
         SQLDataType::SmallInt(_) => Ok(DataType::Int16),
-        SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => Ok(DataType::Utf8),
+        SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
+            Ok(DataType::Utf8)
+        }
         SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
         SQLDataType::Float(_) => Ok(DataType::Float32),
         SQLDataType::Real => Ok(DataType::Float32),
@@ -162,7 +164,10 @@ fn compound_identifier_to_column(ids: &[Ident]) -> Result<Column> {
 }
 
 /// Load the Statistics for a Parquet file at a certain path
-async fn get_parquet_file_statistics(path: &OSPath, schema: SchemaRef) -> Result<Statistics> {
+async fn get_parquet_file_statistics(
+    path: &OSPath,
+    schema: SchemaRef,
+) -> Result<Statistics> {
     // DataFusion's methods for this are all private (see fetch_statistics / summarize_min_max)
     // and require the ObjectStore abstraction since they are normally used in the context
     // of a TableProvider sending a Range request to object storage to get min/max values
@@ -183,8 +188,9 @@ async fn get_parquet_file_statistics(path: &OSPath, schema: SchemaRef) -> Result
 
     // Create a dummy object store pointing to our temporary directory (we don't know if
     // DiskManager will always put all files in the same dir)
-    let dummy_object_store: Arc<dyn ObjectStore> =
-        Arc::from(LocalFileSystem::new_with_prefix(directory).expect("creating object store"));
+    let dummy_object_store: Arc<dyn ObjectStore> = Arc::from(
+        LocalFileSystem::new_with_prefix(directory).expect("creating object store"),
+    );
     let parquet = ParquetFormat::default();
     let meta = dummy_object_store
         .head(&Path::from(file_name))
@@ -197,7 +203,10 @@ async fn get_parquet_file_statistics(path: &OSPath, schema: SchemaRef) -> Result
 }
 
 /// Load the Statistics for a Parquet file in memory
-async fn get_parquet_file_statistics_bytes(data: Bytes, schema: SchemaRef) -> Result<Statistics> {
+async fn get_parquet_file_statistics_bytes(
+    data: Bytes,
+    schema: SchemaRef,
+) -> Result<Statistics> {
     let dummy_object_store: Arc<dyn ObjectStore> = Arc::from(InMemory::new());
     let dummy_path = Path::from("data");
     dummy_object_store.put(&dummy_path, data).await.unwrap();
@@ -214,7 +223,10 @@ async fn get_parquet_file_statistics_bytes(data: Bytes, schema: SchemaRef) -> Re
 }
 
 /// Serialize data for the physical region index from Parquet file statistics
-fn build_region_columns(region_stats: &Statistics, schema: SchemaRef) -> Vec<RegionColumn> {
+fn build_region_columns(
+    region_stats: &Statistics,
+    schema: SchemaRef,
+) -> Vec<RegionColumn> {
     // TODO PhysicalRegionColumn might not be the right data structure here (lacks ID etc)
     match &region_stats.column_statistics {
         Some(column_statistics) => zip(column_statistics, schema.fields())
@@ -320,7 +332,8 @@ pub async fn plan_to_object_store(
 
                 // Index the Parquet file (get its min-max values)
                 let region_stats =
-                    get_parquet_file_statistics_bytes(data.clone(), physical.schema()).await?;
+                    get_parquet_file_statistics_bytes(data.clone(), physical.schema())
+                        .await?;
 
                 let columns = build_region_columns(&region_stats, physical.schema());
 
@@ -671,9 +684,13 @@ impl SeafowlContext {
                     .runtime_env()
                     .object_store(object_store_url.clone())?;
 
-                let regions =
-                    plan_to_object_store(&self.inner.state(), &physical, store, disk_manager)
-                        .await?;
+                let regions = plan_to_object_store(
+                    &self.inner.state(),
+                    &physical,
+                    store,
+                    disk_manager,
+                )
+                .await?;
 
                 // Create an empty table with an empty version
                 let (_, table_version_id) = self
@@ -706,7 +723,11 @@ impl SeafowlContext {
                 // Other custom nodes we made like CREATE TABLE/INSERT/UPDATE/DELETE/ALTER
                 match SeafowlExtensionNode::from_dynamic(node) {
                     Some(sfe_node) => match sfe_node {
-                        SeafowlExtensionNode::CreateTable(CreateTable { schema, name, .. }) => {
+                        SeafowlExtensionNode::CreateTable(CreateTable {
+                            schema,
+                            name,
+                            ..
+                        }) => {
                             self.exec_create_table(name, schema).await?;
 
                             Ok(make_dummy_exec())
@@ -715,9 +736,11 @@ impl SeafowlContext {
                             let physical = self.create_physical_plan(input).await?;
 
                             // Execute the plan and write it out to temporary Parquet files.
-                            let disk_manager = self.inner.runtime_env().disk_manager.clone();
+                            let disk_manager =
+                                self.inner.runtime_env().disk_manager.clone();
 
-                            let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
+                            let object_store_url =
+                                ObjectStoreUrl::parse("seafowl://").unwrap();
                             let store = self
                                 .inner
                                 .runtime_env()
@@ -738,7 +761,8 @@ impl SeafowlContext {
                                 .await;
 
                             // Attach the regions to the table
-                            let region_ids = self.region_catalog.create_regions(regions).await;
+                            let region_ids =
+                                self.region_catalog.create_regions(regions).await;
                             self.region_catalog
                                 .append_regions_to_table(region_ids, new_version_id)
                                 .await;
@@ -802,7 +826,10 @@ impl SeafowlContext {
                             output_schema: _,
                         }) => {
                             let function_code = decode(&details.data).map_err(|e| {
-                                Error::Execution(format!("Error decoding the UDF: {:?}", e))
+                                Error::Execution(format!(
+                                    "Error decoding the UDF: {:?}",
+                                    e
+                                ))
                             })?;
 
                             let _function = create_udf_from_wasm(
@@ -844,20 +871,28 @@ impl SeafowlContext {
             .table_catalog
             .get_collection_id_by_name(&self.database, schema_name)
             .await
-            .ok_or_else(|| Error::Plan(format!("Schema {:?} does not exist!", schema_name)))?;
+            .ok_or_else(|| {
+                Error::Plan(format!("Schema {:?} does not exist!", schema_name))
+            })?;
         Ok(self
             .table_catalog
             .create_table(collection_id, table_name, sf_schema)
             .await)
     }
 
-    pub async fn create_physical_plan(&self, plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
+    pub async fn create_physical_plan(
+        &self,
+        plan: &LogicalPlan,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let physical_plan = self.inner.create_physical_plan(plan).await?;
         Ok(physical_plan)
     }
 
     // Copied from DataFusion's physical_plan
-    pub async fn collect(&self, physical_plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
+    pub async fn collect(
+        &self,
+        physical_plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Vec<RecordBatch>> {
         let stream = self.execute_stream(physical_plan).await?;
         stream.err_into().try_collect().await
     }
@@ -955,7 +990,8 @@ mod tests {
             table_version_id: 0,
             catalog: region_catalog_ptr.clone(),
         };
-        let tables = StdHashMap::from([(Arc::from("some_table"), Arc::from(singleton_table))]);
+        let tables =
+            StdHashMap::from([(Arc::from("some_table"), Arc::from(singleton_table))]);
         let collections = StdHashMap::from([(
             Arc::from("testcol"),
             Arc::from(SeafowlCollection {
@@ -973,7 +1009,8 @@ mod tests {
                 collections: collections.clone(),
             });
 
-        session.register_catalog("testdb", Arc::new(table_catalog.load_database(0).await));
+        session
+            .register_catalog("testdb", Arc::new(table_catalog.load_database(0).await));
 
         setup_table_catalog(&mut table_catalog);
 
@@ -1101,7 +1138,9 @@ mod tests {
         let sf_context = mock_context().await;
 
         let plan = sf_context
-            .create_logical_plan("INSERT INTO testcol.some_table VALUES('2022-01-01T12:00:00', 42)")
+            .create_logical_plan(
+                "INSERT INTO testcol.some_table VALUES('2022-01-01T12:00:00', 42)",
+            )
             .await
             .unwrap();
 
@@ -1131,7 +1170,9 @@ mod tests {
         let sf_context = mock_context().await;
 
         let err = sf_context
-            .create_logical_plan("INSERT INTO testcol.some_table VALUES('2022-01-01T12:00:00')")
+            .create_logical_plan(
+                "INSERT INTO testcol.some_table VALUES('2022-01-01T12:00:00')",
+            )
             .await
             .unwrap_err();
         assert_eq!(

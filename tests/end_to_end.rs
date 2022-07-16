@@ -110,7 +110,9 @@ async fn test_information_schema() {
     let context = make_context_with_pg().await;
 
     let plan = context
-        .plan_query("SELECT * FROM information_schema.tables ORDER BY table_catalog, table_name")
+        .plan_query(
+            "SELECT * FROM information_schema.tables ORDER BY table_catalog, table_name",
+        )
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
