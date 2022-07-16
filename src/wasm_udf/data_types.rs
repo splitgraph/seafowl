@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use wasmtime::ValType;
 
 // WASM to DataFusion conversions
-fn get_wasm_type(t: &CreateFunctionWASMType) -> ValType {
+pub fn get_wasm_type(t: &CreateFunctionWASMType) -> ValType {
     match t {
         CreateFunctionWASMType::I32 => ValType::I32,
         CreateFunctionWASMType::I64 => ValType::I64,
@@ -13,7 +13,7 @@ fn get_wasm_type(t: &CreateFunctionWASMType) -> ValType {
     }
 }
 
-fn get_volatility(t: &CreateFunctionVolatility) -> Volatility {
+pub fn get_volatility(t: &CreateFunctionVolatility) -> Volatility {
     match t {
         CreateFunctionVolatility::Immutable => Volatility::Immutable,
         CreateFunctionVolatility::Stable => Volatility::Stable,

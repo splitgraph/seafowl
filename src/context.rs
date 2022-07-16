@@ -1,5 +1,6 @@
 // DataFusion bindings
 
+use base64::decode;
 use bytes::Bytes;
 
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -10,6 +11,7 @@ use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::{DFField, DropTable, Expr};
 
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
+use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 
 use hashbrown::HashMap;
@@ -56,7 +58,7 @@ use crate::catalog::RegionCatalog;
 use crate::data_types::{TableId, TableVersionId};
 use crate::nodes::{CreateFunction, SeafowlExtensionNode};
 use crate::provider::{RegionColumn, SeafowlRegion, SeafowlTable};
-use crate::wasm_udf::data_types::CreateFunctionDetails;
+use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
     catalog::TableCatalog,
     data_types::DatabaseId,
@@ -794,8 +796,27 @@ impl SeafowlContext {
                             // write that thing back to the db (set table regions)
                             Ok(make_dummy_exec())
                         }
-                        SeafowlExtensionNode::CreateFunction(_) => {
-                            // TODO
+                        SeafowlExtensionNode::CreateFunction(CreateFunction {
+                            name,
+                            details,
+                            output_schema: _,
+                        }) => {
+                            let function_code = decode(&details.data).map_err(|e| {
+                                Error::Execution(format!("Error decoding the UDF: {:?}", e))
+                            })?;
+
+                            let _function = create_udf_from_wasm(
+                                &name.to_string(),
+                                &function_code,
+                                &details.entrypoint,
+                                details.input_types.iter().map(get_wasm_type).collect(),
+                                get_wasm_type(&details.return_type),
+                                get_volatility(&details.volatility),
+                            )?;
+                            // TODO we don't persist the function here in the database, so it'll get
+                            // deleted every time we recreate the context
+                            // also this requires &mut self
+                            // self.inner.register_udf(function);
                             Ok(make_dummy_exec())
                         }
                     },
@@ -885,6 +906,7 @@ mod tests {
     use datafusion::arrow::datatypes::{
         DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     };
+    use datafusion::assert_batches_eq;
     use std::collections::HashMap as StdHashMap;
 
     use super::*;
@@ -1216,5 +1238,51 @@ mod tests {
                 "fadd2ca2b9675ebce722cddc4a4fc05159a644fdeb50893d411c49d58ab52778.parquet"
             )]
         );
+    }
+
+    #[tokio::test]
+    async fn test_register_udf() -> Result<()> {
+        let sf_context = mock_context().await;
+
+        // Source: https://gist.github.com/going-digital/02e46c44d89237c07bc99cd440ebfa43
+        sf_context.collect(sf_context.plan_query(
+            r#"CREATE FUNCTION sintau AS '
+            {
+                "entrypoint": "sintau",
+                "language": "wasm",
+                "input_types": ["f32"],
+                "return_type": "f32",
+                "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
+            }';"#,
+        )
+        .await?).await?;
+
+        let results = sf_context
+            .collect(
+                sf_context
+                    .plan_query(
+                        "
+        SELECT v, ROUND(sintau(CAST(v AS REAL)) * 100) AS sintau
+        FROM (VALUES (0.1), (0.2), (0.3), (0.4), (0.5)) d (v)",
+                    )
+                    .await?,
+            )
+            .await?;
+
+        let expected = vec![
+            "+-----+------------------------------+",
+            "| v   | sintau |",
+            "+-----+------------------------------+",
+            "| 0.1 | 0.5877828                    |",
+            "| 0.2 | 0.95106226                   |",
+            "| 0.3 | 0.95106226                   |",
+            "| 0.4 | 0.5877828                    |",
+            "| 0.5 | 0.0000062162862              |",
+            "+-----+------------------------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
     }
 }
