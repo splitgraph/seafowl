@@ -2,7 +2,7 @@ use std::{any::Any, fmt, sync::Arc, vec};
 
 use datafusion::logical_plan::{Column, DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode};
 
-use crate::provider::SeafowlTable;
+use crate::{provider::SeafowlTable, wasm_udf::data_types::CreateFunctionDetails};
 
 #[derive(Debug)]
 pub struct CreateTable {
@@ -56,11 +56,21 @@ pub struct Delete {
 }
 
 #[derive(Debug)]
+pub struct CreateFunction {
+    /// The function name
+    pub name: String,
+    pub details: CreateFunctionDetails,
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
+}
+
+#[derive(Debug)]
 pub enum SeafowlExtensionNode {
     CreateTable(CreateTable),
     Insert(Insert),
     Update(Update),
     Delete(Delete),
+    CreateFunction(CreateFunction),
 }
 
 impl SeafowlExtensionNode {
@@ -92,6 +102,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::CreateTable(CreateTable { output_schema, .. }) => output_schema,
             SeafowlExtensionNode::Update(Update { output_schema, .. }) => output_schema,
             SeafowlExtensionNode::Delete(Delete { output_schema, .. }) => output_schema,
+            SeafowlExtensionNode::CreateFunction(CreateFunction { output_schema, .. }) => {
+                output_schema
+            }
         }
     }
 
@@ -110,6 +123,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::Update(Update { name, .. }) => write!(f, "Update: {}", name),
             SeafowlExtensionNode::Delete(Delete { name, .. }) => {
                 write!(f, "Delete: {}", name)
+            }
+            SeafowlExtensionNode::CreateFunction(CreateFunction { name, .. }) => {
+                write!(f, "CreateFunction: {}", name)
             }
         }
     }

@@ -12,6 +12,7 @@ sqlparser = "0.18"
 sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "postgres" ] }
 itertools = ">=0.10.0"
 object_store = "0.3.0"
+serde = "1.0.138"
 serde_json = "1.0.81"
 url = "2.2"
 tempfile = "3"
@@ -30,6 +31,10 @@ rand = "0.8"
 # PG wire protocol support
 convergence = "0.5.0"
 convergence-arrow = "0.5.0"
+
+# For WASM user-defined functions
+wasmtime = "0.38.1"
+base64 = "0.13.0"
 
 [patch.crates-io]
 # Get convergence-arrow to use the Git version of datafusion

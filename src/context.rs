@@ -53,8 +53,9 @@ use datafusion::{
 
 use crate::catalog::RegionCatalog;
 use crate::data_types::{TableId, TableVersionId};
-use crate::nodes::SeafowlExtensionNode;
+use crate::nodes::{CreateFunction, SeafowlExtensionNode};
 use crate::provider::{RegionColumn, SeafowlRegion, SeafowlTable};
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     catalog::TableCatalog,
     data_types::DatabaseId,
@@ -541,7 +542,28 @@ impl SeafowlContext {
                             output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
-                }
+                },
+                Statement::CreateFunction {
+                    temporary: false,
+                    name,
+                    class_name,
+                    using: None,
+                } => {
+                    // We abuse the fact that in CREATE FUNCTION AS [class_name], class_name can be an arbitrary string
+                    // and so we can get the user to put some JSON in there
+                    let function_details: CreateFunctionDetails = serde_json::from_str(&class_name)
+                        .map_err(|e| {
+                            Error::Execution(format!("Error parsing UDF details: {:?}", e))
+                        })?;
+
+                        Ok(LogicalPlan::Extension(Extension {
+                            node: Arc::new(SeafowlExtensionNode::CreateFunction(CreateFunction {
+                                name: name.to_string(),
+                                details: function_details,
+                                output_schema: Arc::new(DFSchema::empty())
+                            })),
+                        }))
+                    }
                 _ => Err(Error::NotImplemented(format!(
                     "Unsupported SQL statement: {:?}",
                     sql
@@ -771,6 +793,10 @@ impl SeafowlContext {
 
                             // really we want to be able to load all regions + cols for a table and then
                             // write that thing back to the db (set table regions)
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::CreateFunction(_) => {
+                            // TODO
                             Ok(make_dummy_exec())
                         }
                     },
