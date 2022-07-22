@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <svg
-   xmlns:dc="http://purl.org/dc/elements/1.1/"
-   xmlns:cc="http://creativecommons.org/ns#"
-   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-   xmlns:svg="http://www.w3.org/2000/svg"
-   xmlns="http://www.w3.org/2000/svg"
-   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
-   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    sodipodi:docname="pelican.svg"
-   inkscape:version="1.0 (4035a4fb49, 2020-05-01)"
+   inkscape:version="1.2.1 (9c6d41e410, 2022-07-14)"
    id="svg8"
    version="1.1"
    viewBox="0 0 200 49.999999"
    height="5cm"
-   width="20cm">
+   width="20cm"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:dc="http://purl.org/dc/elements/1.1/">
   <defs
      id="defs2" />
   <sodipodi:namedview
@@ -22,18 +22,18 @@
      inkscape:snap-bbox-edge-midpoints="true"
      inkscape:snap-bbox="true"
      inkscape:window-maximized="1"
-     inkscape:window-y="-8"
-     inkscape:window-x="-8"
-     inkscape:window-height="1017"
+     inkscape:window-y="-7"
+     inkscape:window-x="-7"
+     inkscape:window-height="1141"
      inkscape:window-width="1920"
      units="cm"
      showgrid="false"
      inkscape:document-rotation="0"
      inkscape:current-layer="layer1"
      inkscape:document-units="mm"
-     inkscape:cy="32.819887"
-     inkscape:cx="242.27659"
-     inkscape:zoom="1"
+     inkscape:cy="185"
+     inkscape:cx="389.75"
+     inkscape:zoom="2"
      inkscape:pageshadow="2"
      inkscape:pageopacity="0.0"
      borderopacity="1.0"
@@ -42,7 +42,10 @@
      id="base"
      inkscape:snap-center="true"
      inkscape:snap-object-midpoints="true"
-     inkscape:snap-grids="true">
+     inkscape:snap-grids="true"
+     inkscape:showpageshadow="2"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1">
     <inkscape:grid
        type="xygrid"
        id="grid841" />
@@ -55,7 +58,7 @@
         <dc:format>image/svg+xml</dc:format>
         <dc:type
            rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
-        <dc:title></dc:title>
+        <dc:title />
       </cc:Work>
     </rdf:RDF>
   </metadata>
@@ -90,27 +93,53 @@
          x="75.217255"
          y="23.529018"
          style="stroke-width:0.264583" /></text>
-    <path
-       style="fill:#bdcdd4;fill-opacity:1;stroke:none;stroke-width:2.17752;stroke-linecap:butt;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 143.41181,34.010633 c 0,-14.379349 -8.77102,-15.134769 -8.77102,-0.734991 z"
-       id="path1447-3"
-       sodipodi:nodetypes="ccc" />
-    <text
+    <g
+       aria-label="Seafowl"
        id="text846"
-       y="35.059517"
-       x="74.255341"
-       style="font-size:19.7556px;line-height:1.05;font-family:Telegraf;-inkscape-font-specification:Telegraf;text-align:start;letter-spacing:0px;word-spacing:0px;text-anchor:start;stroke-width:0.264583"
-       xml:space="preserve"><tspan
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:25.4px;font-family:Telegraf;-inkscape-font-specification:'Telegraf, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:start;text-anchor:start;stroke-width:0.264583"
-         y="35.059517"
-         x="74.255341"
-         id="tspan844"
-         sodipodi:role="line">Seafowl</tspan></text>
+       style="font-weight:bold;font-size:19.7556px;line-height:1.05;font-family:Telegraf;-inkscape-font-specification:'Telegraf Bold';letter-spacing:0px;word-spacing:0px;stroke-width:0.264583">
+      <path
+         d="m 79.005141,29.496917 q 0.0762,1.4478 1.015999,2.286 0.9652,0.8382 2.8702,0.8382 1.8288,0 2.6162,-0.5842 0.7874,-0.5842 0.7874,-1.651 0,-0.9398 -0.5588,-1.4478 -0.5588,-0.5334 -1.7018,-0.6858 l -3.7338,-0.4826 q -2.260599,-0.2794 -3.479799,-1.4986 -1.1938,-1.2192 -1.1938,-3.302 0,-2.3876 1.778,-3.81 1.8034,-1.4224 5.257799,-1.4224 3.5814,0 5.3848,1.4986 1.8034,1.4986 1.9558,3.937 h -3.7846 q -0.1524,-1.2192 -1.0414,-1.905 -0.889,-0.6858 -2.5146,-0.6858 -1.524,0 -2.3368,0.5842 -0.8128,0.5588 -0.8128,1.5748 0,0.7874 0.4826,1.2954 0.4826,0.4826 1.4986,0.5842 l 3.5306,0.4318 q 5.1562,0.5842 5.1562,4.953 0,5.4864 -7.3406,5.4864 -3.860799,0 -5.689599,-1.7018 -1.8034,-1.7018 -1.905,-4.2926 z"
+         style="font-size:25.4px"
+         id="path277" />
+      <path
+         d="m 98.842502,32.875117 q 1.168398,0 1.879598,-0.4318 0.7112,-0.4572 0.9906,-1.2192 h 3.6068 q -0.3048,1.8034 -1.8796,3.0226 -1.5494,1.2192 -4.673598,1.2192 -3.4798,0 -5.1562,-1.905 -1.6764,-1.9304 -1.6764,-4.8768 0,-1.905 0.7366,-3.429 0.762,-1.524 2.286,-2.413 1.5494,-0.889 3.81,-0.889 3.378198,0 4.978398,1.8796 1.6002,1.8796 1.6002,4.826 0,0.7366 -0.0508,1.016 h -9.677398 q 0.1524,1.7272 0.9652,2.4638 0.8382,0.7366 2.2606,0.7366 z m -0.0254,-8.382 q -1.397,0 -2.1844,0.6604 -0.762,0.6604 -0.9906,2.2352 h 6.121398 q -0.1016,-1.4478 -0.8382,-2.159 -0.7112,-0.7366 -2.108198,-0.7366 z"
+         style="font-size:25.4px"
+         id="path279" />
+      <path
+         d="m 111.33929,35.389717 q -1.9304,0 -3.0734,-0.9906 -1.143,-1.016 -1.143,-2.7178 0,-1.6256 0.9144,-2.5654 0.9144,-0.9398 3.2512,-1.3462 l 2.9972,-0.508 q 0.8636,-0.1524 1.2192,-0.4318 0.3556,-0.2794 0.3556,-0.8382 0,-0.7112 -0.508,-1.0922 -0.4826,-0.381 -1.7018,-0.381 -2.5146,0 -2.5908,1.9812 h -3.683 q 0.0762,-2.0828 1.7018,-3.3274 1.651,-1.2446 4.4958,-1.2446 2.8448,0 4.2926,1.143 1.4478,1.143 1.4478,3.2004 v 5.4864 q 0,1.5494 0.2032,3.302 h -3.2766 q -0.2032,-1.3462 -0.2032,-2.7178 -0.4572,1.397 -1.651,2.2352 -1.1938,0.8128 -3.048,0.8128 z m 1.27,-2.5654 q 1.4986,0 2.3622,-1.016 0.889,-1.0414 0.889,-2.794 v -0.5588 q -0.4572,0.3048 -0.9398,0.4826 -0.4572,0.1778 -1.143,0.3302 l -1.0668,0.254 q -1.016,0.254 -1.4478,0.6604 -0.4318,0.4064 -0.4318,1.1176 0,0.7366 0.4826,1.143 0.508,0.381 1.2954,0.381 z"
+         style="font-size:25.4px"
+         id="path281" />
+      <path
+         d="m 123.20111,35.059517 v -9.8552 h -2.2606 v -1.8034 l 2.2606,-1.0922 v -1.1684 q 0,-1.8796 1.016,-2.8702 1.0414,-0.9906 3.3274,-0.9906 h 3.2512 v 2.7178 h -4.3688 v 2.3622 h 3.683 v 2.8448 h -3.1496 v 9.8552 z"
+         style="font-size:25.4px"
+         id="path283" />
+      <ellipse
+         style="fill:#bdcdd4;fill-opacity:1;stroke-width:0;stroke-dasharray:none"
+         id="path4749"
+         cx="137.82312"
+         cy="28.697462"
+         rx="4.4565754"
+         ry="4.3589191" />
+      <path
+         d="m 137.95855,35.465917 q -2.413,0 -3.9878,-0.9144 -1.5748,-0.9398 -2.3114,-2.4638 -0.7366,-1.524 -0.7366,-3.4036 0,-1.8542 0.7366,-3.3782 0.7366,-1.524 2.3114,-2.4384 1.5748,-0.9144 3.9878,-0.9144 2.413,0 3.9878,0.9398 1.6002,0.9144 2.3114,2.4384 0.7366,1.524 0.7366,3.3528 0,1.8542 -0.7366,3.4036 -0.7112,1.524 -2.3114,2.4638 -1.5748,0.9144 -3.9878,0.9144 z m -3.2512,-6.7564 q 0,2.0828 0.762,2.9464 0.762,0.8636 2.4892,0.8636 1.7526,0 2.5146,-0.8636 0.762,-0.8636 0.762,-2.9464 0,-2.0828 -0.762,-2.9464 -0.762,-0.8636 -2.5146,-0.8636 -1.7272,0 -2.4892,0.8636 -0.762,0.8636 -0.762,2.9464 z"
+         style="font-size:25.4px"
+         id="path285"
+         class="UnoptimicedTransforms" />
+      <path
+         d="m 162.13937,32.240117 2.413,-9.8806 h 3.5306 l -3.3528,12.7 h -5.2324 l -2.5654,-8.7884 -2.54,8.7884 h -5.2578 l -3.3528,-12.7 h 3.81 l 2.4384,9.906 3.0988,-9.906 h 3.9116 z"
+         style="font-size:25.4px"
+         id="path287" />
+      <path
+         d="m 173.72176,35.059517 h -3.7592 v -17.78 h 3.7592 z"
+         style="font-size:25.4px"
+         id="path289" />
+    </g>
     <circle
        style="fill:#000000;fill-opacity:1;stroke:#000000;stroke-width:1.02401;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;paint-order:normal"
        id="path1443-3"
-       cx="138.96344"
-       cy="28.614546"
-       r="0.79829013" />
+       cx="137.95856"
+       cy="28.709517"
+       r="0.79829013"
+       class="UnoptimicedTransforms" />
   </g>
 </svg>
