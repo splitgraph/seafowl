@@ -1,4 +1,4 @@
-use config::{Config, File, FileFormat};
+use config::{Config, ConfigError, File, FileFormat};
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -30,18 +30,18 @@ pub struct S3 {
     bucket: String,
 }
 
-pub fn load_config() -> SeafowlConfig {
+pub fn load_config() -> Result<SeafowlConfig, ConfigError> {
     let config = Config::builder().add_source(File::with_name("./seafowl.toml"));
 
-    // TODO error handling
-    config.build().unwrap().try_deserialize().unwrap()
+    config.build()?.try_deserialize()
 }
 
-pub fn load_config_from_string(config_str: &str) -> SeafowlConfig {
+// Load a config from a string (to test our structs are defined correctly)
+pub fn load_config_from_string(config_str: &str) -> Result<SeafowlConfig, ConfigError> {
     let config =
         Config::builder().add_source(File::from_str(config_str, FileFormat::Toml));
 
-    config.build().unwrap().try_deserialize().unwrap()
+    config.build()?.try_deserialize()
 }
 
 #[cfg(test)]
@@ -56,9 +56,13 @@ secret_access_key = "ABC..."
 endpoint = "https://s3.amazonaws.com:9000"
 bucket = "seafowl""#;
 
+    const TEST_CONFIG_ERROR: &str = r#"
+    [object_store]
+    type = "local""#;
+
     #[test]
     fn test_parse_config_with_s3() {
-        let config = load_config_from_string(TEST_CONFIG);
+        let config = load_config_from_string(TEST_CONFIG).unwrap();
 
         assert_eq!(
             config,
@@ -71,5 +75,11 @@ bucket = "seafowl""#;
                 })
             }
         )
+    }
+
+    #[test]
+    fn test_parse_config_erroneous() {
+        let error = load_config_from_string(TEST_CONFIG_ERROR).unwrap_err();
+        assert!(error.to_string().contains("missing field `data_dir`"))
     }
 }
