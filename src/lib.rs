@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod config;
 pub mod context;
 pub mod data_types;
 pub mod datafusion;
