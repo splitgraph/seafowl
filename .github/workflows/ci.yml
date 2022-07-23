@@ -14,9 +14,6 @@ jobs:
         # set debuginfo to 1 (line tables only, for panic tracebacks)
         RUSTFLAGS: "-C debuginfo=1"
 
-        # database URL for end-to-end + repository.rs tests
-        DATABASE_URL: "postgres://postgres:postgres@postgres:5432/db_test"
-
     services:
       postgres:
         image: postgres:14
@@ -66,7 +63,6 @@ jobs:
           find . -name 'Cargo.toml' -exec cargo tomlfmt -p {} \;
           git diff --exit-code
 
-      # Because DATABASE_URL is set, sqlx uses that DB URL
       - name: Run `cargo check`
         run: |
           cargo check
@@ -84,6 +80,13 @@ jobs:
       - name: Run tests
         run: |
           cargo test
+        env:
+          # database URL for end-to-end + repository.rs tests
+          DATABASE_URL: "postgres://postgres:postgres@postgres:5432/db_test"
+          # DATABASE_URL makes sqlx expect that we've run a migration to create the schema
+          # out-of-band in order to check all queries at compile time, but we use the pre-baked
+          # offline sqlx-data.json file for this.
+          SQLX_OFFLINE: "true"
 
       # TODO recompiles the whole thing with different flags (busting the cache?,
       #      also codecov needs a token for private repos; also this breaks in Docker
