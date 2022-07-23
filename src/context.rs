@@ -163,9 +163,9 @@ fn compound_identifier_to_column(ids: &[Ident]) -> Result<Column> {
     }
 }
 
-/// Load the Statistics for a Parquet file at a certain path
-async fn get_parquet_file_statistics(
-    path: &OSPath,
+/// Load the Statistics for a Parquet file in memory
+async fn get_parquet_file_statistics_bytes(
+    data: Bytes,
     schema: SchemaRef,
 ) -> Result<Statistics> {
     // DataFusion's methods for this are all private (see fetch_statistics / summarize_min_max)
@@ -177,36 +177,9 @@ async fn get_parquet_file_statistics(
     // A more fancy way to get this working would be making an ObjectStore
     // that serves as a write-through cache so that we can use it both when downloading and uploading
     // Parquet files.
-    let directory = path
-        .parent()
-        .expect("Temporary object store path is a directory / root");
-    let file_name = path
-        .file_name()
-        .expect("Temporary object store path is a root")
-        .to_str()
-        .expect("Temporary object path isn't Unicode");
 
     // Create a dummy object store pointing to our temporary directory (we don't know if
     // DiskManager will always put all files in the same dir)
-    let dummy_object_store: Arc<dyn ObjectStore> = Arc::from(
-        LocalFileSystem::new_with_prefix(directory).expect("creating object store"),
-    );
-    let parquet = ParquetFormat::default();
-    let meta = dummy_object_store
-        .head(&Path::from(file_name))
-        .await
-        .expect("Temporary object not found");
-    let stats = parquet
-        .infer_stats(&dummy_object_store, schema, &meta)
-        .await?;
-    Ok(stats)
-}
-
-/// Load the Statistics for a Parquet file in memory
-async fn get_parquet_file_statistics_bytes(
-    data: Bytes,
-    schema: SchemaRef,
-) -> Result<Statistics> {
     let dummy_object_store: Arc<dyn ObjectStore> = Arc::from(InMemory::new());
     let dummy_path = Path::from("data");
     dummy_object_store.put(&dummy_path, data).await.unwrap();
