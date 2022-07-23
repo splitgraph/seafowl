@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v2.7.1
+    hooks:
+      - id: prettier
+        files: \.(json|markdown|md|yaml|yml)$
+  - repo: local
+    hooks:
+      - id: fmt
+        name: fmt
+        entry: cargo fmt
+        language: system
+        types: [rust]
+        args: ["--"]
+
+      # Run Clippy (lint), which also runs cargo check (check the code compiles)
+      - id: clippy
+        name: clippy
+        entry: ./ci/clippy.sh
+        language: system
+        types: [rust]
+        pass_filenames: false
