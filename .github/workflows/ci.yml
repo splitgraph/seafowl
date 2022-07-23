@@ -27,6 +27,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
+
+      # Setup pre-commit
+      # From https://github.com/mozilla/grcov/blob/master/.github/workflows/CICD.yml
+      - name: Setup Python
+        uses: actions/setup-python@v2
+      - name: Install pre-commit
+        run: python -m pip install --no-cache-dir pre-commit
+      - name: Configure pre-commit cache
+        uses: actions/cache@v2
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
+
       # Use https://github.com/marketplace/actions/rust-cache
 
       # selecting a toolchain either by action or manual `rustup` calls should happen
@@ -50,20 +63,16 @@ jobs:
           rustup default stable
           rustup component add rustfmt clippy
 
-      - name: Check formatting
+      - name: Check pre-commit hooks (formatting and Clippy)
         run: |
-          cargo fmt --all -- --check
+          pre-commit run --all
 
+      # NB this one doesn't run as a pre-commit hook
       - name: Check Cargo.toml formatting
         run: |
           cargo install cargo-tomlfmt
           find . -name 'Cargo.toml' -exec cargo tomlfmt -p {} \;
           git diff --exit-code
-
-      # TODO: put these into pre-commit hooks instead
-      - name: Run Clippy
-        run: |
-          cargo clippy --all-targets --workspace -- -D warnings
 
       - name: Build workspace in debug mode
         run: |
