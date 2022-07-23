@@ -164,8 +164,6 @@ impl TableProvider for SeafowlTable {
         let plan = format.create_physical_plan(config, filters).await?;
 
         Ok(Arc::new(SeafowlBaseTableScanNode {
-            name: self.name.to_owned(),
-            schema: self.schema.to_owned(),
             regions: Arc::new(regions),
             inner: plan,
         }))
@@ -174,8 +172,6 @@ impl TableProvider for SeafowlTable {
 
 #[derive(Debug)]
 struct SeafowlBaseTableScanNode {
-    pub name: Arc<str>,
-    pub schema: Arc<Schema>,
     pub regions: Arc<Vec<SeafowlRegion>>,
     pub inner: Arc<dyn ExecutionPlan>,
 }
