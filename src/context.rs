@@ -17,7 +17,7 @@ use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use hex::encode;
 use object_store::memory::InMemory;
-use object_store::{local::LocalFileSystem, path::Path, ObjectStore};
+use object_store::{path::Path, ObjectStore};
 use sha2::Digest;
 use sha2::Sha256;
 use sqlparser::ast::{
@@ -26,8 +26,8 @@ use sqlparser::ast::{
 };
 use std::io::Read;
 
+use std::iter::zip;
 use std::sync::Arc;
-use std::{iter::zip, path::Path as OSPath};
 
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::{
@@ -560,7 +560,7 @@ impl SeafowlContext {
             },
             DFStatement::DescribeTable(s) => query_planner.describe_table_to_plan(s),
             // Stub out the standard DataFusion CREATE EXTERNAL TABLE statements since we don't support them
-            DFStatement::CreateExternalTable(c) => {
+            DFStatement::CreateExternalTable(_) => {
                 return Err(Error::NotImplemented(format!(
                     "Unsupported SQL statement: {:?}",
                     sql
@@ -806,7 +806,7 @@ impl SeafowlContext {
                             })?;
 
                             let _function = create_udf_from_wasm(
-                                &name.to_string(),
+                                name,
                                 &function_code,
                                 &details.entrypoint,
                                 details.input_types.iter().map(get_wasm_type).collect(),
