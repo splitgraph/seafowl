@@ -63,10 +63,6 @@ jobs:
           find . -name 'Cargo.toml' -exec cargo tomlfmt -p {} \;
           git diff --exit-code
 
-      - name: Run `cargo check`
-        run: |
-          cargo check
-
       # TODO: put these into pre-commit hooks instead
       - name: Run Clippy
         run: |
