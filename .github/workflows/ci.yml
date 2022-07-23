@@ -64,11 +64,14 @@ jobs:
         run: |
           cargo test
 
-      - name: Run coverage
-        run: |
-          cargo install --version 0.20.1 cargo-tarpaulin
-          cargo tarpaulin --all --out Xml
+      # TODO recompiles the whole thing with different flags (busting the cache?,
+      #      also codecov needs a token for private repos; also this breaks in Docker
+      #      because of security / ASLR disable fails)
+      # - name: Run coverage
+      #   run: |
+      #     cargo install --version 0.20.1 cargo-tarpaulin
+      #     cargo tarpaulin --all --out Xml
 
-      - name: Report coverage
-        continue-on-error: true
-        run: bash <(curl -s https://codecov.io/bash)
+      # - name: Report coverage
+      #   continue-on-error: true
+      #   run: bash <(curl -s https://codecov.io/bash)
