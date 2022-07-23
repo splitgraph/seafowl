@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{env, sync::Arc};
 
 use async_trait::async_trait;
 use convergence::{
@@ -84,9 +84,9 @@ impl Engine for SeafowlConvergenceEngine {
     }
 }
 
-const DEV_DB_DSN: &str = "postgresql://sgr:password@localhost:7432/seafowl";
-
 async fn build_context() -> SeafowlContext {
+    let dsn = env::var("DATABASE_URL").unwrap();
+
     let session_config = SessionConfig::new()
         .with_information_schema(true)
         .with_default_catalog_and_schema("default", "public");
@@ -97,10 +97,9 @@ async fn build_context() -> SeafowlContext {
         .register_object_store("seafowl", "", object_store);
 
     // Initialize the repository
-    let repository =
-        PostgresRepository::try_new(DEV_DB_DSN.to_string(), "public".to_string())
-            .await
-            .expect("Error setting up the database");
+    let repository = PostgresRepository::try_new(dsn, "public".to_string())
+        .await
+        .expect("Error setting up the database");
 
     let catalog = Arc::new(PostgresCatalog {
         repository: Arc::new(repository),

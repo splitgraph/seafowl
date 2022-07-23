@@ -1,3 +1,4 @@
+use std::env;
 use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
@@ -10,12 +11,11 @@ use seafowl::{
     repository::testutils::make_repository,
 };
 
-// TODO use envvars or something
-const DEV_DB_DSN: &str = "postgresql://sgr:password@localhost:7432/seafowl";
-
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
 async fn make_context_with_pg() -> SeafowlContext {
+    let dsn = env::var("DATABASE_URL").unwrap();
+
     let session_config = SessionConfig::new()
         .with_information_schema(true)
         .with_default_catalog_and_schema("default", "public");
@@ -26,7 +26,7 @@ async fn make_context_with_pg() -> SeafowlContext {
         .runtime_env()
         .register_object_store("seafowl", "", object_store);
 
-    let repository = Arc::new(make_repository(DEV_DB_DSN).await);
+    let repository = Arc::new(make_repository(&dsn).await);
     let catalog = Arc::new(PostgresCatalog { repository });
 
     // Create a default database and collection

@@ -520,7 +520,7 @@ pub mod testutils {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{env, sync::Arc};
 
     use datafusion::arrow::datatypes::{
         DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
@@ -529,9 +529,6 @@ mod tests {
     use crate::repository::testutils::make_repository;
 
     use super::*;
-
-    // TODO use envvars or something
-    const DEV_DB_DSN: &str = "postgresql://sgr:password@localhost:7432/seafowl";
 
     fn get_test_region() -> SeafowlRegion {
         SeafowlRegion {
@@ -595,7 +592,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_make_repository() {
-        let repository = make_repository(DEV_DB_DSN).await;
+        let dsn = env::var("DATABASE_URL").unwrap();
+
+        let repository = make_repository(&dsn).await;
         assert_eq!(
             repository
                 .get_collections_in_database(0)
@@ -607,7 +606,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_database_collection_table() {
-        let repository = make_repository(DEV_DB_DSN).await;
+        let dsn = env::var("DATABASE_URL").unwrap();
+
+        let repository = make_repository(&dsn).await;
 
         let (database_id, _, _, table_version_id) =
             make_database_with_single_table(&repository).await;
@@ -661,7 +662,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_append_region() {
-        let repository = make_repository(DEV_DB_DSN).await;
+        let dsn = env::var("DATABASE_URL").unwrap();
+        let repository = make_repository(&dsn).await;
 
         let (_, _, _, table_version_id) =
             make_database_with_single_table(&repository).await;
