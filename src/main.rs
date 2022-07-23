@@ -112,10 +112,11 @@ async fn build_context() -> SeafowlContext {
         None => catalog.create_database("default").await,
     };
 
-    let _default_collection = match catalog.get_collection_id_by_name("default", "public").await {
-        Some(id) => id,
-        None => catalog.create_collection(default_db, "public").await,
-    };
+    let _default_collection =
+        match catalog.get_collection_id_by_name("default", "public").await {
+            Some(id) => id,
+            None => catalog.create_collection(default_db, "public").await,
+        };
 
     // Convergence doesn't support connecting to different DB names. We are supposed
     // to do one context per query (as we need to load the schema before executing every
