@@ -4,43 +4,43 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev="bf7564f62117487a9a397c25326fcda1ed22d08d", default-features = false, package = "datafusion" }
 async-trait = "0.1.41"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
-futures = "0.3"
-sqlparser = "0.18"
-sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "postgres" ] }
-itertools = ">=0.10.0"
-object_store = "0.3.0"
-serde = "1.0.138"
-serde_json = "1.0.81"
-url = "2.2"
-tempfile = "3"
-sha2 = ">=0.10.1"
-hex = ">=0.4.0"
-
-# passing to DF's query planner
-hashbrown = { version = "0.12", features = ["raw"] }
+base64 = "0.13.0"
 
 bytes = "1.1.0"
-
-# Needs to be in non-dev because repository::testutils can't be
-# imported by tests::end_to_end if it's cfg(test).
-rand = "0.8"
 
 # PG wire protocol support
 convergence = "0.5.0"
 convergence-arrow = "0.5.0"
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "bf7564f62117487a9a397c25326fcda1ed22d08d", default-features = false, package = "datafusion" }
+futures = "0.3"
+
+# passing to DF's query planner
+hashbrown = { version = "0.12", features = ["raw"] }
+hex = ">=0.4.0"
+itertools = ">=0.10.0"
+object_store = "0.3.0"
+
+# Needs to be in non-dev because repository::testutils can't be
+# imported by tests::end_to_end if it's cfg(test).
+rand = "0.8"
+serde = "1.0.138"
+serde_json = "1.0.81"
+sha2 = ">=0.10.1"
+sqlparser = "0.18"
+sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "postgres" ] }
+tempfile = "3"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
+url = "2.2"
 
 # For WASM user-defined functions
 wasmtime = "0.38.1"
-base64 = "0.13.0"
 
 [patch.crates-io]
 # Get convergence-arrow to use the Git version of datafusion
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev="bf7564f62117487a9a397c25326fcda1ed22d08d", default-features = false, package = "datafusion" }
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "bf7564f62117487a9a397c25326fcda1ed22d08d", default-features = false, package = "datafusion" }
 
 [dev-dependencies]
-mockall = "0.11.1"
 # for test assertions (assert_batches_eq! doesn't work without it)
 arrow = { version = "17.0.0", features = ["prettyprint"] }
+mockall = "0.11.1"
