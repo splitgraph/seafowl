@@ -9,14 +9,9 @@
           "type_info": "Int8"
         }
       ],
-      "nullable": [
-        false
-      ],
+      "nullable": [false],
       "parameters": {
-        "Left": [
-          "Int8",
-          "Varchar"
-        ]
+        "Left": ["Int8", "Varchar"]
       }
     },
     "query": "\n        INSERT INTO \"table\" (collection_id, name) VALUES ($1, $2) RETURNING (id)\n        "
@@ -30,13 +25,9 @@
           "type_info": "Int8"
         }
       ],
-      "nullable": [
-        false
-      ],
+      "nullable": [false],
       "parameters": {
-        "Left": [
-          "Int8"
-        ]
+        "Left": ["Int8"]
       }
     },
     "query": "DELETE FROM \"table\" WHERE id = $1 RETURNING id"
@@ -50,14 +41,9 @@
           "type_info": "Int8"
         }
       ],
-      "nullable": [
-        false
-      ],
+      "nullable": [false],
       "parameters": {
-        "Left": [
-          "Int8",
-          "Varchar"
-        ]
+        "Left": ["Int8", "Varchar"]
       }
     },
     "query": "\n        INSERT INTO \"collection\" (database_id, name) VALUES ($1, $2) RETURNING (id)\n        "
@@ -71,13 +57,9 @@
           "type_info": "Int8"
         }
       ],
-      "nullable": [
-        false
-      ],
+      "nullable": [false],
       "parameters": {
-        "Left": [
-          "Int8"
-        ]
+        "Left": ["Int8"]
       }
     },
     "query": "DELETE FROM database WHERE id = $1 RETURNING id"
@@ -91,13 +73,9 @@
           "type_info": "Int8"
         }
       ],
-      "nullable": [
-        false
-      ],
+      "nullable": [false],
       "parameters": {
-        "Left": [
-          "Int8"
-        ]
+        "Left": ["Int8"]
       }
     },
     "query": "INSERT INTO table_version (table_id)\n            SELECT table_id FROM table_version WHERE id = $1\n            RETURNING (id)"
@@ -111,14 +89,9 @@
           "type_info": "Int8"
         }
       ],
-      "nullable": [
-        false
-      ],
+      "nullable": [false],
       "parameters": {
-        "Left": [
-          "Text",
-          "Text"
-        ]
+        "Left": ["Text", "Text"]
       }
     },
     "query": "\n        SELECT collection.id\n        FROM collection JOIN database ON collection.database_id = database.id\n        WHERE database.name = $1 AND collection.name = $2\n        "
@@ -132,13 +105,9 @@
           "type_info": "Int8"
         }
       ],
-      "nullable": [
-        false
-      ],
+      "nullable": [false],
       "parameters": {
-        "Left": [
-          "Int8"
-        ]
+        "Left": ["Int8"]
       }
     },
     "query": "\n        INSERT INTO table_version (table_id) VALUES ($1) RETURNING (id)\n        "
@@ -148,10 +117,7 @@
       "columns": [],
       "nullable": [],
       "parameters": {
-        "Left": [
-          "Int8",
-          "Int8"
-        ]
+        "Left": ["Int8", "Int8"]
       }
     },
     "query": "INSERT INTO table_region (table_version_id, physical_region_id)\n            SELECT $2, physical_region_id FROM table_region WHERE table_version_id = $1;"
@@ -165,13 +131,9 @@
           "type_info": "Int8"
         }
       ],
-      "nullable": [
-        false
-      ],
+      "nullable": [false],
       "parameters": {
-        "Left": [
-          "Varchar"
-        ]
+        "Left": ["Varchar"]
       }
     },
     "query": "\n        INSERT INTO database (name) VALUES ($1) RETURNING (id)\n        "
@@ -185,13 +147,9 @@
           "type_info": "Int8"
         }
       ],
-      "nullable": [
-        false
-      ],
+      "nullable": [false],
       "parameters": {
-        "Left": [
-          "Text"
-        ]
+        "Left": ["Text"]
       }
     },
     "query": "\n        SELECT id FROM database WHERE database.name = $1\n        "
@@ -205,13 +163,9 @@
           "type_info": "Int8"
         }
       ],
-      "nullable": [
-        false
-      ],
+      "nullable": [false],
       "parameters": {
-        "Left": [
-          "Int8"
-        ]
+        "Left": ["Int8"]
       }
     },
     "query": "DELETE FROM collection WHERE id = $1 RETURNING id"
@@ -250,18 +204,9 @@
           "type_info": "Varchar"
         }
       ],
-      "nullable": [
-        false,
-        false,
-        false,
-        false,
-        false,
-        false
-      ],
+      "nullable": [false, false, false, false, false, false],
       "parameters": {
-        "Left": [
-          "Int8"
-        ]
+        "Left": ["Int8"]
       }
     },
     "query": "\n        WITH latest_table_version AS (\n            SELECT DISTINCT ON (table_id) table_id, id\n            FROM table_version\n            ORDER BY table_id, creation_time DESC, id DESC\n        )\n        SELECT\n            collection.name AS collection_name,\n            \"table\".name AS table_name,\n            \"table\".id AS table_id,\n            latest_table_version.id AS table_version_id,\n            table_column.name AS column_name,\n            table_column.type AS column_type\n        FROM collection\n        INNER JOIN \"table\" ON collection.id = \"table\".collection_id\n        INNER JOIN latest_table_version ON \"table\".id = latest_table_version.table_id\n        INNER JOIN table_column ON table_column.table_version_id = latest_table_version.id\n        WHERE collection.database_id = $1\n        ORDER BY collection_name, table_name\n        "
@@ -271,10 +216,7 @@
       "columns": [],
       "nullable": [],
       "parameters": {
-        "Left": [
-          "Int8",
-          "Int8"
-        ]
+        "Left": ["Int8", "Int8"]
       }
     },
     "query": "INSERT INTO table_column (table_version_id, name, type)\n            SELECT $2, name, type FROM table_column WHERE table_version_id = $1;"
@@ -318,19 +260,9 @@
           "type_info": "Bytea"
         }
       ],
-      "nullable": [
-        false,
-        false,
-        false,
-        false,
-        false,
-        true,
-        true
-      ],
+      "nullable": [false, false, false, false, false, true, true],
       "parameters": {
-        "Left": [
-          "Int8"
-        ]
+        "Left": ["Int8"]
       }
     },
     "query": "SELECT\n            physical_region.id AS table_region_id,\n            physical_region.object_storage_id,\n            physical_region.row_count,\n            physical_region_column.name AS column_name,\n            physical_region_column.type AS column_type,\n            physical_region_column.min_value,\n            physical_region_column.max_value\n        FROM table_region\n        INNER JOIN physical_region ON physical_region.id = table_region.physical_region_id\n        LEFT JOIN physical_region_column ON physical_region_column.physical_region_id = physical_region.id\n        WHERE table_region.table_version_id = $1\n        ORDER BY table_region_id\n        "
