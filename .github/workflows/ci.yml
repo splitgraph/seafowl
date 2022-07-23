@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  CI:
+    name: Lint, build, test
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+      env:
+        # set debuginfo to 1 (line tables only, for panic tracebacks)
+        RUSTFLAGS: "-C debuginfo=1"
+        CARGO_HOME: "/github/home/.cargo"
+        CARGO_TARGET_DIR: "/github/home/target"
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Cache Cargo
+        uses: actions/cache@v3
+        with:
+          path: /github/home/.cargo
+          key: cargo-cache-
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: /github/home/target
+          key: ${{ runner.os }}-amd64-target-cache-stable-
+
+      - name: Setup toolchain
+        run: |
+          rustup toolchain install stable
+          rustup default stable
+          rustup component add rustfmt clippy
+
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check
+
+      - name: Check Cargo.toml formatting
+        run: |
+          cargo install cargo-tomlfmt
+          find . -name 'Cargo.toml' -exec cargo tomlfmt -p {} \;
+          git diff --exit-code
+
+      - name: Run `cargo check`
+        run: |
+          cargo check
+
+      # TODO: put these into pre-commit hooks instead
+      - name: Run Clippy
+        run: |
+          cargo clippy --all-targets --workspace -- -D warnings
+
+      - name: Build workspace in debug mode
+        run: |
+          cargo build
+
+      # TODO split tests into unit and integration (one requires postgres?)
+      - name: Run tests
+        run: |
+          cargo test
+
+      - name: Run coverage
+        run: |
+          cargo install --version 0.20.1 cargo-tarpaulin
+          cargo tarpaulin --all --out Xml
+
+      - name: Report coverage
+        continue-on-error: true
+        run: bash <(curl -s https://codecov.io/bash)
