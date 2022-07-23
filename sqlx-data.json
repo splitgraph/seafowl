@@ -1,0 +1,338 @@
+{
+  "db": "PostgreSQL",
+  "0e73153eabc67cd03e049169706a112c3a8c968dcdd5baa821c8ce59bb2d5fc0": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Varchar"
+        ]
+      }
+    },
+    "query": "\n        INSERT INTO \"table\" (collection_id, name) VALUES ($1, $2) RETURNING (id)\n        "
+  },
+  "251665467884733bbce5f81d9b0c2aa19326cd15fe2e58957e5f4867f02efce8": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      }
+    },
+    "query": "DELETE FROM \"table\" WHERE id = $1 RETURNING id"
+  },
+  "316c3054589f809d73e48a6606c7951481feaa54f3202ce9a6d215aae898da5e": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Varchar"
+        ]
+      }
+    },
+    "query": "\n        INSERT INTO \"collection\" (database_id, name) VALUES ($1, $2) RETURNING (id)\n        "
+  },
+  "398104eb0388502aea033dbbd1505e2d901031351cf0037a662aef3f2634f630": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      }
+    },
+    "query": "DELETE FROM database WHERE id = $1 RETURNING id"
+  },
+  "4607024b7f9bf830c057ba2efebc67f104af89fee6e294f70b732c9a4ecc9eff": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      }
+    },
+    "query": "INSERT INTO table_version (table_id)\n            SELECT table_id FROM table_version WHERE id = $1\n            RETURNING (id)"
+  },
+  "5dab67c221e34358a8a88a9d193407541bbe24cfc25f3b9eec2a35221afda5f8": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Text"
+        ]
+      }
+    },
+    "query": "\n        SELECT collection.id\n        FROM collection JOIN database ON collection.database_id = database.id\n        WHERE database.name = $1 AND collection.name = $2\n        "
+  },
+  "720a9b498a764da061d318da7a5cc68672f52a6d36f74d34e31b9665bd78e0ad": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      }
+    },
+    "query": "\n        INSERT INTO table_version (table_id) VALUES ($1) RETURNING (id)\n        "
+  },
+  "8bf12632647cadb46fb2b5a301e4245ad5b29223f7392df658ca57ff6df7a07a": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int8"
+        ]
+      }
+    },
+    "query": "INSERT INTO table_region (table_version_id, physical_region_id)\n            SELECT $2, physical_region_id FROM table_region WHERE table_version_id = $1;"
+  },
+  "978b1beeefc49e94f916b13ea817849f08c66bcd92aba4c4cb833961255a01af": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Varchar"
+        ]
+      }
+    },
+    "query": "\n        INSERT INTO database (name) VALUES ($1) RETURNING (id)\n        "
+  },
+  "abffa0e0969edb044efdbc5b898d8d5577af514e46cb15addb9d25b5a73e2b4f": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "\n        SELECT id FROM database WHERE database.name = $1\n        "
+  },
+  "cedda4af72e5ebe0f8c8b516cb3f16a801129fc6e1ccb9accafbf2f1b12d29e9": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      }
+    },
+    "query": "DELETE FROM collection WHERE id = $1 RETURNING id"
+  },
+  "ddb9ea826148459abce2cd037d71d454bafc0fa7743dfe1ed3a322cd2b1ca805": {
+    "describe": {
+      "columns": [
+        {
+          "name": "collection_name",
+          "ordinal": 0,
+          "type_info": "Varchar"
+        },
+        {
+          "name": "table_name",
+          "ordinal": 1,
+          "type_info": "Varchar"
+        },
+        {
+          "name": "table_id",
+          "ordinal": 2,
+          "type_info": "Int8"
+        },
+        {
+          "name": "table_version_id",
+          "ordinal": 3,
+          "type_info": "Int8"
+        },
+        {
+          "name": "column_name",
+          "ordinal": 4,
+          "type_info": "Varchar"
+        },
+        {
+          "name": "column_type",
+          "ordinal": 5,
+          "type_info": "Varchar"
+        }
+      ],
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      }
+    },
+    "query": "\n        WITH latest_table_version AS (\n            SELECT DISTINCT ON (table_id) table_id, id\n            FROM table_version\n            ORDER BY table_id, creation_time DESC, id DESC\n        )\n        SELECT\n            collection.name AS collection_name,\n            \"table\".name AS table_name,\n            \"table\".id AS table_id,\n            latest_table_version.id AS table_version_id,\n            table_column.name AS column_name,\n            table_column.type AS column_type\n        FROM collection\n        INNER JOIN \"table\" ON collection.id = \"table\".collection_id\n        INNER JOIN latest_table_version ON \"table\".id = latest_table_version.table_id\n        INNER JOIN table_column ON table_column.table_version_id = latest_table_version.id\n        WHERE collection.database_id = $1\n        ORDER BY collection_name, table_name\n        "
+  },
+  "f804df8880c3fe3ba523445c5c47983ba0662924afaa0d8c78ee8e96648cbaa6": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Int8",
+          "Int8"
+        ]
+      }
+    },
+    "query": "INSERT INTO table_column (table_version_id, name, type)\n            SELECT $2, name, type FROM table_column WHERE table_version_id = $1;"
+  },
+  "ffaed4ab12946aae7e8fb402e878cf4153bd2a5c129960b369716eaebb33d758": {
+    "describe": {
+      "columns": [
+        {
+          "name": "table_region_id",
+          "ordinal": 0,
+          "type_info": "Int8"
+        },
+        {
+          "name": "object_storage_id",
+          "ordinal": 1,
+          "type_info": "Varchar"
+        },
+        {
+          "name": "row_count",
+          "ordinal": 2,
+          "type_info": "Int4"
+        },
+        {
+          "name": "column_name",
+          "ordinal": 3,
+          "type_info": "Varchar"
+        },
+        {
+          "name": "column_type",
+          "ordinal": 4,
+          "type_info": "Varchar"
+        },
+        {
+          "name": "min_value",
+          "ordinal": 5,
+          "type_info": "Bytea"
+        },
+        {
+          "name": "max_value",
+          "ordinal": 6,
+          "type_info": "Bytea"
+        }
+      ],
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true
+      ],
+      "parameters": {
+        "Left": [
+          "Int8"
+        ]
+      }
+    },
+    "query": "SELECT\n            physical_region.id AS table_region_id,\n            physical_region.object_storage_id,\n            physical_region.row_count,\n            physical_region_column.name AS column_name,\n            physical_region_column.type AS column_type,\n            physical_region_column.min_value,\n            physical_region_column.max_value\n        FROM table_region\n        INNER JOIN physical_region ON physical_region.id = table_region.physical_region_id\n        LEFT JOIN physical_region_column ON physical_region_column.physical_region_id = physical_region.id\n        WHERE table_region.table_version_id = $1\n        ORDER BY table_region_id\n        "
+  }
+}
