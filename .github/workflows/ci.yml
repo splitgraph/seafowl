@@ -14,6 +14,23 @@ jobs:
         # set debuginfo to 1 (line tables only, for panic tracebacks)
         RUSTFLAGS: "-C debuginfo=1"
 
+        # database URL for end-to-end + repository.rs tests
+        DATABASE_URL: "postgres://postgres:postgres@postgres:5432/db_test"
+
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: db_test
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v2
       # Use https://github.com/marketplace/actions/rust-cache
@@ -49,6 +66,7 @@ jobs:
           find . -name 'Cargo.toml' -exec cargo tomlfmt -p {} \;
           git diff --exit-code
 
+      # Because DATABASE_URL is set, sqlx uses that DB URL
       - name: Run `cargo check`
         run: |
           cargo check
