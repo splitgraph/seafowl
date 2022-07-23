@@ -13,23 +13,26 @@ jobs:
       env:
         # set debuginfo to 1 (line tables only, for panic tracebacks)
         RUSTFLAGS: "-C debuginfo=1"
-        CARGO_HOME: "/github/home/.cargo"
-        CARGO_TARGET_DIR: "/github/home/target"
 
     steps:
       - uses: actions/checkout@v2
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          key: cargo-cache-
+      # Use https://github.com/marketplace/actions/rust-cache
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          key: ${{ runner.os }}-amd64-target-cache-stable-
+      # selecting a toolchain either by action or manual `rustup` calls should happen
+      # before the plugin, as the cache uses the current rustc version as its cache key
+      - run: rustup toolchain install stable --profile minimal
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # shared-key: ""
+          # key: ""
+          # env-vars: ""
+          # workspaces: ""
+
+          # Determines if the cache should be saved even when the workflow has failed.
+          cache-on-failure: "true"
+
+      # Setup the rest of the toolchain
       - name: Setup toolchain
         run: |
           rustup toolchain install stable
