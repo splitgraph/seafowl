@@ -813,10 +813,8 @@ impl SeafowlContext {
                                 get_wasm_type(&details.return_type),
                                 get_volatility(&details.volatility),
                             )?;
-                            // TODO we don't persist the function here in the database, so it'll get
-                            // deleted every time we recreate the context
-                            // also this requires &mut self
-                            // self.inner.register_udf(function);
+                            let mut mut_session_ctx = self.inner.clone();
+                            mut_session_ctx.register_udf(_function);
                             Ok(make_dummy_exec())
                         }
                     },
@@ -1255,7 +1253,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Currently fails, see https://github.com/splitgraph/seafowl/issues/17"]
     async fn test_register_udf() -> Result<()> {
         let sf_context = mock_context().await;
 
@@ -1285,15 +1282,15 @@ mod tests {
             .await?;
 
         let expected = vec![
-            "+-----+------------------------------+",
+            "+-----+--------+",
             "| v   | sintau |",
-            "+-----+------------------------------+",
-            "| 0.1 | 0.5877828                    |",
-            "| 0.2 | 0.95106226                   |",
-            "| 0.3 | 0.95106226                   |",
-            "| 0.4 | 0.5877828                    |",
-            "| 0.5 | 0.0000062162862              |",
-            "+-----+------------------------------+",
+            "+-----+--------+",
+            "| 0.1 | 59     |",
+            "| 0.2 | 95     |",
+            "| 0.3 | 95     |",
+            "| 0.4 | 59     |",
+            "| 0.5 | 0      |",
+            "+-----+--------+",
         ];
 
         assert_batches_eq!(expected, &results);
