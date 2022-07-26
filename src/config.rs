@@ -1,9 +1,12 @@
+use std::path::Path;
+
 use config::{Config, ConfigError, File, FileFormat};
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, PartialEq)]
 pub struct SeafowlConfig {
-    object_store: ObjectStore,
+    pub object_store: ObjectStore,
+    pub catalog: Catalog,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -16,7 +19,7 @@ pub enum ObjectStore {
 
 #[derive(Deserialize, Debug, PartialEq)]
 pub struct Local {
-    data_dir: String,
+    pub data_dir: String,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -24,14 +27,26 @@ pub struct InMemory {}
 
 #[derive(Deserialize, Debug, PartialEq)]
 pub struct S3 {
-    access_key_id: String,
-    secret_access_key: String,
-    endpoint: String,
-    bucket: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub endpoint: String,
+    pub bucket: String,
 }
 
-pub fn load_config() -> Result<SeafowlConfig, ConfigError> {
-    let config = Config::builder().add_source(File::with_name("./seafowl.toml"));
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Catalog {
+    Postgres(Postgres),
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+pub struct Postgres {
+    pub dsn: String,
+}
+
+pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
+    let config = Config::builder()
+        .add_source(File::with_name(path.to_str().expect("Error parsing path")));
 
     config.build()?.try_deserialize()
 }
@@ -46,7 +61,9 @@ pub fn load_config_from_string(config_str: &str) -> Result<SeafowlConfig, Config
 
 #[cfg(test)]
 mod tests {
-    use super::{load_config_from_string, ObjectStore, SeafowlConfig, S3};
+    use super::{
+        load_config_from_string, Catalog, ObjectStore, Postgres, SeafowlConfig, S3,
+    };
 
     const TEST_CONFIG: &str = r#"
 [object_store]
@@ -54,7 +71,12 @@ type = "s3"
 access_key_id = "AKI..."
 secret_access_key = "ABC..."
 endpoint = "https://s3.amazonaws.com:9000"
-bucket = "seafowl""#;
+bucket = "seafowl"
+
+[catalog]
+type = "postgres"
+dsn = "postgresql://user:pass@localhost:5432/somedb"
+"#;
 
     const TEST_CONFIG_ERROR: &str = r#"
     [object_store]
@@ -72,6 +94,9 @@ bucket = "seafowl""#;
                     secret_access_key: "ABC...".to_string(),
                     endpoint: "https://s3.amazonaws.com:9000".to_string(),
                     bucket: "seafowl".to_string()
+                }),
+                catalog: Catalog::Postgres(Postgres {
+                    dsn: "postgresql://user:pass@localhost:5432/somedb".to_string()
                 })
             }
         )
