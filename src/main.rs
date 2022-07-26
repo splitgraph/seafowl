@@ -1,6 +1,7 @@
-use std::{env, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
+use clap::Parser;
 use convergence::{
     engine::{Engine, Portal},
     protocol::{ErrorResponse, FieldDescription, SqlState},
@@ -163,9 +164,13 @@ async fn build_context(cfg: &SeafowlConfig) -> SeafowlContext {
     context
 }
 
-#[tokio::main]
-async fn main() {
-    let context = Arc::new(build_context().await);
+#[derive(Debug, Parser)]
+struct Args {
+    #[clap(short, long)]
+    config_path: PathBuf,
+}
+
+pub async fn run_pg_server(context: Arc<SeafowlContext>) {
     server::run(
         BindOptions::new().with_port(8432),
         Arc::new(move || {
@@ -179,6 +184,22 @@ async fn main() {
     )
     .await
     .unwrap();
+}
+
+#[tokio::main]
+async fn main() {
+    pretty_env_logger::init_timed();
+
+    info!("Starting Seafowl");
+    let args = Args::parse();
+    let config = load_config(&args.config_path).expect("Error loading config");
+    info!("Config: {:?}", config);
+
+    let context = Arc::new(build_context(&config).await);
+
+    let server = run_pg_server(context);
+    info!("Starting the PG server on 127.0.0.1:8432");
+    server.await;
 }
 
 #[cfg(test)]
