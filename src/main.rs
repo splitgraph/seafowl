@@ -21,6 +21,10 @@ use seafowl::{
 };
 use sqlparser::ast::Statement;
 
+extern crate pretty_env_logger;
+#[macro_use]
+extern crate log;
+
 pub struct SeafowlPortal {
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<SeafowlContext>,
