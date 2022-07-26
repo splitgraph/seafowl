@@ -13,9 +13,11 @@ use datafusion::{
     physical_plan::ExecutionPlan,
     prelude::{SessionConfig, SessionContext},
 };
-use object_store::memory::InMemory;
+use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 use seafowl::{
-    catalog::{PostgresCatalog, TableCatalog},
+    catalog::{PostgresCatalog, RegionCatalog, TableCatalog},
+    config,
+    config::{load_config, SeafowlConfig},
     context::SeafowlContext,
     repository::PostgresRepository,
 };
@@ -88,38 +90,60 @@ impl Engine for SeafowlConvergenceEngine {
     }
 }
 
-async fn build_context() -> SeafowlContext {
-    let dsn = env::var("DATABASE_URL").unwrap();
+async fn build_catalog(
+    config: &SeafowlConfig,
+) -> (Arc<dyn TableCatalog>, Arc<dyn RegionCatalog>) {
+    match &config.catalog {
+        config::Catalog::Postgres(config::Postgres { dsn }) => {
+            // Initialize the repository
+            let repository =
+                PostgresRepository::try_new(dsn.to_string(), "public".to_string())
+                    .await
+                    .expect("Error setting up the database");
 
+            let catalog = Arc::new(PostgresCatalog {
+                repository: Arc::new(repository),
+            });
+
+            (catalog.clone(), catalog)
+        }
+    }
+}
+
+fn build_object_store(cfg: &SeafowlConfig) -> Arc<dyn ObjectStore> {
+    match &cfg.object_store {
+        config::ObjectStore::Local(config::Local { data_dir }) => Arc::new(
+            LocalFileSystem::new_with_prefix(data_dir)
+                .expect("Error creating object store"),
+        ),
+        config::ObjectStore::InMemory(_) => Arc::new(InMemory::new()),
+        config::ObjectStore::S3(_) => todo!(),
+    }
+}
+
+async fn build_context(cfg: &SeafowlConfig) -> SeafowlContext {
     let session_config = SessionConfig::new()
         .with_information_schema(true)
         .with_default_catalog_and_schema("default", "public");
     let context = SessionContext::with_config(session_config);
-    let object_store = Arc::new(InMemory::new());
+
+    let object_store = build_object_store(cfg);
     context
         .runtime_env()
         .register_object_store("seafowl", "", object_store);
 
-    // Initialize the repository
-    let repository = PostgresRepository::try_new(dsn, "public".to_string())
-        .await
-        .expect("Error setting up the database");
-
-    let catalog = Arc::new(PostgresCatalog {
-        repository: Arc::new(repository),
-    });
+    let (tables, regions) = build_catalog(cfg).await;
 
     // Create default DB/collection
-    let default_db = match catalog.get_database_id_by_name("default").await {
+    let default_db = match tables.get_database_id_by_name("default").await {
         Some(id) => id,
-        None => catalog.create_database("default").await,
+        None => tables.create_database("default").await,
     };
 
-    let _default_collection =
-        match catalog.get_collection_id_by_name("default", "public").await {
-            Some(id) => id,
-            None => catalog.create_collection(default_db, "public").await,
-        };
+    match tables.get_collection_id_by_name("default", "public").await {
+        Some(id) => id,
+        None => tables.create_collection(default_db, "public").await,
+    };
 
     // Convergence doesn't support connecting to different DB names. We are supposed
     // to do one context per query (as we need to load the schema before executing every
@@ -128,8 +152,8 @@ async fn build_context() -> SeafowlContext {
     // it before we run the query.
     let context = SeafowlContext {
         inner: context,
-        table_catalog: catalog.clone(),
-        region_catalog: catalog.clone(),
+        table_catalog: tables,
+        region_catalog: regions,
         database: "default".to_string(),
         database_id: default_db,
     };
@@ -155,4 +179,30 @@ async fn main() {
     )
     .await
     .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_config_to_context() {
+        let dsn = env::var("DATABASE_URL").unwrap();
+
+        let config = SeafowlConfig {
+            object_store: config::ObjectStore::InMemory(config::InMemory {}),
+            catalog: config::Catalog::Postgres(config::Postgres { dsn }),
+        };
+
+        let context = build_context(&config).await;
+
+        // Run a query against the context to test it works
+        let results = context
+            .collect(context.plan_query("SHOW TABLES").await.unwrap())
+            .await
+            .unwrap();
+        assert!(!results.is_empty());
+    }
 }
