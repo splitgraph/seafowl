@@ -4,6 +4,7 @@ pub mod context;
 pub mod data_types;
 pub mod datafusion;
 pub mod frontend;
+pub mod http;
 pub mod nodes;
 pub mod provider;
 pub mod repository;
