@@ -8,6 +8,8 @@ async-trait = "0.1.41"
 base64 = "0.13.0"
 
 bytes = "1.1.0"
+clap = { version = "3.2.15", features = [ "derive" ] }
+config = "0.13.1"
 
 # PG wire protocol support
 convergence = "0.5.0"
@@ -19,7 +21,9 @@ futures = "0.3"
 hashbrown = { version = "0.12", features = ["raw"] }
 hex = ">=0.4.0"
 itertools = ">=0.10.0"
+log = "0.4"
 object_store = "0.3.0"
+pretty_env_logger = "0.4"
 
 # Needs to be in non-dev because repository::testutils can't be
 # imported by tests::end_to_end if it's cfg(test).
