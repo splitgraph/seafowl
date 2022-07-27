@@ -15,6 +15,7 @@ pub struct SeafowlConfig {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ObjectStore {
     Local(Local),
+    #[serde(rename = "memory")]
     InMemory(InMemory),
     S3(S3),
 }
