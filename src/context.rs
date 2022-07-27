@@ -1050,6 +1050,12 @@ mod tests {
 
     use super::test_utils::mock_context;
 
+    const EXPECTED_FILE_NAME: &str =
+        "bdd6eef7340866d1ad99ed34ce0fa43c0d06bbed4dbcb027e9a51de48638b3ed.parquet";
+
+    const EXPECTED_INSERT_FILE_NAME: &str =
+        "1592625fb7bb063580d94fe2eaf514d55e6b44f1bebd6c7f6b2e79f55477218b.parquet";
+
     #[tokio::test]
     async fn test_plan_to_object_storage() {
         let sf_context = mock_context().await;
@@ -1086,10 +1092,7 @@ mod tests {
         assert_eq!(
             *region,
             SeafowlRegion {
-                object_storage_id: Arc::from(
-                    "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
-                        .to_string()
-                ),
+                object_storage_id: Arc::from(EXPECTED_FILE_NAME.to_string()),
                 row_count: 2,
                 columns: Arc::new(vec![
                     RegionColumn {
@@ -1101,7 +1104,8 @@ mod tests {
                     RegionColumn {
                         name: Arc::from("integer".to_string()),
                         r#type: Arc::from(
-                            "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string()
+                            "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
+                                .to_string()
                         ),
                         min_value: Arc::new(Some([49, 50].to_vec())),
                         max_value: Arc::new(Some([52, 50].to_vec()))
@@ -1228,7 +1232,7 @@ mod tests {
                         dbg!(regions);
                         *regions
                             == vec![SeafowlRegion {
-                                object_storage_id: Arc::from("fadd2ca2b9675ebce722cddc4a4fc05159a644fdeb50893d411c49d58ab52778.parquet"),
+                                object_storage_id: Arc::from(EXPECTED_INSERT_FILE_NAME),
                                 row_count: 1,
                                 columns: Arc::new(vec![
                                     RegionColumn {
@@ -1297,9 +1301,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             uploaded_objects,
-            vec![Path::from(
-                "fadd2ca2b9675ebce722cddc4a4fc05159a644fdeb50893d411c49d58ab52778.parquet"
-            )]
+            vec![Path::from(EXPECTED_INSERT_FILE_NAME)]
         );
     }
 

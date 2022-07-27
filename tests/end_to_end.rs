@@ -122,12 +122,12 @@ async fn test_information_schema() {
     // "| datafusion    | information_schema | columns    | VIEW       |",
     // "| datafusion    | information_schema | tables     | VIEW       |",
     let expected = vec![
-        "+---------------+--------------------+------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type |",
-        "+---------------+--------------------+------------+------------+",
-        "| default       | information_schema | columns    | VIEW       |",
-        "| default       | information_schema | tables     | VIEW       |",
-        "+---------------+--------------------+------------+------------+",
+        "+---------------+--------------------+------------+------------+------------+",
+        "| table_catalog | table_schema       | table_name | table_type | definition |",
+        "+---------------+--------------------+------------+------------+------------+",
+        "| default       | information_schema | columns    | VIEW       |            |",
+        "| default       | information_schema | tables     | VIEW       |            |",
+        "+---------------+--------------------+------------+------------+------------+",
     ];
 
     assert_batches_eq!(expected, &results);
