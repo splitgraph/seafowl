@@ -11,7 +11,7 @@ use convergence::{
 use convergence_arrow::table::{record_batch_to_rows, schema_to_field_desc};
 use datafusion::{error::DataFusionError, physical_plan::ExecutionPlan};
 
-use crate::{config::PostgresFrontend, context::SeafowlContext};
+use crate::{config::schema::PostgresFrontend, context::SeafowlContext};
 use sqlparser::ast::Statement;
 
 pub struct SeafowlPortal {

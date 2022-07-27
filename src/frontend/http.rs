@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use warp::{hyper::StatusCode, Filter, Reply};
 
 use crate::{
-    config::HttpFrontend, context::SeafowlContext, data_types::TableVersionId,
+    config::schema::HttpFrontend, context::SeafowlContext, data_types::TableVersionId,
     provider::SeafowlTable,
 };
 
