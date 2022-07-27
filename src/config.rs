@@ -49,6 +49,7 @@ pub struct Postgres {
 #[derive(Deserialize, Debug, PartialEq, Default)]
 pub struct Frontend {
     pub postgres: Option<PostgresFrontend>,
+    pub http: Option<HttpFrontend>,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -66,6 +67,23 @@ impl Default for PostgresFrontend {
         }
     }
 }
+
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(default)]
+pub struct HttpFrontend {
+    pub bind_host: String,
+    pub bind_port: u16,
+}
+
+impl Default for HttpFrontend {
+    fn default() -> Self {
+        Self {
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 3030,
+        }
+    }
+}
+
 
 pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
     let config = Config::builder()
@@ -86,7 +104,7 @@ pub fn load_config_from_string(config_str: &str) -> Result<SeafowlConfig, Config
 mod tests {
     use super::{
         load_config_from_string, Catalog, Frontend, ObjectStore, Postgres,
-        PostgresFrontend, SeafowlConfig, S3,
+        PostgresFrontend, SeafowlConfig, S3, HttpFrontend,
     };
 
     const TEST_CONFIG: &str = r#"
@@ -104,6 +122,10 @@ dsn = "postgresql://user:pass@localhost:5432/somedb"
 [frontend.postgres]
 bind_host = "0.0.0.0"
 bind_port = 7432
+
+[frontend.http]
+bind_host = "0.0.0.0"
+bind_port = 80
 "#;
 
     const TEST_CONFIG_ERROR: &str = r#"
@@ -130,6 +152,10 @@ bind_port = 7432
                     postgres: Some(PostgresFrontend {
                         bind_host: "0.0.0.0".to_string(),
                         bind_port: 7432
+                    }),
+                    http: Some(HttpFrontend {
+                        bind_host: "0.0.0.0".to_string(),
+                        bind_port: 80
                     })
                 }
             }
