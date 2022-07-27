@@ -11,7 +11,7 @@ use convergence::{
 use convergence_arrow::table::{record_batch_to_rows, schema_to_field_desc};
 use datafusion::{error::DataFusionError, physical_plan::ExecutionPlan};
 
-use crate::context::SeafowlContext;
+use crate::{config::PostgresFrontend, context::SeafowlContext};
 use sqlparser::ast::Statement;
 
 pub struct SeafowlPortal {
@@ -77,9 +77,11 @@ impl Engine for SeafowlConvergenceEngine {
     }
 }
 
-pub async fn run_pg_server(context: Arc<SeafowlContext>) {
+pub async fn run_pg_server(context: Arc<SeafowlContext>, config: &PostgresFrontend) {
     server::run(
-        BindOptions::new().with_port(8432),
+        BindOptions::new()
+            .with_addr(&config.bind_host)
+            .with_port(config.bind_port),
         Arc::new(move || {
             let context = context.clone();
             Box::pin(async move {
