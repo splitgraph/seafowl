@@ -7,6 +7,7 @@ use serde::Deserialize;
 pub struct SeafowlConfig {
     pub object_store: ObjectStore,
     pub catalog: Catalog,
+    #[serde(default)]
     pub frontend: Frontend,
 }
 
@@ -45,25 +46,25 @@ pub struct Postgres {
     pub dsn: String,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Default)]
 pub struct Frontend {
     pub postgres: Option<PostgresFrontend>,
 }
 
-fn default_bind_host() -> String {
-    "127.0.0.1".to_string()
-}
-const fn default_bind_port() -> u16 {
-    6432
-}
-
 #[derive(Deserialize, Debug, PartialEq)]
+#[serde(default)]
 pub struct PostgresFrontend {
-    #[serde(default = "default_bind_host")]
     pub bind_host: String,
-
-    #[serde(default = "default_bind_port")]
     pub bind_port: u16,
+}
+
+impl Default for PostgresFrontend {
+    fn default() -> Self {
+        Self {
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 6432,
+        }
+    }
 }
 
 pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
