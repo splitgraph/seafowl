@@ -10,3 +10,6 @@ dsn = "postgresql://sgr:password@localhost:7432/seafowl"
 
 [frontend.postgres]
 bind_port = 6432
+
+[frontend.http]
+bind_host = "0.0.0.0"
