@@ -1,50 +1,34 @@
 use std::env;
-use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
 use datafusion::assert_batches_eq;
-use datafusion::prelude::{SessionConfig, SessionContext};
-use object_store::memory::InMemory;
+
+use seafowl::config::context::build_context;
+use seafowl::config::schema::load_config_from_string;
+use seafowl::context::DefaultSeafowlContext;
 use seafowl::context::SeafowlContext;
-use seafowl::{
-    catalog::{PostgresCatalog, TableCatalog},
-    context::DefaultSeafowlContext,
-    repository::testutils::make_repository,
-};
+use seafowl::repository::testutils::get_random_schema;
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
 async fn make_context_with_pg() -> DefaultSeafowlContext {
     let dsn = env::var("DATABASE_URL").unwrap();
 
-    let session_config = SessionConfig::new()
-        .with_information_schema(true)
-        .with_default_catalog_and_schema("default", "public");
+    let config_text = format!(
+        r#"
+[object_store]
+type = "memory"
 
-    let context = SessionContext::with_config(session_config);
-    let object_store = Arc::new(InMemory::new());
-    context
-        .runtime_env()
-        .register_object_store("seafowl", "", object_store);
+[catalog]
+type = "postgres"
+dsn = "{}"
+schema = "{}""#,
+        dsn,
+        get_random_schema()
+    );
 
-    let repository = Arc::new(make_repository(&dsn).await);
-    let catalog = Arc::new(PostgresCatalog { repository });
-
-    // Create a default database and collection
-    let database_id = catalog.create_database("default").await;
-    catalog.create_collection(database_id, "public").await;
-
-    let result = DefaultSeafowlContext {
-        inner: context,
-        table_catalog: catalog.clone(),
-        region_catalog: catalog.clone(),
-        database: "default".to_string(),
-        database_id,
-    };
-
-    // Register our database with DataFusion
-    result.reload_schema().await;
-    result
+    let config = load_config_from_string(&config_text).unwrap();
+    build_context(&config).await
 }
 
 /// Get a batch of results with all tables and columns in a database
@@ -118,13 +102,12 @@ async fn test_information_schema() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    // TODO: the default datafusion schema is missing here
-    // "| datafusion    | information_schema | columns    | VIEW       |",
-    // "| datafusion    | information_schema | tables     | VIEW       |",
     let expected = vec![
         "+---------------+--------------------+------------+------------+------------+",
         "| table_catalog | table_schema       | table_name | table_type | definition |",
         "+---------------+--------------------+------------+------------+------------+",
+        "| datafusion    | information_schema | columns    | VIEW       |            |",
+        "| datafusion    | information_schema | tables     | VIEW       |            |",
         "| default       | information_schema | columns    | VIEW       |            |",
         "| default       | information_schema | tables     | VIEW       |            |",
         "+---------------+--------------------+------------+------------+------------+",
