@@ -2,7 +2,13 @@ use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
 
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::{
+    catalog::{
+        catalog::{CatalogProvider, MemoryCatalogProvider},
+        schema::MemorySchemaProvider,
+    },
+    prelude::{SessionConfig, SessionContext},
+};
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 use seafowl::{
     catalog::{PostgresCatalog, RegionCatalog, TableCatalog},
@@ -71,6 +77,14 @@ async fn build_context(cfg: &SeafowlConfig) -> SeafowlContext {
         Some(id) => id,
         None => tables.create_collection(default_db, "public").await,
     };
+
+    // Register the datafusion catalog (in-memory)
+    let default_catalog = MemoryCatalogProvider::new();
+
+    default_catalog
+        .register_schema("public", Arc::new(MemorySchemaProvider::new()))
+        .expect("memory catalog provider can register schema");
+    context.register_catalog("datafusion", Arc::new(default_catalog));
 
     // Convergence doesn't support connecting to different DB names. We are supposed
     // to do one context per query (as we need to load the schema before executing every
