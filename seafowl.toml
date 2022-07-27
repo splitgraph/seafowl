@@ -7,3 +7,6 @@ data_dir = "../seafowl-data"
 [catalog]
 type = "postgres"
 dsn = "postgresql://sgr:password@localhost:7432/seafowl"
+
+[frontend.postgres]
+bind_port = 6432
