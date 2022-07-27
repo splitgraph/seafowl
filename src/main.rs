@@ -103,7 +103,6 @@ async fn main() {
     info!("Starting Seafowl");
     let args = Args::parse();
     let config = load_config(&args.config_path).expect("Error loading config");
-    info!("Config: {:?}", config);
 
     let context = Arc::new(build_context(&config).await);
 
