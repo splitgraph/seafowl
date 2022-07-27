@@ -565,7 +565,7 @@ mod tests {
     }
 
     async fn make_database_with_single_table(
-        repository: &PostgresRepository,
+        repository: Arc<dyn Repository>,
     ) -> (DatabaseId, CollectionId, TableId, TableVersionId) {
         let database_id = repository
             .create_database("testdb")
@@ -593,10 +593,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_make_repository() {
+    async fn test_postgres_repository() {
         let dsn = env::var("DATABASE_URL").unwrap();
+        let repository = Arc::new(make_repository(&dsn).await);
 
-        let repository = make_repository(&dsn).await;
+        run_generic_repository_tests(repository).await;
+    }
+
+    async fn run_generic_repository_tests(repository: Arc<dyn Repository>) {
+        test_get_collections_empty(repository.clone()).await;
+        let table_version_id =
+            test_create_database_collection_table(repository.clone()).await;
+        test_create_append_region(repository, table_version_id).await;
+    }
+
+    async fn test_get_collections_empty(repository: Arc<dyn Repository>) {
         assert_eq!(
             repository
                 .get_collections_in_database(0)
@@ -606,14 +617,11 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_create_database_collection_table() {
-        let dsn = env::var("DATABASE_URL").unwrap();
-
-        let repository = make_repository(&dsn).await;
-
+    async fn test_create_database_collection_table(
+        repository: Arc<dyn Repository>,
+    ) -> TableVersionId {
         let (database_id, _, _, table_version_id) =
-            make_database_with_single_table(&repository).await;
+            make_database_with_single_table(repository.clone()).await;
 
         // Test loading all columns
 
@@ -660,21 +668,21 @@ mod tests {
             .expect("Error getting all columns");
 
         assert_eq!(all_columns, expected(new_version_id));
+
+        table_version_id
     }
 
-    #[tokio::test]
-    async fn test_create_append_region() {
-        let dsn = env::var("DATABASE_URL").unwrap();
-        let repository = make_repository(&dsn).await;
-
-        let (_, _, _, table_version_id) =
-            make_database_with_single_table(&repository).await;
-
+    async fn test_create_append_region(
+        repository: Arc<dyn Repository>,
+        table_version_id: TableVersionId,
+    ) {
         let region = get_test_region();
 
-        // Create a region; since we're in a separated schema, it gets ID=1
+        // Create a region
         let region_ids = repository.create_regions(vec![region]).await.unwrap();
-        assert_eq!(region_ids, vec![1]);
+        assert_eq!(region_ids.len(), 1);
+
+        let region_id = region_ids.first().unwrap();
 
         // Test loading all table regions when the region is not yet attached
         let all_regions = repository
@@ -685,7 +693,7 @@ mod tests {
 
         // Attach the region to the table
         repository
-            .append_regions_to_table(region_ids, table_version_id)
+            .append_regions_to_table(region_ids.clone(), table_version_id)
             .await
             .unwrap();
 
@@ -697,7 +705,7 @@ mod tests {
 
         let expected_regions = vec![
             AllTableRegionsResult {
-                table_region_id: 1,
+                table_region_id: *region_id,
                 object_storage_id: EXPECTED_FILE_NAME.to_string(),
                 column_name: "timestamp".to_string(),
                 column_type: "{\"name\":\"utf8\"}".to_string(),
@@ -706,7 +714,7 @@ mod tests {
                 max_value: None,
             },
             AllTableRegionsResult {
-                table_region_id: 1,
+                table_region_id: *region_id,
                 object_storage_id: EXPECTED_FILE_NAME.to_string(),
                 column_name: "integer".to_string(),
                 column_type: "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
@@ -716,7 +724,7 @@ mod tests {
                 max_value: Some([52, 50].to_vec()),
             },
             AllTableRegionsResult {
-                table_region_id: 1,
+                table_region_id: *region_id,
                 object_storage_id: EXPECTED_FILE_NAME.to_string(),
                 column_name: "varchar".to_string(),
                 column_type: "{\"name\":\"utf8\"}".to_string(),
