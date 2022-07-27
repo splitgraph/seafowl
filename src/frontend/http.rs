@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use arrow::json::LineDelimitedWriter;
 use datafusion::{
@@ -12,7 +12,8 @@ use sha2::{Digest, Sha256};
 use warp::{hyper::StatusCode, Filter, Reply};
 
 use crate::{
-    context::SeafowlContext, data_types::TableVersionId, provider::SeafowlTable,
+    config::HttpFrontend, context::SeafowlContext, data_types::TableVersionId,
+    provider::SeafowlTable,
 };
 
 #[derive(Default)]
@@ -53,7 +54,7 @@ fn plan_to_etag(plan: &LogicalPlan) -> String {
     encode(hasher.finalize())
 }
 
-pub async fn run_server(context: Arc<SeafowlContext>) {
+pub async fn run_server(context: Arc<SeafowlContext>, config: HttpFrontend) {
     // GET /q/[query hash]
     let hello = warp::path!("q" / String)
         .and(warp::header::<String>("x-seafowl-query"))
@@ -132,5 +133,8 @@ pub async fn run_server(context: Arc<SeafowlContext>) {
             }
         });
 
-    warp::serve(hello).run(([127, 0, 0, 1], 3030)).await;
+    let socket_addr: SocketAddr = format!("{}:{}", config.bind_host, config.bind_port)
+        .parse()
+        .expect("Error parsing the listen address");
+    warp::serve(hello).run(socket_addr).await;
 }
