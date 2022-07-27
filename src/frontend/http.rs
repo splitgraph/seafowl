@@ -154,3 +154,30 @@ pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) 
         .expect("Error parsing the listen address");
     warp::serve(filters).run(socket_addr).await;
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use warp::{hyper::StatusCode, test::request};
+
+    use crate::context::test_utils::mock_context;
+
+    use super::{cached_read_query, QUERY_HEADER};
+
+    #[tokio::test]
+    async fn test_get_cached_hash_mismatch() {
+        let sf_context = mock_context().await;
+        let context = Arc::new(sf_context);
+        let handler = cached_read_query(context);
+
+        let resp = request()
+            .method("GET")
+            .path("/q/wrong-hash")
+            .header(QUERY_HEADER, "SELECT COUNT(*) FROM testcol.some_table")
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.body(), "HASH_MISMATCH");
+    }
+}
