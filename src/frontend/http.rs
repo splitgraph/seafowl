@@ -16,6 +16,10 @@ use crate::{
     provider::SeafowlTable,
 };
 
+const QUERY_HEADER: &str = "X-Seafowl-Query";
+const IF_NONE_MATCH: &str = "If-None-Match";
+const ETAG: &str = "ETag";
+
 #[derive(Default)]
 struct ETagBuilderVisitor {
     table_versions: Vec<TableVersionId>,
@@ -54,11 +58,13 @@ fn plan_to_etag(plan: &LogicalPlan) -> String {
     encode(hasher.finalize())
 }
 
-pub async fn run_server(context: Arc<SeafowlContext>, config: HttpFrontend) {
-    // GET /q/[query hash]
-    let hello = warp::path!("q" / String)
-        .and(warp::header::<String>("x-seafowl-query"))
-        .and(warp::header::optional::<String>("if-none-match"))
+// GET /q/[query hash]
+pub fn cached_read_query(
+    context: Arc<dyn SeafowlContext>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path!("q" / String)
+        .and(warp::header::<String>(QUERY_HEADER))
+        .and(warp::header::optional::<String>(IF_NONE_MATCH))
         .then(move |query_hash, query: String, if_none_match| {
             let context = context.clone();
 
@@ -129,12 +135,22 @@ pub async fn run_server(context: Arc<SeafowlContext>, config: HttpFrontend) {
                 writer.write_batches(&batches).unwrap();
                 writer.finish().unwrap();
 
-                warp::reply::with_header(buf, "ETag", etag).into_response()
+                warp::reply::with_header(buf, ETAG, etag).into_response()
             }
-        });
+        })
+}
+
+pub fn filters(
+    context: Arc<dyn SeafowlContext>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    cached_read_query(context)
+}
+
+pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) {
+    let filters = filters(context);
 
     let socket_addr: SocketAddr = format!("{}:{}", config.bind_host, config.bind_port)
         .parse()
         .expect("Error parsing the listen address");
-    warp::serve(hello).run(socket_addr).await;
+    warp::serve(filters).run(socket_addr).await;
 }
