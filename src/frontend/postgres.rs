@@ -77,7 +77,7 @@ impl Engine for SeafowlConvergenceEngine {
     }
 }
 
-pub async fn run_pg_server(context: Arc<SeafowlContext>, config: &PostgresFrontend) {
+pub async fn run_pg_server(context: Arc<SeafowlContext>, config: PostgresFrontend) {
     server::run(
         BindOptions::new()
             .with_addr(&config.bind_host)
