@@ -498,20 +498,21 @@ pub mod testutils {
 
     use crate::repository::PostgresRepository;
 
+    pub fn get_random_schema() -> String {
+        let mut rng = rand::thread_rng();
+        (&mut rng)
+            .sample_iter(rand::distributions::Alphanumeric)
+            .filter(|c| c.is_ascii_alphabetic())
+            .take(20)
+            .map(char::from)
+            .collect::<String>()
+    }
+
     pub async fn make_repository(dsn: &str) -> PostgresRepository {
         // Generate a random schema (taken from IOx)
 
-        let schema_name = {
-            let mut rng = rand::thread_rng();
-            (&mut rng)
-                .sample_iter(rand::distributions::Alphanumeric)
-                .filter(|c| c.is_ascii_alphabetic())
-                .take(20)
-                .map(char::from)
-                .collect::<String>()
-        };
+        let schema_name = get_random_schema();
 
-        // let dsn = std::env::var("DATABASE_URL").unwrap();
         PostgresRepository::try_new(dsn.to_string(), schema_name)
             .await
             .expect("Error setting up the database")
