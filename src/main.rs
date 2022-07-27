@@ -15,7 +15,7 @@ use seafowl::{
     catalog::{PostgresCatalog, RegionCatalog, TableCatalog},
     config,
     config::{load_config, SeafowlConfig},
-    context::SeafowlContext,
+    context::{DefaultSeafowlContext, SeafowlContext},
     frontend::{http::run_server, postgres::run_pg_server},
     repository::PostgresRepository,
 };
@@ -55,7 +55,7 @@ fn build_object_store(cfg: &SeafowlConfig) -> Arc<dyn ObjectStore> {
     }
 }
 
-async fn build_context(cfg: &SeafowlConfig) -> SeafowlContext {
+async fn build_context(cfg: &SeafowlConfig) -> DefaultSeafowlContext {
     let session_config = SessionConfig::new()
         .with_information_schema(true)
         .with_default_catalog_and_schema("default", "public");
@@ -92,7 +92,7 @@ async fn build_context(cfg: &SeafowlConfig) -> SeafowlContext {
     // query) and per database (since the context is supposed to be limited to the database
     // the user is connected to), but in this case we can just use the same context everywhere, but reload
     // it before we run the query.
-    let context = SeafowlContext {
+    let context = DefaultSeafowlContext {
         inner: context,
         table_catalog: tables,
         region_catalog: regions,
@@ -112,7 +112,7 @@ struct Args {
 }
 
 fn prepare_frontends(
-    context: Arc<SeafowlContext>,
+    context: Arc<dyn SeafowlContext>,
     config: &SeafowlConfig,
 ) -> Vec<Pin<Box<dyn Future<Output = ()>>>> {
     let mut result: Vec<Pin<Box<dyn Future<Output = ()>>>> = Vec::new();
