@@ -14,9 +14,10 @@ use datafusion::logical_plan::{DFField, DropTable, Expr};
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
-
 use hashbrown::HashMap;
 use hex::encode;
+#[cfg(test)]
+use mockall::automock;
 use object_store::memory::InMemory;
 use object_store::{path::Path, ObjectStore};
 use sha2::Digest;
@@ -341,6 +342,7 @@ pub async fn plan_to_object_store(
         .collect()
 }
 
+#[cfg_attr(test, automock)]
 #[async_trait]
 pub trait SeafowlContext: Send + Sync {
     /// Reload the context to apply / pick up new schema changes
@@ -927,9 +929,12 @@ pub mod test_utils {
         provider::{SeafowlCollection, SeafowlDatabase},
     };
 
-    use datafusion::{arrow::datatypes::{
-        DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
-    }, prelude::SessionConfig};
+    use datafusion::{
+        arrow::datatypes::{
+            DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
+        },
+        prelude::SessionConfig,
+    };
 
     use std::collections::HashMap as StdHashMap;
 
