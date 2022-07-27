@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    catalog::{PostgresCatalog, RegionCatalog, TableCatalog},
+    catalog::{DefaultCatalog, RegionCatalog, TableCatalog},
     context::{DefaultSeafowlContext, SeafowlContext},
     repository::PostgresRepository,
 };
@@ -27,7 +27,7 @@ async fn build_catalog(
                     .await
                     .expect("Error setting up the database");
 
-            let catalog = Arc::new(PostgresCatalog {
+            let catalog = Arc::new(DefaultCatalog {
                 repository: Arc::new(repository),
             });
 

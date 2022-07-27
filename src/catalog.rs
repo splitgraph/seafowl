@@ -10,9 +10,7 @@ use crate::{
     provider::{
         RegionColumn, SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable,
     },
-    repository::{
-        AllDatabaseColumnsResult, AllTableRegionsResult, PostgresRepository, Repository,
-    },
+    repository::{AllDatabaseColumnsResult, AllTableRegionsResult, Repository},
     schema::Schema,
 };
 
@@ -79,11 +77,11 @@ pub trait RegionCatalog: Sync + Send + Debug {
 }
 
 #[derive(Clone, Debug)]
-pub struct PostgresCatalog {
-    pub repository: Arc<PostgresRepository>,
+pub struct DefaultCatalog {
+    pub repository: Arc<dyn Repository>,
 }
 
-impl PostgresCatalog {
+impl DefaultCatalog {
     fn build_region<'a, I>(&self, region_columns: I) -> SeafowlRegion
     where
         I: Iterator<Item = &'a AllTableRegionsResult>,
@@ -168,7 +166,7 @@ impl PostgresCatalog {
 }
 
 #[async_trait]
-impl TableCatalog for PostgresCatalog {
+impl TableCatalog for DefaultCatalog {
     async fn load_database(&self, database_id: DatabaseId) -> SeafowlDatabase {
         let all_columns = self
             .repository
@@ -279,7 +277,7 @@ impl TableCatalog for PostgresCatalog {
 }
 
 #[async_trait]
-impl RegionCatalog for PostgresCatalog {
+impl RegionCatalog for DefaultCatalog {
     async fn create_regions(&self, regions: Vec<SeafowlRegion>) -> Vec<PhysicalRegionId> {
         self.repository
             .create_regions(regions)
