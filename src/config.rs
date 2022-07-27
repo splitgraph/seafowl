@@ -3,7 +3,7 @@ use std::path::Path;
 use config::{Config, ConfigError, File, FileFormat};
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct SeafowlConfig {
     pub object_store: ObjectStore,
     pub catalog: Catalog,
@@ -11,7 +11,7 @@ pub struct SeafowlConfig {
     pub frontend: Frontend,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ObjectStore {
     Local(Local),
@@ -19,15 +19,15 @@ pub enum ObjectStore {
     S3(S3),
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct Local {
     pub data_dir: String,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct InMemory {}
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct S3 {
     pub access_key_id: String,
     pub secret_access_key: String,
@@ -35,24 +35,24 @@ pub struct S3 {
     pub bucket: String,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Catalog {
     Postgres(Postgres),
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct Postgres {
     pub dsn: String,
 }
 
-#[derive(Deserialize, Debug, PartialEq, Default)]
+#[derive(Deserialize, Debug, PartialEq, Default, Clone)]
 pub struct Frontend {
     pub postgres: Option<PostgresFrontend>,
     pub http: Option<HttpFrontend>,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 #[serde(default)]
 pub struct PostgresFrontend {
     pub bind_host: String,
@@ -68,7 +68,7 @@ impl Default for PostgresFrontend {
     }
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 #[serde(default)]
 pub struct HttpFrontend {
     pub bind_host: String,
@@ -83,7 +83,6 @@ impl Default for HttpFrontend {
         }
     }
 }
-
 
 pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
     let config = Config::builder()
@@ -103,8 +102,8 @@ pub fn load_config_from_string(config_str: &str) -> Result<SeafowlConfig, Config
 #[cfg(test)]
 mod tests {
     use super::{
-        load_config_from_string, Catalog, Frontend, ObjectStore, Postgres,
-        PostgresFrontend, SeafowlConfig, S3, HttpFrontend,
+        load_config_from_string, Catalog, Frontend, HttpFrontend, ObjectStore, Postgres,
+        PostgresFrontend, SeafowlConfig, S3,
     };
 
     const TEST_CONFIG: &str = r#"
