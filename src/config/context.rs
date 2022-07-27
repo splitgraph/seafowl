@@ -20,10 +20,10 @@ async fn build_catalog(
     config: &schema::SeafowlConfig,
 ) -> (Arc<dyn TableCatalog>, Arc<dyn RegionCatalog>) {
     match &config.catalog {
-        schema::Catalog::Postgres(schema::Postgres { dsn }) => {
+        schema::Catalog::Postgres(schema::Postgres { dsn, schema }) => {
             // Initialize the repository
             let repository =
-                PostgresRepository::try_new(dsn.to_string(), "public".to_string())
+                PostgresRepository::try_new(dsn.to_string(), schema.to_string())
                     .await
                     .expect("Error setting up the database");
 
@@ -109,7 +109,10 @@ mod tests {
 
         let config = schema::SeafowlConfig {
             object_store: schema::ObjectStore::InMemory(schema::InMemory {}),
-            catalog: schema::Catalog::Postgres(schema::Postgres { dsn }),
+            catalog: schema::Catalog::Postgres(schema::Postgres {
+                dsn,
+                schema: "public".to_string(),
+            }),
             frontend: schema::Frontend {
                 postgres: Some(schema::PostgresFrontend {
                     bind_host: "127.0.0.1".to_string(),

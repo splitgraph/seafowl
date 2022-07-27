@@ -45,6 +45,12 @@ pub enum Catalog {
 #[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct Postgres {
     pub dsn: String,
+    #[serde(default = "default_schema")]
+    pub schema: String,
+}
+
+fn default_schema() -> String {
+    "public".to_string()
 }
 
 #[derive(Deserialize, Debug, PartialEq, Default, Clone)]
@@ -146,7 +152,8 @@ bind_port = 80
                     bucket: "seafowl".to_string()
                 }),
                 catalog: Catalog::Postgres(Postgres {
-                    dsn: "postgresql://user:pass@localhost:5432/somedb".to_string()
+                    dsn: "postgresql://user:pass@localhost:5432/somedb".to_string(),
+                    schema: "public".to_string()
                 }),
                 frontend: Frontend {
                     postgres: Some(PostgresFrontend {
