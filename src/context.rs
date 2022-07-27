@@ -925,16 +925,26 @@ pub mod test_utils {
     use crate::{
         catalog::{MockRegionCatalog, MockTableCatalog, TableCatalog},
         provider::{SeafowlCollection, SeafowlDatabase},
-        session::make_session,
     };
 
-    use datafusion::arrow::datatypes::{
+    use datafusion::{arrow::datatypes::{
         DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
-    };
+    }, prelude::SessionConfig};
 
     use std::collections::HashMap as StdHashMap;
 
     use super::*;
+
+    pub fn make_session() -> SessionContext {
+        let session_config = SessionConfig::new().with_information_schema(true);
+
+        let context = SessionContext::with_config(session_config);
+        let object_store = Arc::new(InMemory::new());
+        context
+            .runtime_env()
+            .register_object_store("seafowl", "", object_store);
+        context
+    }
 
     pub async fn mock_context() -> DefaultSeafowlContext {
         mock_context_with_catalog_assertions(|_| (), |_| ()).await
