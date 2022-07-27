@@ -7,7 +7,7 @@ use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::DefaultSeafowlContext;
 use seafowl::context::SeafowlContext;
-use seafowl::repository::testutils::get_random_schema;
+use seafowl::repository::postgres::testutils::get_random_schema;
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)

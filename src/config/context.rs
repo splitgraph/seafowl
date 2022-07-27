@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     catalog::{DefaultCatalog, RegionCatalog, TableCatalog},
     context::{DefaultSeafowlContext, SeafowlContext},
-    repository::PostgresRepository,
+    repository::postgres::PostgresRepository,
 };
 use datafusion::{
     catalog::{
