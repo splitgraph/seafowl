@@ -7,6 +7,7 @@ use serde::Deserialize;
 pub struct SeafowlConfig {
     pub object_store: ObjectStore,
     pub catalog: Catalog,
+    pub frontend: Frontend,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -44,6 +45,27 @@ pub struct Postgres {
     pub dsn: String,
 }
 
+#[derive(Deserialize, Debug, PartialEq)]
+pub struct Frontend {
+    pub postgres: Option<PostgresFrontend>,
+}
+
+fn default_bind_host() -> String {
+    "127.0.0.1".to_string()
+}
+const fn default_bind_port() -> u16 {
+    6432
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+pub struct PostgresFrontend {
+    #[serde(default = "default_bind_host")]
+    pub bind_host: String,
+
+    #[serde(default = "default_bind_port")]
+    pub bind_port: u16,
+}
+
 pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
     let config = Config::builder()
         .add_source(File::with_name(path.to_str().expect("Error parsing path")));
@@ -62,7 +84,8 @@ pub fn load_config_from_string(config_str: &str) -> Result<SeafowlConfig, Config
 #[cfg(test)]
 mod tests {
     use super::{
-        load_config_from_string, Catalog, ObjectStore, Postgres, SeafowlConfig, S3,
+        load_config_from_string, Catalog, Frontend, ObjectStore, Postgres,
+        PostgresFrontend, SeafowlConfig, S3,
     };
 
     const TEST_CONFIG: &str = r#"
@@ -76,6 +99,10 @@ bucket = "seafowl"
 [catalog]
 type = "postgres"
 dsn = "postgresql://user:pass@localhost:5432/somedb"
+
+[frontend.postgres]
+bind_host = "0.0.0.0"
+bind_port = 7432
 "#;
 
     const TEST_CONFIG_ERROR: &str = r#"
@@ -97,7 +124,13 @@ dsn = "postgresql://user:pass@localhost:5432/somedb"
                 }),
                 catalog: Catalog::Postgres(Postgres {
                     dsn: "postgresql://user:pass@localhost:5432/somedb".to_string()
-                })
+                }),
+                frontend: Frontend {
+                    postgres: Some(PostgresFrontend {
+                        bind_host: "0.0.0.0".to_string(),
+                        bind_port: 7432
+                    })
+                }
             }
         )
     }
