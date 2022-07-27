@@ -8,5 +8,4 @@ pub mod nodes;
 pub mod provider;
 pub mod repository;
 pub mod schema;
-pub mod session;
 pub mod wasm_udf;
