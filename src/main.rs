@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, pin::Pin, sync::Arc};
 
 use clap::Parser;
 
@@ -9,13 +9,14 @@ use datafusion::{
     },
     prelude::{SessionConfig, SessionContext},
 };
+use futures::{future::join_all, Future, FutureExt};
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 use seafowl::{
     catalog::{PostgresCatalog, RegionCatalog, TableCatalog},
     config,
     config::{load_config, SeafowlConfig},
     context::SeafowlContext,
-    frontend::postgres::run_pg_server,
+    frontend::{http::run_server, postgres::run_pg_server},
     repository::PostgresRepository,
 };
 
@@ -110,6 +111,33 @@ struct Args {
     config_path: PathBuf,
 }
 
+fn prepare_frontends(
+    context: Arc<SeafowlContext>,
+    config: &SeafowlConfig,
+) -> Vec<Pin<Box<dyn Future<Output = ()>>>> {
+    let mut result: Vec<Pin<Box<dyn Future<Output = ()>>>> = Vec::new();
+
+    if let Some(pg) = &config.frontend.postgres {
+        let server = run_pg_server(context.clone(), pg.to_owned());
+        info!(
+            "Starting the PostgreSQL frontend on {}:{}",
+            pg.bind_host, pg.bind_port
+        );
+        result.push(server.boxed());
+    };
+
+    if let Some(http) = &config.frontend.http {
+        let server = run_server(context, http.to_owned());
+        info!(
+            "Starting the HTTP frontend on {}:{}",
+            http.bind_host, http.bind_port
+        );
+        result.push(server.boxed());
+    };
+
+    result
+}
+
 #[tokio::main]
 async fn main() {
     pretty_env_logger::init_timed();
@@ -120,19 +148,13 @@ async fn main() {
 
     let context = Arc::new(build_context(&config).await);
 
-    match config.frontend.postgres {
-        Some(pg) => {
-            let server = run_pg_server(context, &pg);
-            info!(
-                "Starting the PostgreSQL frontend on {}:{}",
-                pg.bind_host, pg.bind_port
-            );
-            server.await;
-        }
-        None => {
-            warn!("No frontends configured. You will not be able to connect to Seafowl.")
-        }
+    let frontends = prepare_frontends(context, &config);
+
+    if frontends.is_empty() {
+        warn!("No frontends configured. You will not be able to connect to Seafowl.")
     }
+
+    join_all(frontends).await;
 }
 
 #[cfg(test)]
@@ -152,6 +174,10 @@ mod tests {
                 postgres: Some(config::PostgresFrontend {
                     bind_host: "127.0.0.1".to_string(),
                     bind_port: 6432,
+                }),
+                http: Some(config::HttpFrontend {
+                    bind_host: "127.0.0.1".to_string(),
+                    bind_port: 80,
                 }),
             },
         };
