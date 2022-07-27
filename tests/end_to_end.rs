@@ -5,15 +5,16 @@ use arrow::record_batch::RecordBatch;
 use datafusion::assert_batches_eq;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use object_store::memory::InMemory;
+use seafowl::context::SeafowlContext;
 use seafowl::{
     catalog::{PostgresCatalog, TableCatalog},
-    context::SeafowlContext,
+    context::DefaultSeafowlContext,
     repository::testutils::make_repository,
 };
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
-async fn make_context_with_pg() -> SeafowlContext {
+async fn make_context_with_pg() -> DefaultSeafowlContext {
     let dsn = env::var("DATABASE_URL").unwrap();
 
     let session_config = SessionConfig::new()
@@ -33,7 +34,7 @@ async fn make_context_with_pg() -> SeafowlContext {
     let database_id = catalog.create_database("default").await;
     catalog.create_collection(database_id, "public").await;
 
-    let result = SeafowlContext {
+    let result = DefaultSeafowlContext {
         inner: context,
         table_catalog: catalog.clone(),
         region_catalog: catalog.clone(),
@@ -47,7 +48,7 @@ async fn make_context_with_pg() -> SeafowlContext {
 }
 
 /// Get a batch of results with all tables and columns in a database
-async fn list_columns_query(context: &SeafowlContext) -> Vec<RecordBatch> {
+async fn list_columns_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch> {
     context
         .collect(
             context
@@ -64,7 +65,7 @@ async fn list_columns_query(context: &SeafowlContext) -> Vec<RecordBatch> {
         .unwrap()
 }
 
-async fn create_table_and_insert(context: &SeafowlContext, table_name: &str) {
+async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &str) {
     let plan = context
         .plan_query(
             // SQL injection here, fine for test code

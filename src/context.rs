@@ -1,5 +1,6 @@
 // DataFusion bindings
 
+use async_trait::async_trait;
 use base64::decode;
 use bytes::Bytes;
 
@@ -234,7 +235,7 @@ fn build_region_columns(
     }
 }
 
-pub struct SeafowlContext {
+pub struct DefaultSeafowlContext {
     pub inner: SessionContext,
     pub table_catalog: Arc<dyn TableCatalog>,
     pub region_catalog: Arc<dyn RegionCatalog>,
@@ -340,13 +341,120 @@ pub async fn plan_to_object_store(
         .collect()
 }
 
-impl SeafowlContext {
+#[async_trait]
+pub trait SeafowlContext: Send + Sync {
+    /// Reload the context to apply / pick up new schema changes
+    async fn reload_schema(&self);
+    async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan>;
+    async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>>;
+    async fn create_physical_plan(
+        &self,
+        plan: &LogicalPlan,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+    async fn collect(
+        &self,
+        physical_plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Vec<RecordBatch>>;
+}
+
+impl DefaultSeafowlContext {
     pub fn inner(&self) -> &SessionContext {
         &self.inner
     }
+    /// Resolve a table reference into a Seafowl table
+    fn try_get_seafowl_table(
+        &self,
+        table_name: impl Into<String> + std::fmt::Debug,
+    ) -> Result<SeafowlTable> {
+        let table_name = table_name.into();
+        let table_ref = TableReference::from(table_name.as_str());
+        let resolved_ref = table_ref.resolve(&self.database, "public");
+        let table_provider = self
+            .inner
+            .catalog(resolved_ref.catalog)
+            .ok_or_else(|| {
+                Error::Plan(format!(
+                    "failed to resolve catalog: {}",
+                    resolved_ref.catalog
+                ))
+            })?
+            .schema(resolved_ref.schema)
+            .ok_or_else(|| {
+                Error::Plan(format!("failed to resolve schema: {}", resolved_ref.schema))
+            })?
+            .table(resolved_ref.table)
+            .ok_or_else(|| {
+                Error::Plan(format!(
+                    "'{}.{}.{}' not found",
+                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+                ))
+            })?;
+        let seafowl_table = match table_provider.as_any().downcast_ref::<SeafowlTable>() {
+            Some(seafowl_table) => Ok(seafowl_table),
+            None => Err(Error::Plan(format!(
+                "'{:?}' is a read-only table",
+                table_name
+            ))),
+        }?;
+        Ok(seafowl_table.clone())
+    }
 
-    /// Reload the context to apply / pick up new schema changes
-    pub async fn reload_schema(&self) {
+    async fn exec_create_table(
+        &self,
+        name: &str,
+        schema: &Arc<DFSchema>,
+    ) -> Result<(TableId, TableVersionId)> {
+        let table_ref = TableReference::from(name);
+        let resolved_ref = table_ref.resolve(&self.database, "public");
+        let schema_name = resolved_ref.schema;
+        let table_name = resolved_ref.table;
+
+        let sf_schema = SeafowlSchema {
+            arrow_schema: Arc::new(schema.as_ref().into()),
+        };
+        let collection_id = self
+            .table_catalog
+            .get_collection_id_by_name(&self.database, schema_name)
+            .await
+            .ok_or_else(|| {
+                Error::Plan(format!("Schema {:?} does not exist!", schema_name))
+            })?;
+        Ok(self
+            .table_catalog
+            .create_table(collection_id, table_name, sf_schema)
+            .await)
+    }
+
+    async fn execute_stream(
+        &self,
+        physical_plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<SendableRecordBatchStream> {
+        match physical_plan.output_partitioning().partition_count() {
+            0 => Ok(Box::pin(EmptyRecordBatchStream::new(
+                physical_plan.schema(),
+            ))),
+            1 => self.execute_stream_partitioned(&physical_plan, 0).await,
+            _ => {
+                let plan: Arc<dyn ExecutionPlan> =
+                    Arc::new(CoalescePartitionsExec::new(physical_plan));
+                self.execute_stream_partitioned(&plan, 0).await
+            }
+        }
+    }
+
+    async fn execute_stream_partitioned(
+        &self,
+        physical_plan: &Arc<dyn ExecutionPlan>,
+        partition: usize,
+    ) -> Result<SendableRecordBatchStream> {
+        let task_context = Arc::new(TaskContext::from(self.inner()));
+        physical_plan.execute(partition, task_context)
+    }
+}
+
+#[async_trait]
+impl SeafowlContext for DefaultSeafowlContext {
+    async fn reload_schema(&self) {
         // TODO: this loads all collection/table names into memory, so creating tables within the same
         // session won't reflect the changes without recreating the context.
         self.inner.register_catalog(
@@ -355,7 +463,7 @@ impl SeafowlContext {
         );
     }
 
-    pub async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
+    async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
         let mut statements = DFParser::parse_sql(sql)?;
 
         if statements.len() != 1 {
@@ -569,45 +677,7 @@ impl SeafowlContext {
         }
     }
 
-    /// Resolve a table reference into a Seafowl table
-    fn try_get_seafowl_table(
-        &self,
-        table_name: impl Into<String> + std::fmt::Debug,
-    ) -> Result<SeafowlTable> {
-        let table_name = table_name.into();
-        let table_ref = TableReference::from(table_name.as_str());
-        let resolved_ref = table_ref.resolve(&self.database, "public");
-        let table_provider = self
-            .inner
-            .catalog(resolved_ref.catalog)
-            .ok_or_else(|| {
-                Error::Plan(format!(
-                    "failed to resolve catalog: {}",
-                    resolved_ref.catalog
-                ))
-            })?
-            .schema(resolved_ref.schema)
-            .ok_or_else(|| {
-                Error::Plan(format!("failed to resolve schema: {}", resolved_ref.schema))
-            })?
-            .table(resolved_ref.table)
-            .ok_or_else(|| {
-                Error::Plan(format!(
-                    "'{}.{}.{}' not found",
-                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
-                ))
-            })?;
-        let seafowl_table = match table_provider.as_any().downcast_ref::<SeafowlTable>() {
-            Some(seafowl_table) => Ok(seafowl_table),
-            None => Err(Error::Plan(format!(
-                "'{:?}' is a read-only table",
-                table_name
-            ))),
-        }?;
-        Ok(seafowl_table.clone())
-    }
-
-    pub async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
+    async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.create_logical_plan(sql).await?;
 
         // Similarly to DataFrame::sql, run certain logical plans outside of the actual execution flow
@@ -827,33 +897,7 @@ impl SeafowlContext {
         }
     }
 
-    async fn exec_create_table(
-        &self,
-        name: &str,
-        schema: &Arc<DFSchema>,
-    ) -> Result<(TableId, TableVersionId)> {
-        let table_ref = TableReference::from(name);
-        let resolved_ref = table_ref.resolve(&self.database, "public");
-        let schema_name = resolved_ref.schema;
-        let table_name = resolved_ref.table;
-
-        let sf_schema = SeafowlSchema {
-            arrow_schema: Arc::new(schema.as_ref().into()),
-        };
-        let collection_id = self
-            .table_catalog
-            .get_collection_id_by_name(&self.database, schema_name)
-            .await
-            .ok_or_else(|| {
-                Error::Plan(format!("Schema {:?} does not exist!", schema_name))
-            })?;
-        Ok(self
-            .table_catalog
-            .create_table(collection_id, table_name, sf_schema)
-            .await)
-    }
-
-    pub async fn create_physical_plan(
+    async fn create_physical_plan(
         &self,
         plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -862,46 +906,19 @@ impl SeafowlContext {
     }
 
     // Copied from DataFusion's physical_plan
-    pub async fn collect(
+    async fn collect(
         &self,
         physical_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Vec<RecordBatch>> {
         let stream = self.execute_stream(physical_plan).await?;
         stream.err_into().try_collect().await
     }
-
-    pub async fn execute_stream(
-        &self,
-        physical_plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<SendableRecordBatchStream> {
-        match physical_plan.output_partitioning().partition_count() {
-            0 => Ok(Box::pin(EmptyRecordBatchStream::new(
-                physical_plan.schema(),
-            ))),
-            1 => self.execute_stream_partitioned(&physical_plan, 0).await,
-            _ => {
-                let plan: Arc<dyn ExecutionPlan> =
-                    Arc::new(CoalescePartitionsExec::new(physical_plan));
-                self.execute_stream_partitioned(&plan, 0).await
-            }
-        }
-    }
-
-    pub async fn execute_stream_partitioned(
-        &self,
-        physical_plan: &Arc<dyn ExecutionPlan>,
-        partition: usize,
-    ) -> Result<SendableRecordBatchStream> {
-        let task_context = Arc::new(TaskContext::from(self.inner()));
-        physical_plan.execute(partition, task_context)
-    }
 }
 
 #[cfg(test)]
-mod tests {
+pub mod test_utils {
     use std::sync::Arc;
 
-    use datafusion::execution::disk_manager::DiskManagerConfig;
     use mockall::predicate;
     use object_store::memory::InMemory;
 
@@ -914,19 +931,19 @@ mod tests {
     use datafusion::arrow::datatypes::{
         DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     };
-    use datafusion::assert_batches_eq;
+
     use std::collections::HashMap as StdHashMap;
 
     use super::*;
 
-    async fn mock_context() -> SeafowlContext {
+    pub async fn mock_context() -> DefaultSeafowlContext {
         mock_context_with_catalog_assertions(|_| (), |_| ()).await
     }
 
-    async fn mock_context_with_catalog_assertions<FR, FT>(
+    pub async fn mock_context_with_catalog_assertions<FR, FT>(
         mut setup_region_catalog: FR,
         mut setup_table_catalog: FT,
-    ) -> SeafowlContext
+    ) -> DefaultSeafowlContext
     where
         FR: FnMut(&mut MockRegionCatalog),
         FT: FnMut(&mut MockTableCatalog),
@@ -992,7 +1009,7 @@ mod tests {
             .runtime_env()
             .register_object_store("seafowl", "", object_store);
 
-        SeafowlContext {
+        DefaultSeafowlContext {
             inner: session,
             table_catalog: Arc::new(table_catalog),
             region_catalog: region_catalog_ptr,
@@ -1000,6 +1017,23 @@ mod tests {
             database_id: 0,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::execution::disk_manager::DiskManagerConfig;
+    use mockall::predicate;
+    use object_store::memory::InMemory;
+
+    use crate::context::test_utils::mock_context_with_catalog_assertions;
+
+    use datafusion::assert_batches_eq;
+
+    use super::*;
+
+    use super::test_utils::mock_context;
 
     #[tokio::test]
     async fn test_plan_to_object_storage() {
