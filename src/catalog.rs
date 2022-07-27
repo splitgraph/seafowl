@@ -10,7 +10,9 @@ use crate::{
     provider::{
         RegionColumn, SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable,
     },
-    repository::{AllDatabaseColumnsResult, AllTableRegionsResult, Repository},
+    repository::interface::{
+        AllDatabaseColumnsResult, AllTableRegionsResult, Repository,
+    },
     schema::Schema,
 };
 
