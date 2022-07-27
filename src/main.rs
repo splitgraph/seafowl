@@ -107,9 +107,19 @@ async fn main() {
 
     let context = Arc::new(build_context(&config).await);
 
-    let server = run_pg_server(context);
-    info!("Starting the PG server on 127.0.0.1:8432");
-    server.await;
+    match config.frontend.postgres {
+        Some(pg) => {
+            let server = run_pg_server(context, &pg);
+            info!(
+                "Starting the PostgreSQL frontend on {}:{}",
+                pg.bind_host, pg.bind_port
+            );
+            server.await;
+        }
+        None => {
+            warn!("No frontends configured. You will not be able to connect to Seafowl.")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +135,12 @@ mod tests {
         let config = SeafowlConfig {
             object_store: config::ObjectStore::InMemory(config::InMemory {}),
             catalog: config::Catalog::Postgres(config::Postgres { dsn }),
+            frontend: config::Frontend {
+                postgres: Some(config::PostgresFrontend {
+                    bind_host: "127.0.0.1".to_string(),
+                    bind_port: 6432,
+                }),
+            },
         };
 
         let context = build_context(&config).await;
