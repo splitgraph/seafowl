@@ -62,7 +62,7 @@ use crate::nodes::{CreateFunction, SeafowlExtensionNode};
 use crate::provider::{RegionColumn, SeafowlRegion, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
-    catalog::{TableCatalog, FunctionCatalog},
+    catalog::{FunctionCatalog, TableCatalog},
     data_types::DatabaseId,
     nodes::{Assignment, CreateTable, Delete, Insert, Update},
     schema::Schema as SeafowlSchema,
@@ -936,7 +936,9 @@ pub mod test_utils {
     use object_store::memory::InMemory;
 
     use crate::{
-        catalog::{MockRegionCatalog, MockTableCatalog, TableCatalog, MockFunctionCatalog},
+        catalog::{
+            MockFunctionCatalog, MockRegionCatalog, MockTableCatalog, TableCatalog,
+        },
         provider::{SeafowlCollection, SeafowlDatabase},
     };
 

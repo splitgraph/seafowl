@@ -4,13 +4,13 @@ use async_trait::async_trait;
 
 use sqlx::Error;
 
+use crate::data_types::FunctionId;
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
     provider::SeafowlRegion,
     schema::Schema,
 };
-use crate::data_types::FunctionId;
-use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct AllDatabaseColumnsResult {

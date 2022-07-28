@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::catalog::FunctionCatalog;
 use crate::{
     catalog::{DefaultCatalog, RegionCatalog, TableCatalog},
     context::{DefaultSeafowlContext, SeafowlContext},
@@ -13,13 +14,16 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
-use crate::catalog::FunctionCatalog;
 
 use super::schema;
 
 async fn build_catalog(
     config: &schema::SeafowlConfig,
-) -> (Arc<dyn TableCatalog>, Arc<dyn RegionCatalog>, Arc<dyn FunctionCatalog>) {
+) -> (
+    Arc<dyn TableCatalog>,
+    Arc<dyn RegionCatalog>,
+    Arc<dyn FunctionCatalog>,
+) {
     match &config.catalog {
         schema::Catalog::Postgres(schema::Postgres { dsn, schema }) => {
             // Initialize the repository

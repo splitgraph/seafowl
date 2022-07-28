@@ -5,6 +5,8 @@ use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
 
+use crate::data_types::FunctionId;
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
     provider::{
@@ -15,8 +17,6 @@ use crate::{
     },
     schema::Schema,
 };
-use crate::data_types::FunctionId;
-use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 // TODO: this trait is basically a wrapper around Repository, apart from the custom logic
 // for converting rows of database / region results into SeafowlDatabase/Region structs;
@@ -331,7 +331,12 @@ impl RegionCatalog for DefaultCatalog {
 
 #[async_trait]
 impl FunctionCatalog for DefaultCatalog {
-    async fn create_function(&self, database_id: DatabaseId, function_name: &str, details: &CreateFunctionDetails) -> FunctionId {
+    async fn create_function(
+        &self,
+        database_id: DatabaseId,
+        function_name: &str,
+        details: &CreateFunctionDetails,
+    ) -> FunctionId {
         self.repository
             .create_function(database_id, function_name, details)
             .await

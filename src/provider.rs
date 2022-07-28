@@ -26,13 +26,13 @@ use futures::future;
 
 use object_store::path::Path;
 
+use crate::data_types::FunctionId;
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     catalog::RegionCatalog,
     data_types::{TableId, TableVersionId},
     schema::Schema,
 };
-use crate::data_types::FunctionId;
-use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 pub struct SeafowlDatabase {
     pub name: Arc<str>,

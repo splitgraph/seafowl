@@ -8,14 +8,14 @@ use sqlx::{
     Error, Executor, PgPool, Postgres, QueryBuilder, Row,
 };
 
+use crate::data_types::FunctionId;
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
     provider::{RegionColumn, SeafowlRegion},
     repository::interface::AllTableRegionsResult,
     schema::Schema,
 };
-use crate::data_types::FunctionId;
-use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 use super::interface::{AllDatabaseColumnsResult, Repository};
 
@@ -373,8 +373,17 @@ impl Repository for PostgresRepository {
         Ok(new_version)
     }
 
-    async fn create_function(&self, database_id: DatabaseId, function_name: &str, details: &CreateFunctionDetails) -> Result<FunctionId, Error> {
-        let input_types = details.input_types.iter().map(|item| item.to_string()).collect::<Vec<String>>();
+    async fn create_function(
+        &self,
+        database_id: DatabaseId,
+        function_name: &str,
+        details: &CreateFunctionDetails,
+    ) -> Result<FunctionId, Error> {
+        let input_types = details
+            .input_types
+            .iter()
+            .map(|item| item.to_string())
+            .collect::<Vec<String>>();
 
         let new_function_id: i64 = sqlx::query!(
             r#"
