@@ -1,9 +1,11 @@
-use std::{fmt::Debug, iter::zip};
+use std::{fmt::Debug, iter::zip, str::FromStr};
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use sqlx::{
-    migrate::Migrator, sqlite::SqlitePoolOptions, Error, Pool, QueryBuilder, Row, Sqlite,
+    migrate::Migrator,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    Error, Pool, QueryBuilder, Row, Sqlite,
 };
 
 use crate::{
@@ -59,7 +61,9 @@ impl SqliteRepository {
     };
 
     pub async fn try_new(dsn: String) -> Result<Self, Error> {
-        let pool = SqlitePoolOptions::new().connect(&dsn).await?;
+        let options = SqliteConnectOptions::from_str(&dsn)?.create_if_missing(true);
+
+        let pool = SqlitePoolOptions::new().connect_with(options).await?;
         let repo = Self { executor: pool };
         repo.setup().await;
         Ok(repo)
