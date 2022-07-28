@@ -91,9 +91,9 @@ async fn create_table_and_insert(context: &SeafowlContext, table_name: &str) {
         .plan_query(
             format!(
                 "INSERT INTO {:} (some_int_value, some_time, some_value) VALUES
-                (1111, '2022-01-01T20:01:01', 42),
-                (2222, '2022-01-01T20:02:02', 43),
-                (3333, '2022-01-01T20:03:03', 44)",
+                (1111, '2022-01-01T20:01:01Z', 42),
+                (2222, '2022-01-01T20:02:02Z', 43),
+                (3333, '2022-01-01T20:03:03Z', 44)",
                 table_name
             )
             .as_str(),
