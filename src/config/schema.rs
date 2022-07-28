@@ -40,6 +40,7 @@ pub struct S3 {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Catalog {
     Postgres(Postgres),
+    Sqlite(Sqlite),
 }
 
 #[derive(Deserialize, Debug, PartialEq, Clone)]
@@ -47,6 +48,11 @@ pub struct Postgres {
     pub dsn: String,
     #[serde(default = "default_schema")]
     pub schema: String,
+}
+
+#[derive(Deserialize, Debug, PartialEq, Clone)]
+pub struct Sqlite {
+    pub dsn: String,
 }
 
 fn default_schema() -> String {

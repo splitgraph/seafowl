@@ -3,7 +3,9 @@ use std::sync::Arc;
 use crate::{
     catalog::{DefaultCatalog, RegionCatalog, TableCatalog},
     context::{DefaultSeafowlContext, SeafowlContext},
-    repository::postgres::PostgresRepository,
+    repository::{
+        interface::Repository, postgres::PostgresRepository, sqlite::SqliteRepository,
+    },
 };
 use datafusion::{
     catalog::{
@@ -19,21 +21,23 @@ use super::schema;
 async fn build_catalog(
     config: &schema::SeafowlConfig,
 ) -> (Arc<dyn TableCatalog>, Arc<dyn RegionCatalog>) {
-    match &config.catalog {
-        schema::Catalog::Postgres(schema::Postgres { dsn, schema }) => {
-            // Initialize the repository
-            let repository =
-                PostgresRepository::try_new(dsn.to_string(), schema.to_string())
-                    .await
-                    .expect("Error setting up the database");
+    // Initialize the repository
+    let repository: Arc<dyn Repository> = match &config.catalog {
+        schema::Catalog::Postgres(schema::Postgres { dsn, schema }) => Arc::new(
+            PostgresRepository::try_new(dsn.to_string(), schema.to_string())
+                .await
+                .expect("Error setting up the database"),
+        ),
+        schema::Catalog::Sqlite(schema::Sqlite { dsn }) => Arc::new(
+            SqliteRepository::try_new(dsn.to_string())
+                .await
+                .expect("Error setting up the database"),
+        ),
+    };
 
-            let catalog = Arc::new(DefaultCatalog {
-                repository: Arc::new(repository),
-            });
+    let catalog = Arc::new(DefaultCatalog { repository });
 
-            (catalog.clone(), catalog)
-        }
-    }
+    (catalog.clone(), catalog)
 }
 
 fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
@@ -99,19 +103,14 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-
     use super::*;
 
     #[tokio::test]
     async fn test_config_to_context() {
-        let dsn = env::var("DATABASE_URL").unwrap();
-
         let config = schema::SeafowlConfig {
             object_store: schema::ObjectStore::InMemory(schema::InMemory {}),
-            catalog: schema::Catalog::Postgres(schema::Postgres {
-                dsn,
-                schema: "public".to_string(),
+            catalog: schema::Catalog::Sqlite(schema::Sqlite {
+                dsn: "sqlite::memory:".to_string(),
             }),
             frontend: schema::Frontend {
                 postgres: Some(schema::PostgresFrontend {
