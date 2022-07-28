@@ -11,99 +11,13 @@ use sqlx::{
 use crate::{
     data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
     provider::{RegionColumn, SeafowlRegion},
+    repository::interface::AllTableRegionsResult,
     schema::Schema,
 };
 
+use super::interface::{AllDatabaseColumnsResult, Repository};
+
 static MIGRATOR: Migrator = sqlx::migrate!();
-
-#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
-pub struct AllDatabaseColumnsResult {
-    pub collection_name: String,
-    pub table_name: String,
-    pub table_id: TableId,
-    pub table_version_id: TableVersionId,
-    pub column_name: String,
-    pub column_type: String,
-}
-
-#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
-pub struct AllTableRegionsResult {
-    pub table_region_id: i64,
-    pub object_storage_id: String,
-    pub column_name: String,
-    pub column_type: String,
-    pub row_count: i32,
-    pub min_value: Option<Vec<u8>>,
-    pub max_value: Option<Vec<u8>>,
-}
-
-#[async_trait]
-pub trait Repository: Send + Sync + Debug {
-    async fn setup(&self);
-
-    async fn get_collections_in_database(
-        &self,
-        database_id: DatabaseId,
-    ) -> Result<Vec<String>, Error>;
-
-    async fn get_all_columns_in_database(
-        &self,
-        database_id: DatabaseId,
-    ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
-
-    async fn get_all_regions_in_table(
-        &self,
-        table_version_id: TableVersionId,
-    ) -> Result<Vec<AllTableRegionsResult>, Error>;
-
-    async fn get_collection_id_by_name(
-        &self,
-        database_name: &str,
-        collection_name: &str,
-    ) -> Result<CollectionId, Error>;
-
-    async fn get_database_id_by_name(
-        &self,
-        database_name: &str,
-    ) -> Result<DatabaseId, Error>;
-
-    async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error>;
-
-    async fn create_collection(
-        &self,
-        database_id: DatabaseId,
-        collection_name: &str,
-    ) -> Result<CollectionId, Error>;
-
-    async fn create_table(
-        &self,
-        collection_id: CollectionId,
-        table_name: &str,
-        schema: Schema,
-    ) -> Result<(TableId, TableVersionId), Error>;
-
-    async fn create_regions(
-        &self,
-        region: Vec<SeafowlRegion>,
-    ) -> Result<Vec<PhysicalRegionId>, Error>;
-
-    async fn append_regions_to_table(
-        &self,
-        region_ids: Vec<PhysicalRegionId>,
-        table_version_id: TableVersionId,
-    ) -> Result<(), Error>;
-
-    async fn create_new_table_version(
-        &self,
-        from_version: TableVersionId,
-    ) -> Result<TableVersionId, Error>;
-
-    async fn drop_table(&self, table_id: TableId) -> Result<(), Error>;
-
-    async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error>;
-
-    async fn drop_database(&self, database_id: DatabaseId) -> Result<(), Error>;
-}
 
 #[derive(Debug)]
 pub struct PostgresRepository {
@@ -496,22 +410,22 @@ impl Repository for PostgresRepository {
 pub mod testutils {
     use rand::Rng;
 
-    use crate::repository::PostgresRepository;
+    use super::PostgresRepository;
+
+    pub fn get_random_schema() -> String {
+        // Generate a random schema (taken from IOx)
+        let mut rng = rand::thread_rng();
+        (&mut rng)
+            .sample_iter(rand::distributions::Alphanumeric)
+            .filter(|c| c.is_ascii_alphabetic())
+            .take(20)
+            .map(char::from)
+            .collect::<String>()
+    }
 
     pub async fn make_repository(dsn: &str) -> PostgresRepository {
-        // Generate a random schema (taken from IOx)
+        let schema_name = get_random_schema();
 
-        let schema_name = {
-            let mut rng = rand::thread_rng();
-            (&mut rng)
-                .sample_iter(rand::distributions::Alphanumeric)
-                .filter(|c| c.is_ascii_alphabetic())
-                .take(20)
-                .map(char::from)
-                .collect::<String>()
-        };
-
-        // let dsn = std::env::var("DATABASE_URL").unwrap();
         PostgresRepository::try_new(dsn.to_string(), schema_name)
             .await
             .expect("Error setting up the database")
@@ -522,225 +436,14 @@ pub mod testutils {
 mod tests {
     use std::{env, sync::Arc};
 
-    use datafusion::arrow::datatypes::{
-        DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
-    };
-
-    use crate::repository::testutils::make_repository;
-
-    use super::*;
-
-    fn get_test_region() -> SeafowlRegion {
-        SeafowlRegion {
-            object_storage_id: Arc::from(
-                "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
-                    .to_string(),
-            ),
-            row_count: 2,
-            columns: Arc::new(vec![
-                RegionColumn {
-                    name: Arc::from("timestamp".to_string()),
-                    r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
-                    min_value: Arc::new(None),
-                    max_value: Arc::new(None),
-                },
-                RegionColumn {
-                    name: Arc::from("integer".to_string()),
-                    r#type: Arc::from(
-                        "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string(),
-                    ),
-                    min_value: Arc::new(Some([49, 50].to_vec())),
-                    max_value: Arc::new(Some([52, 50].to_vec())),
-                },
-                RegionColumn {
-                    name: Arc::from("varchar".to_string()),
-                    r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
-                    min_value: Arc::new(None),
-                    max_value: Arc::new(None),
-                },
-            ]),
-        }
-    }
-
-    async fn make_database_with_single_table(
-        repository: &PostgresRepository,
-    ) -> (DatabaseId, CollectionId, TableId, TableVersionId) {
-        let database_id = repository
-            .create_database("testdb")
-            .await
-            .expect("Error creating database");
-        let collection_id = repository
-            .create_collection(database_id, "testcol")
-            .await
-            .expect("Error creating collection");
-
-        let arrow_schema = ArrowSchema::new(vec![
-            ArrowField::new("date", ArrowDataType::Date64, false),
-            ArrowField::new("value", ArrowDataType::Float64, false),
-        ]);
-        let schema = Schema {
-            arrow_schema: Arc::new(arrow_schema),
-        };
-
-        let (table_id, table_version_id) = repository
-            .create_table(collection_id, "testtable", schema)
-            .await
-            .expect("Error creating table");
-
-        (database_id, collection_id, table_id, table_version_id)
-    }
+    use super::super::interface::tests::run_generic_repository_tests;
+    use super::testutils::make_repository;
 
     #[tokio::test]
-    async fn test_make_repository() {
+    async fn test_postgres_repository() {
         let dsn = env::var("DATABASE_URL").unwrap();
+        let repository = Arc::new(make_repository(&dsn).await);
 
-        let repository = make_repository(&dsn).await;
-        assert_eq!(
-            repository
-                .get_collections_in_database(0)
-                .await
-                .expect("error getting collections"),
-            Vec::<String>::new()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_create_database_collection_table() {
-        let dsn = env::var("DATABASE_URL").unwrap();
-
-        let repository = make_repository(&dsn).await;
-
-        let (database_id, _, _, table_version_id) =
-            make_database_with_single_table(&repository).await;
-
-        // Test loading all columns
-
-        let all_columns = repository
-            .get_all_columns_in_database(database_id)
-            .await
-            .expect("Error getting all columns");
-
-        fn expected(version: TableVersionId) -> Vec<AllDatabaseColumnsResult> {
-            vec![
-                AllDatabaseColumnsResult {
-                    collection_name: "testcol".to_string(),
-                    table_name: "testtable".to_string(),
-                    table_id: 1,
-                    table_version_id: version,
-                    column_name: "date".to_string(),
-                    column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}"
-                        .to_string(),
-                },
-                AllDatabaseColumnsResult {
-                    collection_name: "testcol".to_string(),
-                    table_name: "testtable".to_string(),
-                    table_id: 1,
-                    table_version_id: version,
-                    column_name: "value".to_string(),
-                    column_type: "{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"
-                        .to_string(),
-                },
-            ]
-        }
-
-        assert_eq!(all_columns, expected(1));
-
-        // Duplicate the table
-        let new_version_id = repository
-            .create_new_table_version(table_version_id)
-            .await
-            .unwrap();
-
-        // Test all columns again: we should have the schema for the latest table version
-        let all_columns = repository
-            .get_all_columns_in_database(database_id)
-            .await
-            .expect("Error getting all columns");
-
-        assert_eq!(all_columns, expected(new_version_id));
-    }
-
-    #[tokio::test]
-    async fn test_create_append_region() {
-        let dsn = env::var("DATABASE_URL").unwrap();
-        let repository = make_repository(&dsn).await;
-
-        let (_, _, _, table_version_id) =
-            make_database_with_single_table(&repository).await;
-
-        let region = get_test_region();
-
-        // Create a region; since we're in a separated schema, it gets ID=1
-        let region_ids = repository.create_regions(vec![region]).await.unwrap();
-        assert_eq!(region_ids, vec![1]);
-
-        // Test loading all table regions when the region is not yet attached
-        let all_regions = repository
-            .get_all_regions_in_table(table_version_id)
-            .await
-            .unwrap();
-        assert_eq!(all_regions, Vec::<AllTableRegionsResult>::new());
-
-        // Attach the region to the table
-        repository
-            .append_regions_to_table(region_ids, table_version_id)
-            .await
-            .unwrap();
-
-        // Load again
-        let all_regions = repository
-            .get_all_regions_in_table(table_version_id)
-            .await
-            .unwrap();
-
-        let expected_regions = vec![
-            AllTableRegionsResult {
-                table_region_id: 1,
-                object_storage_id:
-                    "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
-                        .to_string(),
-                column_name: "timestamp".to_string(),
-                column_type: "{\"name\":\"utf8\"}".to_string(),
-                row_count: 2,
-                min_value: None,
-                max_value: None,
-            },
-            AllTableRegionsResult {
-                table_region_id: 1,
-                object_storage_id:
-                    "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
-                        .to_string(),
-                column_name: "integer".to_string(),
-                column_type: "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}".to_string(),
-                row_count: 2,
-                min_value: Some([49, 50].to_vec()),
-                max_value: Some([52, 50].to_vec()),
-            },
-            AllTableRegionsResult {
-                table_region_id: 1,
-                object_storage_id:
-                    "d52a8584a60b598ad0ffa11d185c3ca800b7ddb47ea448d0072b6bf7a5a209e1.parquet"
-                        .to_string(),
-                column_name: "varchar".to_string(),
-                column_type: "{\"name\":\"utf8\"}".to_string(),
-                row_count: 2,
-                min_value: None,
-                max_value: None,
-            },
-        ];
-        assert_eq!(all_regions, expected_regions);
-
-        // Duplicate the table, check it has the same regions
-        let new_version_id = repository
-            .create_new_table_version(table_version_id)
-            .await
-            .unwrap();
-
-        let all_regions = repository
-            .get_all_regions_in_table(new_version_id)
-            .await
-            .unwrap();
-
-        assert_eq!(all_regions, expected_regions);
+        run_generic_repository_tests(repository).await;
     }
 }

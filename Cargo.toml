@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+arrow = { version = "18.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 base64 = "0.13.0"
 
@@ -12,9 +13,9 @@ clap = { version = "3.2.15", features = [ "derive" ] }
 config = "0.13.1"
 
 # PG wire protocol support
-convergence = "0.5.0"
-convergence-arrow = "0.5.0"
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "bf7564f62117487a9a397c25326fcda1ed22d08d", default-features = false, package = "datafusion" }
+convergence = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515" }
+convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", package = "convergence-arrow" }
+datafusion = "10"
 futures = "0.3"
 
 # passing to DF's query planner
@@ -36,15 +37,10 @@ sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "postgres", "offl
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 url = "2.2"
+warp = "0.3"
 
 # For WASM user-defined functions
 wasmtime = "0.38.1"
 
-[patch.crates-io]
-# Get convergence-arrow to use the Git version of datafusion
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "bf7564f62117487a9a397c25326fcda1ed22d08d", default-features = false, package = "datafusion" }
-
 [dev-dependencies]
-# for test assertions (assert_batches_eq! doesn't work without it)
-arrow = { version = "17.0.0", features = ["prettyprint"] }
 mockall = "0.11.1"

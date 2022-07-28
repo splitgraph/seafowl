@@ -3,7 +3,7 @@ use std::path::Path;
 use config::{Config, ConfigError, File, FileFormat};
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct SeafowlConfig {
     pub object_store: ObjectStore,
     pub catalog: Catalog,
@@ -11,23 +11,24 @@ pub struct SeafowlConfig {
     pub frontend: Frontend,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ObjectStore {
     Local(Local),
+    #[serde(rename = "memory")]
     InMemory(InMemory),
     S3(S3),
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct Local {
     pub data_dir: String,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct InMemory {}
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct S3 {
     pub access_key_id: String,
     pub secret_access_key: String,
@@ -35,23 +36,30 @@ pub struct S3 {
     pub bucket: String,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Catalog {
     Postgres(Postgres),
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct Postgres {
     pub dsn: String,
+    #[serde(default = "default_schema")]
+    pub schema: String,
 }
 
-#[derive(Deserialize, Debug, PartialEq, Default)]
+fn default_schema() -> String {
+    "public".to_string()
+}
+
+#[derive(Deserialize, Debug, PartialEq, Default, Clone)]
 pub struct Frontend {
     pub postgres: Option<PostgresFrontend>,
+    pub http: Option<HttpFrontend>,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 #[serde(default)]
 pub struct PostgresFrontend {
     pub bind_host: String,
@@ -63,6 +71,22 @@ impl Default for PostgresFrontend {
         Self {
             bind_host: "127.0.0.1".to_string(),
             bind_port: 6432,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[serde(default)]
+pub struct HttpFrontend {
+    pub bind_host: String,
+    pub bind_port: u16,
+}
+
+impl Default for HttpFrontend {
+    fn default() -> Self {
+        Self {
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 3030,
         }
     }
 }
@@ -85,7 +109,7 @@ pub fn load_config_from_string(config_str: &str) -> Result<SeafowlConfig, Config
 #[cfg(test)]
 mod tests {
     use super::{
-        load_config_from_string, Catalog, Frontend, ObjectStore, Postgres,
+        load_config_from_string, Catalog, Frontend, HttpFrontend, ObjectStore, Postgres,
         PostgresFrontend, SeafowlConfig, S3,
     };
 
@@ -104,6 +128,10 @@ dsn = "postgresql://user:pass@localhost:5432/somedb"
 [frontend.postgres]
 bind_host = "0.0.0.0"
 bind_port = 7432
+
+[frontend.http]
+bind_host = "0.0.0.0"
+bind_port = 80
 "#;
 
     const TEST_CONFIG_ERROR: &str = r#"
@@ -124,12 +152,17 @@ bind_port = 7432
                     bucket: "seafowl".to_string()
                 }),
                 catalog: Catalog::Postgres(Postgres {
-                    dsn: "postgresql://user:pass@localhost:5432/somedb".to_string()
+                    dsn: "postgresql://user:pass@localhost:5432/somedb".to_string(),
+                    schema: "public".to_string()
                 }),
                 frontend: Frontend {
                     postgres: Some(PostgresFrontend {
                         bind_host: "0.0.0.0".to_string(),
                         bind_port: 7432
+                    }),
+                    http: Some(HttpFrontend {
+                        bind_host: "0.0.0.0".to_string(),
+                        bind_port: 80
                     })
                 }
             }
