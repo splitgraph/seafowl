@@ -13,12 +13,13 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
+use crate::catalog::FunctionCatalog;
 
 use super::schema;
 
 async fn build_catalog(
     config: &schema::SeafowlConfig,
-) -> (Arc<dyn TableCatalog>, Arc<dyn RegionCatalog>) {
+) -> (Arc<dyn TableCatalog>, Arc<dyn RegionCatalog>, Arc<dyn FunctionCatalog>) {
     match &config.catalog {
         schema::Catalog::Postgres(schema::Postgres { dsn, schema }) => {
             // Initialize the repository
@@ -31,7 +32,7 @@ async fn build_catalog(
                 repository: Arc::new(repository),
             });
 
-            (catalog.clone(), catalog)
+            (catalog.clone(), catalog.clone(), catalog)
         }
     }
 }
@@ -58,7 +59,7 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
         .runtime_env()
         .register_object_store("seafowl", "", object_store);
 
-    let (tables, regions) = build_catalog(cfg).await;
+    let (tables, regions, functions) = build_catalog(cfg).await;
 
     // Create default DB/collection
     let default_db = match tables.get_database_id_by_name("default").await {
@@ -88,6 +89,7 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
         inner: context,
         table_catalog: tables,
         region_catalog: regions,
+        function_catalog: functions,
         database: "default".to_string(),
         database_id: default_db,
     };

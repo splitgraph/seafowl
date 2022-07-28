@@ -62,7 +62,7 @@ use crate::nodes::{CreateFunction, SeafowlExtensionNode};
 use crate::provider::{RegionColumn, SeafowlRegion, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
-    catalog::TableCatalog,
+    catalog::{TableCatalog, FunctionCatalog},
     data_types::DatabaseId,
     nodes::{Assignment, CreateTable, Delete, Insert, Update},
     schema::Schema as SeafowlSchema,
@@ -240,6 +240,7 @@ pub struct DefaultSeafowlContext {
     pub inner: SessionContext,
     pub table_catalog: Arc<dyn TableCatalog>,
     pub region_catalog: Arc<dyn RegionCatalog>,
+    pub function_catalog: Arc<dyn FunctionCatalog>,
     pub database: String,
     pub database_id: DatabaseId,
 }
@@ -463,6 +464,12 @@ impl SeafowlContext for DefaultSeafowlContext {
             &self.database,
             Arc::new(self.table_catalog.load_database(self.database_id).await),
         );
+
+        // // Register all functions in the database
+        // let mut mut_session_ctx = self.inner.clone();
+        // for f in self.function_catalog {
+        //     mut_session_ctx.register_udf(f);
+        // }
     }
 
     async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
@@ -887,6 +894,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                             )?;
                             let mut mut_session_ctx = self.inner.clone();
                             mut_session_ctx.register_udf(_function);
+
+                            // Persist the function in the metadata storage
+                            self.function_catalog
+                                .create_function(self.database_id, name, details)
+                                .await;
+
                             Ok(make_dummy_exec())
                         }
                     },
@@ -923,7 +936,7 @@ pub mod test_utils {
     use object_store::memory::InMemory;
 
     use crate::{
-        catalog::{MockRegionCatalog, MockTableCatalog, TableCatalog},
+        catalog::{MockRegionCatalog, MockTableCatalog, TableCatalog, MockFunctionCatalog},
         provider::{SeafowlCollection, SeafowlDatabase},
     };
 
@@ -1012,6 +1025,11 @@ pub mod test_utils {
                 collections: collections.clone(),
             });
 
+        let mut function_catalog = MockFunctionCatalog::new();
+        function_catalog
+            .expect_create_function()
+            .returning(move |_, _, _| 1);
+
         session
             .register_catalog("testdb", Arc::new(table_catalog.load_database(0).await));
 
@@ -1026,6 +1044,7 @@ pub mod test_utils {
             inner: session,
             table_catalog: Arc::new(table_catalog),
             region_catalog: region_catalog_ptr,
+            function_catalog: Arc::new(function_catalog),
             database: "testdb".to_string(),
             database_id: 0,
         }

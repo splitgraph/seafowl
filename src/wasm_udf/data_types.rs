@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter, Result};
+
 use datafusion::logical_expr::Volatility;
 
 use serde::{Deserialize, Serialize};
@@ -51,6 +53,25 @@ pub enum CreateFunctionLanguage {
 impl Default for CreateFunctionLanguage {
     fn default() -> Self {
         CreateFunctionLanguage::Wasm
+    }
+}
+
+// Enable to_string() conversion on account of the default Debug trait for enums
+impl Display for CreateFunctionLanguage {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Display for CreateFunctionWASMType {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Display for CreateFunctionVolatility {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "{:?}", self)
     }
 }
 

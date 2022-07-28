@@ -9,6 +9,8 @@ use crate::{
     provider::SeafowlRegion,
     schema::Schema,
 };
+use crate::data_types::FunctionId;
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct AllDatabaseColumnsResult {
@@ -91,6 +93,13 @@ pub trait Repository: Send + Sync + Debug {
         &self,
         from_version: TableVersionId,
     ) -> Result<TableVersionId, Error>;
+
+    async fn create_function(
+        &self,
+        database_id: DatabaseId,
+        function_name: &str,
+        details: &CreateFunctionDetails,
+    ) -> Result<FunctionId, Error>;
 
     async fn drop_table(&self, table_id: TableId) -> Result<(), Error>;
 

@@ -31,6 +31,8 @@ use crate::{
     data_types::{TableId, TableVersionId},
     schema::Schema,
 };
+use crate::data_types::FunctionId;
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 pub struct SeafowlDatabase {
     pub name: Arc<str>,
@@ -215,6 +217,13 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
     fn statistics(&self) -> Statistics {
         Statistics::default()
     }
+}
+
+#[derive(Debug)]
+pub struct SeafowlFunction {
+    pub function_id: FunctionId,
+    pub name: Arc<str>,
+    pub details: CreateFunctionDetails,
 }
 
 #[cfg(test)]

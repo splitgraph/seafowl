@@ -1,3 +1,4 @@
+DROP TABLE function;
 DROP TABLE table_region;
 DROP TABLE physical_region_column;
 DROP TABLE physical_region;

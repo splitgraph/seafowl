@@ -15,6 +15,8 @@ use crate::{
     },
     schema::Schema,
 };
+use crate::data_types::FunctionId;
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 // TODO: this trait is basically a wrapper around Repository, apart from the custom logic
 // for converting rows of database / region results into SeafowlDatabase/Region structs;
@@ -76,6 +78,17 @@ pub trait RegionCatalog: Sync + Send + Debug {
         region_ids: Vec<PhysicalRegionId>,
         table_version_id: TableVersionId,
     );
+}
+
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait FunctionCatalog: Sync + Send + Debug {
+    async fn create_function(
+        &self,
+        database_id: DatabaseId,
+        function_name: &str,
+        details: &CreateFunctionDetails,
+    ) -> FunctionId;
 }
 
 #[derive(Clone, Debug)]
@@ -313,5 +326,15 @@ impl RegionCatalog for DefaultCatalog {
             .append_regions_to_table(region_ids, table_version_id)
             .await
             .expect("TODO attach region error")
+    }
+}
+
+#[async_trait]
+impl FunctionCatalog for DefaultCatalog {
+    async fn create_function(&self, database_id: DatabaseId, function_name: &str, details: &CreateFunctionDetails) -> FunctionId {
+        self.repository
+            .create_function(database_id, function_name, details)
+            .await
+            .expect("TODO create function error")
     }
 }

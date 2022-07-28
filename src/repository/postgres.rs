@@ -14,6 +14,8 @@ use crate::{
     repository::interface::AllTableRegionsResult,
     schema::Schema,
 };
+use crate::data_types::FunctionId;
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 use super::interface::{AllDatabaseColumnsResult, Repository};
 
@@ -369,6 +371,30 @@ impl Repository for PostgresRepository {
         .await?;
 
         Ok(new_version)
+    }
+
+    async fn create_function(&self, database_id: DatabaseId, function_name: &str, details: &CreateFunctionDetails) -> Result<FunctionId, Error> {
+        let input_types = details.input_types.iter().map(|item| item.to_string()).collect::<Vec<String>>();
+
+        let new_function_id: i64 = sqlx::query!(
+            r#"
+        INSERT INTO "function" (database_id, name, entrypoint, language, input_types, return_type, data, volatility)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING (id);
+        "#,
+            database_id,
+            function_name,
+            details.entrypoint,
+            details.language.to_string(),
+            &input_types,
+            details.return_type.to_string(),
+            details.data,
+            details.volatility.to_string()
+        )
+            .fetch_one(&self.executor)
+            .await?
+            .id;
+
+        Ok(new_function_id)
     }
 
     // Drop table/collection/database
