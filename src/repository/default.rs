@@ -1,87 +1,64 @@
-use std::{fmt::Debug, iter::zip, time::Duration};
+/// Default implementation for a Repository that factors out common
+/// query patterns / SQL queries between Postgres and SQLite.
+///
+/// Usage:
+///
+/// The struct has to have certain fields, since this macro relies on them:
+///
+/// ```ignore
+/// pub struct MyRepository {
+///     pub executor: sqlx::Pool<sqlx::SqlxDatabaseType>
+/// }
+///
+/// impl MyRepository {
+///     pub const MIGRATOR: sqlx::Migrator = sqlx::migrate!("my/migrations");
+///     pub const QUERIES: RepositoryQueries = RepositoryQueries {
+///         all_columns_in_database: "SELECT ...",
+///     }
+/// }
+///
+/// implement_repository!(SqliteRepository)
+/// ```
+///
+/// Gigajank alert: why are we doing this? The code between PG and SQLite is extremely similar.
+/// But, I couldn't find a better way to factor it out in order to reduce duplication.
+/// Here's what I tried:
+///
+///   - Use a generic `Pool<Any>`. This causes a weird borrow checker error when using a
+///     `QueryBuilder` (https://github.com/launchbadge/sqlx/issues/1978)
+///   - Make the implementation generic over any DB (that implements sqlx::Database). In that
+///     case, we need to add a bunch of `where` clauses to the implementation giving constraints
+///     on the argument, the query and the result types (see https://stackoverflow.com/a/70573732).
+///     And, when we do that, we hit the borrow checker error again from #1.
+///   - Add macros with default implementations for everything in the Repository trait and use them
+///     instead of putting the whole implementation in a macro. This conflicts with the #[async_trait]
+///     macro and breaks it (see https://stackoverflow.com/q/68573578). Another solution in that SO
+///     question is generating the implementation functions with a macro and calling them
+///     from the trait, which could work but still means we have to write out all functions in the
+///     PG implementation, SQLite implementation and the macros for both variants of the implementation
+///     functions (since we can't build a function that's generic over any DB)
+///
+/// In any case, this means we have to remove compile-time query checking (even if we duplicate the code
+/// completely), see https://github.com/launchbadge/sqlx/issues/121 and
+/// https://github.com/launchbadge/sqlx/issues/916.
 
-use async_trait::async_trait;
-use futures::TryStreamExt;
-use sqlx::{
-    migrate::{MigrateDatabase, Migrator},
-    postgres::PgPoolOptions,
-    Error, Executor, PgPool, Postgres, QueryBuilder, Row,
-};
-
-use crate::{
-    data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
-    provider::{RegionColumn, SeafowlRegion},
-    repository::interface::AllTableRegionsResult,
-    schema::Schema,
-};
-
-use super::interface::{AllDatabaseColumnsResult, Repository};
-
-static MIGRATOR: Migrator = sqlx::migrate!();
-
-#[derive(Debug)]
-pub struct PostgresRepository {
-    pub executor: PgPool,
-    pub schema_name: String,
+/// Queries that are different between SQLite and PG
+pub struct RepositoryQueries {
+    pub all_columns_in_database: &'static str,
 }
 
-impl PostgresRepository {
-    pub async fn try_new(dsn: String, schema_name: String) -> Result<Self, Error> {
-        if !Postgres::database_exists(&dsn).await? {
-            let _ = Postgres::create_database(&dsn).await;
-        }
-
-        let repo = PostgresRepository::connect(dsn, schema_name.clone()).await?;
-
-        repo.executor
-            .execute(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str())
-            .await?;
-
-        // Setup the schema
-        repo.setup().await;
-        Ok(repo)
-    }
-
-    pub async fn connect(dsn: String, schema_name: String) -> Result<Self, Error> {
-        let schema_name_2 = schema_name.clone();
-
-        let pool = PgPoolOptions::new()
-            .min_connections(1)
-            .max_connections(16)
-            .idle_timeout(Duration::from_millis(30000))
-            .test_before_acquire(true)
-            .after_connect(move |c| {
-                let schema_name = schema_name.to_owned();
-                Box::pin(async move {
-                    let query = format!("SET search_path TO {},public;", schema_name);
-                    c.execute(sqlx::query(&query)).await?;
-                    Ok(())
-                })
-            })
-            .connect(&dsn)
-            .await?;
-
-        Ok(Self {
-            executor: pool,
-            schema_name: schema_name_2,
-        })
-    }
-}
-
+#[macro_export]
+macro_rules! implement_repository {
+    ($repo: ident) => {
 #[async_trait]
-impl Repository for PostgresRepository {
+impl Repository for $repo {
     async fn setup(&self) {
-        let query = format!("CREATE SCHEMA IF NOT EXISTS {};", &self.schema_name);
-        self.executor
-            .execute(sqlx::query(&query))
-            .await
-            .expect("error creating schema");
-
-        MIGRATOR
+        $repo::MIGRATOR
             .run(&self.executor)
             .await
             .expect("error running migrations");
     }
+
     async fn get_collections_in_database(
         &self,
         database_id: DatabaseId,
@@ -98,30 +75,9 @@ impl Repository for PostgresRepository {
         &self,
         database_id: DatabaseId,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error> {
-        let columns = sqlx::query_as!(
-            AllDatabaseColumnsResult,
-            r#"
-        WITH latest_table_version AS (
-            SELECT DISTINCT ON (table_id) table_id, id
-            FROM table_version
-            ORDER BY table_id, creation_time DESC, id DESC
-        )
-        SELECT
-            collection.name AS collection_name,
-            "table".name AS table_name,
-            "table".id AS table_id,
-            latest_table_version.id AS table_version_id,
-            table_column.name AS column_name,
-            table_column.type AS column_type
-        FROM collection
-        INNER JOIN "table" ON collection.id = "table".collection_id
-        INNER JOIN latest_table_version ON "table".id = latest_table_version.table_id
-        INNER JOIN table_column ON table_column.table_version_id = latest_table_version.id
-        WHERE collection.database_id = $1
-        ORDER BY collection_name, table_name
-        "#,
-            database_id
-        )
+
+        let columns = sqlx::query_as($repo::QUERIES.all_columns_in_database)
+        .bind(database_id)
         .fetch_all(&self.executor)
         .await?;
         Ok(columns)
@@ -131,39 +87,34 @@ impl Repository for PostgresRepository {
         &self,
         table_version_id: TableVersionId,
     ) -> Result<Vec<AllTableRegionsResult>, Error> {
-        let regions = sqlx::query_as!(
-            AllTableRegionsResult,
+        let regions = sqlx::query_as(
             r#"SELECT
             physical_region.id AS table_region_id,
             physical_region.object_storage_id,
-            physical_region.row_count,
+            physical_region.row_count AS row_count,
             physical_region_column.name AS column_name,
             physical_region_column.type AS column_type,
             physical_region_column.min_value,
             physical_region_column.max_value
         FROM table_region
         INNER JOIN physical_region ON physical_region.id = table_region.physical_region_id
-        LEFT JOIN physical_region_column ON physical_region_column.physical_region_id = physical_region.id
+        -- TODO left join?
+        INNER JOIN physical_region_column ON physical_region_column.physical_region_id = physical_region.id
         WHERE table_region.table_version_id = $1
-        ORDER BY table_region_id
+        ORDER BY table_region_id, physical_region_column.id
         "#,
-            table_version_id
-        )
+        ).bind(table_version_id)
         .fetch_all(&self.executor)
         .await?;
         Ok(regions)
     }
 
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error> {
-        let id = sqlx::query!(
-            r#"
-        INSERT INTO database (name) VALUES ($1) RETURNING (id)
-        "#,
-            database_name
-        )
-        .fetch_one(&self.executor)
-        .await?
-        .id;
+        let id = sqlx::query(r#"INSERT INTO database (name) VALUES ($1) RETURNING (id)"#)
+            .bind(database_name)
+            .fetch_one(&self.executor)
+            .await?
+            .try_get("id")?;
 
         Ok(id)
     }
@@ -173,18 +124,18 @@ impl Repository for PostgresRepository {
         database_name: &str,
         collection_name: &str,
     ) -> Result<CollectionId, Error> {
-        let id = sqlx::query!(
+        let id = sqlx::query(
             r#"
         SELECT collection.id
         FROM collection JOIN database ON collection.database_id = database.id
         WHERE database.name = $1 AND collection.name = $2
         "#,
-            database_name,
-            collection_name
         )
+        .bind(database_name)
+        .bind(collection_name)
         .fetch_one(&self.executor)
         .await?
-        .id;
+        .try_get("id")?;
 
         Ok(id)
     }
@@ -193,15 +144,11 @@ impl Repository for PostgresRepository {
         &self,
         database_name: &str,
     ) -> Result<DatabaseId, Error> {
-        let id = sqlx::query!(
-            r#"
-        SELECT id FROM database WHERE database.name = $1
-        "#,
-            database_name,
-        )
-        .fetch_one(&self.executor)
-        .await?
-        .id;
+        let id = sqlx::query(r#"SELECT id FROM database WHERE database.name = $1"#)
+            .bind(database_name)
+            .fetch_one(&self.executor)
+            .await?
+            .try_get("id")?;
 
         Ok(id)
     }
@@ -211,16 +158,12 @@ impl Repository for PostgresRepository {
         database_id: DatabaseId,
         collection_name: &str,
     ) -> Result<CollectionId, Error> {
-        let id = sqlx::query!(
-            r#"
-        INSERT INTO "collection" (database_id, name) VALUES ($1, $2) RETURNING (id)
-        "#,
-            database_id,
-            collection_name
-        )
+        let id = sqlx::query(
+            r#"INSERT INTO "collection" (database_id, name) VALUES ($1, $2) RETURNING (id)"#,
+        ).bind(database_id).bind(collection_name)
         .fetch_one(&self.executor)
         .await?
-        .id;
+        .try_get("id")?;
 
         Ok(id)
     }
@@ -232,31 +175,27 @@ impl Repository for PostgresRepository {
         schema: Schema,
     ) -> Result<(TableId, TableVersionId), Error> {
         // Create new (empty) table
-        let new_table_id: i64 = sqlx::query!(
-            r#"
-        INSERT INTO "table" (collection_id, name) VALUES ($1, $2) RETURNING (id)
-        "#,
-            collection_id,
-            table_name
+        let new_table_id: i64 = sqlx::query(
+            r#"INSERT INTO "table" (collection_id, name) VALUES ($1, $2) RETURNING (id)"#,
         )
+        .bind(collection_id)
+        .bind(table_name)
         .fetch_one(&self.executor)
         .await?
-        .id;
+        .try_get("id")?;
 
         // Create initial table version
-        let new_version_id: i64 = sqlx::query!(
-            r#"
-        INSERT INTO table_version (table_id) VALUES ($1) RETURNING (id)
-        "#,
-            new_table_id
+        let new_version_id: i64 = sqlx::query(
+            r#"INSERT INTO table_version (table_id) VALUES ($1) RETURNING (id)"#,
         )
+        .bind(new_table_id)
         .fetch_one(&self.executor)
         .await?
-        .id;
+        .try_get("id")?;
 
         // Create columns
         // TODO this breaks if we have more than (bind limit) columns
-        let mut builder: QueryBuilder<Postgres> =
+        let mut builder: QueryBuilder<_> =
             QueryBuilder::new("INSERT INTO table_column(table_version_id, name, type) ");
         builder.push_values(schema.to_column_names_types(), |mut b, col| {
             b.push_bind(new_version_id)
@@ -276,7 +215,7 @@ impl Repository for PostgresRepository {
     ) -> Result<Vec<PhysicalRegionId>, Error> {
         // Create regions
 
-        let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        let mut builder: QueryBuilder<_> = QueryBuilder::new(
             "INSERT INTO physical_region(row_count, object_storage_id) ",
         );
         builder.push_values(&regions, |mut b, r| {
@@ -290,7 +229,7 @@ impl Repository for PostgresRepository {
             .fetch_all(&self.executor)
             .await?
             .iter()
-            .map(|r| r.get("id"))
+            .flat_map(|r| r.try_get("id"))
             .collect();
 
         // Create region columns
@@ -302,7 +241,7 @@ impl Repository for PostgresRepository {
             })
             .collect();
 
-        let mut builder: QueryBuilder<Postgres> =
+        let mut builder: QueryBuilder<_> =
         QueryBuilder::new("INSERT INTO physical_region_column(physical_region_id, name, type, min_value, max_value) ");
         builder.push_values(columns, |mut b, (rid, c)| {
             b.push_bind(rid)
@@ -323,7 +262,7 @@ impl Repository for PostgresRepository {
         region_ids: Vec<PhysicalRegionId>,
         table_version_id: TableVersionId,
     ) -> Result<(), Error> {
-        let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        let mut builder: QueryBuilder<_> = QueryBuilder::new(
             "INSERT INTO table_region(table_version_id, physical_region_id) ",
         );
         builder.push_values(region_ids, |mut b, rid| {
@@ -340,31 +279,31 @@ impl Repository for PostgresRepository {
         &self,
         from_version: TableVersionId,
     ) -> Result<TableVersionId, Error> {
-        let new_version = sqlx::query!(
+        let new_version = sqlx::query(
             "INSERT INTO table_version (table_id)
             SELECT table_id FROM table_version WHERE id = $1
             RETURNING (id)",
-            from_version
         )
+        .bind(from_version)
         .fetch_one(&self.executor)
         .await?
-        .id;
+        .try_get("id")?;
 
-        sqlx::query!(
+        sqlx::query(
             "INSERT INTO table_column (table_version_id, name, type)
             SELECT $2, name, type FROM table_column WHERE table_version_id = $1;",
-            from_version,
-            new_version
         )
+        .bind(from_version)
+        .bind(new_version)
         .execute(&self.executor)
         .await?;
 
-        sqlx::query!(
+        sqlx::query(
             "INSERT INTO table_region (table_version_id, physical_region_id)
             SELECT $2, physical_region_id FROM table_region WHERE table_version_id = $1;",
-            from_version,
-            new_version
         )
+        .bind(from_version)
+        .bind(new_version)
         .execute(&self.executor)
         .await?;
 
@@ -378,72 +317,29 @@ impl Repository for PostgresRepository {
     // In these methods, return the ID back so that we get an error if the
     // table/collection/schema didn't actually exist
     async fn drop_table(&self, table_id: TableId) -> Result<(), Error> {
-        sqlx::query!("DELETE FROM \"table\" WHERE id = $1 RETURNING id", table_id)
+        sqlx::query("DELETE FROM \"table\" WHERE id = $1 RETURNING id")
+            .bind(table_id)
             .fetch_one(&self.executor)
             .await?;
         Ok(())
     }
 
     async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error> {
-        sqlx::query!(
-            "DELETE FROM collection WHERE id = $1 RETURNING id",
-            collection_id
-        )
-        .fetch_one(&self.executor)
-        .await?;
+        sqlx::query("DELETE FROM collection WHERE id = $1 RETURNING id")
+            .bind(collection_id)
+            .fetch_one(&self.executor)
+            .await?;
         Ok(())
     }
 
     async fn drop_database(&self, database_id: DatabaseId) -> Result<(), Error> {
-        sqlx::query!(
-            "DELETE FROM database WHERE id = $1 RETURNING id",
-            database_id
-        )
-        .fetch_one(&self.executor)
-        .await?;
+        sqlx::query("DELETE FROM database WHERE id = $1 RETURNING id")
+            .bind(database_id)
+            .fetch_one(&self.executor)
+            .await?;
         Ok(())
     }
-
-    // Replace / delete a region (in a copy?)
 }
 
-pub mod testutils {
-    use rand::Rng;
-
-    use super::PostgresRepository;
-
-    pub fn get_random_schema() -> String {
-        // Generate a random schema (taken from IOx)
-        let mut rng = rand::thread_rng();
-        (&mut rng)
-            .sample_iter(rand::distributions::Alphanumeric)
-            .filter(|c| c.is_ascii_alphabetic())
-            .take(20)
-            .map(char::from)
-            .collect::<String>()
-    }
-
-    pub async fn make_repository(dsn: &str) -> PostgresRepository {
-        let schema_name = get_random_schema();
-
-        PostgresRepository::try_new(dsn.to_string(), schema_name)
-            .await
-            .expect("Error setting up the database")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{env, sync::Arc};
-
-    use super::super::interface::tests::run_generic_repository_tests;
-    use super::testutils::make_repository;
-
-    #[tokio::test]
-    async fn test_postgres_repository() {
-        let dsn = env::var("DATABASE_URL").unwrap();
-        let repository = Arc::new(make_repository(&dsn).await);
-
-        run_generic_repository_tests(repository).await;
-    }
+};
 }
