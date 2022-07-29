@@ -377,20 +377,22 @@ impl FunctionCatalog for DefaultCatalog {
                     data,
                     volatility,
                 } = item;
+
                 let details = CreateFunctionDetails {
                     entrypoint: entrypoint.clone(),
                     language: CreateFunctionLanguage::from_str(language.as_str())
                         .unwrap(),
-                    input_types: input_types
-                        .iter()
-                        .map(|x| CreateFunctionWASMType::from_str(x).unwrap())
-                        .collect(),
+                    input_types: serde_json::from_str::<Vec<CreateFunctionWASMType>>(
+                        input_types,
+                    )
+                    .expect("Couldn't deserialize input types!"),
                     return_type: CreateFunctionWASMType::from_str(return_type.as_str())
                         .unwrap(),
                     data: data.clone(),
                     volatility: CreateFunctionVolatility::from_str(volatility.as_str())
                         .unwrap(),
                 };
+
                 SeafowlFunction {
                     function_id: *id,
                     name: name.clone(),

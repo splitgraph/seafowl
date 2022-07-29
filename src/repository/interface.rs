@@ -40,7 +40,7 @@ pub struct AllDatabaseFunctionsResult {
     pub id: FunctionId,
     pub entrypoint: String,
     pub language: String,
-    pub input_types: Vec<String>,
+    pub input_types: String,
     pub return_type: String,
     pub data: String,
     pub volatility: String,
