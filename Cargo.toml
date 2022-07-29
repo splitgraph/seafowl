@@ -32,6 +32,8 @@ rand = "0.8"
 serde = "1.0.138"
 serde_json = "1.0.81"
 sha2 = ">=0.10.1"
+strum = ">=0.24"
+strum_macros = ">=0.24"
 sqlparser = "0.18"
 sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "postgres", "offline" ] }
 tempfile = "3"

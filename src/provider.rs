@@ -222,7 +222,7 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
 #[derive(Debug)]
 pub struct SeafowlFunction {
     pub function_id: FunctionId,
-    pub name: Arc<str>,
+    pub name: String,
     pub details: CreateFunctionDetails,
 }
 

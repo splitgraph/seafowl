@@ -428,6 +428,28 @@ impl DefaultSeafowlContext {
             .await)
     }
 
+    async fn register_function(
+        &self,
+        name: &str,
+        details: &CreateFunctionDetails,
+    ) -> Result<()> {
+        let function_code = decode(&details.data)
+            .map_err(|e| Error::Execution(format!("Error decoding the UDF: {:?}", e)))?;
+
+        let _function = create_udf_from_wasm(
+            name,
+            &function_code,
+            &details.entrypoint,
+            details.input_types.iter().map(get_wasm_type).collect(),
+            get_wasm_type(&details.return_type),
+            get_volatility(&details.volatility),
+        )?;
+        let mut mut_session_ctx = self.inner.clone();
+        mut_session_ctx.register_udf(_function);
+
+        Ok(())
+    }
+
     async fn execute_stream(
         &self,
         physical_plan: Arc<dyn ExecutionPlan>,
@@ -465,11 +487,16 @@ impl SeafowlContext for DefaultSeafowlContext {
             Arc::new(self.table_catalog.load_database(self.database_id).await),
         );
 
-        // // Register all functions in the database
-        // let mut mut_session_ctx = self.inner.clone();
-        // for f in self.function_catalog {
-        //     mut_session_ctx.register_udf(f);
-        // }
+        // Register all functions in the database
+        for func in self
+            .function_catalog
+            .get_all_functions_in_database(self.database_id)
+            .await
+        {
+            self.register_function(&func.name, &func.details)
+                .await
+                .expect("Failed to reload functions");
+        }
     }
 
     async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
@@ -877,23 +904,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                             details,
                             output_schema: _,
                         }) => {
-                            let function_code = decode(&details.data).map_err(|e| {
-                                Error::Execution(format!(
-                                    "Error decoding the UDF: {:?}",
-                                    e
-                                ))
-                            })?;
-
-                            let _function = create_udf_from_wasm(
-                                name,
-                                &function_code,
-                                &details.entrypoint,
-                                details.input_types.iter().map(get_wasm_type).collect(),
-                                get_wasm_type(&details.return_type),
-                                get_volatility(&details.volatility),
-                            )?;
-                            let mut mut_session_ctx = self.inner.clone();
-                            mut_session_ctx.register_udf(_function);
+                            self.register_function(name, details).await?;
 
                             // Persist the function in the metadata storage
                             self.function_catalog

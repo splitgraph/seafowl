@@ -4,10 +4,11 @@ use async_trait::async_trait;
 
 use sqlx::Error;
 
-use crate::data_types::FunctionId;
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
-    data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
+    data_types::{
+        CollectionId, DatabaseId, FunctionId, PhysicalRegionId, TableId, TableVersionId,
+    },
     provider::SeafowlRegion,
     schema::Schema,
 };
@@ -31,6 +32,18 @@ pub struct AllTableRegionsResult {
     pub row_count: i32,
     pub min_value: Option<Vec<u8>>,
     pub max_value: Option<Vec<u8>>,
+}
+
+#[derive(sqlx::FromRow, Debug, PartialEq)]
+pub struct AllDatabaseFunctionsResult {
+    pub name: String,
+    pub id: FunctionId,
+    pub entrypoint: String,
+    pub language: String,
+    pub input_types: Vec<String>,
+    pub return_type: String,
+    pub data: String,
+    pub volatility: String,
 }
 
 #[async_trait]
@@ -100,6 +113,11 @@ pub trait Repository: Send + Sync + Debug {
         function_name: &str,
         details: &CreateFunctionDetails,
     ) -> Result<FunctionId, Error>;
+
+    async fn get_all_functions_in_database(
+        &self,
+        database_id: DatabaseId,
+    ) -> Result<Vec<AllDatabaseFunctionsResult>, Error>;
 
     async fn drop_table(&self, table_id: TableId) -> Result<(), Error>;
 

@@ -9,6 +9,7 @@ use sqlx::{
 };
 
 use crate::data_types::FunctionId;
+use crate::repository::interface::AllDatabaseFunctionsResult;
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
@@ -404,6 +405,33 @@ impl Repository for PostgresRepository {
             .id;
 
         Ok(new_function_id)
+    }
+
+    async fn get_all_functions_in_database(
+        &self,
+        database_id: DatabaseId,
+    ) -> Result<Vec<AllDatabaseFunctionsResult>, Error> {
+        let functions = sqlx::query_as!(
+            AllDatabaseFunctionsResult,
+            r#"
+        SELECT
+            name,
+            id,
+            entrypoint,
+            language,
+            input_types,
+            return_type,
+            data,
+            volatility
+        FROM function
+        WHERE database_id = $1;
+        "#,
+            database_id
+        )
+        .fetch_all(&self.executor)
+        .await?;
+
+        Ok(functions)
     }
 
     // Drop table/collection/database

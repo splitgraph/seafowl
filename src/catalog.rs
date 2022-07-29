@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
@@ -6,14 +7,19 @@ use itertools::Itertools;
 use mockall::automock;
 
 use crate::data_types::FunctionId;
-use crate::wasm_udf::data_types::CreateFunctionDetails;
+use crate::provider::SeafowlFunction;
+use crate::wasm_udf::data_types::{
+    CreateFunctionDetails, CreateFunctionLanguage, CreateFunctionVolatility,
+    CreateFunctionWASMType,
+};
 use crate::{
     data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
     provider::{
         RegionColumn, SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable,
     },
     repository::interface::{
-        AllDatabaseColumnsResult, AllTableRegionsResult, Repository,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTableRegionsResult,
+        Repository,
     },
     schema::Schema,
 };
@@ -89,6 +95,11 @@ pub trait FunctionCatalog: Sync + Send + Debug {
         function_name: &str,
         details: &CreateFunctionDetails,
     ) -> FunctionId;
+
+    async fn get_all_functions_in_database(
+        &self,
+        database_id: DatabaseId,
+    ) -> Vec<SeafowlFunction>;
 }
 
 #[derive(Clone, Debug)]
@@ -341,5 +352,53 @@ impl FunctionCatalog for DefaultCatalog {
             .create_function(database_id, function_name, details)
             .await
             .expect("TODO create function error")
+    }
+
+    async fn get_all_functions_in_database(
+        &self,
+        database_id: DatabaseId,
+    ) -> Vec<SeafowlFunction> {
+        let all_functions = self
+            .repository
+            .get_all_functions_in_database(database_id)
+            .await
+            .expect("TODO get all functions in database error");
+
+        let functions = all_functions
+            .iter()
+            .map(|item| {
+                let AllDatabaseFunctionsResult {
+                    id,
+                    name,
+                    entrypoint,
+                    language,
+                    input_types,
+                    return_type,
+                    data,
+                    volatility,
+                } = item;
+                let details = CreateFunctionDetails {
+                    entrypoint: entrypoint.clone(),
+                    language: CreateFunctionLanguage::from_str(language.as_str())
+                        .unwrap(),
+                    input_types: input_types
+                        .iter()
+                        .map(|x| CreateFunctionWASMType::from_str(x).unwrap())
+                        .collect(),
+                    return_type: CreateFunctionWASMType::from_str(return_type.as_str())
+                        .unwrap(),
+                    data: data.clone(),
+                    volatility: CreateFunctionVolatility::from_str(volatility.as_str())
+                        .unwrap(),
+                };
+                SeafowlFunction {
+                    function_id: *id,
+                    name: name.clone(),
+                    details,
+                }
+            })
+            .collect::<Vec<SeafowlFunction>>();
+
+        functions
     }
 }
