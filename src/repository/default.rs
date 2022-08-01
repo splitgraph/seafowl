@@ -310,6 +310,59 @@ impl Repository for $repo {
         Ok(new_version)
     }
 
+    async fn create_function(
+        &self,
+        database_id: DatabaseId,
+        function_name: &str,
+        details: &CreateFunctionDetails,
+    ) -> Result<FunctionId, Error> {
+        let input_types = serde_json::to_string(&details.input_types).expect("Couldn't serialize input types!");
+
+        let new_function_id: i64 = sqlx::query(
+            r#"
+        INSERT INTO "function" (database_id, name, entrypoint, language, input_types, return_type, data, volatility)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING (id);
+        "#)
+            .bind(database_id)
+            .bind(function_name)
+            .bind(details.entrypoint.clone())
+            .bind(details.language.to_string())
+            .bind(input_types)
+            .bind(details.return_type.to_string())
+            .bind(details.data.clone())
+            .bind(details.volatility.to_string())
+            .fetch_one(&self.executor)
+            .await?
+            .try_get("id")?;
+
+        Ok(new_function_id)
+    }
+
+    async fn get_all_functions_in_database(
+        &self,
+        database_id: DatabaseId,
+    ) -> Result<Vec<AllDatabaseFunctionsResult>, Error> {
+        let functions = sqlx::query_as(
+            r#"
+        SELECT
+            name,
+            id,
+            entrypoint,
+            language,
+            input_types,
+            return_type,
+            data,
+            volatility
+        FROM function
+        WHERE database_id = $1;
+        "#)
+        .bind(database_id)
+        .fetch_all(&self.executor)
+        .await?;
+
+        Ok(functions)
+    }
+
     // Drop table/collection/database
     // Currently we actually delete these, though we could mark them as deleted
     // to allow for undeletion

@@ -1,6 +1,7 @@
 use datafusion::logical_expr::Volatility;
 
 use serde::{Deserialize, Serialize};
+use strum_macros::{Display, EnumString};
 use wasmtime::ValType;
 
 // WASM to DataFusion conversions
@@ -21,7 +22,7 @@ pub fn get_volatility(t: &CreateFunctionVolatility) -> Volatility {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, EnumString, Display)]
 #[serde(rename_all = "camelCase")]
 pub enum CreateFunctionWASMType {
     I32,
@@ -30,7 +31,7 @@ pub enum CreateFunctionWASMType {
     F64,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, EnumString, Display)]
 #[serde(rename_all = "camelCase")]
 pub enum CreateFunctionVolatility {
     Immutable,
@@ -43,7 +44,7 @@ impl Default for CreateFunctionVolatility {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, EnumString, Display)]
 #[serde(rename_all = "camelCase")]
 pub enum CreateFunctionLanguage {
     Wasm,

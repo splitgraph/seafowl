@@ -4,8 +4,11 @@ use async_trait::async_trait;
 
 use sqlx::Error;
 
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
-    data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
+    data_types::{
+        CollectionId, DatabaseId, FunctionId, PhysicalRegionId, TableId, TableVersionId,
+    },
     provider::SeafowlRegion,
     schema::Schema,
 };
@@ -29,6 +32,18 @@ pub struct AllTableRegionsResult {
     pub row_count: i32,
     pub min_value: Option<Vec<u8>>,
     pub max_value: Option<Vec<u8>>,
+}
+
+#[derive(sqlx::FromRow, Debug, PartialEq)]
+pub struct AllDatabaseFunctionsResult {
+    pub name: String,
+    pub id: FunctionId,
+    pub entrypoint: String,
+    pub language: String,
+    pub input_types: String,
+    pub return_type: String,
+    pub data: String,
+    pub volatility: String,
 }
 
 #[async_trait]
@@ -92,6 +107,18 @@ pub trait Repository: Send + Sync + Debug {
         from_version: TableVersionId,
     ) -> Result<TableVersionId, Error>;
 
+    async fn create_function(
+        &self,
+        database_id: DatabaseId,
+        function_name: &str,
+        details: &CreateFunctionDetails,
+    ) -> Result<FunctionId, Error>;
+
+    async fn get_all_functions_in_database(
+        &self,
+        database_id: DatabaseId,
+    ) -> Result<Vec<AllDatabaseFunctionsResult>, Error>;
+
     async fn drop_table(&self, table_id: TableId) -> Result<(), Error>;
 
     async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error>;
@@ -108,6 +135,9 @@ pub mod tests {
     };
 
     use crate::provider::RegionColumn;
+    use crate::wasm_udf::data_types::{
+        CreateFunctionLanguage, CreateFunctionVolatility, CreateFunctionWASMType,
+    };
 
     use super::*;
 
@@ -174,9 +204,10 @@ pub mod tests {
 
     pub async fn run_generic_repository_tests(repository: Arc<dyn Repository>) {
         test_get_collections_empty(repository.clone()).await;
-        let table_version_id =
+        let (database_id, table_version_id) =
             test_create_database_collection_table(repository.clone()).await;
-        test_create_append_region(repository, table_version_id).await;
+        test_create_append_region(repository.clone(), table_version_id).await;
+        test_create_functions(repository, database_id).await;
     }
 
     async fn test_get_collections_empty(repository: Arc<dyn Repository>) {
@@ -191,7 +222,7 @@ pub mod tests {
 
     async fn test_create_database_collection_table(
         repository: Arc<dyn Repository>,
-    ) -> TableVersionId {
+    ) -> (DatabaseId, TableVersionId) {
         let (database_id, _, _, table_version_id) =
             make_database_with_single_table(repository.clone()).await;
 
@@ -241,7 +272,7 @@ pub mod tests {
 
         assert_eq!(all_columns, expected(new_version_id));
 
-        table_version_id
+        (database_id, table_version_id)
     }
 
     async fn test_create_append_region(
@@ -319,5 +350,48 @@ pub mod tests {
             .unwrap();
 
         assert_eq!(all_regions, expected_regions);
+    }
+
+    async fn test_create_functions(
+        repository: Arc<dyn Repository>,
+        database_id: DatabaseId,
+    ) {
+        // Persist some functions
+        let function_id = repository
+            .create_function(
+                database_id,
+                "testfun",
+                &CreateFunctionDetails {
+                    entrypoint: "entrypoint".to_string(),
+                    language: CreateFunctionLanguage::Wasm,
+                    input_types: vec![
+                        CreateFunctionWASMType::F32,
+                        CreateFunctionWASMType::I64,
+                    ],
+                    return_type: CreateFunctionWASMType::I32,
+                    data: "data".to_string(),
+                    volatility: CreateFunctionVolatility::Volatile,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Load functions
+        let all_functions = repository
+            .get_all_functions_in_database(database_id)
+            .await
+            .unwrap();
+
+        let expected_functions = vec![AllDatabaseFunctionsResult {
+            name: "testfun".to_string(),
+            id: function_id,
+            entrypoint: "entrypoint".to_string(),
+            language: "Wasm".to_string(),
+            input_types: r#"["f32","i64"]"#.to_string(),
+            return_type: "I32".to_string(),
+            data: "data".to_string(),
+            volatility: "Volatile".to_string(),
+        }];
+        assert_eq!(all_functions, expected_functions);
     }
 }

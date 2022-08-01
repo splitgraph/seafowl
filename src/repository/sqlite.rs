@@ -9,17 +9,20 @@ use sqlx::{
 };
 
 use crate::{
-    data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
+    data_types::{
+        CollectionId, DatabaseId, FunctionId, PhysicalRegionId, TableId, TableVersionId,
+    },
     provider::{RegionColumn, SeafowlRegion},
     repository::interface::AllTableRegionsResult,
     schema::Schema,
+    wasm_udf::data_types::CreateFunctionDetails,
 };
 
 use crate::implement_repository;
 
 use super::{
     default::RepositoryQueries,
-    interface::{AllDatabaseColumnsResult, Repository},
+    interface::{AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Repository},
 };
 
 #[derive(Debug)]

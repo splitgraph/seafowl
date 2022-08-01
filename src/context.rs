@@ -62,7 +62,7 @@ use crate::nodes::{CreateFunction, SeafowlExtensionNode};
 use crate::provider::{RegionColumn, SeafowlRegion, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
-    catalog::TableCatalog,
+    catalog::{FunctionCatalog, TableCatalog},
     data_types::DatabaseId,
     nodes::{Assignment, CreateTable, Delete, Insert, Update},
     schema::Schema as SeafowlSchema,
@@ -240,6 +240,7 @@ pub struct DefaultSeafowlContext {
     pub inner: SessionContext,
     pub table_catalog: Arc<dyn TableCatalog>,
     pub region_catalog: Arc<dyn RegionCatalog>,
+    pub function_catalog: Arc<dyn FunctionCatalog>,
     pub database: String,
     pub database_id: DatabaseId,
 }
@@ -427,6 +428,28 @@ impl DefaultSeafowlContext {
             .await)
     }
 
+    fn register_function(
+        &self,
+        name: &str,
+        details: &CreateFunctionDetails,
+    ) -> Result<()> {
+        let function_code = decode(&details.data)
+            .map_err(|e| Error::Execution(format!("Error decoding the UDF: {:?}", e)))?;
+
+        let function = create_udf_from_wasm(
+            name,
+            &function_code,
+            &details.entrypoint,
+            details.input_types.iter().map(get_wasm_type).collect(),
+            get_wasm_type(&details.return_type),
+            get_volatility(&details.volatility),
+        )?;
+        let mut mut_session_ctx = self.inner.clone();
+        mut_session_ctx.register_udf(function);
+
+        Ok(())
+    }
+
     async fn execute_stream(
         &self,
         physical_plan: Arc<dyn ExecutionPlan>,
@@ -463,6 +486,14 @@ impl SeafowlContext for DefaultSeafowlContext {
             &self.database,
             Arc::new(self.table_catalog.load_database(self.database_id).await),
         );
+
+        // Register all functions in the database
+        self.function_catalog
+            .get_all_functions_in_database(self.database_id)
+            .await
+            .iter()
+            .try_for_each(|f| self.register_function(&f.name, &f.details))
+            .expect("Failed to reload functions");
     }
 
     async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
@@ -870,25 +901,13 @@ impl SeafowlContext for DefaultSeafowlContext {
                             details,
                             output_schema: _,
                         }) => {
-                            let function_code = decode(&details.data).map_err(|e| {
-                                Error::Execution(format!(
-                                    "Error decoding the UDF: {:?}",
-                                    e
-                                ))
-                            })?;
+                            self.register_function(name, details)?;
 
-                            let _function = create_udf_from_wasm(
-                                name,
-                                &function_code,
-                                &details.entrypoint,
-                                details.input_types.iter().map(get_wasm_type).collect(),
-                                get_wasm_type(&details.return_type),
-                                get_volatility(&details.volatility),
-                            )?;
-                            // TODO we don't persist the function here in the database, so it'll get
-                            // deleted every time we recreate the context
-                            // also this requires &mut self
-                            // self.inner.register_udf(function);
+                            // Persist the function in the metadata storage
+                            self.function_catalog
+                                .create_function(self.database_id, name, details)
+                                .await;
+
                             Ok(make_dummy_exec())
                         }
                     },
@@ -925,7 +944,9 @@ pub mod test_utils {
     use object_store::memory::InMemory;
 
     use crate::{
-        catalog::{MockRegionCatalog, MockTableCatalog, TableCatalog},
+        catalog::{
+            MockFunctionCatalog, MockRegionCatalog, MockTableCatalog, TableCatalog,
+        },
         provider::{SeafowlCollection, SeafowlDatabase},
     };
 
@@ -1014,6 +1035,11 @@ pub mod test_utils {
                 collections: collections.clone(),
             });
 
+        let mut function_catalog = MockFunctionCatalog::new();
+        function_catalog
+            .expect_create_function()
+            .returning(move |_, _, _| 1);
+
         session
             .register_catalog("testdb", Arc::new(table_catalog.load_database(0).await));
 
@@ -1028,6 +1054,7 @@ pub mod test_utils {
             inner: session,
             table_catalog: Arc::new(table_catalog),
             region_catalog: region_catalog_ptr,
+            function_catalog: Arc::new(function_catalog),
             database: "testdb".to_string(),
             database_id: 0,
         }
@@ -1306,7 +1333,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Currently fails, see https://github.com/splitgraph/seafowl/issues/17"]
     async fn test_register_udf() -> Result<()> {
         let sf_context = mock_context().await;
 
@@ -1336,15 +1362,15 @@ mod tests {
             .await?;
 
         let expected = vec![
-            "+-----+------------------------------+",
+            "+-----+--------+",
             "| v   | sintau |",
-            "+-----+------------------------------+",
-            "| 0.1 | 0.5877828                    |",
-            "| 0.2 | 0.95106226                   |",
-            "| 0.3 | 0.95106226                   |",
-            "| 0.4 | 0.5877828                    |",
-            "| 0.5 | 0.0000062162862              |",
-            "+-----+------------------------------+",
+            "+-----+--------+",
+            "| 0.1 | 59     |",
+            "| 0.2 | 95     |",
+            "| 0.3 | 95     |",
+            "| 0.4 | 59     |",
+            "| 0.5 | 0      |",
+            "+-----+--------+",
         ];
 
         assert_batches_eq!(expected, &results);

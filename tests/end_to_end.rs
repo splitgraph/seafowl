@@ -76,9 +76,9 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
         .plan_query(
             format!(
                 "INSERT INTO {:} (some_int_value, some_time, some_value) VALUES
-                (1111, '2022-01-01T20:01:01', 42),
-                (2222, '2022-01-01T20:02:02', 43),
-                (3333, '2022-01-01T20:03:03', 44)",
+                (1111, '2022-01-01T20:01:01Z', 42),
+                (2222, '2022-01-01T20:02:02Z', 43),
+                (3333, '2022-01-01T20:03:03Z', 44)",
                 table_name
             )
             .as_str(),
@@ -362,6 +362,57 @@ async fn test_create_table_and_drop() {
     let results = list_columns_query(&context).await;
 
     let expected = vec!["++", "++"];
+
+    assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
+async fn test_create_and_reload_function() {
+    let context = make_context_with_pg().await;
+
+    let plan = context
+        .plan_query(
+            r#"CREATE FUNCTION sintau AS '
+            {
+                "entrypoint": "sintau",
+                "language": "wasm",
+                "input_types": ["f32"],
+                "return_type": "f32",
+                "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
+            }';"#,
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // Reload to make sure we picked up the stored function from the metadata store
+    context.reload_schema().await;
+
+    let results = context
+        .collect(
+            context
+                .plan_query(
+                    "
+        SELECT v, ROUND(sintau(CAST(v AS REAL)) * 100) AS sintau
+        FROM (VALUES (0.1), (0.2), (0.3), (0.4), (0.5)) d (v)",
+                )
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let expected = vec![
+        "+-----+--------+",
+        "| v   | sintau |",
+        "+-----+--------+",
+        "| 0.1 | 59     |",
+        "| 0.2 | 95     |",
+        "| 0.3 | 95     |",
+        "| 0.4 | 59     |",
+        "| 0.5 | 0      |",
+        "+-----+--------+",
+    ];
 
     assert_batches_eq!(expected, &results);
 }

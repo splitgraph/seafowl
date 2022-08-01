@@ -26,6 +26,8 @@ use futures::future;
 
 use object_store::path::Path;
 
+use crate::data_types::FunctionId;
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     catalog::RegionCatalog,
     data_types::{TableId, TableVersionId},
@@ -215,6 +217,13 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
     fn statistics(&self) -> Statistics {
         Statistics::default()
     }
+}
+
+#[derive(Debug)]
+pub struct SeafowlFunction {
+    pub function_id: FunctionId,
+    pub name: String,
+    pub details: CreateFunctionDetails,
 }
 
 #[cfg(test)]

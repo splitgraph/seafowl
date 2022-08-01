@@ -6,6 +6,7 @@ pub type Timestamp = i64;
 pub type TableColumnId = i64;
 pub type PhysicalRegionId = i64;
 pub type PhysicalRegionColumnId = i64;
+pub type FunctionId = i64;
 
 // TODO: most of these structs currently aren't used (we use versions
 // without IDs since they can be passed to db-writing routines before

@@ -60,3 +60,16 @@ CREATE TABLE table_region (
     physical_region_id BIGINT NOT NULL REFERENCES physical_region(id),
     PRIMARY KEY(table_version_id, physical_region_id)
 );
+
+CREATE TABLE "function" (
+    id INTEGER NOT NULL PRIMARY KEY,
+    database_id BIGINT NOT NULL REFERENCES database(id) ON DELETE CASCADE,
+    name VARCHAR NOT NULL,
+    entrypoint VARCHAR NOT NULL,
+    language VARCHAR NOT NULL,
+    input_types VARCHAR NOT NULL,
+    return_type VARCHAR NOT NULL,
+    data VARCHAR NOT NULL,
+    volatility VARCHAR NOT NULL,
+    CONSTRAINT function_name_unique UNIQUE(name, database_id)
+);
