@@ -428,7 +428,7 @@ impl DefaultSeafowlContext {
             .await)
     }
 
-    async fn register_function(
+    fn register_function(
         &self,
         name: &str,
         details: &CreateFunctionDetails,
@@ -436,7 +436,7 @@ impl DefaultSeafowlContext {
         let function_code = decode(&details.data)
             .map_err(|e| Error::Execution(format!("Error decoding the UDF: {:?}", e)))?;
 
-        let _function = create_udf_from_wasm(
+        let function = create_udf_from_wasm(
             name,
             &function_code,
             &details.entrypoint,
@@ -445,7 +445,7 @@ impl DefaultSeafowlContext {
             get_volatility(&details.volatility),
         )?;
         let mut mut_session_ctx = self.inner.clone();
-        mut_session_ctx.register_udf(_function);
+        mut_session_ctx.register_udf(function);
 
         Ok(())
     }
@@ -488,15 +488,12 @@ impl SeafowlContext for DefaultSeafowlContext {
         );
 
         // Register all functions in the database
-        for func in self
-            .function_catalog
+        self.function_catalog
             .get_all_functions_in_database(self.database_id)
             .await
-        {
-            self.register_function(&func.name, &func.details)
-                .await
-                .expect("Failed to reload functions");
-        }
+            .iter()
+            .try_for_each(|f| self.register_function(&f.name, &f.details))
+            .expect("Failed to reload functions");
     }
 
     async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
@@ -904,7 +901,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                             details,
                             output_schema: _,
                         }) => {
-                            self.register_function(name, details).await?;
+                            self.register_function(name, details)?;
 
                             // Persist the function in the metadata storage
                             self.function_catalog
