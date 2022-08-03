@@ -10,8 +10,11 @@ use seafowl::{
         schema::{load_config, SeafowlConfig},
     },
     context::SeafowlContext,
-    frontend::{http::run_server, postgres::run_pg_server},
+    frontend::http::run_server,
 };
+
+#[cfg(feature = "frontend-postgres")]
+use seafowl::frontend::postgres::run_pg_server;
 
 extern crate pretty_env_logger;
 #[macro_use]
@@ -29,6 +32,7 @@ fn prepare_frontends(
 ) -> Vec<Pin<Box<dyn Future<Output = ()>>>> {
     let mut result: Vec<Pin<Box<dyn Future<Output = ()>>>> = Vec::new();
 
+    #[cfg(feature = "frontend-postgres")]
     if let Some(pg) = &config.frontend.postgres {
         let server = run_pg_server(context.clone(), pg.to_owned());
         info!(
