@@ -5,8 +5,9 @@ edition = "2021"
 
 [features]
 catalog-postgres = ["sqlx/postgres"]
-default = ["catalog-postgres", "frontend-postgres"]
+default = ["catalog-postgres", "frontend-postgres", "object-store-s3"]
 frontend-postgres = ["convergence", "convergence-arrow"]
+object-store-s3 = ["object_store/aws"]
 
 [dependencies]
 arrow = { version = "18.0.0", features = ["prettyprint"] }

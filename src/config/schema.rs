@@ -17,6 +17,7 @@ pub enum ObjectStore {
     Local(Local),
     #[serde(rename = "memory")]
     InMemory(InMemory),
+    #[cfg(feature = "object-store-s3")]
     S3(S3),
 }
 
@@ -117,11 +118,11 @@ pub fn load_config_from_string(config_str: &str) -> Result<SeafowlConfig, Config
 #[cfg(test)]
 mod tests {
     use super::{
-        load_config_from_string, Catalog, Frontend, HttpFrontend, ObjectStore, Postgres,
-        SeafowlConfig, S3,
+        load_config_from_string, Catalog, Frontend, HttpFrontend, Local, ObjectStore,
+        Postgres, SeafowlConfig, S3,
     };
 
-    const TEST_CONFIG: &str = r#"
+    const TEST_CONFIG_S3: &str = r#"
 [object_store]
 type = "s3"
 access_key_id = "AKI..."
@@ -138,13 +139,28 @@ bind_host = "0.0.0.0"
 bind_port = 80
 "#;
 
+    const TEST_CONFIG_BASIC: &str = r#"
+[object_store]
+type = "local"
+data_dir = "./seafowl-data"
+
+[catalog]
+type = "postgres"
+dsn = "postgresql://user:pass@localhost:5432/somedb"
+
+[frontend.http]
+bind_host = "0.0.0.0"
+bind_port = 80
+"#;
+
     const TEST_CONFIG_ERROR: &str = r#"
     [object_store]
     type = "local""#;
 
+    #[cfg(feature = "object-store-s3")]
     #[test]
     fn test_parse_config_with_s3() {
-        let config = load_config_from_string(TEST_CONFIG).unwrap();
+        let config = load_config_from_string(TEST_CONFIG_S3).unwrap();
 
         assert_eq!(
             config,
@@ -154,6 +170,32 @@ bind_port = 80
                     secret_access_key: "ABC...".to_string(),
                     endpoint: "https://s3.amazonaws.com:9000".to_string(),
                     bucket: "seafowl".to_string()
+                }),
+                catalog: Catalog::Postgres(Postgres {
+                    dsn: "postgresql://user:pass@localhost:5432/somedb".to_string(),
+                    schema: "public".to_string()
+                }),
+                frontend: Frontend {
+                    #[cfg(feature = "frontend-postgres")]
+                    postgres: None,
+                    http: Some(HttpFrontend {
+                        bind_host: "0.0.0.0".to_string(),
+                        bind_port: 80
+                    })
+                }
+            }
+        )
+    }
+
+    #[test]
+    fn test_parse_config_basic() {
+        let config = load_config_from_string(TEST_CONFIG_BASIC).unwrap();
+
+        assert_eq!(
+            config,
+            SeafowlConfig {
+                object_store: ObjectStore::Local(Local {
+                    data_dir: "./seafowl-data".to_string(),
                 }),
                 catalog: Catalog::Postgres(Postgres {
                     dsn: "postgresql://user:pass@localhost:5432/somedb".to_string(),
