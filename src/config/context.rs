@@ -53,6 +53,7 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
                 .expect("Error creating object store"),
         ),
         schema::ObjectStore::InMemory(_) => Arc::new(InMemory::new()),
+        #[cfg(feature = "object-store-s3")]
         schema::ObjectStore::S3(_) => todo!(),
     }
 }
