@@ -3,6 +3,10 @@ name = "seafowl"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+catalog-postgres = ["sqlx/postgres"]
+default = ["catalog-postgres"]
+
 [dependencies]
 arrow = { version = "18.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
@@ -33,7 +37,7 @@ serde = "1.0.138"
 serde_json = "1.0.81"
 sha2 = ">=0.10.1"
 sqlparser = "0.18"
-sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "postgres", "sqlite", "offline" ] }
+sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "sqlite" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
 tempfile = "3"
