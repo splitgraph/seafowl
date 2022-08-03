@@ -120,6 +120,7 @@ mod tests {
                 dsn: "sqlite::memory:".to_string(),
             }),
             frontend: schema::Frontend {
+                #[cfg(feature = "frontend-postgres")]
                 postgres: Some(schema::PostgresFrontend {
                     bind_host: "127.0.0.1".to_string(),
                     bind_port: 6432,

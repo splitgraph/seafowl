@@ -39,6 +39,7 @@ pub struct S3 {
 #[derive(Deserialize, Debug, PartialEq, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Catalog {
+    #[cfg(feature = "catalog-postgres")]
     Postgres(Postgres),
     Sqlite(Sqlite),
 }
@@ -61,6 +62,7 @@ fn default_schema() -> String {
 
 #[derive(Deserialize, Debug, PartialEq, Default, Clone)]
 pub struct Frontend {
+    #[cfg(feature = "frontend-postgres")]
     pub postgres: Option<PostgresFrontend>,
     pub http: Option<HttpFrontend>,
 }
@@ -115,8 +117,8 @@ pub fn load_config_from_string(config_str: &str) -> Result<SeafowlConfig, Config
 #[cfg(test)]
 mod tests {
     use super::{
-        load_config_from_string, Catalog, Frontend, HttpFrontend, ObjectStore,
-        PostgresFrontend, SeafowlConfig, Sqlite, S3,
+        load_config_from_string, Catalog, Frontend, HttpFrontend, ObjectStore, Postgres,
+        SeafowlConfig, S3,
     };
 
     const TEST_CONFIG: &str = r#"
@@ -128,12 +130,8 @@ endpoint = "https://s3.amazonaws.com:9000"
 bucket = "seafowl"
 
 [catalog]
-type = "sqlite"
-dsn = "sqlite://path.sqlite"
-
-[frontend.postgres]
-bind_host = "0.0.0.0"
-bind_port = 7432
+type = "postgres"
+dsn = "postgresql://user:pass@localhost:5432/somedb"
 
 [frontend.http]
 bind_host = "0.0.0.0"
@@ -157,14 +155,13 @@ bind_port = 80
                     endpoint: "https://s3.amazonaws.com:9000".to_string(),
                     bucket: "seafowl".to_string()
                 }),
-                catalog: Catalog::Sqlite(Sqlite {
-                    dsn: "sqlite://path.sqlite".to_string(),
+                catalog: Catalog::Postgres(Postgres {
+                    dsn: "postgresql://user:pass@localhost:5432/somedb".to_string(),
+                    schema: "public".to_string()
                 }),
                 frontend: Frontend {
-                    postgres: Some(PostgresFrontend {
-                        bind_host: "0.0.0.0".to_string(),
-                        bind_port: 7432
-                    }),
+                    #[cfg(feature = "frontend-postgres")]
+                    postgres: None,
                     http: Some(HttpFrontend {
                         bind_host: "0.0.0.0".to_string(),
                         bind_port: 80
