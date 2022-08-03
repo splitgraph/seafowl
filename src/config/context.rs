@@ -3,9 +3,7 @@ use std::sync::Arc;
 use crate::{
     catalog::{DefaultCatalog, FunctionCatalog, RegionCatalog, TableCatalog},
     context::{DefaultSeafowlContext, SeafowlContext},
-    repository::{
-        interface::Repository, postgres::PostgresRepository, sqlite::SqliteRepository,
-    },
+    repository::{interface::Repository, sqlite::SqliteRepository},
 };
 use datafusion::{
     catalog::{
@@ -15,6 +13,9 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
+
+#[cfg(feature = "catalog-postgres")]
+use crate::repository::postgres::PostgresRepository;
 
 use super::schema;
 
@@ -27,6 +28,7 @@ async fn build_catalog(
 ) {
     // Initialize the repository
     let repository: Arc<dyn Repository> = match &config.catalog {
+        #[cfg(feature = "catalog-postgres")]
         schema::Catalog::Postgres(schema::Postgres { dsn, schema }) => Arc::new(
             PostgresRepository::try_new(dsn.to_string(), schema.to_string())
                 .await

@@ -115,8 +115,8 @@ pub fn load_config_from_string(config_str: &str) -> Result<SeafowlConfig, Config
 #[cfg(test)]
 mod tests {
     use super::{
-        load_config_from_string, Catalog, Frontend, HttpFrontend, ObjectStore, Postgres,
-        PostgresFrontend, SeafowlConfig, S3,
+        load_config_from_string, Catalog, Frontend, HttpFrontend, ObjectStore,
+        PostgresFrontend, SeafowlConfig, Sqlite, S3,
     };
 
     const TEST_CONFIG: &str = r#"
@@ -128,8 +128,8 @@ endpoint = "https://s3.amazonaws.com:9000"
 bucket = "seafowl"
 
 [catalog]
-type = "postgres"
-dsn = "postgresql://user:pass@localhost:5432/somedb"
+type = "sqlite"
+dsn = "sqlite://path.sqlite"
 
 [frontend.postgres]
 bind_host = "0.0.0.0"
@@ -157,9 +157,8 @@ bind_port = 80
                     endpoint: "https://s3.amazonaws.com:9000".to_string(),
                     bucket: "seafowl".to_string()
                 }),
-                catalog: Catalog::Postgres(Postgres {
-                    dsn: "postgresql://user:pass@localhost:5432/somedb".to_string(),
-                    schema: "public".to_string()
+                catalog: Catalog::Sqlite(Sqlite {
+                    dsn: "sqlite://path.sqlite".to_string(),
                 }),
                 frontend: Frontend {
                     postgres: Some(PostgresFrontend {
