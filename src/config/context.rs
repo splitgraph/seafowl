@@ -17,7 +17,10 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
 
-use super::schema;
+#[cfg(feature = "object-store-s3")]
+use object_store::aws::new_s3;
+
+use super::schema::{self, S3};
 
 async fn build_catalog(
     config: &schema::SeafowlConfig,
@@ -54,7 +57,26 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
         ),
         schema::ObjectStore::InMemory(_) => Arc::new(InMemory::new()),
         #[cfg(feature = "object-store-s3")]
-        schema::ObjectStore::S3(_) => todo!(),
+        schema::ObjectStore::S3(S3 {
+            access_key_id,
+            secret_access_key,
+            endpoint,
+            bucket,
+        }) => {
+            // Use endpoint instead of region
+            let store = new_s3(
+                Some(access_key_id),
+                Some(secret_access_key),
+                "",
+                bucket,
+                Some(endpoint.clone()),
+                None as Option<&str>,
+                std::num::NonZeroUsize::new(16).unwrap(),
+                true,
+            )
+            .expect("Error creating object store");
+            Arc::new(store)
+        }
     }
 }
 
