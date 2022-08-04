@@ -65,10 +65,13 @@ pub fn cached_read_query(
     warp::path!("q" / String)
         .and(warp::header::<String>(QUERY_HEADER))
         .and(warp::header::optional::<String>(IF_NONE_MATCH))
-        .then(move |query_hash, query: String, if_none_match| {
+        .then(move |query_hash: String, query: String, if_none_match| {
             let context = context.clone();
 
             async move {
+                // Ignore dots at the end
+                let query_hash = query_hash.split('.').next().unwrap();
+
                 context.reload_schema().await;
                 let mut hasher = Sha256::new();
                 hasher.update(&query);
@@ -314,6 +317,22 @@ mod tests {
         let resp = request()
             .method("GET")
             .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
+            .header(QUERY_HEADER, SELECT_QUERY)
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.body(), "{\"col1\":1}\n");
+        assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V1_ETAG);
+    }
+
+    #[tokio::test]
+    async fn test_get_cached_no_etag_extension() {
+        let context = build_mock_context_with_table_version(0);
+        let handler = cached_read_query(context);
+
+        let resp = request()
+            .method("GET")
+            .path(format!("/q/{}.bin", SELECT_QUERY_HASH).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;
