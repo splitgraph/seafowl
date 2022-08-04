@@ -5,12 +5,17 @@ use base64::decode;
 use bytes::Bytes;
 use std::fs::File;
 
+use datafusion::datasource::file_format::avro::{AvroFormat, DEFAULT_AVRO_EXTENSION};
+use datafusion::datasource::file_format::csv::{CsvFormat, DEFAULT_CSV_EXTENSION};
+use datafusion::datasource::file_format::json::{JsonFormat, DEFAULT_JSON_EXTENSION};
+use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
 
 use datafusion::logical_plan::plan::Projection;
-use datafusion::logical_plan::{DFField, DropTable, Expr};
+use datafusion::logical_plan::{CreateExternalTable, DFField, DropTable, Expr, FileType};
 
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
@@ -745,11 +750,8 @@ impl SeafowlContext for DefaultSeafowlContext {
             },
             DFStatement::DescribeTable(s) => query_planner.describe_table_to_plan(s),
             // Stub out the standard DataFusion CREATE EXTERNAL TABLE statements since we don't support them
-            DFStatement::CreateExternalTable(_) => {
-                return Err(Error::NotImplemented(format!(
-                    "Unsupported SQL statement: {:?}",
-                    sql
-                )))
+            DFStatement::CreateExternalTable(c) => {
+                query_planner.external_table_to_plan(c)
             }
         }
     }
@@ -760,9 +762,73 @@ impl SeafowlContext for DefaultSeafowlContext {
         // Similarly to DataFrame::sql, run certain logical plans outside of the actual execution flow
         // and produce a dummy physical plan instead
         match logical_plan {
-            LogicalPlan::CreateExternalTable(_) => {
-                // We're not supposed to reach this since we filtered it out above
-                panic!("No plan for CreateExternalTable");
+            LogicalPlan::CreateExternalTable(CreateExternalTable {
+                ref schema,
+                ref name,
+                ref location,
+                ref file_type,
+                ref has_header,
+                ref delimiter,
+                ref table_partition_cols,
+                ref if_not_exists,
+            }) => {
+                let (file_format, file_extension) = match file_type {
+                    FileType::CSV => (
+                        Arc::new(
+                            CsvFormat::default()
+                                .with_has_header(*has_header)
+                                .with_delimiter(*delimiter as u8),
+                        ) as Arc<dyn FileFormat>,
+                        DEFAULT_CSV_EXTENSION,
+                    ),
+                    FileType::Parquet => (
+                        Arc::new(ParquetFormat::default()) as Arc<dyn FileFormat>,
+                        DEFAULT_PARQUET_EXTENSION,
+                    ),
+                    FileType::Avro => (
+                        Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>,
+                        DEFAULT_AVRO_EXTENSION,
+                    ),
+                    FileType::NdJson => (
+                        Arc::new(JsonFormat::default()) as Arc<dyn FileFormat>,
+                        DEFAULT_JSON_EXTENSION,
+                    ),
+                };
+                let table = self.inner.table(name.as_str());
+                match (if_not_exists, table) {
+                    (true, Ok(_)) => Ok(make_dummy_exec()),
+                    (_, Err(_)) => {
+                        // TODO make schema in CreateExternalTable optional instead of empty
+                        let provided_schema = if schema.fields().is_empty() {
+                            None
+                        } else {
+                            Some(Arc::new(schema.as_ref().to_owned().into()))
+                        };
+                        let options = ListingOptions {
+                            format: file_format,
+                            collect_stat: false,
+                            file_extension: file_extension.to_owned(),
+                            target_partitions: self
+                                .inner
+                                .copied_config()
+                                .target_partitions,
+                            table_partition_cols: table_partition_cols.clone(),
+                        };
+                        self.inner
+                            .register_listing_table(
+                                name,
+                                location,
+                                options,
+                                provided_schema,
+                            )
+                            .await?;
+                        Ok(make_dummy_exec())
+                    }
+                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                        "Table '{:?}' already exists",
+                        name
+                    ))),
+                }
             }
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
                 schema_name,
