@@ -5,8 +5,8 @@ type = "local"
 data_dir = "../seafowl-data"
 
 [catalog]
-type = "postgres"
-dsn = "postgresql://sgr:password@localhost:7432/seafowl"
+type = "sqlite"
+dsn = "../seafowl-data/seafowl.sqlite"
 
 [frontend.postgres]
 bind_port = 6432
