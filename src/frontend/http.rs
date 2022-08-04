@@ -143,7 +143,12 @@ pub fn cached_read_query(
 pub fn filters(
     context: Arc<dyn SeafowlContext>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    cached_read_query(context)
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_headers(vec!["X-Seafowl-Query", "Authorization"])
+        .allow_methods(vec!["GET", "POST"]);
+
+    cached_read_query(context).with(cors)
 }
 
 pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) {
