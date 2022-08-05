@@ -298,10 +298,10 @@ pub async fn plan_to_object_store(
 
         while let Some(batch) = stream.next().await {
             let mut batch = batch?;
-            let leftover_partition_capacity =
+            let mut leftover_partition_capacity =
                 (max_partition_size - current_partition_size) as usize;
 
-            if batch.num_rows() > leftover_partition_capacity {
+            while batch.num_rows() > leftover_partition_capacity {
                 if leftover_partition_capacity > 0 {
                     // Fill up the remaining capacity in the slice
                     writer
@@ -318,6 +318,7 @@ pub async fn plan_to_object_store(
                 // counter and open new temp file + writer.
                 writer.close().map_err(DataFusionError::from).map(|_| ())?;
                 current_partition_size = 0;
+                leftover_partition_capacity = max_partition_size as usize;
 
                 (current_partition_file_handle, writer) =
                     temp_partition_file_writer(disk_manager.clone(), plan.schema())?;
@@ -1113,6 +1114,7 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::Int32Array;
     use std::sync::Arc;
 
     use datafusion::execution::disk_manager::DiskManagerConfig;
@@ -1122,6 +1124,8 @@ mod tests {
     use crate::context::test_utils::mock_context_with_catalog_assertions;
 
     use datafusion::assert_batches_eq;
+    use datafusion::from_slice::FromSlice;
+    use datafusion::physical_plan::memory::MemoryExec;
 
     use super::*;
 
@@ -1224,6 +1228,143 @@ mod tests {
                             r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                             min_value: Arc::new(None),
                             max_value: Arc::new(None)
+                        }
+                    ])
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_multi_partitions_plan_to_object_storage() {
+        let sf_context = mock_context().await;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "some_number",
+            DataType::Int32,
+            true,
+        )]));
+
+        // Let's say Datafusion returns 2 partitions longer than the max_partition_size
+        let df_partitions = vec![
+            vec![
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(Int32Array::from_slice(&[11, 10, 9]))],
+                )
+                .unwrap(),
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(Int32Array::from_slice(&[8, 7, 6]))],
+                )
+                .unwrap(),
+            ],
+            vec![
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(Int32Array::from_slice(&[5, 4, 3]))],
+                )
+                .unwrap(),
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(Int32Array::from_slice(&[2, 1, 0]))],
+                )
+                .unwrap(),
+            ],
+        ];
+
+        // Make a SELECT VALUES(...) query
+        let execution_plan: Arc<dyn ExecutionPlan> = Arc::new(
+            MemoryExec::try_new(df_partitions.as_slice(), schema, None).unwrap(),
+        );
+
+        let object_store = Arc::new(InMemory::new());
+        let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
+        let partitions = plan_to_object_store(
+            &sf_context.inner.state(),
+            &execution_plan,
+            object_store,
+            disk_manager,
+            2,
+        )
+        .await
+        .unwrap();
+
+        // Check we re-chunked it into 6 partitions
+        assert_eq!(partitions.len(), 6);
+
+        assert_eq!(
+            partitions,
+            vec![
+                SeafowlPartition {
+                    object_storage_id: Arc::from("f62a1a9d06e04511fc23fda9f4f8b42f0455f8299cb49e3dad31cc6cfac012a5.parquet".to_string()),
+                    row_count: 2,
+                    columns: Arc::new(vec![
+                        PartitionColumn {
+                            name: Arc::from("some_number"),
+                            r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
+                            min_value: Arc::from(Some([49, 48].to_vec())),
+                            max_value: Arc::from(Some([49, 49].to_vec()))
+                        }
+                    ])
+                },
+                SeafowlPartition {
+                    object_storage_id: Arc::from("d8bc01b5e65cdde262a60679371ac7bbc185eea9aa578c49b01f0cbda1115f6e.parquet".to_string()),
+                    row_count: 2,
+                    columns: Arc::new(vec![
+                        PartitionColumn {
+                            name: Arc::from("some_number"),
+                            r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
+                            min_value: Arc::from(Some([56].to_vec())),
+                            max_value: Arc::from(Some([57].to_vec()))
+                        }
+                    ])
+                },
+                SeafowlPartition {
+                    object_storage_id: Arc::from("bfe148feefaf1f1d072a1478a7053341d32e1e7ed72806c166cb923a06b7e468.parquet".to_string()),
+                    row_count: 2,
+                    columns: Arc::new(vec![
+                        PartitionColumn {
+                            name: Arc::from("some_number"),
+                            r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
+                            min_value: Arc::from(Some([54].to_vec())),
+                            max_value: Arc::from(Some([55].to_vec()))
+                        }
+                    ])
+                },
+                SeafowlPartition {
+                    object_storage_id: Arc::from("2273f990bbbd187d7907da19f06a30f12a3d16bf60274423de6396fbfea128e0.parquet".to_string()),
+                    row_count: 2,
+                    columns: Arc::new(vec![
+                        PartitionColumn {
+                            name: Arc::from("some_number"),
+                            r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
+                            min_value: Arc::from(Some([52].to_vec())),
+                            max_value: Arc::from(Some([53].to_vec()))
+                        }
+                    ])
+                },
+                SeafowlPartition {
+                    object_storage_id: Arc::from("c0b0d147af121ec7447711ef952c9e13992147270ec6d84db5ade08838db6c2d.parquet".to_string()),
+                    row_count: 2,
+                    columns: Arc::new(vec![
+                        PartitionColumn {
+                            name: Arc::from("some_number"),
+                            r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
+                            min_value: Arc::from(Some([50].to_vec())),
+                            max_value: Arc::from(Some([51].to_vec()))
+                        }
+                    ])
+                },
+                SeafowlPartition {
+                    object_storage_id: Arc::from("1cb190feb9fb5140e193f130600a1497d5984fdcec4ed1a5d4765e3946a2f804.parquet".to_string()),
+                    row_count: 2,
+                    columns: Arc::new(vec![
+                        PartitionColumn {
+                            name: Arc::from("some_number"),
+                            r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
+                            min_value: Arc::from(Some([48].to_vec())),
+                            max_value: Arc::from(Some([49].to_vec()))
                         }
                     ])
                 },
