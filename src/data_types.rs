@@ -4,8 +4,8 @@ pub type TableId = i64;
 pub type TableVersionId = i64;
 pub type Timestamp = i64;
 pub type TableColumnId = i64;
-pub type PhysicalRegionId = i64;
-pub type PhysicalRegionColumnId = i64;
+pub type PhysicalPartitionId = i64;
+pub type PhysicalPartitionColumnId = i64;
 pub type FunctionId = i64;
 
 // TODO: most of these structs currently aren't used (we use versions
@@ -46,23 +46,23 @@ pub struct TableColumn {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct PhysicalRegion {
-    pub id: PhysicalRegionId,
+pub struct PhysicalPartition {
+    pub id: PhysicalPartitionId,
     pub row_count: i32,
     pub object_storage_id: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct PhysicalRegionColumn {
-    pub id: PhysicalRegionColumnId,
-    pub physical_region_id: PhysicalRegionId,
+pub struct PhysicalPartitionColumn {
+    pub id: PhysicalPartitionColumnId,
+    pub physical_partition_id: PhysicalPartitionId,
     pub name: String,
     pub r#type: String,
     pub min_value: Option<Vec<u8>>,
     pub max_value: Option<Vec<u8>>,
 }
 
-pub struct TableRegion {
+pub struct TablePartition {
     pub table_version_id: TableVersionId,
-    pub physical_region_id: PhysicalRegionId,
+    pub physical_partition_id: PhysicalPartitionId,
 }

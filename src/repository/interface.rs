@@ -7,9 +7,10 @@ use sqlx::Error;
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     data_types::{
-        CollectionId, DatabaseId, FunctionId, PhysicalRegionId, TableId, TableVersionId,
+        CollectionId, DatabaseId, FunctionId, PhysicalPartitionId, TableId,
+        TableVersionId,
     },
-    provider::SeafowlRegion,
+    provider::SeafowlPartition,
     schema::Schema,
 };
 
@@ -24,8 +25,8 @@ pub struct AllDatabaseColumnsResult {
 }
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
-pub struct AllTableRegionsResult {
-    pub table_region_id: i64,
+pub struct AllTablePartitionsResult {
+    pub table_partition_id: i64,
     pub object_storage_id: String,
     pub column_name: String,
     pub column_type: String,
@@ -60,10 +61,10 @@ pub trait Repository: Send + Sync + Debug {
         database_id: DatabaseId,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
-    async fn get_all_regions_in_table(
+    async fn get_all_partitions_in_table(
         &self,
         table_version_id: TableVersionId,
-    ) -> Result<Vec<AllTableRegionsResult>, Error>;
+    ) -> Result<Vec<AllTablePartitionsResult>, Error>;
 
     async fn get_collection_id_by_name(
         &self,
@@ -91,14 +92,14 @@ pub trait Repository: Send + Sync + Debug {
         schema: Schema,
     ) -> Result<(TableId, TableVersionId), Error>;
 
-    async fn create_regions(
+    async fn create_partitions(
         &self,
-        region: Vec<SeafowlRegion>,
-    ) -> Result<Vec<PhysicalRegionId>, Error>;
+        partition: Vec<SeafowlPartition>,
+    ) -> Result<Vec<PhysicalPartitionId>, Error>;
 
-    async fn append_regions_to_table(
+    async fn append_partitions_to_table(
         &self,
-        region_ids: Vec<PhysicalRegionId>,
+        partition_ids: Vec<PhysicalPartitionId>,
         table_version_id: TableVersionId,
     ) -> Result<(), Error>;
 
@@ -134,7 +135,7 @@ pub mod tests {
         DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     };
 
-    use crate::provider::RegionColumn;
+    use crate::provider::PartitionColumn;
     use crate::wasm_udf::data_types::{
         CreateFunctionLanguage, CreateFunctionVolatility, CreateFunctionWASMType,
     };
@@ -144,18 +145,18 @@ pub mod tests {
     const EXPECTED_FILE_NAME: &str =
         "bdd6eef7340866d1ad99ed34ce0fa43c0d06bbed4dbcb027e9a51de48638b3ed.parquet";
 
-    fn get_test_region() -> SeafowlRegion {
-        SeafowlRegion {
+    fn get_test_partition() -> SeafowlPartition {
+        SeafowlPartition {
             object_storage_id: Arc::from(EXPECTED_FILE_NAME.to_string()),
             row_count: 2,
             columns: Arc::new(vec![
-                RegionColumn {
+                PartitionColumn {
                     name: Arc::from("timestamp".to_string()),
                     r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                     min_value: Arc::new(None),
                     max_value: Arc::new(None),
                 },
-                RegionColumn {
+                PartitionColumn {
                     name: Arc::from("integer".to_string()),
                     r#type: Arc::from(
                         "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
@@ -164,7 +165,7 @@ pub mod tests {
                     min_value: Arc::new(Some([49, 50].to_vec())),
                     max_value: Arc::new(Some([52, 50].to_vec())),
                 },
-                RegionColumn {
+                PartitionColumn {
                     name: Arc::from("varchar".to_string()),
                     r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                     min_value: Arc::new(None),
@@ -206,7 +207,7 @@ pub mod tests {
         test_get_collections_empty(repository.clone()).await;
         let (database_id, table_version_id) =
             test_create_database_collection_table(repository.clone()).await;
-        test_create_append_region(repository.clone(), table_version_id).await;
+        test_create_append_partition(repository.clone(), table_version_id).await;
         test_create_functions(repository, database_id).await;
     }
 
@@ -275,40 +276,40 @@ pub mod tests {
         (database_id, table_version_id)
     }
 
-    async fn test_create_append_region(
+    async fn test_create_append_partition(
         repository: Arc<dyn Repository>,
         table_version_id: TableVersionId,
     ) {
-        let region = get_test_region();
+        let partition = get_test_partition();
 
-        // Create a region
-        let region_ids = repository.create_regions(vec![region]).await.unwrap();
-        assert_eq!(region_ids.len(), 1);
+        // Create a partition
+        let partition_ids = repository.create_partitions(vec![partition]).await.unwrap();
+        assert_eq!(partition_ids.len(), 1);
 
-        let region_id = region_ids.first().unwrap();
+        let partition_id = partition_ids.first().unwrap();
 
-        // Test loading all table regions when the region is not yet attached
-        let all_regions = repository
-            .get_all_regions_in_table(table_version_id)
+        // Test loading all table partitions when the partition is not yet attached
+        let all_partitions = repository
+            .get_all_partitions_in_table(table_version_id)
             .await
             .unwrap();
-        assert_eq!(all_regions, Vec::<AllTableRegionsResult>::new());
+        assert_eq!(all_partitions, Vec::<AllTablePartitionsResult>::new());
 
-        // Attach the region to the table
+        // Attach the partition to the table
         repository
-            .append_regions_to_table(region_ids.clone(), table_version_id)
+            .append_partitions_to_table(partition_ids.clone(), table_version_id)
             .await
             .unwrap();
 
         // Load again
-        let all_regions = repository
-            .get_all_regions_in_table(table_version_id)
+        let all_partitions = repository
+            .get_all_partitions_in_table(table_version_id)
             .await
             .unwrap();
 
-        let expected_regions = vec![
-            AllTableRegionsResult {
-                table_region_id: *region_id,
+        let expected_partitions = vec![
+            AllTablePartitionsResult {
+                table_partition_id: *partition_id,
                 object_storage_id: EXPECTED_FILE_NAME.to_string(),
                 column_name: "timestamp".to_string(),
                 column_type: "{\"name\":\"utf8\"}".to_string(),
@@ -316,8 +317,8 @@ pub mod tests {
                 min_value: None,
                 max_value: None,
             },
-            AllTableRegionsResult {
-                table_region_id: *region_id,
+            AllTablePartitionsResult {
+                table_partition_id: *partition_id,
                 object_storage_id: EXPECTED_FILE_NAME.to_string(),
                 column_name: "integer".to_string(),
                 column_type: "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
@@ -326,8 +327,8 @@ pub mod tests {
                 min_value: Some([49, 50].to_vec()),
                 max_value: Some([52, 50].to_vec()),
             },
-            AllTableRegionsResult {
-                table_region_id: *region_id,
+            AllTablePartitionsResult {
+                table_partition_id: *partition_id,
                 object_storage_id: EXPECTED_FILE_NAME.to_string(),
                 column_name: "varchar".to_string(),
                 column_type: "{\"name\":\"utf8\"}".to_string(),
@@ -336,20 +337,20 @@ pub mod tests {
                 max_value: None,
             },
         ];
-        assert_eq!(all_regions, expected_regions);
+        assert_eq!(all_partitions, expected_partitions);
 
-        // Duplicate the table, check it has the same regions
+        // Duplicate the table, check it has the same partitions
         let new_version_id = repository
             .create_new_table_version(table_version_id)
             .await
             .unwrap();
 
-        let all_regions = repository
-            .get_all_regions_in_table(new_version_id)
+        let all_partitions = repository
+            .get_all_partitions_in_table(new_version_id)
             .await
             .unwrap();
 
-        assert_eq!(all_regions, expected_regions);
+        assert_eq!(all_partitions, expected_partitions);
     }
 
     async fn test_create_functions(

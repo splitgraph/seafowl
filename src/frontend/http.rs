@@ -173,7 +173,7 @@ mod tests {
     };
 
     use crate::{
-        catalog::MockRegionCatalog,
+        catalog::MockPartitionCatalog,
         context::{MockSeafowlContext, SeafowlContext},
         data_types::TableVersionId,
         frontend::http::ETAG,
@@ -197,8 +197,8 @@ mod tests {
             ArrowDataType::Int8,
             true,
         )]));
-        let region_catalog = MockRegionCatalog::new();
-        let region_catalog_ptr = Arc::new(region_catalog);
+        let partition_catalog = MockPartitionCatalog::new();
+        let partition_catalog_ptr = Arc::new(partition_catalog);
 
         let table_source = SeafowlTable {
             name: Arc::from("some_table"),
@@ -207,7 +207,7 @@ mod tests {
             }),
             table_id: 0,
             table_version_id,
-            catalog: region_catalog_ptr,
+            catalog: partition_catalog_ptr,
         };
         let plan = LogicalPlanBuilder::scan(
             "some_table",

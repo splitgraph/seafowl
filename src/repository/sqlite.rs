@@ -10,10 +10,11 @@ use sqlx::{
 
 use crate::{
     data_types::{
-        CollectionId, DatabaseId, FunctionId, PhysicalRegionId, TableId, TableVersionId,
+        CollectionId, DatabaseId, FunctionId, PhysicalPartitionId, TableId,
+        TableVersionId,
     },
-    provider::{RegionColumn, SeafowlRegion},
-    repository::interface::AllTableRegionsResult,
+    provider::{PartitionColumn, SeafowlPartition},
+    repository::interface::AllTablePartitionsResult,
     schema::Schema,
     wasm_udf::data_types::CreateFunctionDetails,
 };

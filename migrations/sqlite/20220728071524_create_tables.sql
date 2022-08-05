@@ -38,27 +38,27 @@ CREATE TABLE table_column (
     CONSTRAINT column_name_unique UNIQUE(name, table_version_id)
 );
 
-CREATE TABLE physical_region (
+CREATE TABLE physical_partition (
     id INTEGER NOT NULL PRIMARY KEY,
     row_count INTEGER(4) NOT NULL,
     object_storage_id VARCHAR NOT NULL
 );
 
-CREATE TABLE physical_region_column (
+CREATE TABLE physical_partition_column (
     id INTEGER NOT NULL PRIMARY KEY,
-    physical_region_id BIGINT NOT NULL REFERENCES physical_region(id) ON DELETE CASCADE,
+    physical_partition_id BIGINT NOT NULL REFERENCES physical_partition(id) ON DELETE CASCADE,
     name VARCHAR NOT NULL,
     type VARCHAR NOT NULL,
     min_value BLOB,
     max_value BLOB
 );
 
-CREATE TABLE table_region (
+CREATE TABLE table_partition (
     table_version_id BIGINT NOT NULL REFERENCES table_version(id) ON DELETE CASCADE,
-    -- Don't CASCADE deletions of region <> table references as a safeguard against
-    -- deleting regions that are still referenced by something
-    physical_region_id BIGINT NOT NULL REFERENCES physical_region(id),
-    PRIMARY KEY(table_version_id, physical_region_id)
+    -- Don't CASCADE deletions of partition <> table references as a safeguard against
+    -- deleting partitions that are still referenced by something
+    physical_partition_id BIGINT NOT NULL REFERENCES physical_partition(id),
+    PRIMARY KEY(table_version_id, physical_partition_id)
 );
 
 CREATE TABLE "function" (
