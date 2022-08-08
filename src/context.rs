@@ -1139,6 +1139,10 @@ mod tests {
     const EXPECTED_INSERT_FILE_NAME: &str =
         "1592625fb7bb063580d94fe2eaf514d55e6b44f1bebd6c7f6b2e79f55477218b.parquet";
 
+    fn to_min_max_value<T: ToString>(item: T) -> Arc<Option<Vec<u8>>> {
+        Arc::from(Some(item.to_string().as_bytes().to_vec()))
+    }
+
     #[tokio::test]
     async fn test_plan_to_object_storage() {
         let sf_context = mock_context().await;
@@ -1193,8 +1197,8 @@ mod tests {
                                 "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
                                     .to_string()
                             ),
-                            min_value: Arc::new(Some([49, 50].to_vec())),
-                            max_value: Arc::new(Some([52, 50].to_vec()))
+                            min_value: to_min_max_value(12),
+                            max_value: to_min_max_value(42),
                         },
                         PartitionColumn {
                             name: Arc::from("varchar".to_string()),
@@ -1220,8 +1224,8 @@ mod tests {
                                 "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
                                     .to_string()
                             ),
-                            min_value: Arc::new(Some([50, 50].to_vec())),
-                            max_value: Arc::new(Some([51, 50].to_vec()))
+                            min_value: to_min_max_value(22),
+                            max_value: to_min_max_value(32),
                         },
                         PartitionColumn {
                             name: Arc::from("varchar".to_string()),
@@ -1303,8 +1307,8 @@ mod tests {
                         PartitionColumn {
                             name: Arc::from("some_number"),
                             r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
-                            min_value: Arc::from(Some([49, 48].to_vec())),
-                            max_value: Arc::from(Some([49, 49].to_vec()))
+                            min_value: to_min_max_value(10),
+                            max_value: to_min_max_value(11),
                         }
                     ])
                 },
@@ -1315,8 +1319,8 @@ mod tests {
                         PartitionColumn {
                             name: Arc::from("some_number"),
                             r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
-                            min_value: Arc::from(Some([56].to_vec())),
-                            max_value: Arc::from(Some([57].to_vec()))
+                            min_value: to_min_max_value(8),
+                            max_value: to_min_max_value(9),
                         }
                     ])
                 },
@@ -1327,8 +1331,8 @@ mod tests {
                         PartitionColumn {
                             name: Arc::from("some_number"),
                             r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
-                            min_value: Arc::from(Some([54].to_vec())),
-                            max_value: Arc::from(Some([55].to_vec()))
+                            min_value: to_min_max_value(6),
+                            max_value: to_min_max_value(7),
                         }
                     ])
                 },
@@ -1339,8 +1343,8 @@ mod tests {
                         PartitionColumn {
                             name: Arc::from("some_number"),
                             r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
-                            min_value: Arc::from(Some([52].to_vec())),
-                            max_value: Arc::from(Some([53].to_vec()))
+                            min_value: to_min_max_value(4),
+                            max_value: to_min_max_value(5),
                         }
                     ])
                 },
@@ -1351,8 +1355,8 @@ mod tests {
                         PartitionColumn {
                             name: Arc::from("some_number"),
                             r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
-                            min_value: Arc::from(Some([50].to_vec())),
-                            max_value: Arc::from(Some([51].to_vec()))
+                            min_value: to_min_max_value(2),
+                            max_value: to_min_max_value(3),
                         }
                     ])
                 },
@@ -1363,8 +1367,8 @@ mod tests {
                         PartitionColumn {
                             name: Arc::from("some_number"),
                             r#type: Arc::from(r#"{"name":"int","bitWidth":32,"isSigned":true}"#),
-                            min_value: Arc::from(Some([48].to_vec())),
-                            max_value: Arc::from(Some([49].to_vec()))
+                            min_value: to_min_max_value(0),
+                            max_value: to_min_max_value(1),
                         }
                     ])
                 },
