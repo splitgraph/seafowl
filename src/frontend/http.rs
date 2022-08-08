@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use arrow::json::LineDelimitedWriter;
 use datafusion::{
@@ -63,84 +63,117 @@ pub fn cached_read_query(
     context: Arc<dyn SeafowlContext>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("q" / String)
-        .and(warp::header::<String>(QUERY_HEADER))
+        .and(warp::header::optional::<String>(QUERY_HEADER))
         .and(warp::header::optional::<String>(IF_NONE_MATCH))
-        .then(move |query_hash: String, query: String, if_none_match| {
-            let context = context.clone();
+        .and(warp::body::json())
+        .then(
+            move |query_hash: String,
+                  query: Option<String>,
+                  if_none_match: Option<String>,
+                  body: Option<HashMap<String, String>>| {
+                let context = context.clone();
 
-            async move {
-                // Ignore dots at the end
-                let query_hash = query_hash.split('.').next().unwrap();
+                async move {
+                    // Ignore dots at the end
+                    let query_hash = query_hash.split('.').next().unwrap();
 
-                context.reload_schema().await;
-                let mut hasher = Sha256::new();
-                hasher.update(&query);
-                let hash_str = encode(hasher.finalize());
+                    // Extract the query from the body / header
+                    let sql_query = {
+                        match body {
+                            Some(body) => match body.get("query") {
+                                Some(sql_query) => Ok(sql_query.to_owned()),
+                                None => Err(warp::reply::with_status(
+                                    "WRONG_QUERY_BODY",
+                                    StatusCode::BAD_REQUEST,
+                                )
+                                .into_response()),
+                            },
+                            None => match query {
+                                Some(sql_query) => Ok(sql_query),
+                                None => Err(warp::reply::with_status(
+                                    "MISSING_QUERY_HEADER",
+                                    StatusCode::BAD_REQUEST,
+                                )
+                                .into_response()),
+                            },
+                        }
+                    };
 
-                debug!(
-                    "Received query: {}, URL hash {}, actual hash {}",
-                    query, query_hash, hash_str
-                );
+                    let query = match sql_query {
+                        Ok(query) => query,
+                        Err(r) => return r,
+                    };
 
-                // Verify the query hash matches the query
-                if query_hash != hash_str {
-                    return warp::reply::with_status(
-                        "HASH_MISMATCH",
-                        StatusCode::BAD_REQUEST,
-                    )
-                    .into_response();
-                }
+                    context.reload_schema().await;
+                    let mut hasher = Sha256::new();
+                    hasher.update(&query);
+                    let hash_str = encode(hasher.finalize());
 
-                // Plan the query
-                // TODO handle error
-                let plan = context.create_logical_plan(&query).await.unwrap();
-                debug!("Query plan: {:?}", plan);
+                    debug!(
+                        "Received query: {}, URL hash {}, actual hash {}",
+                        query, query_hash, hash_str
+                    );
 
-                // Write queries should come in as POST requests
-                match plan {
-                    LogicalPlan::CreateExternalTable(_)
-                    | LogicalPlan::CreateMemoryTable(_)
-                    | LogicalPlan::CreateView(_)
-                    | LogicalPlan::CreateCatalogSchema(_)
-                    | LogicalPlan::CreateCatalog(_)
-                    | LogicalPlan::DropTable(_)
-                    | LogicalPlan::Analyze(_)
-                    | LogicalPlan::Extension(_) => {
+                    // Verify the query hash matches the query
+                    if query_hash != hash_str {
                         return warp::reply::with_status(
-                            "NOT_READ_ONLY_QUERY",
-                            StatusCode::METHOD_NOT_ALLOWED,
-                        )
-                        .into_response()
-                    }
-                    _ => (),
-                };
-
-                // Pre-execution check: if ETags match, we don't need to re-execute the query
-                let etag = plan_to_etag(&plan);
-                debug!("ETag: {}, if-none-match header: {:?}", etag, if_none_match);
-
-                if let Some(if_none_match) = if_none_match {
-                    if etag == if_none_match {
-                        return warp::reply::with_status(
-                            "NOT_MODIFIED",
-                            StatusCode::NOT_MODIFIED,
+                            "HASH_MISMATCH",
+                            StatusCode::BAD_REQUEST,
                         )
                         .into_response();
                     }
+
+                    // Plan the query
+                    // TODO handle error
+                    let plan = context.create_logical_plan(&query).await.unwrap();
+                    debug!("Query plan: {:?}", plan);
+
+                    // Write queries should come in as POST requests
+                    match plan {
+                        LogicalPlan::CreateExternalTable(_)
+                        | LogicalPlan::CreateMemoryTable(_)
+                        | LogicalPlan::CreateView(_)
+                        | LogicalPlan::CreateCatalogSchema(_)
+                        | LogicalPlan::CreateCatalog(_)
+                        | LogicalPlan::DropTable(_)
+                        | LogicalPlan::Analyze(_)
+                        | LogicalPlan::Extension(_) => {
+                            return warp::reply::with_status(
+                                "NOT_READ_ONLY_QUERY",
+                                StatusCode::METHOD_NOT_ALLOWED,
+                            )
+                            .into_response()
+                        }
+                        _ => (),
+                    };
+
+                    // Pre-execution check: if ETags match, we don't need to re-execute the query
+                    let etag = plan_to_etag(&plan);
+                    debug!("ETag: {}, if-none-match header: {:?}", etag, if_none_match);
+
+                    if let Some(if_none_match) = if_none_match {
+                        if etag == if_none_match {
+                            return warp::reply::with_status(
+                                "NOT_MODIFIED",
+                                StatusCode::NOT_MODIFIED,
+                            )
+                            .into_response();
+                        }
+                    }
+
+                    // Guess we'll have to actually run the query
+                    let physical = context.create_physical_plan(&plan).await.unwrap();
+                    let batches = context.collect(physical).await.unwrap();
+
+                    let mut buf = Vec::new();
+                    let mut writer = LineDelimitedWriter::new(&mut buf);
+                    writer.write_batches(&batches).unwrap();
+                    writer.finish().unwrap();
+
+                    warp::reply::with_header(buf, ETAG, etag).into_response()
                 }
-
-                // Guess we'll have to actually run the query
-                let physical = context.create_physical_plan(&plan).await.unwrap();
-                let batches = context.collect(physical).await.unwrap();
-
-                let mut buf = Vec::new();
-                let mut writer = LineDelimitedWriter::new(&mut buf);
-                writer.write_batches(&batches).unwrap();
-                writer.finish().unwrap();
-
-                warp::reply::with_header(buf, ETAG, etag).into_response()
-            }
-        })
+            },
+        )
 }
 
 pub fn filters(
