@@ -111,7 +111,7 @@ pub struct Runtime {
 impl Default for Runtime {
     fn default() -> Self {
         Self {
-            max_partition_size: 100000,
+            max_partition_size: 1048576,
         }
     }
 }
@@ -201,7 +201,7 @@ bind_port = 80
                     })
                 },
                 runtime: Runtime {
-                    max_partition_size: 100000
+                    max_partition_size: 1048576
                 },
             }
         )
@@ -230,7 +230,7 @@ bind_port = 80
                     })
                 },
                 runtime: Runtime {
-                    max_partition_size: 100000
+                    max_partition_size: 1048576
                 },
             }
         )

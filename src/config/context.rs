@@ -155,7 +155,7 @@ mod tests {
                 }),
             },
             runtime: schema::Runtime {
-                max_partition_size: 100000,
+                max_partition_size: 1048576,
             },
         };
 
