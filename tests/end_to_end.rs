@@ -1,4 +1,5 @@
 use std::env;
+use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
 use datafusion::assert_batches_eq;
@@ -7,6 +8,7 @@ use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::DefaultSeafowlContext;
 use seafowl::context::SeafowlContext;
+use seafowl::data_types::TableVersionId;
 use seafowl::repository::postgres::testutils::get_random_schema;
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
@@ -249,6 +251,99 @@ async fn test_insert_two_different_schemas() {
         "| true            |                | 9.1199999999     |                     | 45         |",
         "| false           |                | 44.3400000000    |                     |            |",
         "+-----------------+----------------+------------------+---------------------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
+async fn test_table_partitioning_and_rechunking() {
+    let context = make_context_with_pg().await;
+
+    // Make table versions 1 and 2
+    create_table_and_insert(&context, "test_table").await;
+
+    // Make table version 3
+    let plan = context
+        .plan_query(
+            "INSERT INTO test_table (some_int_value, some_value) VALUES
+            (4444, 45),
+            (5555, 46),
+            (6666, 47)",
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    let partitions = context
+        .partition_catalog
+        .load_table_partitions(3 as TableVersionId)
+        .await;
+
+    // Ensure we have 2 partitions, originating from 2 INSERTS
+    assert_eq!(partitions.len(), 2);
+    assert_eq!(
+        partitions[0].object_storage_id,
+        Arc::from(
+            "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet"
+                .to_string()
+        )
+    );
+    assert_eq!(partitions[0].row_count, 3);
+    assert_eq!(partitions[0].columns.len(), 3);
+    assert_eq!(
+        partitions[1].object_storage_id,
+        Arc::from(
+            "a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet"
+                .to_string()
+        )
+    );
+    assert_eq!(partitions[1].row_count, 3);
+    assert_eq!(partitions[1].columns.len(), 2);
+
+    context.reload_schema().await;
+
+    let plan = context
+        .plan_query("CREATE TABLE table_rechunked AS SELECT * FROM test_table")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    let partitions = context
+        .partition_catalog
+        .load_table_partitions(4 as TableVersionId)
+        .await;
+
+    // Ensure we have re-chunked the 2 partitions into 1
+    assert_eq!(partitions.len(), 1);
+    assert_eq!(
+        partitions[0].object_storage_id,
+        Arc::from(
+            "80091935282490b5a715080555c1e8c58bb8ce69e07cf7533ec83aa29167cee3.parquet"
+                .to_string()
+        )
+    );
+    assert_eq!(partitions[0].row_count, 6);
+    assert_eq!(partitions[0].columns.len(), 5);
+
+    // Ensure table contents
+    context.reload_schema().await;
+    let plan = context
+        .plan_query("SELECT some_value, some_int_value FROM table_rechunked")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+------------+----------------+",
+        "| some_value | some_int_value |",
+        "+------------+----------------+",
+        "| 42         | 1111           |",
+        "| 43         | 2222           |",
+        "| 44         | 3333           |",
+        "| 45         | 4444           |",
+        "| 46         | 5555           |",
+        "| 47         | 6666           |",
+        "+------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 }

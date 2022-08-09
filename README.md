@@ -28,7 +28,7 @@ BigQuery, as well as the lessons we learned over the past few years of working o
 
 - **Separation of storage and compute**. You can store Seafowl data in object storage or on a
   persistent volume and spin up Seafowl instances on-demand to satisfy incoming queries.
-- **Partition pruning**. Seafowl splits tables into regions (stored as Parquet files) and indexes
+- **Partition pruning**. Seafowl splits tables into partitions (stored as Parquet files) and indexes
   them to satisfy filter queries without scanning through the whole table.
 - **Extensibility**. You can write user-defined-functions (UDFs) in any language that compiles to
   WebAssembly (WASM) and add them to Seafowl.

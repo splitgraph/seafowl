@@ -83,30 +83,30 @@ impl Repository for $repo {
         Ok(columns)
     }
 
-    async fn get_all_regions_in_table(
+    async fn get_all_partitions_in_table(
         &self,
         table_version_id: TableVersionId,
-    ) -> Result<Vec<AllTableRegionsResult>, Error> {
-        let regions = sqlx::query_as(
+    ) -> Result<Vec<AllTablePartitionsResult>, Error> {
+        let partitions = sqlx::query_as(
             r#"SELECT
-            physical_region.id AS table_region_id,
-            physical_region.object_storage_id,
-            physical_region.row_count AS row_count,
-            physical_region_column.name AS column_name,
-            physical_region_column.type AS column_type,
-            physical_region_column.min_value,
-            physical_region_column.max_value
-        FROM table_region
-        INNER JOIN physical_region ON physical_region.id = table_region.physical_region_id
+            physical_partition.id AS table_partition_id,
+            physical_partition.object_storage_id,
+            physical_partition.row_count AS row_count,
+            physical_partition_column.name AS column_name,
+            physical_partition_column.type AS column_type,
+            physical_partition_column.min_value,
+            physical_partition_column.max_value
+        FROM table_partition
+        INNER JOIN physical_partition ON physical_partition.id = table_partition.physical_partition_id
         -- TODO left join?
-        INNER JOIN physical_region_column ON physical_region_column.physical_region_id = physical_region.id
-        WHERE table_region.table_version_id = $1
-        ORDER BY table_region_id, physical_region_column.id
+        INNER JOIN physical_partition_column ON physical_partition_column.physical_partition_id = physical_partition.id
+        WHERE table_partition.table_version_id = $1
+        ORDER BY table_partition_id, physical_partition_column.id
         "#,
         ).bind(table_version_id)
         .fetch_all(&self.executor)
         .await?;
-        Ok(regions)
+        Ok(partitions)
     }
 
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error> {
@@ -209,40 +209,40 @@ impl Repository for $repo {
         Ok((new_table_id, new_version_id))
     }
 
-    async fn create_regions(
+    async fn create_partitions(
         &self,
-        regions: Vec<SeafowlRegion>,
-    ) -> Result<Vec<PhysicalRegionId>, Error> {
-        // Create regions
+        partitions: Vec<SeafowlPartition>,
+    ) -> Result<Vec<PhysicalPartitionId>, Error> {
+        // Create partitions
 
         let mut builder: QueryBuilder<_> = QueryBuilder::new(
-            "INSERT INTO physical_region(row_count, object_storage_id) ",
+            "INSERT INTO physical_partition(row_count, object_storage_id) ",
         );
-        builder.push_values(&regions, |mut b, r| {
+        builder.push_values(&partitions, |mut b, r| {
             b.push_bind(r.row_count)
                 .push_bind(r.object_storage_id.as_ref());
         });
         builder.push("RETURNING id");
 
         let query = builder.build();
-        let region_ids: Vec<PhysicalRegionId> = query
+        let partition_ids: Vec<PhysicalPartitionId> = query
             .fetch_all(&self.executor)
             .await?
             .iter()
             .flat_map(|r| r.try_get("id"))
             .collect();
 
-        // Create region columns
+        // Create partition columns
 
-        // Make an vector of (region_id, column)
-        let columns: Vec<(PhysicalRegionId, &RegionColumn)> = zip(&region_ids, &regions)
-            .flat_map(|(region_id, region)| {
-                region.columns.iter().map(|c| (region_id.to_owned(), c))
+        // Make an vector of (partition_id, column)
+        let columns: Vec<(PhysicalPartitionId, &PartitionColumn)> = zip(&partition_ids, &partitions)
+            .flat_map(|(partition_id, partition)| {
+                partition.columns.iter().map(|c| (partition_id.to_owned(), c))
             })
             .collect();
 
         let mut builder: QueryBuilder<_> =
-        QueryBuilder::new("INSERT INTO physical_region_column(physical_region_id, name, type, min_value, max_value) ");
+        QueryBuilder::new("INSERT INTO physical_partition_column(physical_partition_id, name, type, min_value, max_value) ");
         builder.push_values(columns, |mut b, (rid, c)| {
             b.push_bind(rid)
                 .push_bind(c.name.as_ref())
@@ -254,18 +254,18 @@ impl Repository for $repo {
         let query = builder.build();
         query.execute(&self.executor).await?;
 
-        Ok(region_ids)
+        Ok(partition_ids)
     }
 
-    async fn append_regions_to_table(
+    async fn append_partitions_to_table(
         &self,
-        region_ids: Vec<PhysicalRegionId>,
+        partition_ids: Vec<PhysicalPartitionId>,
         table_version_id: TableVersionId,
     ) -> Result<(), Error> {
         let mut builder: QueryBuilder<_> = QueryBuilder::new(
-            "INSERT INTO table_region(table_version_id, physical_region_id) ",
+            "INSERT INTO table_partition(table_version_id, physical_partition_id) ",
         );
-        builder.push_values(region_ids, |mut b, rid| {
+        builder.push_values(partition_ids, |mut b, rid| {
             b.push_bind(table_version_id).push_bind(rid);
         });
 
@@ -299,8 +299,8 @@ impl Repository for $repo {
         .await?;
 
         sqlx::query(
-            "INSERT INTO table_region (table_version_id, physical_region_id)
-            SELECT $2, physical_region_id FROM table_region WHERE table_version_id = $1;",
+            "INSERT INTO table_partition (table_version_id, physical_partition_id)
+            SELECT $2, physical_partition_id FROM table_partition WHERE table_version_id = $1;",
         )
         .bind(from_version)
         .bind(new_version)

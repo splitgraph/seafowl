@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    catalog::{DefaultCatalog, FunctionCatalog, RegionCatalog, TableCatalog},
+    catalog::{DefaultCatalog, FunctionCatalog, PartitionCatalog, TableCatalog},
     context::{DefaultSeafowlContext, SeafowlContext},
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
@@ -26,7 +26,7 @@ async fn build_catalog(
     config: &schema::SeafowlConfig,
 ) -> (
     Arc<dyn TableCatalog>,
-    Arc<dyn RegionCatalog>,
+    Arc<dyn PartitionCatalog>,
     Arc<dyn FunctionCatalog>,
 ) {
     // Initialize the repository
@@ -63,7 +63,7 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             endpoint,
             bucket,
         }) => {
-            // Use endpoint instead of region
+            // Use endpoint instead of partition
             let store = new_s3(
                 Some(access_key_id),
                 Some(secret_access_key),
@@ -91,7 +91,7 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
         .runtime_env()
         .register_object_store("seafowl", "", object_store);
 
-    let (tables, regions, functions) = build_catalog(cfg).await;
+    let (tables, partitions, functions) = build_catalog(cfg).await;
 
     // Create default DB/collection
     let default_db = match tables.get_database_id_by_name("default").await {
@@ -120,10 +120,11 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
     let context = DefaultSeafowlContext {
         inner: context,
         table_catalog: tables,
-        region_catalog: regions,
+        partition_catalog: partitions,
         function_catalog: functions,
         database: "default".to_string(),
         database_id: default_db,
+        max_partition_size: cfg.misc.max_partition_size,
     };
 
     // Register our database with DataFusion
@@ -152,6 +153,9 @@ mod tests {
                     bind_host: "127.0.0.1".to_string(),
                     bind_port: 80,
                 }),
+            },
+            misc: schema::Misc {
+                max_partition_size: 1048576,
             },
         };
 

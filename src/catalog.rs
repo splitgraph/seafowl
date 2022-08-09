@@ -13,21 +13,24 @@ use crate::wasm_udf::data_types::{
     CreateFunctionWASMType,
 };
 use crate::{
-    data_types::{CollectionId, DatabaseId, PhysicalRegionId, TableId, TableVersionId},
+    data_types::{
+        CollectionId, DatabaseId, PhysicalPartitionId, TableId, TableVersionId,
+    },
     provider::{
-        RegionColumn, SeafowlCollection, SeafowlDatabase, SeafowlRegion, SeafowlTable,
+        PartitionColumn, SeafowlCollection, SeafowlDatabase, SeafowlPartition,
+        SeafowlTable,
     },
     repository::interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTableRegionsResult,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTablePartitionsResult,
         Repository,
     },
     schema::Schema,
 };
 
 // TODO: this trait is basically a wrapper around Repository, apart from the custom logic
-// for converting rows of database / region results into SeafowlDatabase/Region structs;
+// for converting rows of database / partition results into SeafowlDatabase/Partition structs;
 // merge the two? Will a different database than PG still use the AllDatabaseColumnsResult /
-// AllTableRegionsResult structs?
+// AllTablePartitionsResult structs?
 
 #[cfg_attr(test, automock)]
 #[async_trait]
@@ -69,19 +72,22 @@ pub trait TableCatalog: Sync + Send + Debug {
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait RegionCatalog: Sync + Send + Debug {
-    // TODO: figure out content addressability (currently we'll create new region meta records
-    // even if the same region already exists)
-    async fn create_regions(&self, regions: Vec<SeafowlRegion>) -> Vec<PhysicalRegionId>;
+pub trait PartitionCatalog: Sync + Send + Debug {
+    // TODO: figure out content addressability (currently we'll create new partition meta records
+    // even if the same partition already exists)
+    async fn create_partitions(
+        &self,
+        partitions: Vec<SeafowlPartition>,
+    ) -> Vec<PhysicalPartitionId>;
 
-    async fn load_table_regions(
+    async fn load_table_partitions(
         &self,
         table_version_id: TableVersionId,
-    ) -> Vec<SeafowlRegion>;
+    ) -> Vec<SeafowlPartition>;
 
-    async fn append_regions_to_table(
+    async fn append_partitions_to_table(
         &self,
-        region_ids: Vec<PhysicalRegionId>,
+        partition_ids: Vec<PhysicalPartitionId>,
         table_version_id: TableVersionId,
     );
 }
@@ -108,21 +114,21 @@ pub struct DefaultCatalog {
 }
 
 impl DefaultCatalog {
-    fn build_region<'a, I>(&self, region_columns: I) -> SeafowlRegion
+    fn build_partition<'a, I>(&self, partition_columns: I) -> SeafowlPartition
     where
-        I: Iterator<Item = &'a AllTableRegionsResult>,
+        I: Iterator<Item = &'a AllTablePartitionsResult>,
     {
-        let mut iter = region_columns.peekable();
+        let mut iter = partition_columns.peekable();
 
-        SeafowlRegion {
+        SeafowlPartition {
             object_storage_id: Arc::from(iter.peek().unwrap().object_storage_id.clone()),
             row_count: iter.peek().unwrap().row_count,
             columns: Arc::new(
-                iter.map(|region| RegionColumn {
-                    name: Arc::from(region.column_name.clone()),
-                    r#type: Arc::from(region.column_type.clone()),
-                    min_value: Arc::new(region.min_value.clone()),
-                    max_value: Arc::new(region.max_value.clone()),
+                iter.map(|partition| PartitionColumn {
+                    name: Arc::from(partition.column_name.clone()),
+                    r#type: Arc::from(partition.column_type.clone()),
+                    min_value: Arc::new(partition.min_value.clone()),
+                    max_value: Arc::new(partition.max_value.clone()),
                 })
                 .collect(),
             ),
@@ -137,10 +143,10 @@ impl DefaultCatalog {
     where
         I: Iterator<Item = &'a AllDatabaseColumnsResult>,
     {
-        // We have an iterator of all columns and all regions in this table.
-        // We want to, first, deduplicate all columns (since we repeat them for every region)
+        // We have an iterator of all columns and all partitions in this table.
+        // We want to, first, deduplicate all columns (since we repeat them for every partition)
         // in order to build the table's schema.
-        // We also want to make a Region object from all regions in this table.
+        // We also want to make a Partition object from all partitions in this table.
         // Since we're going to be consuming this iterator twice (first for unique, then for the group_by),
         // collect all columns into a vector.
         let table_columns_vec = table_columns.collect_vec();
@@ -303,40 +309,43 @@ impl TableCatalog for DefaultCatalog {
 }
 
 #[async_trait]
-impl RegionCatalog for DefaultCatalog {
-    async fn create_regions(&self, regions: Vec<SeafowlRegion>) -> Vec<PhysicalRegionId> {
+impl PartitionCatalog for DefaultCatalog {
+    async fn create_partitions(
+        &self,
+        partitions: Vec<SeafowlPartition>,
+    ) -> Vec<PhysicalPartitionId> {
         self.repository
-            .create_regions(regions)
+            .create_partitions(partitions)
             .await
-            .expect("TODO create region error")
+            .expect("TODO create partition error")
     }
 
-    async fn load_table_regions(
+    async fn load_table_partitions(
         &self,
         table_version_id: TableVersionId,
-    ) -> Vec<SeafowlRegion> {
-        let all_regions = self
+    ) -> Vec<SeafowlPartition> {
+        let all_partitions = self
             .repository
-            .get_all_regions_in_table(table_version_id)
+            .get_all_partitions_in_table(table_version_id)
             .await
             .expect("TODO db load error");
-        all_regions
+        all_partitions
             .iter()
-            .group_by(|col| col.table_region_id)
+            .group_by(|col| col.table_partition_id)
             .into_iter()
-            .map(|(_, cs)| self.build_region(cs))
+            .map(|(_, cs)| self.build_partition(cs))
             .collect()
     }
 
-    async fn append_regions_to_table(
+    async fn append_partitions_to_table(
         &self,
-        region_ids: Vec<PhysicalRegionId>,
+        partition_ids: Vec<PhysicalPartitionId>,
         table_version_id: TableVersionId,
     ) {
         self.repository
-            .append_regions_to_table(region_ids, table_version_id)
+            .append_partitions_to_table(partition_ids, table_version_id)
             .await
-            .expect("TODO attach region error")
+            .expect("TODO attach partition error")
     }
 }
 

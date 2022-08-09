@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use base64::decode;
 use bytes::Bytes;
+use std::fs::File;
 
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
@@ -55,11 +56,12 @@ use datafusion::{
     prelude::SessionContext,
     sql::{planner::SqlToRel, TableReference},
 };
+use tempfile::NamedTempFile;
 
-use crate::catalog::RegionCatalog;
+use crate::catalog::PartitionCatalog;
 use crate::data_types::{TableId, TableVersionId};
 use crate::nodes::{CreateFunction, SeafowlExtensionNode};
-use crate::provider::{RegionColumn, SeafowlRegion, SeafowlTable};
+use crate::provider::{PartitionColumn, SeafowlPartition, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
     catalog::{FunctionCatalog, TableCatalog},
@@ -197,13 +199,13 @@ async fn get_parquet_file_statistics_bytes(
     Ok(stats)
 }
 
-/// Serialize data for the physical region index from Parquet file statistics
-fn build_region_columns(
-    region_stats: &Statistics,
+/// Serialize data for the physical partition index from Parquet file statistics
+fn build_partition_columns(
+    partition_stats: &Statistics,
     schema: SchemaRef,
-) -> Vec<RegionColumn> {
-    // TODO PhysicalRegionColumn might not be the right data structure here (lacks ID etc)
-    match &region_stats.column_statistics {
+) -> Vec<PartitionColumn> {
+    // TODO PhysicalPartitionColumn might not be the right data structure here (lacks ID etc)
+    match &partition_stats.column_statistics {
         Some(column_statistics) => zip(column_statistics, schema.fields())
             .map(|(stats, column)| {
                 let min_value = stats
@@ -215,7 +217,7 @@ fn build_region_columns(
                     .as_ref()
                     .map(|m| m.to_string().as_bytes().into());
 
-                RegionColumn {
+                PartitionColumn {
                     name: Arc::from(column.name().to_string()),
                     r#type: Arc::from(column.data_type().to_json().to_string()),
                     min_value: Arc::new(min_value),
@@ -226,7 +228,7 @@ fn build_region_columns(
         None => schema
             .fields()
             .iter()
-            .map(|column| RegionColumn {
+            .map(|column| PartitionColumn {
                 name: Arc::from(column.name().to_string()),
                 r#type: Arc::from(column.data_type().to_json().to_string()),
                 min_value: Arc::new(None),
@@ -239,10 +241,11 @@ fn build_region_columns(
 pub struct DefaultSeafowlContext {
     pub inner: SessionContext,
     pub table_catalog: Arc<dyn TableCatalog>,
-    pub region_catalog: Arc<dyn RegionCatalog>,
+    pub partition_catalog: Arc<dyn PartitionCatalog>,
     pub function_catalog: Arc<dyn FunctionCatalog>,
     pub database: String,
     pub database_id: DatabaseId,
+    pub max_partition_size: i64,
 }
 
 /// Create an ExecutionPlan that doesn't produce any results.
@@ -252,6 +255,25 @@ fn make_dummy_exec() -> Arc<dyn ExecutionPlan> {
     Arc::new(EmptyExec::new(false, SchemaRef::new(Schema::empty())))
 }
 
+/// Open a temporary file to write partition and return a handle and a writer for it.
+fn temp_partition_file_writer(
+    disk_manager: Arc<DiskManager>,
+    arrow_schema: SchemaRef,
+) -> Result<(File, ArrowWriter<NamedTempFile>)> {
+    let partition_file = disk_manager.create_tmp_file()?;
+    // Maintain a second handle to the file (the first one is consumed by ArrowWriter)
+    // We'll close this handle (and hence drop the file) upon reading the partition contents, just
+    // prior to uploading them.
+    let partition_file_handle = partition_file.reopen().map_err(|_| {
+        DataFusionError::Execution("Error with temporary Parquet file".to_string())
+    })?;
+
+    let writer_properties = WriterProperties::builder().build();
+    let writer =
+        ArrowWriter::try_new(partition_file, arrow_schema, Some(writer_properties))?;
+    Ok((partition_file_handle, writer))
+}
+
 /// Execute a plan and upload the results to object storage as Parquet files, indexing them.
 /// Partially taken from DataFusion's plan_to_parquet with some additions (file stats, using a DiskManager)
 pub async fn plan_to_object_store(
@@ -259,39 +281,60 @@ pub async fn plan_to_object_store(
     plan: &Arc<dyn ExecutionPlan>,
     store: Arc<dyn ObjectStore>,
     disk_manager: Arc<DiskManager>,
-) -> Result<Vec<SeafowlRegion>> {
+    max_partition_size: i64,
+) -> Result<Vec<SeafowlPartition>> {
+    let mut current_partition_size = 0;
+    let (mut current_partition_file_handle, mut writer) =
+        temp_partition_file_writer(disk_manager.clone(), plan.schema())?;
+    let mut partition_file_handles = vec![current_partition_file_handle];
     let mut tasks = vec![];
+
+    // Iterate over Datafusion partitions and rechuhk them into Seafowl partitions, since we want to
+    // enforce a pre-defined partition size limit, which is not guaranteed by DF.
     for i in 0..plan.output_partitioning().partition_count() {
-        let physical = plan.clone();
         let task_ctx = Arc::new(TaskContext::from(state));
-        let store = store.clone();
+        let mut stream = plan.execute(i, task_ctx)?;
 
-        let partition_file = disk_manager.create_tmp_file()?;
-        // Maintain a second handle to the file (the first one is consumed by ArrowWriter)
-        // We'll close this handle at the end of the task, dropping the file.
-        let mut partition_file_handle = partition_file.reopen().map_err(|_| {
-            DataFusionError::Execution("Error with temporary Parquet file".to_string())
-        })?;
+        while let Some(batch) = stream.next().await {
+            let mut batch = batch?;
+            let mut leftover_partition_capacity =
+                (max_partition_size - current_partition_size) as usize;
 
-        // let partition_file_path = partition_file.path().to_owned();
+            while batch.num_rows() > leftover_partition_capacity {
+                if leftover_partition_capacity > 0 {
+                    // Fill up the remaining capacity in the slice
+                    writer
+                        .write(&batch.slice(0, leftover_partition_capacity))
+                        .map_err(DataFusionError::from)?;
+                    // Trim away the part that made it to the current partition
+                    batch = batch.slice(
+                        leftover_partition_capacity,
+                        batch.num_rows() - leftover_partition_capacity,
+                    );
+                }
 
-        let writer_properties = WriterProperties::builder().build();
-        let mut writer = ArrowWriter::try_new(
-            partition_file,
-            physical.schema(),
-            Some(writer_properties.clone()),
-        )?;
-        let stream = physical.execute(i, task_ctx)?;
-
-        let handle: tokio::task::JoinHandle<Result<SeafowlRegion>> =
-            tokio::task::spawn(async move {
-                stream
-                    .map(|batch| writer.write(&batch?))
-                    .try_collect()
-                    .await
-                    .map_err(DataFusionError::from)?;
+                // Roll-over into the next partition: close partition writer, reset partition size
+                // counter and open new temp file + writer.
                 writer.close().map_err(DataFusionError::from).map(|_| ())?;
+                current_partition_size = 0;
+                leftover_partition_capacity = max_partition_size as usize;
 
+                (current_partition_file_handle, writer) =
+                    temp_partition_file_writer(disk_manager.clone(), plan.schema())?;
+                partition_file_handles.push(current_partition_file_handle);
+            }
+
+            current_partition_size += batch.num_rows() as i64;
+            writer.write(&batch).map_err(DataFusionError::from)?;
+        }
+    }
+    writer.close().map_err(DataFusionError::from).map(|_| ())?;
+
+    for mut partition_file_handle in partition_file_handles {
+        let physical = plan.clone();
+        let store = store.clone();
+        let handle: tokio::task::JoinHandle<Result<SeafowlPartition>> =
+            tokio::task::spawn(async move {
                 // TODO: the object_store crate doesn't support multi-part uploads / uploading a file
                 // from a local path. This means we have to read the file back into memory in full.
                 // https://github.com/influxdata/object_store_rs/issues/9
@@ -307,11 +350,12 @@ pub async fn plan_to_object_store(
                 let data = Bytes::from(buf);
 
                 // Index the Parquet file (get its min-max values)
-                let region_stats =
+                let partition_stats =
                     get_parquet_file_statistics_bytes(data.clone(), physical.schema())
                         .await?;
 
-                let columns = build_region_columns(&region_stats, physical.schema());
+                let columns =
+                    build_partition_columns(&partition_stats, physical.schema());
 
                 let mut hasher = Sha256::new();
                 hasher.update(&data);
@@ -321,9 +365,9 @@ pub async fn plan_to_object_store(
                     .put(&Path::from(object_storage_id.clone()), data)
                     .await?;
 
-                let region = SeafowlRegion {
+                let partition = SeafowlPartition {
                     object_storage_id: Arc::from(object_storage_id),
-                    row_count: region_stats
+                    row_count: partition_stats
                         .num_rows
                         .expect("Error counting rows in the written file")
                         .try_into()
@@ -331,7 +375,7 @@ pub async fn plan_to_object_store(
                     columns: Arc::new(columns),
                 };
 
-                Ok(region)
+                Ok(partition)
             });
         tasks.push(handle);
     }
@@ -760,11 +804,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                     .runtime_env()
                     .object_store(object_store_url.clone())?;
 
-                let regions = plan_to_object_store(
+                let partitions = plan_to_object_store(
                     &self.inner.state(),
                     &physical,
                     store,
                     disk_manager,
+                    self.max_partition_size,
                 )
                 .await?;
 
@@ -773,10 +818,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                     .exec_create_table(&name, &physical.schema().to_dfschema_ref()?)
                     .await?;
 
-                // Attach the regions to the empty table
-                let region_ids = self.region_catalog.create_regions(regions).await;
-                self.region_catalog
-                    .append_regions_to_table(region_ids, table_version_id)
+                // Attach the partitions to the empty table
+                let partition_ids =
+                    self.partition_catalog.create_partitions(partitions).await;
+                self.partition_catalog
+                    .append_partitions_to_table(partition_ids, table_version_id)
                     .await;
 
                 Ok(make_dummy_exec())
@@ -822,11 +868,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 .runtime_env()
                                 .object_store(object_store_url.clone())?;
 
-                            let regions = plan_to_object_store(
+                            let partitions = plan_to_object_store(
                                 &self.inner.state(),
                                 &physical,
                                 store,
                                 disk_manager,
+                                self.max_partition_size,
                             )
                             .await?;
 
@@ -836,11 +883,13 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 .create_new_table_version(table.table_version_id)
                                 .await;
 
-                            // Attach the regions to the table
-                            let region_ids =
-                                self.region_catalog.create_regions(regions).await;
-                            self.region_catalog
-                                .append_regions_to_table(region_ids, new_version_id)
+                            // Attach the partitions to the table
+                            let partition_ids = self
+                                .partition_catalog
+                                .create_partitions(partitions)
+                                .await;
+                            self.partition_catalog
+                                .append_partitions_to_table(partition_ids, new_version_id)
                                 .await;
 
                             Ok(make_dummy_exec())
@@ -881,8 +930,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                             // This also assumes one Parquet file <> one partition
 
                             // - Duplicate the table (new version)
-                            // - replace regions that are changed (but we don't know the table_region i.e. which entry to
-                            // repoint to our new region)?
+                            // - replace partitions that are changed (but we don't know the table_partition i.e. which entry to
+                            // repoint to our new partition)?
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::Delete(_) => {
@@ -890,10 +939,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                             // - Similar to UPDATE, but just a filter
 
                             // upload new files
-                            // replace regions (sometimes we delete them)
+                            // replace partitions (sometimes we delete them)
 
-                            // really we want to be able to load all regions + cols for a table and then
-                            // write that thing back to the db (set table regions)
+                            // really we want to be able to load all partitions + cols for a table and then
+                            // write that thing back to the db (set table partitions)
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::CreateFunction(CreateFunction {
@@ -945,7 +994,7 @@ pub mod test_utils {
 
     use crate::{
         catalog::{
-            MockFunctionCatalog, MockRegionCatalog, MockTableCatalog, TableCatalog,
+            MockFunctionCatalog, MockPartitionCatalog, MockTableCatalog, TableCatalog,
         },
         provider::{SeafowlCollection, SeafowlDatabase},
     };
@@ -977,11 +1026,11 @@ pub mod test_utils {
     }
 
     pub async fn mock_context_with_catalog_assertions<FR, FT>(
-        mut setup_region_catalog: FR,
+        mut setup_partition_catalog: FR,
         mut setup_table_catalog: FT,
     ) -> DefaultSeafowlContext
     where
-        FR: FnMut(&mut MockRegionCatalog),
+        FR: FnMut(&mut MockPartitionCatalog),
         FT: FnMut(&mut MockTableCatalog),
     {
         let session = make_session();
@@ -990,22 +1039,22 @@ pub mod test_utils {
             ArrowField::new("value", ArrowDataType::Float64, false),
         ]);
 
-        let mut region_catalog = MockRegionCatalog::new();
+        let mut partition_catalog = MockPartitionCatalog::new();
 
-        region_catalog
-            .expect_load_table_regions()
+        partition_catalog
+            .expect_load_table_partitions()
             .with(predicate::eq(1))
             .returning(|_| {
-                vec![SeafowlRegion {
+                vec![SeafowlPartition {
                     object_storage_id: Arc::from("some-file.parquet"),
                     row_count: 3,
                     columns: Arc::new(vec![]),
                 }]
             });
 
-        setup_region_catalog(&mut region_catalog);
+        setup_partition_catalog(&mut partition_catalog);
 
-        let region_catalog_ptr = Arc::new(region_catalog);
+        let partition_catalog_ptr = Arc::new(partition_catalog);
 
         let singleton_table = SeafowlTable {
             name: Arc::from("some_table"),
@@ -1014,7 +1063,7 @@ pub mod test_utils {
             }),
             table_id: 0,
             table_version_id: 0,
-            catalog: region_catalog_ptr.clone(),
+            catalog: partition_catalog_ptr.clone(),
         };
         let tables =
             StdHashMap::from([(Arc::from("some_table"), Arc::from(singleton_table))]);
@@ -1053,35 +1102,46 @@ pub mod test_utils {
         DefaultSeafowlContext {
             inner: session,
             table_catalog: Arc::new(table_catalog),
-            region_catalog: region_catalog_ptr,
+            partition_catalog: partition_catalog_ptr,
             function_catalog: Arc::new(function_catalog),
             database: "testdb".to_string(),
             database_id: 0,
+            max_partition_size: 2,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::Int32Array;
     use std::sync::Arc;
 
     use datafusion::execution::disk_manager::DiskManagerConfig;
     use mockall::predicate;
     use object_store::memory::InMemory;
+    use test_case::test_case;
 
     use crate::context::test_utils::mock_context_with_catalog_assertions;
 
     use datafusion::assert_batches_eq;
+    use datafusion::from_slice::FromSlice;
+    use datafusion::physical_plan::memory::MemoryExec;
 
     use super::*;
 
     use super::test_utils::mock_context;
 
-    const EXPECTED_FILE_NAME: &str =
+    const PARTITION_1_FILE_NAME: &str =
         "bdd6eef7340866d1ad99ed34ce0fa43c0d06bbed4dbcb027e9a51de48638b3ed.parquet";
+    const PARTITION_2_FILE_NAME: &str =
+        "2d6cabc587f8a3d8b16a56294e84f9b39fc5fc30a00d98c205ad6be670d205a3.parquet";
 
     const EXPECTED_INSERT_FILE_NAME: &str =
         "1592625fb7bb063580d94fe2eaf514d55e6b44f1bebd6c7f6b2e79f55477218b.parquet";
+
+    fn to_min_max_value<T: ToString>(item: T) -> Arc<Option<Vec<u8>>> {
+        Arc::from(Some(item.to_string().as_bytes().to_vec()))
+    }
 
     #[tokio::test]
     async fn test_plan_to_object_storage() {
@@ -1093,7 +1153,9 @@ mod tests {
                 r#"
                 SELECT * FROM (VALUES
                     ('2022-01-01', 42, 'one'),
-                    ('2022-01-02', 12, 'two'))
+                    ('2022-01-02', 12, 'two'),
+                    ('2022-01-03', 32, 'three'),
+                    ('2022-01-04', 22, 'four'))
                 AS t(timestamp, integer, varchar);"#,
             )
             .await
@@ -1101,51 +1163,200 @@ mod tests {
 
         let object_store = Arc::new(InMemory::new());
         let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
-        let regions = plan_to_object_store(
+        let partitions = plan_to_object_store(
             &sf_context.inner.state(),
             &execution_plan,
             object_store,
             disk_manager,
+            2,
         )
         .await
         .unwrap();
 
-        assert_eq!(regions.len(), 1);
+        assert_eq!(partitions.len(), 2);
 
-        let region = regions.get(0).unwrap();
-        // TODO figure out why:
-        //   - timestamp didn't get converted
-        //   - utf8 didn't get indexed
+        // - Timestamp didn't get converted since we'd need to cast the string to Timestamp in query
+        // or call a to_timestamp function, but neither is supported in the DF ValueExpr node.
+        // - Looks like utf8 is None because DF's summarize_min_max doesn't match ByteArray stats.
         assert_eq!(
-            *region,
-            SeafowlRegion {
-                object_storage_id: Arc::from(EXPECTED_FILE_NAME.to_string()),
-                row_count: 2,
-                columns: Arc::new(vec![
-                    RegionColumn {
-                        name: Arc::from("timestamp".to_string()),
-                        r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
-                        min_value: Arc::new(None),
-                        max_value: Arc::new(None)
-                    },
-                    RegionColumn {
-                        name: Arc::from("integer".to_string()),
-                        r#type: Arc::from(
-                            "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
-                                .to_string()
-                        ),
-                        min_value: Arc::new(Some([49, 50].to_vec())),
-                        max_value: Arc::new(Some([52, 50].to_vec()))
-                    },
-                    RegionColumn {
-                        name: Arc::from("varchar".to_string()),
-                        r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
-                        min_value: Arc::new(None),
-                        max_value: Arc::new(None)
-                    }
-                ])
-            }
+            partitions,
+            vec![
+                SeafowlPartition {
+                    object_storage_id: Arc::from(PARTITION_1_FILE_NAME.to_string()),
+                    row_count: 2,
+                    columns: Arc::new(vec![
+                        PartitionColumn {
+                            name: Arc::from("timestamp".to_string()),
+                            r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                            min_value: Arc::new(None),
+                            max_value: Arc::new(None)
+                        },
+                        PartitionColumn {
+                            name: Arc::from("integer".to_string()),
+                            r#type: Arc::from(
+                                "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
+                                    .to_string()
+                            ),
+                            min_value: to_min_max_value(12),
+                            max_value: to_min_max_value(42),
+                        },
+                        PartitionColumn {
+                            name: Arc::from("varchar".to_string()),
+                            r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                            min_value: Arc::new(None),
+                            max_value: Arc::new(None)
+                        }
+                    ])
+                },
+                SeafowlPartition {
+                    object_storage_id: Arc::from(PARTITION_2_FILE_NAME.to_string()),
+                    row_count: 2,
+                    columns: Arc::new(vec![
+                        PartitionColumn {
+                            name: Arc::from("timestamp".to_string()),
+                            r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                            min_value: Arc::new(None),
+                            max_value: Arc::new(None)
+                        },
+                        PartitionColumn {
+                            name: Arc::from("integer".to_string()),
+                            r#type: Arc::from(
+                                "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
+                                    .to_string()
+                            ),
+                            min_value: to_min_max_value(22),
+                            max_value: to_min_max_value(32),
+                        },
+                        PartitionColumn {
+                            name: Arc::from("varchar".to_string()),
+                            r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                            min_value: Arc::new(None),
+                            max_value: Arc::new(None)
+                        }
+                    ])
+                },
+            ]
         );
+    }
+
+    #[test_case(
+        5,
+        vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
+        vec![vec![0, 1, 2, 3, 4], vec![5, 6, 7, 8, 9], vec![10, 11]],
+        vec![
+            "012fc5d6c2d7379103280ebc39d5d6bf8b9aae45a75f0b722576b442c24d6784.parquet",
+            "8ee4296b8bfcd1a2a013685a73bf755387ce0275b0d49159ee67ca72c8237bc1.parquet",
+            "e6628dd3c33c390d34e208c01a30365d9565edef101b6f272c2dff661dc67763.parquet",
+        ];
+        "record batches smaller than partitions")
+    ]
+    #[test_case(
+        3,
+        vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
+        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]],
+        vec![
+            "207f477f85081b79122ba19edbc4612a8ca747470795be1ef9d71518f79d543f.parquet",
+            "45f630745bc7238fc30c0e17af635cf7f177d51fb2a1a05781fe809d36fad00d.parquet",
+            "ea7504e00f9bf75273ae1f6c7760e600c358fbbe19599f41ad808f9f1d520749.parquet",
+            "b4d90e2de27c2ed2db4908bcdbb52e0cd0e205966131d9f064c43a7cd98c8f14.parquet",
+        ];
+        "record batches same size as partitions")
+    ]
+    #[test_case(
+        2,
+        vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
+        vec![vec![0, 1], vec![2, 3], vec![4, 5], vec![6, 7], vec![8, 9], vec![10, 11]],
+        vec![
+            "785bae45499128d4898cb7307e636606ada772f69c2e9ae842e79422beb9e95f.parquet",
+            "991242bb627896dfa6820f8e486fcead3059205b8c262951c248210047b981eb.parquet",
+            "5c7aded940a2b69bf68e824040dfe1e9c6ffcffe5f7d2cc61208fa96f86337ec.parquet",
+            "9bf3793f1a262a5f662ceb50a669fcad19d587bdd016f04cd33a475b90b191d9.parquet",
+            "72587d81f4f3a1b2b69377d5a6d302fea796319d6fa1ca777cc3148b63ffb819.parquet",
+            "e6628dd3c33c390d34e208c01a30365d9565edef101b6f272c2dff661dc67763.parquet",
+        ];
+        "record batches larger than partitions")
+    ]
+    #[test_case(
+        3,
+        vec![vec![vec![0, 1], vec![2, 3, 4]], vec![vec![5]], vec![vec![6, 7, 8, 9], vec![10, 11]]],
+        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]],
+        vec![
+            "207f477f85081b79122ba19edbc4612a8ca747470795be1ef9d71518f79d543f.parquet",
+            "45f630745bc7238fc30c0e17af635cf7f177d51fb2a1a05781fe809d36fad00d.parquet",
+            "ea7504e00f9bf75273ae1f6c7760e600c358fbbe19599f41ad808f9f1d520749.parquet",
+            "b4d90e2de27c2ed2db4908bcdbb52e0cd0e205966131d9f064c43a7cd98c8f14.parquet",
+        ];
+        "record batches irregular size")
+    ]
+    #[tokio::test]
+    async fn test_plan_to_object_storage_partition_chunking(
+        max_partition_size: i64,
+        input_partitions: Vec<Vec<Vec<i32>>>,
+        output_partitions: Vec<Vec<i32>>,
+        storage_ids: Vec<&str>,
+    ) {
+        let sf_context = mock_context().await;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "some_number",
+            DataType::Int32,
+            true,
+        )]));
+
+        let df_partitions: Vec<Vec<RecordBatch>> = input_partitions
+            .iter()
+            .map(|partition| {
+                partition
+                    .iter()
+                    .map(|record_batch| {
+                        RecordBatch::try_new(
+                            schema.clone(),
+                            vec![Arc::new(Int32Array::from_slice(record_batch))],
+                        )
+                        .unwrap()
+                    })
+                    .collect()
+            })
+            .collect();
+
+        // Make a dummy execution plan that will return the data we feed it
+        let execution_plan: Arc<dyn ExecutionPlan> = Arc::new(
+            MemoryExec::try_new(df_partitions.as_slice(), schema, None).unwrap(),
+        );
+
+        let object_store = Arc::new(InMemory::new());
+        let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
+        let partitions = plan_to_object_store(
+            &sf_context.inner.state(),
+            &execution_plan,
+            object_store,
+            disk_manager,
+            max_partition_size,
+        )
+        .await
+        .unwrap();
+
+        for i in 0..output_partitions.len() {
+            assert_eq!(
+                partitions[i],
+                SeafowlPartition {
+                    object_storage_id: Arc::from(storage_ids[i].to_string()),
+                    row_count: output_partitions[i].len() as i32,
+                    columns: Arc::new(vec![PartitionColumn {
+                        name: Arc::from("some_number"),
+                        r#type: Arc::from(
+                            r#"{"name":"int","bitWidth":32,"isSigned":true}"#
+                        ),
+                        min_value: to_min_max_value(
+                            output_partitions[i].iter().min().unwrap()
+                        ),
+                        max_value: to_min_max_value(
+                            output_partitions[i].iter().max().unwrap()
+                        ),
+                    }])
+                },
+            )
+        }
     }
 
     #[tokio::test]
@@ -1250,25 +1461,25 @@ mod tests {
     #[tokio::test]
     async fn test_preexec_insert() {
         let sf_context = mock_context_with_catalog_assertions(
-            |regions| {
-                regions
-                    .expect_create_regions()
-                    .withf(|regions| {
+            |partitions| {
+                partitions
+                    .expect_create_partitions()
+                    .withf(|partitions| {
                         // TODO: the ergonomics of these mocks are pretty bad, standard with(predicate::eq(...)) doesn't
                         // show the actual value so we have to resort to this.
-                        dbg!(regions);
-                        *regions
-                            == vec![SeafowlRegion {
+                        dbg!(partitions);
+                        *partitions
+                            == vec![SeafowlPartition {
                                 object_storage_id: Arc::from(EXPECTED_INSERT_FILE_NAME),
                                 row_count: 1,
                                 columns: Arc::new(vec![
-                                    RegionColumn {
+                                    PartitionColumn {
                                         name: Arc::from("date"),
                                         r#type: Arc::from("{\"name\":\"date\",\"unit\":\"MILLISECOND\"}"),
                                         min_value: Arc::new(None),
                                         max_value: Arc::new(None),
                                     },
-                                    RegionColumn {
+                                    PartitionColumn {
                                         name: Arc::from("value"),
                                         r#type: Arc::from("{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"),
                                         min_value: Arc::new(Some(
@@ -1292,8 +1503,8 @@ mod tests {
                 // NB: even though this result isn't consumed by the caller, we need
                 // to return a unit here, otherwise this will fail pretending the
                 // expectation failed.
-                regions
-                    .expect_append_regions_to_table()
+                partitions
+                    .expect_append_partitions_to_table()
                     .with(predicate::eq(vec![2]), predicate::eq(1)).return_const(());
             },
             |tables| {

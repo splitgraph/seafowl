@@ -9,6 +9,8 @@ pub struct SeafowlConfig {
     pub catalog: Catalog,
     #[serde(default)]
     pub frontend: Frontend,
+    #[serde(default)]
+    pub misc: Misc,
 }
 
 #[derive(Deserialize, Debug, PartialEq, Clone)]
@@ -100,6 +102,20 @@ impl Default for HttpFrontend {
     }
 }
 
+#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[serde(default)]
+pub struct Misc {
+    pub max_partition_size: i64,
+}
+
+impl Default for Misc {
+    fn default() -> Self {
+        Self {
+            max_partition_size: 1048576,
+        }
+    }
+}
+
 pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
     let config = Config::builder()
         .add_source(File::with_name(path.to_str().expect("Error parsing path")));
@@ -121,6 +137,7 @@ mod tests {
         load_config_from_string, Catalog, Frontend, HttpFrontend, Local, ObjectStore,
         Postgres, SeafowlConfig, S3,
     };
+    use crate::config::schema::Misc;
 
     const TEST_CONFIG_S3: &str = r#"
 [object_store]
@@ -182,7 +199,10 @@ bind_port = 80
                         bind_host: "0.0.0.0".to_string(),
                         bind_port: 80
                     })
-                }
+                },
+                misc: Misc {
+                    max_partition_size: 1048576
+                },
             }
         )
     }
@@ -208,7 +228,10 @@ bind_port = 80
                         bind_host: "0.0.0.0".to_string(),
                         bind_port: 80
                     })
-                }
+                },
+                misc: Misc {
+                    max_partition_size: 1048576
+                },
             }
         )
     }

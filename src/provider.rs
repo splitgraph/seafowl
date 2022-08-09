@@ -29,7 +29,7 @@ use object_store::path::Path;
 use crate::data_types::FunctionId;
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
-    catalog::RegionCatalog,
+    catalog::PartitionCatalog,
     data_types::{TableId, TableVersionId},
     schema::Schema,
 };
@@ -77,14 +77,14 @@ impl SchemaProvider for SeafowlCollection {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct SeafowlRegion {
+pub struct SeafowlPartition {
     pub object_storage_id: Arc<str>,
     pub row_count: i32,
-    pub columns: Arc<Vec<RegionColumn>>,
+    pub columns: Arc<Vec<PartitionColumn>>,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct RegionColumn {
+pub struct PartitionColumn {
     pub name: Arc<str>,
     pub r#type: Arc<str>,
     pub min_value: Arc<Option<Vec<u8>>>,
@@ -99,12 +99,12 @@ pub struct SeafowlTable {
     pub table_version_id: TableVersionId,
 
     // We have to keep a reference to the original catalog here. This is
-    // because we need it to load the regions for a given table at query plan
-    // time (instead of loading the regions for _all_ tables in the database
+    // because we need it to load the partitions for a given table at query plan
+    // time (instead of loading the partitions for _all_ tables in the database
     // when we build the DataFusion CatalogProvider). But we can't actually
-    // load the regions somewhere in the SchemaProvider because none of the functions
+    // load the partitions somewhere in the SchemaProvider because none of the functions
     // there are async.
-    pub catalog: Arc<dyn RegionCatalog>,
+    pub catalog: Arc<dyn PartitionCatalog>,
 }
 
 #[async_trait]
@@ -128,7 +128,10 @@ impl TableProvider for SeafowlTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        let regions = self.catalog.load_table_regions(self.table_version_id).await;
+        let partitions = self
+            .catalog
+            .load_table_partitions(self.table_version_id)
+            .await;
 
         // This code is partially taken from ListingTable but adapted to use an arbitrary
         // list of Parquet URLs rather than all files in a given directory.
@@ -138,9 +141,9 @@ impl TableProvider for SeafowlTable {
         let store = ctx.runtime_env.object_store(object_store_url.clone())?;
 
         // Build a list of lists of PartitionedFile groups (one file = one partition for the scan)
-        // TODO: use filters and apply them to regions here (grab the code from list_files_for_scan)
+        // TODO: use filters and apply them to partitions here (grab the code from list_files_for_scan)
         let partitioned_file_lists: Vec<Vec<PartitionedFile>> =
-            future::try_join_all(regions.iter().map(|r| async {
+            future::try_join_all(partitions.iter().map(|r| async {
                 let path = Path::parse(&r.object_storage_id)?;
                 let meta = store.head(&path).await?;
                 Ok(vec![PartitionedFile {
@@ -166,7 +169,7 @@ impl TableProvider for SeafowlTable {
         let plan = format.create_physical_plan(config, filters).await?;
 
         Ok(Arc::new(SeafowlBaseTableScanNode {
-            regions: Arc::new(regions),
+            partitions: Arc::new(partitions),
             inner: plan,
         }))
     }
@@ -174,7 +177,7 @@ impl TableProvider for SeafowlTable {
 
 #[derive(Debug)]
 struct SeafowlBaseTableScanNode {
-    pub regions: Arc<Vec<SeafowlRegion>>,
+    pub partitions: Arc<Vec<SeafowlPartition>>,
     pub inner: Arc<dyn ExecutionPlan>,
 }
 
@@ -188,7 +191,7 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.regions.len())
+        Partitioning::UnknownPartitioning(self.partitions.len())
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
@@ -247,8 +250,8 @@ mod tests {
     use object_store::{memory::InMemory, path::Path, ObjectStore};
 
     use crate::{
-        catalog::MockRegionCatalog,
-        provider::{SeafowlRegion, SeafowlTable},
+        catalog::MockPartitionCatalog,
+        provider::{SeafowlPartition, SeafowlTable},
         schema::Schema,
     };
 
@@ -289,13 +292,13 @@ mod tests {
             Arc::new(object_store),
         );
 
-        let mut catalog = MockRegionCatalog::new();
+        let mut catalog = MockPartitionCatalog::new();
 
         catalog
-            .expect_load_table_regions()
+            .expect_load_table_partitions()
             .with(predicate::eq(1))
             .returning(|_| {
-                vec![SeafowlRegion {
+                vec![SeafowlPartition {
                     object_storage_id: Arc::from("some-file.parquet"),
                     row_count: 3,
                     columns: Arc::new(vec![]),
