@@ -1240,6 +1240,29 @@ mod tests {
     }
 
     #[test_case(
+        5,
+        vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
+        vec![vec![0, 1, 2, 3, 4], vec![5, 6, 7, 8, 9], vec![10, 11]],
+        vec![
+            "012fc5d6c2d7379103280ebc39d5d6bf8b9aae45a75f0b722576b442c24d6784.parquet",
+            "8ee4296b8bfcd1a2a013685a73bf755387ce0275b0d49159ee67ca72c8237bc1.parquet",
+            "e6628dd3c33c390d34e208c01a30365d9565edef101b6f272c2dff661dc67763.parquet",
+        ];
+        "record batches smaller than partitions")
+    ]
+    #[test_case(
+        3,
+        vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
+        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]],
+        vec![
+            "207f477f85081b79122ba19edbc4612a8ca747470795be1ef9d71518f79d543f.parquet",
+            "45f630745bc7238fc30c0e17af635cf7f177d51fb2a1a05781fe809d36fad00d.parquet",
+            "ea7504e00f9bf75273ae1f6c7760e600c358fbbe19599f41ad808f9f1d520749.parquet",
+            "b4d90e2de27c2ed2db4908bcdbb52e0cd0e205966131d9f064c43a7cd98c8f14.parquet",
+        ];
+        "record batches same size as partitions")
+    ]
+    #[test_case(
         2,
         vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
         vec![vec![0, 1], vec![2, 3], vec![4, 5], vec![6, 7], vec![8, 9], vec![10, 11]],
@@ -1251,18 +1274,19 @@ mod tests {
             "72587d81f4f3a1b2b69377d5a6d302fea796319d6fa1ca777cc3148b63ffb819.parquet",
             "e6628dd3c33c390d34e208c01a30365d9565edef101b6f272c2dff661dc67763.parquet",
         ];
-        "batches larger then partitions")
+        "record batches larger then partitions")
     ]
     #[test_case(
-        5,
-        vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
-        vec![vec![0, 1, 2, 3, 4], vec![5, 6, 7, 8, 9], vec![10, 11]],
+        3,
+        vec![vec![vec![0, 1], vec![2, 3, 4]], vec![vec![5]], vec![vec![6, 7, 8, 9], vec![10, 11]]],
+        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]],
         vec![
-            "012fc5d6c2d7379103280ebc39d5d6bf8b9aae45a75f0b722576b442c24d6784.parquet",
-            "8ee4296b8bfcd1a2a013685a73bf755387ce0275b0d49159ee67ca72c8237bc1.parquet",
-            "e6628dd3c33c390d34e208c01a30365d9565edef101b6f272c2dff661dc67763.parquet",
+            "207f477f85081b79122ba19edbc4612a8ca747470795be1ef9d71518f79d543f.parquet",
+            "45f630745bc7238fc30c0e17af635cf7f177d51fb2a1a05781fe809d36fad00d.parquet",
+            "ea7504e00f9bf75273ae1f6c7760e600c358fbbe19599f41ad808f9f1d520749.parquet",
+            "b4d90e2de27c2ed2db4908bcdbb52e0cd0e205966131d9f064c43a7cd98c8f14.parquet",
         ];
-        "batches smaller than partitions")
+        "record batches irregular size")
     ]
     #[tokio::test]
     async fn test_plan_to_object_storage_partition_chunking(
