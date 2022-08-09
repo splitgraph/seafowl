@@ -323,7 +323,29 @@ async fn test_table_partitioning_and_rechunking() {
         )
     );
     assert_eq!(partitions[0].row_count, 6);
-    assert_eq!(partitions[0].columns.len(), 5); // TODO: see why the partition now stores 2 empty columns
+    assert_eq!(partitions[0].columns.len(), 5);
+
+    // Ensure table contents
+    context.reload_schema().await;
+    let plan = context
+        .plan_query("SELECT some_value, some_int_value FROM table_rechunked")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+------------+----------------+",
+        "| some_value | some_int_value |",
+        "+------------+----------------+",
+        "| 42         | 1111           |",
+        "| 43         | 2222           |",
+        "| 44         | 3333           |",
+        "| 45         | 4444           |",
+        "| 46         | 5555           |",
+        "| 47         | 6666           |",
+        "+------------+----------------+",
+    ];
+    assert_batches_eq!(expected, &results);
 }
 
 #[tokio::test]

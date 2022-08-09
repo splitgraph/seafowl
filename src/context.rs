@@ -1274,7 +1274,7 @@ mod tests {
             "72587d81f4f3a1b2b69377d5a6d302fea796319d6fa1ca777cc3148b63ffb819.parquet",
             "e6628dd3c33c390d34e208c01a30365d9565edef101b6f272c2dff661dc67763.parquet",
         ];
-        "record batches larger then partitions")
+        "record batches larger than partitions")
     ]
     #[test_case(
         3,

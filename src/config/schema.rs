@@ -10,7 +10,7 @@ pub struct SeafowlConfig {
     #[serde(default)]
     pub frontend: Frontend,
     #[serde(default)]
-    pub runtime: Runtime,
+    pub misc: Misc,
 }
 
 #[derive(Deserialize, Debug, PartialEq, Clone)]
@@ -104,11 +104,11 @@ impl Default for HttpFrontend {
 
 #[derive(Deserialize, Debug, PartialEq, Clone)]
 #[serde(default)]
-pub struct Runtime {
+pub struct Misc {
     pub max_partition_size: i64,
 }
 
-impl Default for Runtime {
+impl Default for Misc {
     fn default() -> Self {
         Self {
             max_partition_size: 1048576,
@@ -137,7 +137,7 @@ mod tests {
         load_config_from_string, Catalog, Frontend, HttpFrontend, Local, ObjectStore,
         Postgres, SeafowlConfig, S3,
     };
-    use crate::config::schema::Runtime;
+    use crate::config::schema::Misc;
 
     const TEST_CONFIG_S3: &str = r#"
 [object_store]
@@ -200,7 +200,7 @@ bind_port = 80
                         bind_port: 80
                     })
                 },
-                runtime: Runtime {
+                misc: Misc {
                     max_partition_size: 1048576
                 },
             }
@@ -229,7 +229,7 @@ bind_port = 80
                         bind_port: 80
                     })
                 },
-                runtime: Runtime {
+                misc: Misc {
                     max_partition_size: 1048576
                 },
             }

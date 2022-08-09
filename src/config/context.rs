@@ -124,7 +124,7 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
         function_catalog: functions,
         database: "default".to_string(),
         database_id: default_db,
-        max_partition_size: cfg.runtime.max_partition_size,
+        max_partition_size: cfg.misc.max_partition_size,
     };
 
     // Register our database with DataFusion
@@ -154,7 +154,7 @@ mod tests {
                     bind_port: 80,
                 }),
             },
-            runtime: schema::Runtime {
+            misc: schema::Misc {
                 max_partition_size: 1048576,
             },
         };
