@@ -1,16 +1,16 @@
-# Seafowl
-
 ![Seafowl](./docs/static/logotype.svg)
+
+[Home page](https://seafowl.io) | [Documentation](https://www.splitgraph.com/docs/seafowl/getting-started/introduction) | [Download](https://github.com/splitgraph/seafowl/releases)
 
 Seafowl is an analytical database designed for modern data-driven Web applications.
 
 ## Work in progress
 
-This repository is an active work in progress and we do not yet provide pre-compiled builds or build
-instructions.
+**This repository is an active work in progress and we do not yet provide pre-compiled builds or build
+instructions.**
 
-Read on to find out more about our goals for the initial release or star/watch this repository to
-stay informed on our progress!
+**Read on to find out more about our goals for the initial release or star/watch this repository to
+stay informed on our progress!**
 
 ## Initial release roadmap
 
