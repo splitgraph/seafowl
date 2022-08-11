@@ -399,6 +399,9 @@ pub trait SeafowlContext: Send + Sync {
     async fn reload_schema(&self);
     async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan>;
     async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>>;
+
+    // TODO: context.create_physical_plan shouldn't be exposed in the interface, since
+    // it bypasses our special way of executing Inserts etc
     async fn create_physical_plan(
         &self,
         plan: &LogicalPlan,
