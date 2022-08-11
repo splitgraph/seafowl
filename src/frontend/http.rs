@@ -64,6 +64,35 @@ struct QueryBody {
     query: String,
 }
 
+// POST /q
+pub fn uncached_read_write_query(
+    context: Arc<dyn SeafowlContext>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path!("q")
+        .and(warp::post())
+        .and(
+            // Extract the query from the JSON body
+            warp::body::json().map(|b: QueryBody| b.query),
+        )
+        .then(move |query: String| {
+            let context = context.clone();
+            async move {
+                context.reload_schema().await;
+                // TODO: handle/propagate errors
+                // TODO (when authz is implemented) check for read-only queries
+                let physical = context.plan_query(&query).await.unwrap();
+                let batches = context.collect(physical).await.unwrap();
+
+                let mut buf = Vec::new();
+                let mut writer = LineDelimitedWriter::new(&mut buf);
+                writer.write_batches(&batches).unwrap();
+                writer.finish().unwrap();
+
+                buf.into_response()
+            }
+        })
+}
+
 // GET /q/[query hash]
 pub fn cached_read_query(
     context: Arc<dyn SeafowlContext>,
@@ -165,7 +194,9 @@ pub fn filters(
         .allow_headers(vec!["X-Seafowl-Query", "Authorization", "Content-Type"])
         .allow_methods(vec!["GET", "POST"]);
 
-    cached_read_query(context).with(cors)
+    cached_read_query(context.clone())
+        .or(uncached_read_write_query(context))
+        .with(cors)
 }
 
 pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) {
