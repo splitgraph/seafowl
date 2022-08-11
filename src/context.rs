@@ -1060,9 +1060,11 @@ pub mod test_utils {
 
     use crate::{
         catalog::{
-            MockFunctionCatalog, MockPartitionCatalog, MockTableCatalog, TableCatalog,
+            DefaultCatalog, MockFunctionCatalog, MockPartitionCatalog, MockTableCatalog,
+            TableCatalog,
         },
         provider::{SeafowlCollection, SeafowlDatabase},
+        repository::sqlite::SqliteRepository,
     };
 
     use datafusion::{
@@ -1077,13 +1079,41 @@ pub mod test_utils {
     use super::*;
 
     pub fn make_session() -> SessionContext {
-        let session_config = SessionConfig::new().with_information_schema(true);
+        let session_config = SessionConfig::new()
+            .with_information_schema(true)
+            .with_default_catalog_and_schema("default", "public");
 
         let context = SessionContext::with_config(session_config);
         let object_store = Arc::new(InMemory::new());
         context
             .runtime_env()
             .register_object_store("seafowl", "", object_store);
+        context
+    }
+
+    /// Build a real (not mocked) in-memory context that uses SQLite
+    pub async fn in_memory_context() -> DefaultSeafowlContext {
+        let session = make_session();
+
+        let repository = SqliteRepository::try_new("sqlite://:memory:".to_string())
+            .await
+            .unwrap();
+        let catalog = Arc::new(DefaultCatalog {
+            repository: Arc::new(repository),
+        });
+        let default_db = catalog.create_database("default").await;
+        catalog.create_collection(default_db, "public").await;
+
+        let context = DefaultSeafowlContext {
+            inner: session,
+            table_catalog: catalog.clone(),
+            partition_catalog: catalog.clone(),
+            function_catalog: catalog,
+            database: "default".to_string(),
+            database_id: default_db,
+            max_partition_size: 1024 * 1024,
+        };
+        context.reload_schema().await;
         context
     }
 
