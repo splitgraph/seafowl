@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 
 use arrow::json::LineDelimitedWriter;
 use datafusion::{
@@ -7,6 +7,7 @@ use datafusion::{
 };
 use hex::encode;
 use log::debug;
+use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use warp::{hyper::StatusCode, Filter, Reply};
@@ -58,51 +59,30 @@ fn plan_to_etag(plan: &LogicalPlan) -> String {
     encode(hasher.finalize())
 }
 
+#[derive(Debug, Deserialize)]
+struct QueryBody {
+    query: String,
+}
+
 // GET /q/[query hash]
 pub fn cached_read_query(
     context: Arc<dyn SeafowlContext>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("q" / String)
-        .and(warp::header::optional::<String>(QUERY_HEADER))
+        .and(
+            // Extract the query either from the header or from the JSON body
+            warp::header::<String>(QUERY_HEADER)
+                .or(warp::body::json().map(|b: QueryBody| b.query))
+                .unify(),
+        )
         .and(warp::header::optional::<String>(IF_NONE_MATCH))
-        .and(warp::body::json())
         .then(
-            move |query_hash: String,
-                  query: Option<String>,
-                  if_none_match: Option<String>,
-                  body: Option<HashMap<String, String>>| {
+            move |query_hash: String, query: String, if_none_match: Option<String>| {
                 let context = context.clone();
 
                 async move {
                     // Ignore dots at the end
                     let query_hash = query_hash.split('.').next().unwrap();
-
-                    // Extract the query from the body / header
-                    let sql_query = {
-                        match body {
-                            Some(body) => match body.get("query") {
-                                Some(sql_query) => Ok(sql_query.to_owned()),
-                                None => Err(warp::reply::with_status(
-                                    "WRONG_QUERY_BODY",
-                                    StatusCode::BAD_REQUEST,
-                                )
-                                .into_response()),
-                            },
-                            None => match query {
-                                Some(sql_query) => Ok(sql_query),
-                                None => Err(warp::reply::with_status(
-                                    "MISSING_QUERY_HEADER",
-                                    StatusCode::BAD_REQUEST,
-                                )
-                                .into_response()),
-                            },
-                        }
-                    };
-
-                    let query = match sql_query {
-                        Ok(query) => query,
-                        Err(r) => return r,
-                    };
 
                     context.reload_schema().await;
                     let mut hasher = Sha256::new();
@@ -181,7 +161,7 @@ pub fn filters(
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let cors = warp::cors()
         .allow_any_origin()
-        .allow_headers(vec!["X-Seafowl-Query", "Authorization"])
+        .allow_headers(vec!["X-Seafowl-Query", "Authorization", "Content-Type"])
         .allow_methods(vec!["GET", "POST"]);
 
     cached_read_query(context).with(cors)
@@ -356,6 +336,22 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"col1\":1}\n");
         assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V1_ETAG);
+    }
+
+    #[tokio::test]
+    async fn test_get_cached_no_query() {
+        let context = build_mock_context_with_table_version(0);
+        let handler = cached_read_query(context);
+
+        let resp = request()
+            .method("GET")
+            .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // TODO: return a better error than this
+        // https://github.com/splitgraph/seafowl/issues/22
+        assert_eq!(resp.body(), "Request body deserialize error: EOF while parsing a value at line 1 column 0");
     }
 
     #[tokio::test]
