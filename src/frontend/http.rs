@@ -69,6 +69,7 @@ pub fn cached_read_query(
     context: Arc<dyn SeafowlContext>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("q" / String)
+        .and(warp::get())
         .and(
             // Extract the query either from the header or from the JSON body
             warp::header::<String>(QUERY_HEADER)
