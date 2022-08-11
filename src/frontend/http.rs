@@ -1,15 +1,19 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use arrow::json::LineDelimitedWriter;
+use bytes::BufMut;
 use datafusion::{
     datasource::DefaultTableSource,
     logical_plan::{LogicalPlan, PlanVisitor, TableScan},
 };
+use futures::TryStreamExt;
 use hex::encode;
 use log::debug;
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use warp::multipart::{FormData, Part};
+use warp::reply::Response;
 use warp::{hyper::StatusCode, Filter, Reply};
 
 use crate::{
@@ -65,125 +69,125 @@ struct QueryBody {
 }
 
 // POST /q
-pub fn uncached_read_write_query(
+pub async fn uncached_read_write_query(
+    query: String,
     context: Arc<dyn SeafowlContext>,
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp::path!("q")
-        .and(warp::post())
-        .and(
-            // Extract the query from the JSON body
-            warp::body::json().map(|b: QueryBody| b.query),
-        )
-        .then(move |query: String| {
-            let context = context.clone();
-            async move {
-                context.reload_schema().await;
-                // TODO: handle/propagate errors
-                // TODO (when authz is implemented) check for read-only queries
-                let physical = context.plan_query(&query).await.unwrap();
-                let batches = context.collect(physical).await.unwrap();
+) -> Response {
+    context.reload_schema().await;
+    // TODO: handle/propagate errors
+    // TODO (when authz is implemented) check for read-only queries
+    let physical = context.plan_query(&query).await.unwrap();
+    let batches = context.collect(physical).await.unwrap();
 
-                let mut buf = Vec::new();
-                let mut writer = LineDelimitedWriter::new(&mut buf);
-                writer.write_batches(&batches).unwrap();
-                writer.finish().unwrap();
+    let mut buf = Vec::new();
+    let mut writer = LineDelimitedWriter::new(&mut buf);
+    writer.write_batches(&batches).unwrap();
+    writer.finish().unwrap();
 
-                buf.into_response()
-            }
-        })
+    buf.into_response()
 }
 
 // GET /q/[query hash]
-pub fn cached_read_query(
+pub async fn cached_read_query(
+    query_hash: String,
+    query: String,
+    if_none_match: Option<String>,
     context: Arc<dyn SeafowlContext>,
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp::path!("q" / String)
-        .and(warp::get())
-        .and(
-            // Extract the query either from the header or from the JSON body
-            warp::header::<String>(QUERY_HEADER)
-                .or(warp::body::json().map(|b: QueryBody| b.query))
-                .unify(),
-        )
-        .and(warp::header::optional::<String>(IF_NONE_MATCH))
-        .then(
-            move |query_hash: String, query: String, if_none_match: Option<String>| {
-                let context = context.clone();
+) -> Response {
+    // Ignore dots at the end
+    let query_hash = query_hash.split('.').next().unwrap();
 
-                async move {
-                    // Ignore dots at the end
-                    let query_hash = query_hash.split('.').next().unwrap();
+    context.reload_schema().await;
+    let mut hasher = Sha256::new();
+    hasher.update(&query);
+    let hash_str = encode(hasher.finalize());
 
-                    context.reload_schema().await;
-                    let mut hasher = Sha256::new();
-                    hasher.update(&query);
-                    let hash_str = encode(hasher.finalize());
+    debug!(
+        "Received query: {}, URL hash {}, actual hash {}",
+        query, query_hash, hash_str
+    );
 
-                    debug!(
-                        "Received query: {}, URL hash {}, actual hash {}",
-                        query, query_hash, hash_str
-                    );
+    // Verify the query hash matches the query
+    if query_hash != hash_str {
+        return warp::reply::with_status("HASH_MISMATCH", StatusCode::BAD_REQUEST)
+            .into_response();
+    }
 
-                    // Verify the query hash matches the query
-                    if query_hash != hash_str {
-                        return warp::reply::with_status(
-                            "HASH_MISMATCH",
-                            StatusCode::BAD_REQUEST,
-                        )
-                        .into_response();
-                    }
+    // Plan the query
+    // TODO handle error
+    let plan = context.create_logical_plan(&query).await.unwrap();
+    debug!("Query plan: {:?}", plan);
 
-                    // Plan the query
-                    // TODO handle error
-                    let plan = context.create_logical_plan(&query).await.unwrap();
-                    debug!("Query plan: {:?}", plan);
+    // Write queries should come in as POST requests
+    match plan {
+        LogicalPlan::CreateExternalTable(_)
+        | LogicalPlan::CreateMemoryTable(_)
+        | LogicalPlan::CreateView(_)
+        | LogicalPlan::CreateCatalogSchema(_)
+        | LogicalPlan::CreateCatalog(_)
+        | LogicalPlan::DropTable(_)
+        | LogicalPlan::Analyze(_)
+        | LogicalPlan::Extension(_) => {
+            return warp::reply::with_status(
+                "NOT_READ_ONLY_QUERY",
+                StatusCode::METHOD_NOT_ALLOWED,
+            )
+            .into_response()
+        }
+        _ => (),
+    };
 
-                    // Write queries should come in as POST requests
-                    match plan {
-                        LogicalPlan::CreateExternalTable(_)
-                        | LogicalPlan::CreateMemoryTable(_)
-                        | LogicalPlan::CreateView(_)
-                        | LogicalPlan::CreateCatalogSchema(_)
-                        | LogicalPlan::CreateCatalog(_)
-                        | LogicalPlan::DropTable(_)
-                        | LogicalPlan::Analyze(_)
-                        | LogicalPlan::Extension(_) => {
-                            return warp::reply::with_status(
-                                "NOT_READ_ONLY_QUERY",
-                                StatusCode::METHOD_NOT_ALLOWED,
-                            )
-                            .into_response()
-                        }
-                        _ => (),
-                    };
+    // Pre-execution check: if ETags match, we don't need to re-execute the query
+    let etag = plan_to_etag(&plan);
+    debug!("ETag: {}, if-none-match header: {:?}", etag, if_none_match);
 
-                    // Pre-execution check: if ETags match, we don't need to re-execute the query
-                    let etag = plan_to_etag(&plan);
-                    debug!("ETag: {}, if-none-match header: {:?}", etag, if_none_match);
+    if let Some(if_none_match) = if_none_match {
+        if etag == if_none_match {
+            return warp::reply::with_status("NOT_MODIFIED", StatusCode::NOT_MODIFIED)
+                .into_response();
+        }
+    }
 
-                    if let Some(if_none_match) = if_none_match {
-                        if etag == if_none_match {
-                            return warp::reply::with_status(
-                                "NOT_MODIFIED",
-                                StatusCode::NOT_MODIFIED,
-                            )
-                            .into_response();
-                        }
-                    }
+    // Guess we'll have to actually run the query
+    let physical = context.create_physical_plan(&plan).await.unwrap();
+    let batches = context.collect(physical).await.unwrap();
 
-                    // Guess we'll have to actually run the query
-                    let physical = context.create_physical_plan(&plan).await.unwrap();
-                    let batches = context.collect(physical).await.unwrap();
+    let mut buf = Vec::new();
+    let mut writer = LineDelimitedWriter::new(&mut buf);
+    writer.write_batches(&batches).unwrap();
+    writer.finish().unwrap();
 
-                    let mut buf = Vec::new();
-                    let mut writer = LineDelimitedWriter::new(&mut buf);
-                    writer.write_batches(&batches).unwrap();
-                    writer.finish().unwrap();
+    warp::reply::with_header(buf, ETAG, etag).into_response()
+}
 
-                    warp::reply::with_header(buf, ETAG, etag).into_response()
-                }
-            },
-        )
+pub async fn upload(
+    _schema: String,
+    _table: String,
+    form: FormData,
+    _context: Arc<dyn SeafowlContext>,
+) -> Response {
+    let parts: Vec<Part> = form.try_collect().await.unwrap();
+    for p in parts {
+        println!("{:?}", p);
+        if p.name() == "file" {
+            // Load the file content from the request and write it out to the temp file
+            let value = p
+                .stream()
+                .try_fold(Vec::new(), |mut vec, data| {
+                    vec.put(data);
+                    async move { Ok(vec) }
+                })
+                .await
+                .map_err(|e| {
+                    eprintln!("reading file error: {}", e);
+                    warp::reject::reject()
+                })
+                .unwrap();
+
+            println!("{:?}", String::from_utf8(value));
+        }
+    }
+    warp::reply::with_status(Ok("done"), StatusCode::OK).into_response()
 }
 
 pub fn filters(
@@ -194,9 +198,49 @@ pub fn filters(
         .allow_headers(vec!["X-Seafowl-Query", "Authorization", "Content-Type"])
         .allow_methods(vec!["GET", "POST"]);
 
-    cached_read_query(context.clone())
-        .or(uncached_read_write_query(context))
+    // Cached read query
+    let cached_read_query_ctx = context.clone();
+    let cached_read_query_route = warp::path!("q" / String)
+        .and(warp::get())
+        .and(
+            // Extract the query either from the header or from the JSON body
+            warp::header::<String>(QUERY_HEADER)
+                .or(warp::body::json().map(|b: QueryBody| b.query))
+                .unify(),
+        )
+        .and(warp::header::optional::<String>(IF_NONE_MATCH))
+        .then(move |query_hash, query, if_none_match| {
+            cached_read_query(
+                query_hash,
+                query,
+                if_none_match,
+                cached_read_query_ctx.clone(),
+            )
+        });
+
+    // Uncached read/write query
+    let uncached_read_write_query_ctx = context.clone();
+    let uncached_read_write_query_route = warp::path!("q")
+        .and(warp::post())
+        .and(
+            // Extract the query from the JSON body
+            warp::body::json().map(|b: QueryBody| b.query),
+        )
+        .then(move |query| {
+            uncached_read_write_query(query, uncached_read_write_query_ctx.clone())
+        });
+
+    // Upload endpoint
+    let upload_ctx = context.clone();
+    let upload_route = warp::path!("upload" / String / String)
+        .and(warp::post())
+        .and(warp::multipart::form())
+        .then(move |schema, table, form| upload(schema, table, form, upload_ctx.clone()));
+
+    cached_read_query_route
+        .or(uncached_read_write_query_route)
         .with(cors)
+        .or(upload_route)
 }
 
 pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) {
@@ -447,5 +491,34 @@ mod tests {
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":2}\n");
+    }
+
+    #[tokio::test]
+    async fn test_upload() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(context);
+
+        let body = "--42\r\n\
+            Content-Disposition: form-data; name=\"file\"; filename=\"fruits.csv\"\n\
+            Content-Type: application/octet-stream\n\n\
+            fruit_id,name\n\
+            1,apple\n\
+            2,orange\n\
+            --42--";
+
+        let resp = request()
+            .method("POST")
+            .path(format!("/upload/{}/{}", "test_schema", "test_table").as_str())
+            .header("Host", "localhost:3030")
+            .header("User-Agent", "curl/7.64.1")
+            .header("Accept", "*/*")
+            .header("Content-Length", 232)
+            .header("Content-Type", "multipart/form-data; boundary=42")
+            .body(body.to_string().as_bytes())
+            .reply(&handler)
+            .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.body(), "done");
     }
 }
