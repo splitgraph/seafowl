@@ -180,121 +180,77 @@ pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) 
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::{array::Int8Array, record_batch::RecordBatch};
-    use datafusion::{
-        logical_plan::{
-            provider_as_source, CreateCatalog, DFSchema, LogicalPlan, LogicalPlanBuilder,
-        },
-        physical_plan::empty::EmptyExec,
-    };
-    use mockall::predicate;
     use warp::{
         hyper::{header::IF_NONE_MATCH, StatusCode},
         test::request,
     };
 
     use crate::{
-        catalog::MockPartitionCatalog,
-        context::{MockSeafowlContext, SeafowlContext},
-        data_types::TableVersionId,
+        context::{test_utils::in_memory_context, SeafowlContext},
         frontend::http::ETAG,
-        provider::SeafowlTable,
-        schema::Schema as SeafowlSchema,
     };
 
     use super::{cached_read_query, QUERY_HEADER};
 
-    use datafusion::arrow::datatypes::{
-        DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
-    };
+    /// Build an in-memory context with a single table
+    /// We implicitly assume here that this table is the only one in this context
+    /// and has version ID 1 (otherwise the hashes won't match).
+    async fn in_memory_context_with_single_table() -> Arc<dyn SeafowlContext> {
+        let context = Arc::new(in_memory_context().await);
 
-    /// Build a fully mocked context that plans a scan through a table with a certain version
-    /// and returns a single-value result.
-    fn build_mock_context_with_table_version(
-        table_version_id: TableVersionId,
-    ) -> Arc<dyn SeafowlContext> {
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
-            "col1",
-            ArrowDataType::Int8,
-            true,
-        )]));
-        let partition_catalog = MockPartitionCatalog::new();
-        let partition_catalog_ptr = Arc::new(partition_catalog);
+        context
+            .collect(
+                context
+                    .plan_query("CREATE TABLE test_table(col_1 INTEGER)")
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        context.reload_schema().await;
 
-        let table_source = SeafowlTable {
-            name: Arc::from("some_table"),
-            schema: Arc::new(SeafowlSchema {
-                arrow_schema: arrow_schema.clone(),
-            }),
-            table_id: 0,
-            table_version_id,
-            catalog: partition_catalog_ptr,
-        };
-        let plan = LogicalPlanBuilder::scan(
-            "some_table",
-            provider_as_source(Arc::new(table_source)),
-            None,
-        )
-        .unwrap()
-        .build()
-        .unwrap();
-
-        let mut sf_context = MockSeafowlContext::new();
-        sf_context.expect_reload_schema().return_const(());
-
-        sf_context
-            .expect_create_logical_plan()
-            .with(predicate::eq(SELECT_QUERY))
-            .returning(move |_| Ok(plan.clone()));
-
-        let schema = arrow_schema.clone();
-        sf_context
-            .expect_create_physical_plan()
-            .returning(move |_| Ok(Arc::new(EmptyExec::new(true, schema.clone()))));
-
-        let schema = arrow_schema;
-        sf_context.expect_collect().returning(move |_| {
-            Ok(vec![RecordBatch::try_new(
-                schema.clone(),
-                vec![Arc::new([Some(1)].into_iter().collect::<Int8Array>())],
-            )?])
-        });
-
-        Arc::new(sf_context)
+        context
+            .collect(
+                context
+                    .plan_query("INSERT INTO test_table VALUES (1)")
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        context.reload_schema().await;
+        context
     }
 
-    fn build_mock_context_write_query() -> Arc<dyn SeafowlContext> {
-        let plan = LogicalPlan::CreateCatalog(CreateCatalog {
-            catalog_name: "catalog".to_string(),
-            if_not_exists: true,
-            schema: Arc::new(DFSchema::empty()),
-        });
-
-        let mut sf_context = MockSeafowlContext::new();
-        sf_context.expect_reload_schema().return_const(());
-
-        sf_context
-            .expect_create_logical_plan()
-            .with(predicate::eq(CREATE_QUERY))
-            .returning(move |_| Ok(plan.clone()));
-
-        Arc::new(sf_context)
+    async fn in_memory_context_with_modified_table() -> Arc<dyn SeafowlContext> {
+        let context = in_memory_context_with_single_table().await;
+        context
+            .collect(
+                context
+                    .plan_query("INSERT INTO test_table VALUES (2)")
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        context.reload_schema().await;
+        context
     }
 
-    const SELECT_QUERY: &str = "SELECT COUNT(*) FROM testcol.some_table";
-    const CREATE_QUERY: &str = "CREATE DATABASE catalog";
+    const SELECT_QUERY: &str = "SELECT COUNT(*) AS c FROM test_table";
+    const CREATE_QUERY: &str = "CREATE TABLE other_test_table(col_1 INTEGER)";
     const SELECT_QUERY_HASH: &str =
-        "aa352ab71747f77b955ff09bf28ab9b60db0ce7c10022fcbd4961808063443b8";
+        "7fbbf7dddfd330d03e5e08cc5885ad8ca823e1b56e7cbadd156daa0e21c288f6";
     const CREATE_QUERY_HASH: &str =
-        "58a04cbb43d016a84d478e8291c34535771068cae2b229a550f7748a8ccef2a0";
+        "be185830b7db691f3ffd33c81a83bb4ed48e2411fc3fc500ee20b8ec7effb8a6";
     const V1_ETAG: &str =
-        "d0bca111f8628137adc4c16f123496dcdd1d590d06cb5d9acd68b39fe656fb97";
+        "038966de9f6b9a901b20b4c6ca8b2a46009feebe031babc842d43690c0bc222b";
     const V2_ETAG: &str =
-        "080a9ed428559ef602668b4c00f114f1a11c3f6b02a435f0bdc154578e4d7f22";
+        "06d033ece6645de592db973644cf7357255f24536ff7b03c3b2ace10736f7636";
 
     #[tokio::test]
     async fn test_get_cached_hash_mismatch() {
-        let context = build_mock_context_with_table_version(0);
+        let context = in_memory_context_with_single_table().await;
         let handler = cached_read_query(context);
 
         let resp = request()
@@ -309,7 +265,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_cached_write_query_error() {
-        let context = build_mock_context_write_query();
+        let context = in_memory_context_with_single_table().await;
         let handler = cached_read_query(context);
 
         let resp = request()
@@ -324,7 +280,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_cached_no_etag() {
-        let context = build_mock_context_with_table_version(0);
+        let context = in_memory_context_with_single_table().await;
         let handler = cached_read_query(context);
 
         let resp = request()
@@ -334,13 +290,13 @@ mod tests {
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "{\"col1\":1}\n");
+        assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V1_ETAG);
     }
 
     #[tokio::test]
     async fn test_get_cached_no_query() {
-        let context = build_mock_context_with_table_version(0);
+        let context = in_memory_context_with_single_table().await;
         let handler = cached_read_query(context);
 
         let resp = request()
@@ -356,7 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_cached_no_etag_query_in_body() {
-        let context = build_mock_context_with_table_version(0);
+        let context = in_memory_context_with_single_table().await;
         let handler = cached_read_query(context);
 
         let resp = request()
@@ -366,13 +322,13 @@ mod tests {
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "{\"col1\":1}\n");
+        assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V1_ETAG);
     }
 
     #[tokio::test]
     async fn test_get_cached_no_etag_extension() {
-        let context = build_mock_context_with_table_version(0);
+        let context = in_memory_context_with_single_table().await;
         let handler = cached_read_query(context);
 
         let resp = request()
@@ -382,7 +338,7 @@ mod tests {
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "{\"col1\":1}\n");
+        assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V1_ETAG);
     }
 
@@ -390,13 +346,13 @@ mod tests {
     async fn test_get_cached_reuse_etag() {
         // Pass the same ETag as If-None-Match, should return a 301
 
-        let context = build_mock_context_with_table_version(0);
+        let context = in_memory_context_with_single_table().await;
         let handler = cached_read_query(context);
 
         let resp = request()
             .method("GET")
             .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
-            .header(QUERY_HEADER, "SELECT COUNT(*) FROM testcol.some_table")
+            .header(QUERY_HEADER, SELECT_QUERY)
             .header(IF_NONE_MATCH, V1_ETAG)
             .reply(&handler)
             .await;
@@ -408,18 +364,18 @@ mod tests {
     async fn test_get_cached_etag_new_version() {
         // Pass the same ETag as If-None-Match, but the table version changed -> reruns the query
 
-        let context = build_mock_context_with_table_version(1);
+        let context = in_memory_context_with_modified_table().await;
         let handler = cached_read_query(context);
 
         let resp = request()
             .method("GET")
             .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
-            .header(QUERY_HEADER, "SELECT COUNT(*) FROM testcol.some_table")
+            .header(QUERY_HEADER, SELECT_QUERY)
             .header(ETAG, V1_ETAG)
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "{\"col1\":1}\n");
+        assert_eq!(resp.body(), "{\"c\":2}\n");
         assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V2_ETAG);
     }
 }
