@@ -187,10 +187,8 @@ mod tests {
 
     use crate::{
         context::{test_utils::in_memory_context, SeafowlContext},
-        frontend::http::ETAG,
+        frontend::http::{filters, ETAG, QUERY_HEADER},
     };
-
-    use super::{cached_read_query, QUERY_HEADER};
 
     /// Build an in-memory context with a single table
     /// We implicitly assume here that this table is the only one in this context
@@ -251,7 +249,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_hash_mismatch() {
         let context = in_memory_context_with_single_table().await;
-        let handler = cached_read_query(context);
+        let handler = filters(context);
 
         let resp = request()
             .method("GET")
@@ -266,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_write_query_error() {
         let context = in_memory_context_with_single_table().await;
-        let handler = cached_read_query(context);
+        let handler = filters(context);
 
         let resp = request()
             .method("GET")
@@ -281,7 +279,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_etag() {
         let context = in_memory_context_with_single_table().await;
-        let handler = cached_read_query(context);
+        let handler = filters(context);
 
         let resp = request()
             .method("GET")
@@ -297,7 +295,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_query() {
         let context = in_memory_context_with_single_table().await;
-        let handler = cached_read_query(context);
+        let handler = filters(context);
 
         let resp = request()
             .method("GET")
@@ -313,7 +311,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_etag_query_in_body() {
         let context = in_memory_context_with_single_table().await;
-        let handler = cached_read_query(context);
+        let handler = filters(context);
 
         let resp = request()
             .method("GET")
@@ -329,7 +327,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_etag_extension() {
         let context = in_memory_context_with_single_table().await;
-        let handler = cached_read_query(context);
+        let handler = filters(context);
 
         let resp = request()
             .method("GET")
@@ -347,7 +345,7 @@ mod tests {
         // Pass the same ETag as If-None-Match, should return a 301
 
         let context = in_memory_context_with_single_table().await;
-        let handler = cached_read_query(context);
+        let handler = filters(context);
 
         let resp = request()
             .method("GET")
@@ -365,7 +363,7 @@ mod tests {
         // Pass the same ETag as If-None-Match, but the table version changed -> reruns the query
 
         let context = in_memory_context_with_modified_table().await;
-        let handler = cached_read_query(context);
+        let handler = filters(context);
 
         let resp = request()
             .method("GET")
