@@ -6,7 +6,7 @@ use datafusion::logical_plan::{
 
 use crate::{provider::SeafowlTable, wasm_udf::data_types::CreateFunctionDetails};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CreateTable {
     /// The table schema
     pub schema: DFSchemaRef,
@@ -19,7 +19,7 @@ pub struct CreateTable {
     pub output_schema: DFSchemaRef,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Insert {
     /// The table to insert into
     pub table: Arc<SeafowlTable>,
@@ -29,13 +29,13 @@ pub struct Insert {
     pub output_schema: DFSchemaRef,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Assignment {
     pub column: Column,
     pub expr: Expr,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Update {
     /// The table name (TODO: should this be a table ref?)
     pub name: String,
@@ -47,7 +47,7 @@ pub struct Update {
     pub output_schema: DFSchemaRef,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Delete {
     /// The table name (TODO: should this be a table ref?)
     pub name: String,
@@ -57,7 +57,7 @@ pub struct Delete {
     pub output_schema: DFSchemaRef,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CreateFunction {
     /// The function name
     pub name: String,
@@ -66,7 +66,7 @@ pub struct CreateFunction {
     pub output_schema: DFSchemaRef,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SeafowlExtensionNode {
     CreateTable(CreateTable),
     Insert(Insert),
@@ -114,6 +114,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
+        // NB: this is used by the plan optimizer (gets expressions(), optimizes them,
+        // calls from_template(optimized_exprs) and we'll need to expose our expressions here
+        // and support from_template for a given node if we want them to be optimized.
         vec![]
     }
 
@@ -140,8 +143,23 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
     fn from_template(
         &self,
         _exprs: &[Expr],
-        _inputs: &[LogicalPlan],
+        inputs: &[LogicalPlan],
     ) -> Arc<dyn UserDefinedLogicalNode> {
-        todo!()
+        match self {
+            // This is the only node for which we return `inputs` in inputs()
+            SeafowlExtensionNode::Insert(Insert {
+                table,
+                input,
+                output_schema,
+            }) => Arc::new(SeafowlExtensionNode::Insert(Insert {
+                table: table.clone(),
+                input: match inputs.first() {
+                    Some(new_input) => Arc::new(new_input.clone()),
+                    None => input.clone(),
+                },
+                output_schema: output_schema.clone(),
+            })),
+            _ => Arc::from(self.clone()),
+        }
     }
 }

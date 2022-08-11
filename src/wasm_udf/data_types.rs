@@ -22,7 +22,7 @@ pub fn get_volatility(t: &CreateFunctionVolatility) -> Volatility {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, EnumString, Display)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, EnumString, Display, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum CreateFunctionWASMType {
     I32,
@@ -31,7 +31,7 @@ pub enum CreateFunctionWASMType {
     F64,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, EnumString, Display)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, EnumString, Display, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum CreateFunctionVolatility {
     Immutable,
@@ -44,7 +44,7 @@ impl Default for CreateFunctionVolatility {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, EnumString, Display)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, EnumString, Display, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum CreateFunctionLanguage {
     Wasm,
@@ -55,7 +55,7 @@ impl Default for CreateFunctionLanguage {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct CreateFunctionDetails {
     pub entrypoint: String,
     #[serde(default)]
