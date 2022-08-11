@@ -198,7 +198,7 @@ pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) 
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
     use arrow::{array::Int8Array, record_batch::RecordBatch};
     use datafusion::{
@@ -351,6 +351,22 @@ mod tests {
             .method("GET")
             .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.body(), "{\"col1\":1}\n");
+        assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V1_ETAG);
+    }
+
+    #[tokio::test]
+    async fn test_get_cached_no_etag_query_in_body() {
+        let context = build_mock_context_with_table_version(0);
+        let handler = cached_read_query(context);
+
+        let resp = request()
+            .method("GET")
+            .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
+            .json(&HashMap::from([("query", SELECT_QUERY)]))
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
