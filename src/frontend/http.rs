@@ -268,6 +268,7 @@ mod tests {
     }
 
     const SELECT_QUERY: &str = "SELECT COUNT(*) AS c FROM test_table";
+    const INSERT_QUERY: &str = "INSERT INTO test_table VALUES (2)";
     const CREATE_QUERY: &str = "CREATE TABLE other_test_table(col_1 INTEGER)";
     const SELECT_QUERY_HASH: &str =
         "7fbbf7dddfd330d03e5e08cc5885ad8ca823e1b56e7cbadd156daa0e21c288f6";
@@ -407,5 +408,44 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":2}\n");
         assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V2_ETAG);
+    }
+
+    #[tokio::test]
+    async fn test_get_uncached_read_query() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(context);
+
+        let resp = request()
+            .method("POST")
+            .path("/q")
+            .json(&HashMap::from([("query", SELECT_QUERY)]))
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.body(), "{\"c\":1}\n");
+    }
+
+    #[tokio::test]
+    async fn test_get_uncached_write_query() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(context);
+
+        let resp = request()
+            .method("POST")
+            .path("/q")
+            .json(&HashMap::from([("query", INSERT_QUERY)]))
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.body(), "");
+
+        let resp = request()
+            .method("POST")
+            .path("/q")
+            .json(&HashMap::from([("query", SELECT_QUERY)]))
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.body(), "{\"c\":2}\n");
     }
 }
