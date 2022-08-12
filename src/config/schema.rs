@@ -97,7 +97,7 @@ impl Default for HttpFrontend {
     fn default() -> Self {
         Self {
             bind_host: "127.0.0.1".to_string(),
-            bind_port: 3030,
+            bind_port: 8080,
         }
     }
 }
