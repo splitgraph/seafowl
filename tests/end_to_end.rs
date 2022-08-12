@@ -29,7 +29,9 @@ schema = "{}""#,
         get_random_schema()
     );
 
-    let config = load_config_from_string(&config_text).unwrap();
+    // Ignore the "in-memory object store / persistent catalog" error in e2e tests (we'll discard
+    // the PG instance anyway)
+    let config = load_config_from_string(&config_text, true).unwrap();
     build_context(&config).await
 }
 

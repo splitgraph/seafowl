@@ -141,11 +141,18 @@ pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
 }
 
 // Load a config from a string (to test our structs are defined correctly)
-pub fn load_config_from_string(config_str: &str) -> Result<SeafowlConfig, ConfigError> {
+pub fn load_config_from_string(
+    config_str: &str,
+    skip_validation: bool,
+) -> Result<SeafowlConfig, ConfigError> {
     let config =
         Config::builder().add_source(File::from_str(config_str, FileFormat::Toml));
 
-    config.build()?.try_deserialize().and_then(validate_config)
+    if skip_validation {
+        config.build()?.try_deserialize()
+    } else {
+        config.build()?.try_deserialize().and_then(validate_config)
+    }
 }
 
 #[cfg(test)]
@@ -203,7 +210,7 @@ bind_port = 80
     #[cfg(feature = "object-store-s3")]
     #[test]
     fn test_parse_config_with_s3() {
-        let config = load_config_from_string(TEST_CONFIG_S3).unwrap();
+        let config = load_config_from_string(TEST_CONFIG_S3, false).unwrap();
 
         assert_eq!(
             config,
@@ -235,7 +242,7 @@ bind_port = 80
 
     #[test]
     fn test_parse_config_basic() {
-        let config = load_config_from_string(TEST_CONFIG_BASIC).unwrap();
+        let config = load_config_from_string(TEST_CONFIG_BASIC, false).unwrap();
 
         assert_eq!(
             config,
@@ -264,13 +271,13 @@ bind_port = 80
 
     #[test]
     fn test_parse_config_erroneous() {
-        let error = load_config_from_string(TEST_CONFIG_ERROR).unwrap_err();
+        let error = load_config_from_string(TEST_CONFIG_ERROR, false).unwrap_err();
         assert!(error.to_string().contains("missing field `data_dir`"))
     }
 
     #[test]
     fn test_parse_config_invalid() {
-        let error = load_config_from_string(TEST_CONFIG_INVALID).unwrap_err();
+        let error = load_config_from_string(TEST_CONFIG_INVALID, false).unwrap_err();
         assert!(error
             .to_string()
             .contains("You are using an in-memory catalog with a non in-memory"))
