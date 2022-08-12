@@ -303,7 +303,14 @@ pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) 
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{Int32Array, StringArray};
+    use arrow::csv::Writer;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_eq;
+    use datafusion::from_slice::FromSlice;
+    use datafusion::parquet::arrow::ArrowWriter;
+    use std::io::Cursor;
     use std::{collections::HashMap, sync::Arc};
 
     use warp::{
@@ -546,25 +553,61 @@ mod tests {
     }
 
     #[test_case(
-        "csv",
-        "fruit_id,name\n1,apple\n2,orange\n";
+        "csv";
         "CSV file upload")
     ]
+    #[test_case(
+        "parquet";
+        "Parquet file upload")
+    ]
     #[tokio::test]
-    async fn test_upload(file_format: &str, form_data: &str) {
+    async fn test_upload(file_format: &str) {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(context.clone());
 
         let table_name = format!("{}_table", file_format);
 
-        let body = format!(
+        // Prepare the schema + data (record batch) which we'll convert to bytes via corresponding writer
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("fruit_id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from_slice(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["apple", "orange"])),
+            ],
+        )
+        .unwrap();
+
+        // Write out the CSV/Parquet format data into mock request
+        let mut form_data: Cursor<Vec<u8>> = Default::default();
+        // drop the writer early to release the borrow.
+        if file_format == "csv" {
+            let mut writer = Writer::new(&mut form_data);
+            writer.write(&batch).unwrap();
+        } else if file_format == "parquet" {
+            let mut writer = ArrowWriter::try_new(&mut form_data, schema, None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+        form_data.set_position(0);
+
+        let mut body = format!(
             "--42\r\n\
             Content-Disposition: form-data; name=\"file\"; filename=\"fruits.{}\"\n\
-            Content-Type: application/octet-stream\n\n\
-            {}\
-            --42--",
-            file_format, form_data
-        );
+            Content-Type: application/octet-stream\n\n",
+            file_format
+        )
+        .as_bytes()
+        .to_vec();
+
+        let mut part_footer = "--42--".as_bytes().to_vec();
+
+        body.append(&mut form_data.into_inner());
+        body.append(&mut part_footer);
 
         let resp = request()
             .method("POST")
@@ -574,7 +617,7 @@ mod tests {
             .header("Accept", "*/*")
             .header("Content-Length", 232)
             .header("Content-Type", "multipart/form-data; boundary=42")
-            .body(body.to_string().as_bytes())
+            .body(body)
             .reply(&handler)
             .await;
 
