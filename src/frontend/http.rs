@@ -1,7 +1,12 @@
+use arrow::csv::ReaderBuilder;
+use arrow::datatypes::{DataType, Field, Schema};
 use std::{net::SocketAddr, sync::Arc};
 
 use arrow::json::LineDelimitedWriter;
+use arrow::record_batch::RecordBatch;
 use bytes::BufMut;
+use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::{
     datasource::DefaultTableSource,
     logical_plan::{LogicalPlan, PlanVisitor, TableScan},
@@ -68,7 +73,7 @@ struct QueryBody {
     query: String,
 }
 
-// POST /q
+/// POST /q
 pub async fn uncached_read_write_query(
     query: String,
     context: Arc<dyn SeafowlContext>,
@@ -87,7 +92,7 @@ pub async fn uncached_read_write_query(
     buf.into_response()
 }
 
-// GET /q/[query hash]
+/// GET /q/[query hash]
 pub async fn cached_read_query(
     query_hash: String,
     query: String,
@@ -160,17 +165,19 @@ pub async fn cached_read_query(
     warp::reply::with_header(buf, ETAG, etag).into_response()
 }
 
+/// POST /upload/[schema]/[table]
 pub async fn upload(
-    _schema: String,
-    _table: String,
+    _schema_name: String,
+    table_name: String,
     form: FormData,
-    _context: Arc<dyn SeafowlContext>,
+    context: Arc<dyn SeafowlContext>,
 ) -> Response {
     let parts: Vec<Part> = form.try_collect().await.unwrap();
     for p in parts {
-        println!("{:?}", p);
         if p.name() == "file" {
-            // Load the file content from the request and write it out to the temp file
+            let filename = p.filename().unwrap().to_string();
+
+            // Load the file content from the request
             let value = p
                 .stream()
                 .try_fold(Vec::new(), |mut vec, data| {
@@ -179,12 +186,41 @@ pub async fn upload(
                 })
                 .await
                 .map_err(|e| {
-                    eprintln!("reading file error: {}", e);
+                    eprintln!("Error reading part's data: {}", e);
                     warp::reject::reject()
                 })
                 .unwrap();
 
-            println!("{:?}", String::from_utf8(value));
+            let execution_plan: Arc<dyn ExecutionPlan> = if filename.ends_with(".csv") {
+                let schema = Schema::new(vec![
+                    Field::new("fruit_id", DataType::Int8, false),
+                    Field::new("name", DataType::Utf8, false),
+                ]);
+
+                let builder = ReaderBuilder::new()
+                    .with_schema(Arc::new(schema.clone()))
+                    .has_header(true)
+                    .with_escape(b'\\'); // default is None, change to \
+
+                let mut csv_reader = std::io::Cursor::new(&value);
+                let reader = builder.build(&mut csv_reader).unwrap();
+                let partition: Vec<RecordBatch> =
+                    reader.into_iter().map(|item| item.unwrap()).collect();
+                Arc::new(
+                    MemoryExec::try_new(&[partition], Arc::new(schema.clone()), None)
+                        .unwrap(),
+                )
+            } else {
+                return warp::reply::with_status(
+                    format!("File {} not supported", filename),
+                    StatusCode::BAD_REQUEST,
+                )
+                .into_response();
+            };
+
+            let _result = context
+                .plan_to_table(execution_plan, table_name.clone())
+                .await;
         }
     }
     warp::reply::with_status(Ok("done"), StatusCode::OK).into_response()
@@ -199,7 +235,7 @@ pub fn filters(
         .allow_methods(vec!["GET", "POST"]);
 
     // Cached read query
-    let cached_read_query_ctx = context.clone();
+    let ctx = context.clone();
     let cached_read_query_route = warp::path!("q" / String)
         .and(warp::get())
         .and(
@@ -209,33 +245,27 @@ pub fn filters(
                 .unify(),
         )
         .and(warp::header::optional::<String>(IF_NONE_MATCH))
-        .then(move |query_hash, query, if_none_match| {
-            cached_read_query(
-                query_hash,
-                query,
-                if_none_match,
-                cached_read_query_ctx.clone(),
-            )
-        });
+        .and(warp::any().map(move || ctx.clone()))
+        .then(cached_read_query);
 
     // Uncached read/write query
-    let uncached_read_write_query_ctx = context.clone();
+    let ctx = context.clone();
     let uncached_read_write_query_route = warp::path!("q")
         .and(warp::post())
         .and(
             // Extract the query from the JSON body
             warp::body::json().map(|b: QueryBody| b.query),
         )
-        .then(move |query| {
-            uncached_read_write_query(query, uncached_read_write_query_ctx.clone())
-        });
+        .and(warp::any().map(move || ctx.clone()))
+        .then(uncached_read_write_query);
 
     // Upload endpoint
-    let upload_ctx = context.clone();
+    let ctx = context.clone();
     let upload_route = warp::path!("upload" / String / String)
         .and(warp::post())
         .and(warp::multipart::form())
-        .then(move |schema, table, form| upload(schema, table, form, upload_ctx.clone()));
+        .and(warp::any().map(move || ctx.clone()))
+        .then(upload);
 
     cached_read_query_route
         .or(uncached_read_write_query_route)
@@ -254,6 +284,7 @@ pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) 
 
 #[cfg(test)]
 mod tests {
+    use datafusion::assert_batches_eq;
     use std::{collections::HashMap, sync::Arc};
 
     use warp::{
@@ -496,7 +527,7 @@ mod tests {
     #[tokio::test]
     async fn test_upload() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context);
+        let handler = filters(context.clone());
 
         let body = "--42\r\n\
             Content-Disposition: form-data; name=\"file\"; filename=\"fruits.csv\"\n\
@@ -508,7 +539,7 @@ mod tests {
 
         let resp = request()
             .method("POST")
-            .path(format!("/upload/{}/{}", "test_schema", "test_table").as_str())
+            .path(format!("/upload/{}/{}", "test_upload", "csv_table").as_str())
             .header("Host", "localhost:3030")
             .header("User-Agent", "curl/7.64.1")
             .header("Accept", "*/*")
@@ -520,5 +551,20 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "done");
+
+        context.reload_schema().await;
+
+        let plan = context.plan_query("SELECT * FROM csv_table").await.unwrap();
+        let results = context.collect(plan).await.unwrap();
+
+        let expected = vec![
+            "+----------+--------+",
+            "| fruit_id | name   |",
+            "+----------+--------+",
+            "| 1        | apple  |",
+            "| 2        | orange |",
+            "+----------+--------+",
+        ];
+        assert_batches_eq!(expected, &results);
     }
 }
