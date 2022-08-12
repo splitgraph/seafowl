@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use base64::decode;
 use bytes::Bytes;
+use datafusion::sql::planner::convert_simple_data_type;
 use std::fs::File;
 
 use datafusion::datasource::file_format::avro::{AvroFormat, DEFAULT_AVRO_EXTENSION};
@@ -29,8 +30,8 @@ use object_store::{path::Path, ObjectStore};
 use sha2::Digest;
 use sha2::Sha256;
 use sqlparser::ast::{
-    ColumnDef as SQLColumnDef, ColumnOption, DataType as SQLDataType, Ident, Statement,
-    TableFactor, TableWithJoins,
+    ColumnDef as SQLColumnDef, ColumnOption, Ident, Statement, TableFactor,
+    TableWithJoins,
 };
 use std::io::Read;
 
@@ -40,10 +41,7 @@ use std::sync::Arc;
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::{
     arrow::{
-        datatypes::{
-            DataType, Field, Schema, SchemaRef, TimeUnit, DECIMAL_DEFAULT_SCALE,
-            DECIMAL_MAX_PRECISION,
-        },
+        datatypes::{Field, Schema, SchemaRef},
         record_batch::RecordBatch,
     },
     datasource::file_format::{parquet::ParquetFormat, FileFormat},
@@ -77,32 +75,6 @@ use crate::{
 
 // Copied from datafusion::sql::utils (private)
 
-/// Returns a validated `DataType` for the specified precision and
-/// scale
-fn make_decimal_type(precision: Option<u64>, scale: Option<u64>) -> Result<DataType> {
-    // postgres like behavior
-    let (precision, scale) = match (precision, scale) {
-        (Some(p), Some(s)) => (p as usize, s as usize),
-        (Some(p), None) => (p as usize, 0),
-        (None, Some(_)) => {
-            return Err(DataFusionError::Internal(
-                "Cannot specify only scale for decimal data type".to_string(),
-            ))
-        }
-        (None, None) => (DECIMAL_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
-    };
-
-    // Arrow decimal is i128 meaning 38 maximum decimal digits
-    if precision > DECIMAL_MAX_PRECISION || scale > precision {
-        return Err(DataFusionError::Internal(format!(
-            "For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
-            precision, scale
-        )));
-    } else {
-        Ok(DataType::Decimal(precision, scale))
-    }
-}
-
 // Normalize an identifier to a lowercase string unless the identifier is quoted.
 fn normalize_ident(id: &Ident) -> String {
     match id.quote_style {
@@ -116,7 +88,7 @@ fn build_schema(columns: Vec<SQLColumnDef>) -> Result<Schema> {
     let mut fields = Vec::with_capacity(columns.len());
 
     for column in columns {
-        let data_type = make_data_type(&column.data_type)?;
+        let data_type = convert_simple_data_type(&column.data_type)?;
         let allow_null = column
             .options
             .iter()
@@ -129,30 +101,6 @@ fn build_schema(columns: Vec<SQLColumnDef>) -> Result<Schema> {
     }
 
     Ok(Schema::new(fields))
-}
-
-/// Maps the SQL type to the corresponding Arrow `DataType`
-fn make_data_type(sql_type: &SQLDataType) -> Result<DataType> {
-    match sql_type {
-        SQLDataType::BigInt(_) => Ok(DataType::Int64),
-        SQLDataType::Int(_) => Ok(DataType::Int32),
-        SQLDataType::SmallInt(_) => Ok(DataType::Int16),
-        SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
-            Ok(DataType::Utf8)
-        }
-        SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
-        SQLDataType::Float(_) => Ok(DataType::Float32),
-        SQLDataType::Real => Ok(DataType::Float32),
-        SQLDataType::Double => Ok(DataType::Float64),
-        SQLDataType::Boolean => Ok(DataType::Boolean),
-        SQLDataType::Date => Ok(DataType::Date32),
-        SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Millisecond)),
-        SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "The SQL data type {:?} is not implemented",
-            sql_type
-        ))),
-    }
 }
 
 /// End copied functions
@@ -1213,6 +1161,7 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use arrow::array::Int32Array;
+    use arrow::datatypes::DataType;
     use std::sync::Arc;
 
     use datafusion::execution::disk_manager::DiskManagerConfig;
