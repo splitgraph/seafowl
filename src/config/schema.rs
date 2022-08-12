@@ -116,11 +116,28 @@ impl Default for Misc {
     }
 }
 
+pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigError> {
+    let in_memory_catalog = matches!(config.catalog, Catalog::Sqlite(Sqlite { ref dsn }) if dsn.contains(":memory:"));
+
+    let in_memory_object_store = matches!(config.object_store, ObjectStore::InMemory(_));
+
+    if in_memory_catalog ^ in_memory_object_store {
+        Err(ConfigError::Message(
+            "You are using an in-memory catalog with a non in-memory \
+        object store or vice versa. This will cause consistency issues \
+        if the process is restarted."
+                .to_string(),
+        ))
+    } else {
+        Ok(config)
+    }
+}
+
 pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
     let config = Config::builder()
         .add_source(File::with_name(path.to_str().expect("Error parsing path")));
 
-    config.build()?.try_deserialize()
+    config.build()?.try_deserialize().and_then(validate_config)
 }
 
 // Load a config from a string (to test our structs are defined correctly)
@@ -128,7 +145,7 @@ pub fn load_config_from_string(config_str: &str) -> Result<SeafowlConfig, Config
     let config =
         Config::builder().add_source(File::from_str(config_str, FileFormat::Toml));
 
-    config.build()?.try_deserialize()
+    config.build()?.try_deserialize().and_then(validate_config)
 }
 
 #[cfg(test)]
@@ -173,6 +190,15 @@ bind_port = 80
     const TEST_CONFIG_ERROR: &str = r#"
     [object_store]
     type = "local""#;
+
+    // Invalid config: in-memory object store with an on-disk SQLite
+    const TEST_CONFIG_INVALID: &str = r#"
+    [object_store]
+    type = "local"
+    data_dir = "./seafowl-data"
+    [catalog]
+    type = "sqlite"
+    dsn = ":memory:""#;
 
     #[cfg(feature = "object-store-s3")]
     #[test]
@@ -240,5 +266,13 @@ bind_port = 80
     fn test_parse_config_erroneous() {
         let error = load_config_from_string(TEST_CONFIG_ERROR).unwrap_err();
         assert!(error.to_string().contains("missing field `data_dir`"))
+    }
+
+    #[test]
+    fn test_parse_config_invalid() {
+        let error = load_config_from_string(TEST_CONFIG_INVALID).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("You are using an in-memory catalog with a non in-memory"))
     }
 }
