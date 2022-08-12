@@ -1,12 +1,14 @@
 use arrow::csv::ReaderBuilder;
 use arrow::datatypes::{DataType, Field, Schema};
+use std::io::Cursor;
 use std::{net::SocketAddr, sync::Arc};
 
 use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::RecordBatch;
 use bytes::BufMut;
+use bytes::Bytes;
+use datafusion::parquet::arrow::{ArrowReader, ParquetFileArrowReader};
 use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::{
     datasource::DefaultTableSource,
     logical_plan::{LogicalPlan, PlanVisitor, TableScan},
@@ -190,9 +192,11 @@ pub async fn upload(
                     warp::reject::reject()
                 })
                 .unwrap();
+            let mut cursor = Cursor::new(&value);
 
-            let execution_plan: Arc<dyn ExecutionPlan> = if filename.ends_with(".csv") {
-                let schema = Schema::new(vec![
+            let schema: Schema;
+            let partition = if filename.ends_with(".csv") {
+                schema = Schema::new(vec![
                     Field::new("fruit_id", DataType::Int8, false),
                     Field::new("name", DataType::Utf8, false),
                 ]);
@@ -202,14 +206,24 @@ pub async fn upload(
                     .has_header(true)
                     .with_escape(b'\\'); // default is None, change to \
 
-                let mut csv_reader = std::io::Cursor::new(&value);
-                let reader = builder.build(&mut csv_reader).unwrap();
+                let csv_reader = builder.build(&mut cursor).unwrap();
                 let partition: Vec<RecordBatch> =
-                    reader.into_iter().map(|item| item.unwrap()).collect();
-                Arc::new(
-                    MemoryExec::try_new(&[partition], Arc::new(schema.clone()), None)
-                        .unwrap(),
-                )
+                    csv_reader.into_iter().map(|item| item.unwrap()).collect();
+
+                partition
+            } else if filename.ends_with(".parquet") {
+                let mut parquet_reader =
+                    ParquetFileArrowReader::try_new(Bytes::from(value)).unwrap();
+
+                schema = parquet_reader.get_schema().unwrap();
+
+                let partition: Vec<RecordBatch> = parquet_reader
+                    .get_record_reader(100000)
+                    .unwrap()
+                    .map(|item| item.unwrap())
+                    .collect();
+
+                partition
             } else {
                 return warp::reply::with_status(
                     format!("File {} not supported", filename),
@@ -217,6 +231,11 @@ pub async fn upload(
                 )
                 .into_response();
             };
+
+            let execution_plan = Arc::new(
+                MemoryExec::try_new(&[partition], Arc::new(schema.clone()), None)
+                    .unwrap(),
+            );
 
             let _result = context
                 .plan_to_table(execution_plan, table_name.clone())
@@ -291,6 +310,8 @@ mod tests {
         hyper::{header::IF_NONE_MATCH, StatusCode},
         test::request,
     };
+
+    use test_case::test_case;
 
     use crate::{
         context::{test_utils::in_memory_context, SeafowlContext},
@@ -524,22 +545,30 @@ mod tests {
         assert_eq!(resp.body(), "{\"c\":2}\n");
     }
 
+    #[test_case(
+        "csv",
+        "fruit_id,name\n1,apple\n2,orange\n";
+        "CSV file upload")
+    ]
     #[tokio::test]
-    async fn test_upload() {
+    async fn test_upload(file_format: &str, form_data: &str) {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(context.clone());
 
-        let body = "--42\r\n\
-            Content-Disposition: form-data; name=\"file\"; filename=\"fruits.csv\"\n\
+        let table_name = format!("{}_table", file_format);
+
+        let body = format!(
+            "--42\r\n\
+            Content-Disposition: form-data; name=\"file\"; filename=\"fruits.{}\"\n\
             Content-Type: application/octet-stream\n\n\
-            fruit_id,name\n\
-            1,apple\n\
-            2,orange\n\
-            --42--";
+            {}\
+            --42--",
+            file_format, form_data
+        );
 
         let resp = request()
             .method("POST")
-            .path(format!("/upload/{}/{}", "test_upload", "csv_table").as_str())
+            .path(format!("/upload/{}/{}", "test_upload", table_name).as_str())
             .header("Host", "localhost:3030")
             .header("User-Agent", "curl/7.64.1")
             .header("Accept", "*/*")
@@ -554,7 +583,10 @@ mod tests {
 
         context.reload_schema().await;
 
-        let plan = context.plan_query("SELECT * FROM csv_table").await.unwrap();
+        let plan = context
+            .plan_query(format!("SELECT * FROM {}", table_name).as_str())
+            .await
+            .unwrap();
         let results = context.collect(plan).await.unwrap();
 
         let expected = vec![
