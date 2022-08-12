@@ -35,7 +35,7 @@ pub struct AllTablePartitionsResult {
     pub max_value: Option<Vec<u8>>,
 }
 
-#[derive(sqlx::FromRow, Debug, PartialEq)]
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct AllDatabaseFunctionsResult {
     pub name: String,
     pub id: FunctionId,

@@ -3,7 +3,7 @@ use std::path::Path;
 use config::{Config, ConfigError, File, FileFormat};
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct SeafowlConfig {
     pub object_store: ObjectStore,
     pub catalog: Catalog,
@@ -13,7 +13,7 @@ pub struct SeafowlConfig {
     pub misc: Misc,
 }
 
-#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ObjectStore {
     Local(Local),
@@ -23,15 +23,15 @@ pub enum ObjectStore {
     S3(S3),
 }
 
-#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Local {
     pub data_dir: String,
 }
 
-#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct InMemory {}
 
-#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct S3 {
     pub access_key_id: String,
     pub secret_access_key: String,
@@ -39,7 +39,7 @@ pub struct S3 {
     pub bucket: String,
 }
 
-#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Catalog {
     #[cfg(feature = "catalog-postgres")]
@@ -47,14 +47,14 @@ pub enum Catalog {
     Sqlite(Sqlite),
 }
 
-#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Postgres {
     pub dsn: String,
     #[serde(default = "default_schema")]
     pub schema: String,
 }
 
-#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Sqlite {
     pub dsn: String,
 }
@@ -63,14 +63,14 @@ fn default_schema() -> String {
     "public".to_string()
 }
 
-#[derive(Deserialize, Debug, PartialEq, Default, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Default, Clone)]
 pub struct Frontend {
     #[cfg(feature = "frontend-postgres")]
     pub postgres: Option<PostgresFrontend>,
     pub http: Option<HttpFrontend>,
 }
 
-#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(default)]
 pub struct PostgresFrontend {
     pub bind_host: String,
@@ -86,7 +86,7 @@ impl Default for PostgresFrontend {
     }
 }
 
-#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(default)]
 pub struct HttpFrontend {
     pub bind_host: String,
@@ -102,7 +102,7 @@ impl Default for HttpFrontend {
     }
 }
 
-#[derive(Deserialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(default)]
 pub struct Misc {
     pub max_partition_size: i64,
