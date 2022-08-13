@@ -201,8 +201,8 @@ pub async fn upload(
             let (schema, partition) = match filename.split('.').last().unwrap() {
                 "csv" => {
                     let schema = Schema::new(vec![
-                        Field::new("fruit_id", DataType::Int8, false),
-                        Field::new("name", DataType::Utf8, false),
+                        Field::new("number", DataType::Int32, false),
+                        Field::new("parity", DataType::Utf8, false),
                     ]);
 
                     let builder = ReaderBuilder::new()
@@ -320,6 +320,7 @@ mod tests {
     use datafusion::assert_batches_eq;
     use datafusion::from_slice::FromSlice;
     use datafusion::parquet::arrow::ArrowWriter;
+    use itertools::Itertools;
     use std::io::Cursor;
     use std::{collections::HashMap, sync::Arc};
 
@@ -603,31 +604,49 @@ SELECT
     }
 
     #[test_case(
-        "csv";
-        "CSV file upload")
+        "csv",
+        10;
+        "CSV file with 10 rows")
     ]
     #[test_case(
-        "parquet";
-        "Parquet file upload")
+        "csv",
+        1000;
+        "CSV file with 1000 rows")
+    ]
+    #[test_case(
+        "parquet",
+        10;
+        "Parquet file with 10 rows")
+    ]
+    #[test_case(
+        "parquet",
+        1000;
+        "Parquet file with 1000 rows")
     ]
     #[tokio::test]
-    async fn test_upload(file_format: &str) {
+    async fn test_upload(file_format: &str, row_count: i32) {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(context.clone());
 
         let table_name = format!("{}_table", file_format);
 
-        // Prepare the schema + data (record batch) which we'll convert to bytes via corresponding writer
+        // Prepare the schema + data (a single record batch) which we'll convert to bytes via
+        // a corresponding writer
         let schema = Arc::new(Schema::new(vec![
-            Field::new("fruit_id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, false),
+            Field::new("number", DataType::Int32, false),
+            Field::new("parity", DataType::Utf8, false),
         ]));
 
+        let range = 0..row_count;
         let input_batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from_slice(vec![1, 2])),
-                Arc::new(StringArray::from(vec!["apple", "orange"])),
+                Arc::new(Int32Array::from_slice(range.clone().collect_vec())),
+                Arc::new(StringArray::from(
+                    range
+                        .map(|number| if number % 2 == 0 { "even" } else { "odd" })
+                        .collect_vec(),
+                )),
             ],
         )
         .unwrap();
