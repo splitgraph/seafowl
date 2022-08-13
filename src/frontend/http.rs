@@ -562,6 +562,46 @@ mod tests {
         assert_eq!(resp.body(), "{\"c\":2}\n");
     }
 
+    #[tokio::test]
+    async fn test_http_type_conversion() {
+        let context = Arc::new(in_memory_context().await);
+        let handler = filters(context);
+
+        let query = r#"
+SELECT
+  1::SMALLINT AS smallint_val,
+  1000000::INTEGER AS integer_val,
+  10000000000::BIGINT AS bigint_val,
+  'c'::CHAR AS char_val,
+  'varchar'::VARCHAR AS varchar_val,
+  'text'::TEXT AS text_val,
+  -- Unsupported 12.345::DECIMAL(5, 2) AS decimal_val,
+  12.345::FLOAT AS float_val,
+  12.345::REAL AS real_val,
+  12.3456789101112131415::DOUBLE AS double_val,
+  'true'::BOOLEAN AS bool_val,
+  '2022-01-01'::DATE AS date_val,
+  '2022-01-01T12:03:11.123456'::TIMESTAMP AS timestamp_val,
+  [1,2,3,4,5] AS int_array_val,
+  ['one','two'] AS text_array_val
+"#;
+        // NB: we can return arrays from these SELECT queries, but we don't support
+        // CREATE TABLE queries with arrays, so we don't officially support arrays.
+
+        let resp = request()
+            .method("POST")
+            .path("/q")
+            .json(&HashMap::from([("query", query)]))
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.body(),
+            r#"{"smallint_val":1,"integer_val":1000000,"bigint_val":10000000000,"char_val":"c","varchar_val":"varchar","text_val":"text","float_val":12.345,"real_val":12.345,"double_val":12.345678910111213,"bool_val":true,"date_val":"2022-01-01","timestamp_val":"2022-01-01 12:03:11.123456","int_array_val":[1,2,3,4,5],"text_array_val":["one","two"]}
+"#
+        );
+    }
+
     #[test_case(
         "csv";
         "CSV file upload")

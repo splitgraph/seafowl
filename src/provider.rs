@@ -76,14 +76,14 @@ impl SchemaProvider for SeafowlCollection {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SeafowlPartition {
     pub object_storage_id: Arc<str>,
     pub row_count: i32,
     pub columns: Arc<Vec<PartitionColumn>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct PartitionColumn {
     pub name: Arc<str>,
     pub r#type: Arc<str>,
