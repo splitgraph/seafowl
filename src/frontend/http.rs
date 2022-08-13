@@ -180,6 +180,10 @@ pub async fn upload(
             let filename = p.filename().unwrap().to_string();
 
             // Load the file content from the request
+            // TODO: we're actually buffering the entire file into memory here which is sub-optimal,
+            // since we could be writing the contents of the stream out into a temp file on the disk
+            // to have a smaller memory footprint. However, for this to be supported warp first
+            // needs to support streaming here: https://github.com/seanmonstar/warp/issues/323
             let value = p
                 .stream()
                 .try_fold(Vec::new(), |mut vec, data| {
@@ -192,51 +196,57 @@ pub async fn upload(
                     warp::reject::reject()
                 })
                 .unwrap();
-            let mut cursor = Cursor::new(&value);
 
-            let schema: Schema;
-            let partition = if filename.ends_with(".csv") {
-                schema = Schema::new(vec![
-                    Field::new("fruit_id", DataType::Int8, false),
-                    Field::new("name", DataType::Utf8, false),
-                ]);
+            // Parse the schema and load the file contents into a vector of record batches
+            let (schema, partition) = match filename.split('.').last().unwrap() {
+                "csv" => {
+                    let schema = Schema::new(vec![
+                        Field::new("fruit_id", DataType::Int8, false),
+                        Field::new("name", DataType::Utf8, false),
+                    ]);
 
-                let builder = ReaderBuilder::new()
-                    .with_schema(Arc::new(schema.clone()))
-                    .has_header(true)
-                    .with_escape(b'\\'); // default is None, change to \
+                    let builder = ReaderBuilder::new()
+                        .with_schema(Arc::new(schema.clone()))
+                        .has_header(true)
+                        .with_escape(b'\\'); // default is None, change to \
 
-                let csv_reader = builder.build(&mut cursor).unwrap();
-                let partition: Vec<RecordBatch> =
-                    csv_reader.into_iter().map(|item| item.unwrap()).collect();
+                    let mut cursor = Cursor::new(&value);
+                    let csv_reader = builder.build(&mut cursor).unwrap();
+                    let partition: Vec<RecordBatch> =
+                        csv_reader.into_iter().map(|item| item.unwrap()).collect();
 
-                partition
-            } else if filename.ends_with(".parquet") {
-                let mut parquet_reader =
-                    ParquetFileArrowReader::try_new(Bytes::from(value)).unwrap();
+                    (schema, partition)
+                }
+                "parquet" => {
+                    let mut parquet_reader =
+                        ParquetFileArrowReader::try_new(Bytes::from(value)).unwrap();
 
-                schema = parquet_reader.get_schema().unwrap();
+                    let schema = parquet_reader.get_schema().unwrap();
 
-                let partition: Vec<RecordBatch> = parquet_reader
-                    .get_record_reader(100000)
-                    .unwrap()
-                    .map(|item| item.unwrap())
-                    .collect();
+                    let partition: Vec<RecordBatch> = parquet_reader
+                        .get_record_reader(100000) // TODO: Probably a constant or even a config somewhere
+                        .unwrap()
+                        .map(|item| item.unwrap())
+                        .collect();
 
-                partition
-            } else {
-                return warp::reply::with_status(
-                    format!("File {} not supported", filename),
-                    StatusCode::BAD_REQUEST,
-                )
-                .into_response();
+                    (schema, partition)
+                }
+                _ => {
+                    return warp::reply::with_status(
+                        format!("File {} not supported", filename),
+                        StatusCode::BAD_REQUEST,
+                    )
+                    .into_response();
+                }
             };
 
+            // Create an execution plan for yielding the record batches we just generated
             let execution_plan = Arc::new(
                 MemoryExec::try_new(&[partition], Arc::new(schema.clone()), None)
                     .unwrap(),
             );
 
+            // Execute the plan and persist objects as well as table/partition metadata
             let _result = context
                 .plan_to_table(execution_plan, table_name.clone())
                 .await;
@@ -573,7 +583,7 @@ mod tests {
             Field::new("name", DataType::Utf8, false),
         ]));
 
-        let batch = RecordBatch::try_new(
+        let input_batch = RecordBatch::try_new(
             schema.clone(),
             vec![
                 Arc::new(Int32Array::from_slice(vec![1, 2])),
@@ -587,14 +597,15 @@ mod tests {
         // drop the writer early to release the borrow.
         if file_format == "csv" {
             let mut writer = Writer::new(&mut form_data);
-            writer.write(&batch).unwrap();
+            writer.write(&input_batch).unwrap();
         } else if file_format == "parquet" {
             let mut writer = ArrowWriter::try_new(&mut form_data, schema, None).unwrap();
-            writer.write(&batch).unwrap();
+            writer.write(&input_batch).unwrap();
             writer.close().unwrap();
         }
         form_data.set_position(0);
 
+        // Generate request body
         let mut body = format!(
             "--42\r\n\
             Content-Disposition: form-data; name=\"file\"; filename=\"fruits.{}\"\n\
@@ -609,6 +620,7 @@ mod tests {
         body.append(&mut form_data.into_inner());
         body.append(&mut part_footer);
 
+        // Create a mock request and execute it
         let resp = request()
             .method("POST")
             .path(format!("/upload/{}/{}", "test_upload", table_name).as_str())
@@ -626,20 +638,20 @@ mod tests {
 
         context.reload_schema().await;
 
+        // Verify the newly created table contents
         let plan = context
             .plan_query(format!("SELECT * FROM {}", table_name).as_str())
             .await
             .unwrap();
         let results = context.collect(plan).await.unwrap();
 
-        let expected = vec![
-            "+----------+--------+",
-            "| fruit_id | name   |",
-            "+----------+--------+",
-            "| 1        | apple  |",
-            "| 2        | orange |",
-            "+----------+--------+",
-        ];
+        // Generate expected output from the input batch that was used in the multipart request
+        let formatted = arrow::util::pretty::pretty_format_batches(&[input_batch])
+            .unwrap()
+            .to_string();
+
+        let expected: Vec<&str> = formatted.trim().lines().collect();
+
         assert_batches_eq!(expected, &results);
     }
 }
