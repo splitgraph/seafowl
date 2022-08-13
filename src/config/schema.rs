@@ -1,7 +1,11 @@
 use std::path::Path;
 
 use config::{Config, ConfigError, File, FileFormat};
+use hex::encode;
+use log::info;
+use rand::distributions::{Alphanumeric, DistString};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct SeafowlConfig {
@@ -87,10 +91,35 @@ impl Default for PostgresFrontend {
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+pub enum AccessSettings {
+    Any,
+    Off,
+    Password { sha256_hash: String },
+}
+
+impl AccessSettings {
+    pub fn with_random_password() -> Self {
+        let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 32);
+        let mut hasher = Sha256::new();
+        hasher.update(&password);
+        let sha256_hash = encode(hasher.finalize());
+
+        info!("Writing to Seafowl will require a password. Randomly generated password: {:}", password);
+        info!("The SHA-256 hash will be stored in the config as follows:");
+        info!("[frontend.http]");
+        info!("write_access = \"{:}\"", sha256_hash);
+
+        Self::Password { sha256_hash }
+    }
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(default)]
 pub struct HttpFrontend {
     pub bind_host: String,
     pub bind_port: u16,
+    pub read_access: AccessSettings,
+    pub write_access: AccessSettings,
 }
 
 impl Default for HttpFrontend {
@@ -98,6 +127,8 @@ impl Default for HttpFrontend {
         Self {
             bind_host: "127.0.0.1".to_string(),
             bind_port: 8080,
+            read_access: AccessSettings::Any,
+            write_access: AccessSettings::with_random_password(),
         }
     }
 }
@@ -158,8 +189,8 @@ pub fn load_config_from_string(
 #[cfg(test)]
 mod tests {
     use super::{
-        load_config_from_string, Catalog, Frontend, HttpFrontend, Local, ObjectStore,
-        Postgres, SeafowlConfig, S3,
+        load_config_from_string, AccessSettings, Catalog, Frontend, HttpFrontend, Local,
+        ObjectStore, Postgres, SeafowlConfig, S3,
     };
     use crate::config::schema::Misc;
 
@@ -227,6 +258,11 @@ bind_port = 80
     fn test_parse_config_basic() {
         let config = load_config_from_string(TEST_CONFIG_BASIC, false).unwrap();
 
+        let sha256_hash = match &config.frontend.http.as_ref().unwrap().write_access {
+            AccessSettings::Password { sha256_hash } => sha256_hash.clone(),
+            _ => panic!("write_access didn't default to a password!"),
+        };
+
         assert_eq!(
             config,
             SeafowlConfig {
@@ -242,7 +278,9 @@ bind_port = 80
                     postgres: None,
                     http: Some(HttpFrontend {
                         bind_host: "0.0.0.0".to_string(),
-                        bind_port: 80
+                        bind_port: 80,
+                        read_access: AccessSettings::Any,
+                        write_access: AccessSettings::Password { sha256_hash }
                     })
                 },
                 misc: Misc {

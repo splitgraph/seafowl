@@ -152,6 +152,8 @@ mod tests {
                 http: Some(schema::HttpFrontend {
                     bind_host: "127.0.0.1".to_string(),
                     bind_port: 80,
+                    read_access: schema::AccessSettings::Any,
+                    write_access: schema::AccessSettings::Any,
                 }),
             },
             misc: schema::Misc {
