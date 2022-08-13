@@ -213,31 +213,14 @@ bind_port = 80
         let config = load_config_from_string(TEST_CONFIG_S3, false).unwrap();
 
         assert_eq!(
-            config,
-            SeafowlConfig {
-                object_store: ObjectStore::S3(S3 {
-                    access_key_id: "AKI...".to_string(),
-                    secret_access_key: "ABC...".to_string(),
-                    endpoint: "https://s3.amazonaws.com:9000".to_string(),
-                    bucket: "seafowl".to_string()
-                }),
-                catalog: Catalog::Postgres(Postgres {
-                    dsn: "postgresql://user:pass@localhost:5432/somedb".to_string(),
-                    schema: "public".to_string()
-                }),
-                frontend: Frontend {
-                    #[cfg(feature = "frontend-postgres")]
-                    postgres: None,
-                    http: Some(HttpFrontend {
-                        bind_host: "0.0.0.0".to_string(),
-                        bind_port: 80
-                    })
-                },
-                misc: Misc {
-                    max_partition_size: 1048576
-                },
-            }
-        )
+            config.object_store,
+            ObjectStore::S3(S3 {
+                access_key_id: "AKI...".to_string(),
+                secret_access_key: "ABC...".to_string(),
+                endpoint: "https://s3.amazonaws.com:9000".to_string(),
+                bucket: "seafowl".to_string()
+            })
+        );
     }
 
     #[test]
