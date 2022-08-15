@@ -113,12 +113,16 @@ impl<'de> Deserialize<'de> for AccessSettings {
     }
 }
 
+pub fn str_to_hex_hash(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input);
+    encode(hasher.finalize())
+}
+
 impl AccessSettings {
     pub fn with_random_password() -> Self {
         let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 32);
-        let mut hasher = Sha256::new();
-        hasher.update(&password);
-        let sha256_hash = encode(hasher.finalize());
+        let sha256_hash = str_to_hex_hash(&password);
 
         info!("Writing to Seafowl will require a password. Randomly generated password: {:}", password);
         info!("The SHA-256 hash will be stored in the config as follows:");
