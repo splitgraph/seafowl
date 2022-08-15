@@ -14,7 +14,7 @@ use datafusion::{
     datasource::DefaultTableSource,
     logical_plan::{LogicalPlan, PlanVisitor, TableScan},
 };
-use futures::TryStreamExt;
+use futures::{future, TryStreamExt};
 use hex::encode;
 use log::debug;
 use serde::Deserialize;
@@ -25,6 +25,7 @@ use warp::reply::Response;
 use warp::{hyper::StatusCode, Filter, Reply};
 
 use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
+use crate::config::schema::AccessSettings;
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
     context::SeafowlContext,
@@ -157,6 +158,23 @@ pub fn with_auth(
             }
         },
     )
+}
+
+// Disable the cached GET endpoint if we require auth for reads / they're disabled.
+// (since caching + auth is yet another can of worms)
+pub fn cached_read_query_authz(
+    policy: &AccessPolicy,
+) -> impl Filter<Extract = (), Error = Rejection> + Clone {
+    let policy = policy.clone();
+    warp::any()
+        .and_then(move || {
+            match policy.read {
+                AccessSettings::Any => future::ok(()),
+                // TODO errors
+                _ => future::err(warp::reject::reject()),
+            }
+        })
+        .untuple_one()
 }
 
 /// GET /q/[query hash]
@@ -364,6 +382,7 @@ pub fn filters(
     let ctx = context.clone();
     let cached_read_query_route = warp::path!("q" / String)
         .and(warp::get())
+        .and(cached_read_query_authz(&access_policy))
         .and(
             // Extract the query either from the header or from the JSON body
             warp::header::<String>(QUERY_HEADER)
