@@ -2,7 +2,8 @@ use arrow::csv::ReaderBuilder;
 use arrow::datatypes::Schema;
 use arrow::error::ArrowError;
 use std::io::Cursor;
-use std::{net::SocketAddr, sync::Arc, convert::Infallible};
+use std::{convert::Infallible, net::SocketAddr, sync::Arc};
+use warp::Rejection;
 
 use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::RecordBatch;
@@ -23,8 +24,11 @@ use warp::multipart::{FormData, Part};
 use warp::reply::Response;
 use warp::{hyper::StatusCode, Filter, Reply};
 
+use crate::auth::{token_to_principal, AccessPolicy, UserContext};
 use crate::{
-    config::schema::{HttpFrontend, str_to_hex_hash}, context::SeafowlContext, data_types::TableVersionId,
+    config::schema::{str_to_hex_hash, HttpFrontend},
+    context::SeafowlContext,
+    data_types::TableVersionId,
     provider::SeafowlTable,
 };
 
@@ -77,6 +81,7 @@ struct QueryBody {
 
 /// POST /q
 pub async fn uncached_read_write_query(
+    _user_context: UserContext,
     query: String,
     context: Arc<dyn SeafowlContext>,
 ) -> Response {
@@ -92,6 +97,42 @@ pub async fn uncached_read_write_query(
     writer.finish().unwrap();
 
     buf.into_response()
+}
+
+pub fn with_auth(
+    policy: &AccessPolicy,
+) -> impl Filter<Extract = (UserContext,), Error = Rejection> + Clone {
+    // TODO this is absolutely disgusting
+    //   - double clone of policy
+    //   - async closure even though we don't use async but there's no non-async
+    //     counterpart to and_then
+    let policy = policy.clone();
+    warp::header::optional::<String>("Authorization").and_then(
+        move |header: Option<String>| {
+            let policy = policy.clone();
+            async move {
+                let token = match header {
+                    Some(h) => {
+                        if !h.starts_with("Bearer ") {
+                            return Err(warp::reject::reject());
+                        };
+
+                        Some(h.trim_start_matches("Bearer ").to_string())
+                    }
+                    None => None,
+                };
+
+                // TODO propagate a 401 here
+                let principal = token_to_principal(token, &policy)
+                    .map_err(|_| warp::reject::reject())?;
+
+                Ok(UserContext {
+                    principal,
+                    policy: policy.clone(),
+                })
+            }
+        },
+    )
 }
 
 /// GET /q/[query hash]
@@ -298,6 +339,7 @@ fn load_parquet_bytes(source: Vec<u8>) -> Result<(Schema, Vec<RecordBatch>), Arr
 
 pub fn filters(
     context: Arc<dyn SeafowlContext>,
+    access_policy: AccessPolicy,
 ) -> impl Filter<Extract = impl Reply, Error = warp::Rejection> + Clone {
     let cors = warp::cors()
         .allow_any_origin()
@@ -322,6 +364,7 @@ pub fn filters(
     let ctx = context.clone();
     let uncached_read_write_query_route = warp::path!("q")
         .and(warp::post())
+        .and(with_auth(&access_policy))
         .and(
             // Extract the query from the JSON body
             warp::body::json().map(|b: QueryBody| b.query),
@@ -344,7 +387,7 @@ pub fn filters(
 }
 
 pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) {
-    let filters = filters(context);
+    let filters = filters(context, AccessPolicy::from_config(&config));
 
     let socket_addr: SocketAddr = format!("{}:{}", config.bind_host, config.bind_port)
         .parse()
@@ -374,6 +417,8 @@ mod tests {
 
     use test_case::test_case;
 
+    use crate::auth::AccessPolicy;
+    use crate::config::schema::AccessSettings;
     use crate::{
         context::{test_utils::in_memory_context, SeafowlContext},
         frontend::http::{filters, ETAG, QUERY_HEADER},
@@ -422,6 +467,13 @@ mod tests {
             .unwrap();
         context.reload_schema().await;
         context
+    }
+
+    fn free_for_all() -> AccessPolicy {
+        AccessPolicy {
+            read: AccessSettings::Any,
+            write: AccessSettings::Any,
+        }
     }
 
     const SELECT_QUERY: &str = "SELECT COUNT(*) AS c FROM test_table";
@@ -483,7 +535,7 @@ mod tests {
             body
         }
 
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let boundary = "0123456789";
         let mut body: Vec<u8> = vec![];
@@ -541,7 +593,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_hash_mismatch() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let resp = request()
             .method("GET")
@@ -556,7 +608,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_write_query_error() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let resp = request()
             .method("GET")
@@ -571,7 +623,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_etag() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let resp = request()
             .method("GET")
@@ -587,7 +639,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_query() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let resp = request()
             .method("GET")
@@ -603,7 +655,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_etag_query_in_body() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let resp = request()
             .method("GET")
@@ -619,7 +671,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_etag_extension() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let resp = request()
             .method("GET")
@@ -637,7 +689,7 @@ mod tests {
         // Pass the same ETag as If-None-Match, should return a 301
 
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let resp = request()
             .method("GET")
@@ -655,7 +707,7 @@ mod tests {
         // Pass the same ETag as If-None-Match, but the table version changed -> reruns the query
 
         let context = in_memory_context_with_modified_table().await;
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let resp = request()
             .method("GET")
@@ -672,7 +724,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_uncached_read_query() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let resp = request()
             .method("POST")
@@ -687,7 +739,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_uncached_write_query() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let resp = request()
             .method("POST")
@@ -711,7 +763,7 @@ mod tests {
     #[tokio::test]
     async fn test_http_type_conversion() {
         let context = Arc::new(in_memory_context().await);
-        let handler = filters(context);
+        let handler = filters(context, free_for_all());
 
         let query = r#"
 SELECT
@@ -785,6 +837,7 @@ SELECT
         add_headers: Option<bool>,
     ) {
         let context = in_memory_context_with_single_table().await;
+        let _handler = filters(context.clone(), free_for_all());
 
         let table_name = format!("{}_table", file_format);
 
