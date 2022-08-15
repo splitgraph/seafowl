@@ -90,11 +90,27 @@ impl Default for PostgresFrontend {
     }
 }
 
-#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum AccessSettings {
     Any,
     Off,
     Password { sha256_hash: String },
+}
+
+impl<'de> Deserialize<'de> for AccessSettings {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(d)?;
+        return match s.as_str() {
+            "any" => Ok(AccessSettings::Any),
+            "off" => Ok(AccessSettings::Off),
+            s => Ok(AccessSettings::Password {
+                sha256_hash: s.to_string(),
+            }),
+        };
+    }
 }
 
 impl AccessSettings {
@@ -225,6 +241,21 @@ bind_host = "0.0.0.0"
 bind_port = 80
 "#;
 
+    const TEST_CONFIG_ACCESS: &str = r#"
+[object_store]
+type = "memory"
+
+[catalog]
+type = "sqlite"
+dsn = ":memory:"
+
+[frontend.http]
+bind_host = "0.0.0.0"
+bind_port = 80
+read_access = "any"
+write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
+"#;
+
     const TEST_CONFIG_ERROR: &str = r#"
     [object_store]
     type = "local""#;
@@ -288,6 +319,25 @@ bind_port = 80
                 },
             }
         )
+    }
+
+    #[test]
+    fn test_parse_config_custom_access() {
+        let config = load_config_from_string(TEST_CONFIG_ACCESS, false).unwrap();
+
+        assert_eq!(
+            config.frontend.http.unwrap(),
+            HttpFrontend {
+                bind_host: "0.0.0.0".to_string(),
+                bind_port: 80,
+                read_access: AccessSettings::Any,
+                write_access: AccessSettings::Password {
+                    sha256_hash:
+                        "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
+                            .to_string()
+                },
+            }
+        );
     }
 
     #[test]
