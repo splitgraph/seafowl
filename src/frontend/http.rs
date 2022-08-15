@@ -24,7 +24,7 @@ use warp::multipart::{FormData, Part};
 use warp::reply::Response;
 use warp::{hyper::StatusCode, Filter, Reply};
 
-use crate::auth::{token_to_principal, AccessPolicy, UserContext};
+use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
     context::SeafowlContext,
@@ -79,16 +79,40 @@ struct QueryBody {
     query: String,
 }
 
+pub fn is_read_only(plan: &LogicalPlan) -> bool {
+    !matches!(
+        plan,
+        LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::CreateMemoryTable(_)
+            | LogicalPlan::CreateView(_)
+            | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Extension(_)
+    )
+}
+
 /// POST /q
 pub async fn uncached_read_write_query(
-    _user_context: UserContext,
+    user_context: UserContext,
     query: String,
     context: Arc<dyn SeafowlContext>,
 ) -> Response {
     context.reload_schema().await;
     // TODO: handle/propagate errors
-    // TODO (when authz is implemented) check for read-only queries
-    let physical = context.plan_query(&query).await.unwrap();
+    let logical = context.create_logical_plan(&query).await.unwrap();
+
+    if !user_context.can_perform_action(if is_read_only(&logical) {
+        Action::Read
+    } else {
+        Action::Write
+    }) {
+        return warp::reply::with_status("FORBIDDEN", StatusCode::FORBIDDEN)
+            .into_response();
+    };
+
+    let physical = context.create_physical_plan(&logical).await.unwrap();
     let batches = context.collect(physical).await.unwrap();
 
     let mut buf = Vec::new();
@@ -165,22 +189,12 @@ pub async fn cached_read_query(
     debug!("Query plan: {:?}", plan);
 
     // Write queries should come in as POST requests
-    match plan {
-        LogicalPlan::CreateExternalTable(_)
-        | LogicalPlan::CreateMemoryTable(_)
-        | LogicalPlan::CreateView(_)
-        | LogicalPlan::CreateCatalogSchema(_)
-        | LogicalPlan::CreateCatalog(_)
-        | LogicalPlan::DropTable(_)
-        | LogicalPlan::Analyze(_)
-        | LogicalPlan::Extension(_) => {
-            return warp::reply::with_status(
-                "NOT_READ_ONLY_QUERY",
-                StatusCode::METHOD_NOT_ALLOWED,
-            )
-            .into_response()
-        }
-        _ => (),
+    if !is_read_only(&plan) {
+        return warp::reply::with_status(
+            "NOT_READ_ONLY_QUERY",
+            StatusCode::METHOD_NOT_ALLOWED,
+        )
+        .into_response();
     };
 
     // Pre-execution check: if ETags match, we don't need to re-execute the query
