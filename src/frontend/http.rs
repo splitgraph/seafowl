@@ -169,12 +169,14 @@ pub async fn cached_read_query(
 
 /// POST /upload/[schema]/[table]
 pub async fn upload(
-    _schema_name: String,
+    schema_name: String,
     table_name: String,
     form: FormData,
     context: Arc<dyn SeafowlContext>,
 ) -> Response {
     let parts: Vec<Part> = form.try_collect().await.unwrap();
+    // let schema_part = parts.into_iter().find(|&&p| p.name() == "schema").unwrap();
+
     for p in parts {
         if p.name() == "file" {
             let filename = p.filename().unwrap().to_string();
@@ -247,9 +249,16 @@ pub async fn upload(
             );
 
             // Execute the plan and persist objects as well as table/partition metadata
-            let _result = context
-                .plan_to_table(execution_plan, table_name.clone())
-                .await;
+            if let Err(error) = context
+                .plan_to_table(execution_plan, schema_name.clone(), table_name.clone())
+                .await
+            {
+                return warp::reply::with_status(
+                    error.to_string(),
+                    StatusCode::BAD_REQUEST,
+                )
+                .into_response();
+            }
         }
     }
     warp::reply::with_status(Ok("done"), StatusCode::OK).into_response()
@@ -257,7 +266,7 @@ pub async fn upload(
 
 pub fn filters(
     context: Arc<dyn SeafowlContext>,
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+) -> impl Filter<Extract = impl Reply, Error = warp::Rejection> + Clone {
     let cors = warp::cors()
         .allow_any_origin()
         .allow_headers(vec!["X-Seafowl-Query", "Authorization", "Content-Type"])
@@ -317,6 +326,7 @@ mod tests {
     use arrow::csv::Writer;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use bytes::Bytes;
     use datafusion::assert_batches_eq;
     use datafusion::from_slice::FromSlice;
     use datafusion::parquet::arrow::ArrowWriter;
@@ -324,6 +334,7 @@ mod tests {
     use std::io::Cursor;
     use std::{collections::HashMap, sync::Arc};
 
+    use warp::http::Response;
     use warp::{
         hyper::{header::IF_NONE_MATCH, StatusCode},
         test::request,
@@ -392,6 +403,43 @@ mod tests {
         "038966de9f6b9a901b20b4c6ca8b2a46009feebe031babc842d43690c0bc222b";
     const V2_ETAG: &str =
         "06d033ece6645de592db973644cf7357255f24536ff7b03c3b2ace10736f7636";
+
+    // Create a mock upload request and execute it
+    async fn mock_upload_request(
+        filename: &str,
+        mut file_content: Vec<u8>,
+        schema_name: &str,
+        table_name: &str,
+        context: Arc<dyn SeafowlContext>,
+    ) -> Response<Bytes> {
+        let handler = filters(context);
+
+        let mut body = format!(
+            "--42\r\n\
+            Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\n\
+            Content-Type: application/octet-stream\n\n",
+            filename
+        )
+        .as_bytes()
+        .to_vec();
+
+        let mut part_footer = "--42--".as_bytes().to_vec();
+
+        body.append(&mut file_content);
+        body.append(&mut part_footer);
+
+        request()
+            .method("POST")
+            .path(format!("/upload/{}/{}", schema_name, table_name).as_str())
+            .header("Host", "localhost:3030")
+            .header("User-Agent", "curl/7.64.1")
+            .header("Accept", "*/*")
+            .header("Content-Length", 232)
+            .header("Content-Type", "multipart/form-data; boundary=42")
+            .body(body)
+            .reply(&handler)
+            .await
+    }
 
     #[tokio::test]
     async fn test_get_cached_hash_mismatch() {
@@ -624,9 +672,8 @@ SELECT
         "Parquet file with 1000 rows")
     ]
     #[tokio::test]
-    async fn test_upload(file_format: &str, row_count: i32) {
+    async fn test_upload_base(file_format: &str, row_count: i32) {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context.clone());
 
         let table_name = format!("{}_table", file_format);
 
@@ -664,33 +711,14 @@ SELECT
         }
         form_data.set_position(0);
 
-        // Generate request body
-        let mut body = format!(
-            "--42\r\n\
-            Content-Disposition: form-data; name=\"file\"; filename=\"fruits.{}\"\n\
-            Content-Type: application/octet-stream\n\n",
-            file_format
+        let resp = mock_upload_request(
+            format!("test.{}", file_format).as_str(),
+            form_data.into_inner(),
+            "test_upload",
+            table_name.as_str(),
+            context.clone(),
         )
-        .as_bytes()
-        .to_vec();
-
-        let mut part_footer = "--42--".as_bytes().to_vec();
-
-        body.append(&mut form_data.into_inner());
-        body.append(&mut part_footer);
-
-        // Create a mock request and execute it
-        let resp = request()
-            .method("POST")
-            .path(format!("/upload/{}/{}", "test_upload", table_name).as_str())
-            .header("Host", "localhost:3030")
-            .header("User-Agent", "curl/7.64.1")
-            .header("Accept", "*/*")
-            .header("Content-Length", 232)
-            .header("Content-Type", "multipart/form-data; boundary=42")
-            .body(body)
-            .reply(&handler)
-            .await;
+        .await;
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "done");
@@ -699,7 +727,7 @@ SELECT
 
         // Verify the newly created table contents
         let plan = context
-            .plan_query(format!("SELECT * FROM {}", table_name).as_str())
+            .plan_query(format!("SELECT * FROM test_upload.{}", table_name).as_str())
             .await
             .unwrap();
         let results = context.collect(plan).await.unwrap();
@@ -712,5 +740,102 @@ SELECT
         let expected: Vec<&str> = formatted.trim().lines().collect();
 
         assert_batches_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn test_upload_to_existing_table() {
+        let context = in_memory_context_with_single_table().await;
+
+        // Prepare the schema that matches the existing table + some data
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col_1",
+            DataType::Int32,
+            true,
+        )]));
+
+        let input_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![2, 3]))],
+        )
+        .unwrap();
+
+        // Write out the new data into mock request for Parquet upload
+        let mut form_data: Cursor<Vec<u8>> = Default::default();
+        // drop the writer early to release the borrow.
+        {
+            let mut writer = ArrowWriter::try_new(&mut form_data, schema, None).unwrap();
+            writer.write(&input_batch).unwrap();
+            writer.close().unwrap();
+        }
+        form_data.set_position(0);
+
+        // Create a mock request and execute it
+        let resp = mock_upload_request(
+            "test.parquet",
+            form_data.into_inner(),
+            "public",
+            "test_table",
+            context.clone(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.body(), "done");
+
+        context.reload_schema().await;
+
+        // Verify the newly created table contents
+        let plan = context
+            .plan_query("SELECT * FROM test_table")
+            .await
+            .unwrap();
+        let results = context.collect(plan).await.unwrap();
+
+        let expected = vec![
+            "+-------+",
+            "| col_1 |",
+            "+-------+",
+            "| 1     |",
+            "| 2     |",
+            "| 3     |",
+            "+-------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        // Now try with schema that doesn't matches the existing table (re-use inout batch from before)
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col_1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let input_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![4, 5]))],
+        )
+        .unwrap();
+
+        // Write out the new data into mock request for Parquet upload
+        let mut form_data: Cursor<Vec<u8>> = Default::default();
+        // drop the writer early to release the borrow.
+        {
+            let mut writer = ArrowWriter::try_new(&mut form_data, schema, None).unwrap();
+            writer.write(&input_batch).unwrap();
+            writer.close().unwrap();
+        }
+        form_data.set_position(0);
+
+        let resp = mock_upload_request(
+            "test.parquet",
+            form_data.into_inner(),
+            "public",
+            "test_table",
+            context,
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.body(), "Execution error: The table public.test_table already exists but has a different schema than the one provided.");
     }
 }

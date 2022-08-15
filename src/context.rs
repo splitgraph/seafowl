@@ -361,6 +361,7 @@ pub trait SeafowlContext: Send + Sync {
     async fn plan_to_table(
         &self,
         plan: Arc<dyn ExecutionPlan>,
+        schema_name: String,
         table_name: String,
     ) -> Result<bool>;
 }
@@ -1014,10 +1015,47 @@ impl SeafowlContext for DefaultSeafowlContext {
     async fn plan_to_table(
         &self,
         plan: Arc<dyn ExecutionPlan>,
+        schema_name: String,
         table_name: String,
     ) -> Result<bool> {
+        let mut full_table_name = Some(format!("{}.{}", schema_name, table_name));
+        let mut from_table_version = None;
+
+        // Ensure the schema exists prior to creating the table
+        match self
+            .table_catalog
+            .get_collection_id_by_name(&self.database, &schema_name)
+            .await
+        {
+            Some(_) => {
+                if let Ok(table) =
+                    self.try_get_seafowl_table(full_table_name.clone().unwrap())
+                {
+                    // Table exists, see if the schemas match
+                    if table.schema.arrow_schema != plan.schema() {
+                        return Err(DataFusionError::Execution(
+                            format!(
+                                "The table {} already exists but has a different schema than the one provided.",
+                                full_table_name.clone().unwrap())
+                            )
+                        );
+                    }
+
+                    // Instead of creating a new table, just insert the data into a new version
+                    // of an existing table
+                    full_table_name = None;
+                    from_table_version = Some(table.table_version_id);
+                }
+            }
+            None => {
+                self.table_catalog
+                    .create_collection(self.database_id, &schema_name)
+                    .await;
+            }
+        };
+
         let res = self
-            .execute_plan_to_table(&plan, Some(table_name), None)
+            .execute_plan_to_table(&plan, full_table_name, from_table_version)
             .await;
 
         res
