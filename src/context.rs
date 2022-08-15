@@ -345,19 +345,31 @@ pub async fn plan_to_object_store(
 pub trait SeafowlContext: Send + Sync {
     /// Reload the context to apply / pick up new schema changes
     async fn reload_schema(&self);
+
+    /// Create a logical plan for a query
     async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan>;
+
+    /// Create a physical plan for a query.
+    /// This runs `create_logical_plan` and then `create_physical_plan`.
+    /// Note that for some statements like INSERT, this will also execute
+    /// the query.
     async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>>;
 
-    // TODO: context.create_physical_plan shouldn't be exposed in the interface, since
-    // it bypasses our special way of executing Inserts etc
+    /// Create a phyiscal plan from a logical plan.
+    /// Note that for some statements like INSERT, this will also execute
+    /// the query.
     async fn create_physical_plan(
         &self,
         plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Execute a plan, producing a vector of results.
     async fn collect(
         &self,
         physical_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Vec<RecordBatch>>;
+
+    /// Execute a plan, outputting its results to a table.
     async fn plan_to_table(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -772,10 +784,16 @@ impl SeafowlContext for DefaultSeafowlContext {
 
     async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.create_logical_plan(sql).await?;
+        self.create_physical_plan(&logical_plan).await
+    }
 
+    async fn create_physical_plan(
+        &self,
+        plan: &LogicalPlan,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         // Similarly to DataFrame::sql, run certain logical plans outside of the actual execution flow
         // and produce a dummy physical plan instead
-        match logical_plan {
+        match plan {
             LogicalPlan::CreateExternalTable(CreateExternalTable {
                 ref schema,
                 ref name,
@@ -852,7 +870,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // CREATE SCHEMA
                 // Create a schema and register it
                 self.table_catalog
-                    .create_collection(self.database_id, &schema_name)
+                    .create_collection(self.database_id, schema_name)
                     .await;
                 Ok(make_dummy_exec())
             }
@@ -862,7 +880,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 schema: _,
             }) => {
                 // CREATE DATABASE
-                self.table_catalog.create_database(&catalog_name).await;
+                self.table_catalog.create_database(catalog_name).await;
                 Ok(make_dummy_exec())
             }
             // TODO DROP DATABASE / SCHEMA
@@ -873,7 +891,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 or_replace: _,
             }) => {
                 // This is actually CREATE TABLE AS
-                let physical = self.create_physical_plan(&input).await?;
+                let physical = self.create_physical_plan(input).await?;
 
                 self.execute_plan_to_table(&physical, Some(name), None)
                     .await?;
@@ -985,19 +1003,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                             Ok(make_dummy_exec())
                         }
                     },
-                    None => self.inner.create_physical_plan(&logical_plan).await,
+                    None => self.inner.create_physical_plan(plan).await,
                 }
             }
-            _ => self.inner.create_physical_plan(&logical_plan).await,
+            _ => self.inner.create_physical_plan(plan).await,
         }
-    }
-
-    async fn create_physical_plan(
-        &self,
-        plan: &LogicalPlan,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let physical_plan = self.inner.create_physical_plan(plan).await?;
-        Ok(physical_plan)
     }
 
     // Copied from DataFusion's physical_plan
