@@ -1,12 +1,11 @@
 use arrow::csv::ReaderBuilder;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::Schema;
 use std::io::Cursor;
 use std::{net::SocketAddr, sync::Arc};
 
 use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::RecordBatch;
-use bytes::BufMut;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes};
 use datafusion::parquet::arrow::{ArrowReader, ParquetFileArrowReader};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::{
@@ -17,7 +16,7 @@ use futures::TryStreamExt;
 use hex::encode;
 use log::debug;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use warp::multipart::{FormData, Part};
 use warp::reply::Response;
@@ -175,10 +174,27 @@ pub async fn upload(
     context: Arc<dyn SeafowlContext>,
 ) -> Response {
     let parts: Vec<Part> = form.try_collect().await.unwrap();
-    // let schema_part = parts.into_iter().find(|&&p| p.name() == "schema").unwrap();
 
+    let mut csv_schema: Option<Schema> = None;
     for p in parts {
-        if p.name() == "file" {
+        if p.name() == "schema" && p.content_type() == Some("application/json") {
+            let json_bytes = p
+                .stream()
+                .try_fold(Vec::new(), |mut vec, data| {
+                    vec.put(data);
+                    async move { Ok(vec) }
+                })
+                .await
+                .map_err(|e| {
+                    eprintln!("Error reading part's data: {}", e);
+                    warp::reject::reject()
+                })
+                .unwrap();
+
+            let schema_json: Value =
+                serde_json::from_slice(json_bytes.as_slice()).unwrap();
+            csv_schema = Some(Schema::from(&schema_json).unwrap());
+        } else if p.name() == "file" {
             let filename = p.filename().unwrap().to_string();
 
             // Load the file content from the request
@@ -202,10 +218,19 @@ pub async fn upload(
             // Parse the schema and load the file contents into a vector of record batches
             let (schema, partition) = match filename.split('.').last().unwrap() {
                 "csv" => {
-                    let schema = Schema::new(vec![
-                        Field::new("number", DataType::Int32, false),
-                        Field::new("parity", DataType::Utf8, false),
-                    ]);
+                    let schema = match csv_schema.clone() {
+                        Some(schema) => schema,
+                        None => {
+                            // TODO: We could actually make the schema part optional, and utilize
+                            // CSV reader's ability to infer the schema, so that we gain some
+                            // ergonomics at the expense of some schema ambiguity
+                            return warp::reply::with_status(
+                                "CSV schema not supplied".to_string(),
+                                StatusCode::BAD_REQUEST,
+                            )
+                            .into_response();
+                        }
+                    };
 
                     let builder = ReaderBuilder::new()
                         .with_schema(Arc::new(schema.clone()))
@@ -410,23 +435,37 @@ mod tests {
         mut file_content: Vec<u8>,
         schema_name: &str,
         table_name: &str,
+        schema_json: Option<&str>,
         context: Arc<dyn SeafowlContext>,
     ) -> Response<Bytes> {
         let handler = filters(context);
 
-        let mut body = format!(
-            "--42\r\n\
-            Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\n\
-            Content-Type: application/octet-stream\n\n",
-            filename
-        )
-        .as_bytes()
-        .to_vec();
+        let mut body: Vec<u8> = vec![];
 
-        let mut part_footer = "--42--".as_bytes().to_vec();
+        if let Some(schema_json) = schema_json {
+            body = "--42\r\n\
+                Content-Disposition: form-data; name=\"schema\"\n\
+                Content-Type: application/json\n\n"
+                .to_string()
+                .as_bytes()
+                .to_vec();
+            body.append(&mut schema_json.as_bytes().to_vec());
+            body.append(&mut "\n\n".as_bytes().to_vec());
+        }
+
+        body.append(
+            &mut format!(
+                "--42\r\n\
+                Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\n\
+                Content-Type: application/octet-stream\n\n",
+                filename
+            )
+            .as_bytes()
+            .to_vec(),
+        );
 
         body.append(&mut file_content);
-        body.append(&mut part_footer);
+        body.append(&mut "--42--".as_bytes().to_vec());
 
         request()
             .method("POST")
@@ -684,6 +723,28 @@ SELECT
             Field::new("parity", DataType::Utf8, false),
         ]));
 
+        // For CSV uploads supply the schema as another part of the multipart request
+        let schema_json = r#"{
+                "fields": [
+                    {
+                        "name": "number",
+                        "nullable": false,
+                        "type": {
+                            "name": "int",
+                            "bitWidth": 32,
+                            "isSigned": true
+                        }
+                    },
+                    {
+                        "name": "parity",
+                        "nullable": false,
+                        "type": {
+                            "name": "utf8"
+                        }
+                    }
+                ]
+            }"#;
+
         let range = 0..row_count;
         let input_batch = RecordBatch::try_new(
             schema.clone(),
@@ -716,6 +777,11 @@ SELECT
             form_data.into_inner(),
             "test_upload",
             table_name.as_str(),
+            if file_format == "csv" {
+                Some(schema_json)
+            } else {
+                None
+            },
             context.clone(),
         )
         .await;
@@ -775,6 +841,7 @@ SELECT
             form_data.into_inner(),
             "public",
             "test_table",
+            None,
             context.clone(),
         )
         .await;
@@ -831,6 +898,7 @@ SELECT
             form_data.into_inner(),
             "public",
             "test_table",
+            None,
             context,
         )
         .await;
