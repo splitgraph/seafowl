@@ -125,36 +125,28 @@ pub async fn uncached_read_write_query(
 }
 
 pub fn with_auth(
-    policy: &AccessPolicy,
+    policy: AccessPolicy,
 ) -> impl Filter<Extract = (UserContext,), Error = Rejection> + Clone {
-    // TODO this is absolutely disgusting
-    //   - double clone of policy
-    //   - async closure even though we don't use async but there's no non-async
-    //     counterpart to and_then
-    let policy = policy.clone();
     warp::header::optional::<String>("Authorization").and_then(
         move |header: Option<String>| {
-            let policy = policy.clone();
-            async move {
-                let token = match header {
-                    Some(h) => {
-                        if !h.starts_with("Bearer ") {
-                            return Err(warp::reject::reject());
-                        };
+            let token = match header {
+                Some(h) => {
+                    if !h.starts_with("Bearer ") {
+                        return future::err(warp::reject::reject());
+                    };
 
-                        Some(h.trim_start_matches("Bearer ").to_string())
-                    }
-                    None => None,
-                };
+                    Some(h.trim_start_matches("Bearer ").to_string())
+                }
+                None => None,
+            };
 
-                // TODO propagate a 401 here
-                let principal = token_to_principal(token, &policy)
-                    .map_err(|_| warp::reject::reject())?;
-
-                Ok(UserContext {
+            // TODO propagate a 401 here
+            match token_to_principal(token, &policy) {
+                Ok(principal) => future::ok(UserContext {
                     principal,
                     policy: policy.clone(),
-                })
+                }),
+                Err(_) => future::err(warp::reject::reject()),
             }
         },
     )
@@ -163,9 +155,8 @@ pub fn with_auth(
 // Disable the cached GET endpoint if we require auth for reads / they're disabled.
 // (since caching + auth is yet another can of worms)
 pub fn cached_read_query_authz(
-    policy: &AccessPolicy,
+    policy: AccessPolicy,
 ) -> impl Filter<Extract = (), Error = Rejection> + Clone {
-    let policy = policy.clone();
     warp::any()
         .and_then(move || {
             match policy.read {
@@ -382,7 +373,7 @@ pub fn filters(
     let ctx = context.clone();
     let cached_read_query_route = warp::path!("q" / String)
         .and(warp::get())
-        .and(cached_read_query_authz(&access_policy))
+        .and(cached_read_query_authz(access_policy.clone()))
         .and(
             // Extract the query either from the header or from the JSON body
             warp::header::<String>(QUERY_HEADER)
@@ -397,7 +388,7 @@ pub fn filters(
     let ctx = context.clone();
     let uncached_read_write_query_route = warp::path!("q")
         .and(warp::post())
-        .and(with_auth(&access_policy))
+        .and(with_auth(access_policy))
         .and(
             // Extract the query from the JSON body
             warp::body::json().map(|b: QueryBody| b.query),
