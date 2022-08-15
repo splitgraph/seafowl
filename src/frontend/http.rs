@@ -176,6 +176,7 @@ pub async fn upload(
     let parts: Vec<Part> = form.try_collect().await.unwrap();
 
     let mut csv_schema: Option<Schema> = None;
+    let mut filename = String::new();
     for p in parts {
         if p.name() == "schema" && p.content_type() == Some("application/json") {
             let json_bytes = p
@@ -194,8 +195,8 @@ pub async fn upload(
             let schema_json: Value =
                 serde_json::from_slice(json_bytes.as_slice()).unwrap();
             csv_schema = Some(Schema::from(&schema_json).unwrap());
-        } else if p.name() == "file" {
-            let filename = p.filename().unwrap().to_string();
+        } else if p.name() == "data" || p.name() == "file" {
+            filename = p.filename().unwrap().to_string();
 
             // Load the file content from the request
             // TODO: we're actually buffering the entire file into memory here which is sub-optimal,
@@ -225,7 +226,7 @@ pub async fn upload(
                             // CSV reader's ability to infer the schema, so that we gain some
                             // ergonomics at the expense of some schema ambiguity
                             return warp::reply::with_status(
-                                "CSV schema not supplied".to_string(),
+                                "CSV schema part not supplied".to_string(),
                                 StatusCode::BAD_REQUEST,
                             )
                             .into_response();
@@ -286,6 +287,15 @@ pub async fn upload(
             }
         }
     }
+
+    if filename.is_empty() {
+        return warp::reply::with_status(
+            "No part containing file found in the request!",
+            StatusCode::BAD_REQUEST,
+        )
+        .into_response();
+    }
+
     warp::reply::with_status(Ok("done"), StatusCode::OK).into_response()
 }
 
@@ -456,7 +466,7 @@ mod tests {
         body.append(
             &mut format!(
                 "--42\r\n\
-                Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\n\
+                Content-Disposition: form-data; name=\"data\"; filename=\"{}\"\n\
                 Content-Type: application/octet-stream\n\n",
                 filename
             )

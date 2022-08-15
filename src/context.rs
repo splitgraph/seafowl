@@ -1054,11 +1054,8 @@ impl SeafowlContext for DefaultSeafowlContext {
             }
         };
 
-        let res = self
-            .execute_plan_to_table(&plan, full_table_name, from_table_version)
-            .await;
-
-        res
+        self.execute_plan_to_table(&plan, full_table_name, from_table_version)
+            .await
     }
 }
 
