@@ -2,7 +2,7 @@ use arrow::csv::ReaderBuilder;
 use arrow::datatypes::Schema;
 use arrow::error::ArrowError;
 use std::io::Cursor;
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, convert::Infallible};
 
 use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::RecordBatch;
@@ -24,7 +24,7 @@ use warp::reply::Response;
 use warp::{hyper::StatusCode, Filter, Reply};
 
 use crate::{
-    config::schema::HttpFrontend, context::SeafowlContext, data_types::TableVersionId,
+    config::schema::{HttpFrontend, str_to_hex_hash}, context::SeafowlContext, data_types::TableVersionId,
     provider::SeafowlTable,
 };
 
@@ -38,7 +38,7 @@ struct ETagBuilderVisitor {
 }
 
 impl PlanVisitor for ETagBuilderVisitor {
-    type Error = ();
+    type Error = Infallible;
 
     fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
         if let LogicalPlan::TableScan(TableScan { source, .. }) = plan {
@@ -105,9 +105,7 @@ pub async fn cached_read_query(
     let query_hash = query_hash.split('.').next().unwrap();
 
     context.reload_schema().await;
-    let mut hasher = Sha256::new();
-    hasher.update(&query);
-    let hash_str = encode(hasher.finalize());
+    let hash_str = str_to_hex_hash(&query);
 
     debug!(
         "Received query: {}, URL hash {}, actual hash {}",
