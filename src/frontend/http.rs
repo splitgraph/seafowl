@@ -176,11 +176,16 @@ pub async fn upload(
 ) -> Response {
     let parts: Vec<Part> = form.try_collect().await.unwrap();
 
+    let mut has_header = true;
     let mut csv_schema: Option<Schema> = None;
     let mut filename = String::new();
     for p in parts {
-        if p.name() == "schema" && p.content_type() == Some("application/json") {
-            let json_bytes = p
+        if p.name() == "has_header"
+            || p.name() == "schema" && p.content_type() == Some("application/json")
+        {
+            let header_part = p.name() == "has_header";
+
+            let value_bytes = p
                 .stream()
                 .try_fold(Vec::new(), |mut vec, data| {
                     vec.put(data);
@@ -193,9 +198,14 @@ pub async fn upload(
                 })
                 .unwrap();
 
-            let schema_json: Value =
-                serde_json::from_slice(json_bytes.as_slice()).unwrap();
-            csv_schema = Some(Schema::from(&schema_json).unwrap());
+            if header_part {
+                has_header = String::from_utf8(value_bytes).unwrap().starts_with("true");
+                debug!("Form part has_header is: {}", has_header);
+            } else {
+                let schema_json: Value =
+                    serde_json::from_slice(value_bytes.as_slice()).unwrap();
+                csv_schema = Some(Schema::from(&schema_json).unwrap());
+            }
         } else if p.name() == "data" || p.name() == "file" {
             filename = p.filename().unwrap().to_string();
 
@@ -220,27 +230,19 @@ pub async fn upload(
             // Parse the schema and load the file contents into a vector of record batches
             let (schema, partition) = match filename.split('.').last().unwrap() {
                 "csv" => {
-                    let schema = match csv_schema.clone() {
-                        Some(schema) => schema,
-                        None => {
-                            // TODO: We could actually make the schema part optional, and utilize
-                            // CSV reader's ability to infer the schema, so that we gain some
-                            // ergonomics at the expense of some schema ambiguity
-                            return warp::reply::with_status(
-                                "CSV schema part not supplied".to_string(),
-                                StatusCode::BAD_REQUEST,
-                            )
-                            .into_response();
-                        }
+                    // If the schema part wasn't specified we'll need to infer it
+                    let builder = match csv_schema.clone() {
+                        Some(schema) => ReaderBuilder::new()
+                            .with_schema(Arc::new(schema.clone()))
+                            .has_header(has_header), // .with_escape(b'\\'); // default is None, change to \
+                        None => ReaderBuilder::new()
+                            .infer_schema(None)
+                            .has_header(has_header),
                     };
-
-                    let builder = ReaderBuilder::new()
-                        .with_schema(Arc::new(schema.clone()))
-                        .has_header(true)
-                        .with_escape(b'\\'); // default is None, change to \
 
                     let mut cursor = Cursor::new(&value);
                     let csv_reader = builder.build(&mut cursor).unwrap();
+                    let schema = csv_reader.schema().as_ref().clone();
                     let partition: Vec<RecordBatch> = csv_reader
                         .into_iter()
                         .collect::<Result<Vec<RecordBatch>, ArrowError>>()
@@ -361,7 +363,7 @@ pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) 
 #[cfg(test)]
 mod tests {
     use arrow::array::{Int32Array, StringArray};
-    use arrow::csv::Writer;
+    use arrow::csv::WriterBuilder;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use bytes::Bytes;
@@ -445,40 +447,88 @@ mod tests {
     // Create a mock upload request and execute it
     async fn mock_upload_request(
         filename: &str,
-        mut file_content: Vec<u8>,
+        file_content: Vec<u8>,
         schema_name: &str,
         table_name: &str,
         schema_json: Option<&str>,
+        has_headers: Option<&str>,
         context: Arc<dyn SeafowlContext>,
     ) -> Response<Bytes> {
-        let handler = filters(context);
-
-        let mut body: Vec<u8> = vec![];
-
-        if let Some(schema_json) = schema_json {
-            body = "--0123456789\r\n\
-                Content-Disposition: form-data; name=\"schema\"\n\
-                Content-Type: application/json\n\n"
-                .to_string()
+        fn append_parts_to_body(
+            mut body: Vec<u8>,
+            boundary: &str,
+            name: &str,
+            content_type: &str,
+            filename: Option<&str>,
+            mut part: Vec<u8>,
+            end: bool,
+        ) -> Vec<u8> {
+            body.append(
+                &mut format!(
+                    "--{}\r\n\
+                Content-Disposition: form-data; name=\"{}\"{}\n\
+                Content-Type: {}\n\n",
+                    boundary,
+                    name,
+                    if let Some(filename) = filename {
+                        format!("; filename=\"{}\"", filename)
+                    } else {
+                        String::new()
+                    },
+                    content_type
+                )
                 .as_bytes()
-                .to_vec();
-            body.append(&mut schema_json.as_bytes().to_vec());
-            body.append(&mut "\n\n".as_bytes().to_vec());
+                .to_vec(),
+            );
+
+            body.append(&mut part);
+            if end {
+                body.append(&mut format!("--{}--", boundary).as_bytes().to_vec())
+            } else {
+                body.append(&mut "\n\n".as_bytes().to_vec());
+            };
+
+            body
         }
 
-        body.append(
-            &mut format!(
-                "--0123456789\r\n\
-                Content-Disposition: form-data; name=\"data\"; filename=\"{}\"\n\
-                Content-Type: application/octet-stream\n\n",
-                filename
-            )
-            .as_bytes()
-            .to_vec(),
-        );
+        let handler = filters(context);
 
-        body.append(&mut file_content);
-        body.append(&mut "--0123456789--".as_bytes().to_vec());
+        let boundary = "0123456789";
+        let mut body: Vec<u8> = vec![];
+
+        if let Some(has_headers) = has_headers {
+            body = append_parts_to_body(
+                body,
+                boundary,
+                "has_header",
+                "application/json",
+                None,
+                has_headers.as_bytes().to_vec(),
+                false,
+            );
+        }
+
+        if let Some(schema_json) = schema_json {
+            body = append_parts_to_body(
+                body,
+                boundary,
+                "schema",
+                "application/json",
+                None,
+                schema_json.as_bytes().to_vec(),
+                false,
+            );
+        }
+
+        body = append_parts_to_body(
+            body,
+            boundary,
+            "data",
+            "application/octet-stream",
+            Some(filename),
+            file_content,
+            true,
+        );
 
         request()
             .method("POST")
@@ -487,7 +537,10 @@ mod tests {
             .header("User-Agent", "curl/7.64.1")
             .header("Accept", "*/*")
             .header("Content-Length", 232)
-            .header("Content-Type", "multipart/form-data; boundary=0123456789")
+            .header(
+                "Content-Type",
+                format!("multipart/form-data; boundary={}", boundary),
+            )
             .body(body)
             .reply(&handler)
             .await
@@ -705,26 +758,40 @@ SELECT
 
     #[test_case(
         "csv",
-        10;
-        "CSV file with 10 rows")
+        true,
+        Some(true);
+        "CSV file upload schema supplied w/ headers")
     ]
     #[test_case(
         "csv",
-        1000;
-        "CSV file with 1000 rows")
+        true,
+        Some(false);
+        "CSV file upload schema supplied w/o headers")
+    ]
+    #[test_case(
+        "csv",
+        false,
+        Some(true);
+        "CSV file upload schema inferred w/ headers")
+    ]
+    #[test_case(
+        "csv",
+        false,
+        Some(false);
+        "CSV file upload schema inferred w/o headers")
     ]
     #[test_case(
         "parquet",
-        10;
-        "Parquet file with 10 rows")
-    ]
-    #[test_case(
-        "parquet",
-        1000;
-        "Parquet file with 1000 rows")
+        false,
+        None;
+        "Parquet file upload")
     ]
     #[tokio::test]
-    async fn test_upload_base(file_format: &str, row_count: i32) {
+    async fn test_upload_base(
+        file_format: &str,
+        include_schema: bool,
+        add_headers: Option<bool>,
+    ) {
         let context = in_memory_context_with_single_table().await;
 
         let table_name = format!("{}_table", file_format);
@@ -736,7 +803,8 @@ SELECT
             Field::new("parity", DataType::Utf8, false),
         ]));
 
-        // For CSV uploads supply the schema as another part of the multipart request
+        // For CSV uploads we can supply the schema as another part of the multipart request, to
+        // reduce the ambiguity resulting from automatic schema inference
         let schema_json = r#"{
                 "fields": [
                     {
@@ -758,8 +826,8 @@ SELECT
                 ]
             }"#;
 
-        let range = 0..row_count;
-        let input_batch = RecordBatch::try_new(
+        let range = 0..2000;
+        let mut input_batch = RecordBatch::try_new(
             schema.clone(),
             vec![
                 Arc::new(Int32Array::from_slice(range.clone().collect_vec())),
@@ -776,7 +844,13 @@ SELECT
         let mut form_data: Cursor<Vec<u8>> = Default::default();
         // drop the writer early to release the borrow.
         if file_format == "csv" {
-            let mut writer = Writer::new(&mut form_data);
+            let mut writer = WriterBuilder::new()
+                .has_headers(if let Some(has_headers) = add_headers {
+                    has_headers
+                } else {
+                    true
+                })
+                .build(&mut form_data);
             writer.write(&input_batch).unwrap();
         } else if file_format == "parquet" {
             let mut writer = ArrowWriter::try_new(&mut form_data, schema, None).unwrap();
@@ -785,16 +859,26 @@ SELECT
         }
         form_data.set_position(0);
 
+        let has_headers = if let Some(headers) = add_headers {
+            if headers {
+                Some("true")
+            } else {
+                Some("false")
+            }
+        } else {
+            None
+        };
         let resp = mock_upload_request(
             format!("test.{}", file_format).as_str(),
             form_data.into_inner(),
             "test_upload",
             table_name.as_str(),
-            if file_format == "csv" {
+            if include_schema && file_format == "csv" {
                 Some(schema_json)
             } else {
                 None
             },
+            has_headers,
             context.clone(),
         )
         .await;
@@ -812,6 +896,14 @@ SELECT
         let results = context.collect(plan).await.unwrap();
 
         // Generate expected output from the input batch that was used in the multipart request
+        if !include_schema && add_headers == Some(false) {
+            // Rename the column names as they will be inferred without a schema
+            input_batch = RecordBatch::try_from_iter_with_nullable(vec![
+                ("column_1", input_batch.column(0).clone(), false),
+                ("column_2", input_batch.column(1).clone(), false),
+            ])
+            .unwrap();
+        }
         let formatted = arrow::util::pretty::pretty_format_batches(&[input_batch])
             .unwrap()
             .to_string();
@@ -854,6 +946,7 @@ SELECT
             form_data.into_inner(),
             "public",
             "test_table",
+            None,
             None,
             context.clone(),
         )
@@ -911,6 +1004,7 @@ SELECT
             form_data.into_inner(),
             "public",
             "test_table",
+            None,
             None,
             context,
         )
