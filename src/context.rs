@@ -893,7 +893,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // This is actually CREATE TABLE AS
                 let physical = self.create_physical_plan(input).await?;
 
-                self.execute_plan_to_table(&physical, Some(name), None)
+                self.execute_plan_to_table(&physical, Some(name.to_string()), None)
                     .await?;
 
                 Ok(make_dummy_exec())
