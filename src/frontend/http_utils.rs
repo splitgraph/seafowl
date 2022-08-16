@@ -52,6 +52,10 @@ pub enum ApiError {
     HashMismatch(String, String),
     NotReadOnlyQuery,
     ReadOnlyEndpointDisabled,
+    NeedAccessToken,
+    UselessAccessToken,
+    WrongAccessToken,
+    InvalidAuthorizationHeader,
 }
 
 // Wrap DataFusion errors so that we can automagically return an
@@ -73,7 +77,11 @@ impl ApiError {
             // Mismatched hash
             ApiError::HashMismatch(expected, got) => (StatusCode::BAD_REQUEST, format!("Invalid hash: expected {0:?}, got {1:?}. Resend your query with {0:?}", expected, got)),
             ApiError::NotReadOnlyQuery => (StatusCode::METHOD_NOT_ALLOWED, "NOT_READ_ONLY_QUERY".to_string()),
-            ApiError::ReadOnlyEndpointDisabled => (StatusCode::METHOD_NOT_ALLOWED, "READ_ONLY_ENDPOINT_DISABLED".to_string())
+            ApiError::ReadOnlyEndpointDisabled => (StatusCode::METHOD_NOT_ALLOWED, "READ_ONLY_ENDPOINT_DISABLED".to_string()),
+            ApiError::NeedAccessToken => (StatusCode::UNAUTHORIZED, "NEED_ACCESS_TOKEN".to_string()),
+            ApiError::UselessAccessToken => (StatusCode::BAD_REQUEST, "USELESS_ACCESS_TOKEN".to_string()),
+            ApiError::WrongAccessToken => (StatusCode::FORBIDDEN, "INVALID_ACCESS_TOKEN".to_string()),
+            ApiError::InvalidAuthorizationHeader => (StatusCode::UNAUTHORIZED, "INVALID_AUTHORIZATION_HEADER".to_string()),
         }
     }
 

@@ -1,4 +1,7 @@
-use crate::config::schema::{str_to_hex_hash, AccessSettings, HttpFrontend};
+use crate::{
+    config::schema::{str_to_hex_hash, AccessSettings, HttpFrontend},
+    frontend::http_utils::ApiError,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Principal {
@@ -75,22 +78,21 @@ impl AccessPolicy {
 pub fn token_to_principal(
     token: Option<String>,
     policy: &AccessPolicy,
-    // TODO: error enums instead of strings
-) -> Result<Principal, String> {
+) -> Result<Principal, ApiError> {
     match (token, &policy.write, &policy.read) {
         // If both read and write require a password and the user didn't pass a token: error
         (
             None,
             AccessSettings::Off | AccessSettings::Password { sha256_hash: _ },
             AccessSettings::Off | AccessSettings::Password { sha256_hash: _ },
-        ) => Err("UNAUTHORIZED".to_string()),
+        ) => Err(ApiError::NeedAccessToken),
         (None, _, _) => Ok(Principal::Anonymous),
         // If password auth is disabled and the user passed a token: error
         (
             Some(_),
             AccessSettings::Any | AccessSettings::Off,
             AccessSettings::Any | AccessSettings::Off,
-        ) => Err("TOKEN_NOT_NEEDED".to_string()),
+        ) => Err(ApiError::UselessAccessToken),
 
         (Some(t), AccessSettings::Password { sha256_hash }, _)
             if str_to_hex_hash(&t) == sha256_hash.as_str() =>
@@ -102,8 +104,8 @@ pub fn token_to_principal(
         {
             Ok(Principal::Reader)
         }
-        // If the token's hash didn't match: error (TODO 401?)
-        (Some(_), _, _) => Err("WRONG_PASSWORD".to_string()),
+        // If the token's hash didn't match: error
+        (Some(_), _, _) => Err(ApiError::WrongAccessToken),
     }
 }
 
@@ -139,7 +141,10 @@ impl UserContext {
 
 #[cfg(test)]
 mod tests {
-    use crate::auth::{Action, UserContext};
+    use crate::{
+        auth::{Action, UserContext},
+        frontend::http_utils::ApiError,
+    };
 
     use super::{token_to_principal, AccessPolicy, Principal};
 
@@ -172,16 +177,19 @@ mod tests {
 
     #[test]
     fn test_all_allowed_disallows_token() {
-        assert_eq!(
+        assert!(matches!(
             token_to_principal(Some(READ_PW.to_string()), &free_for_all()),
-            Err("TOKEN_NOT_NEEDED".to_string())
-        )
+            Err(ApiError::UselessAccessToken)
+        ))
     }
 
     #[test]
     fn test_all_allowed_anon() {
         let policy = free_for_all();
-        assert_eq!(token_to_principal(None, &policy), Ok(Principal::Anonymous));
+        assert!(matches!(
+            token_to_principal(None, &policy),
+            Ok(Principal::Anonymous)
+        ));
 
         let context = UserContext {
             principal: Principal::Anonymous,
@@ -195,19 +203,19 @@ mod tests {
     #[test]
     fn test_write_pw_wrong_token() {
         let policy = need_write_pw();
-        assert_eq!(
+        assert!(matches!(
             token_to_principal(Some(READ_PW.to_string()), &policy),
-            Err("WRONG_PASSWORD".to_string())
-        );
+            Err(ApiError::WrongAccessToken)
+        ));
     }
 
     #[test]
     fn test_write_pw_correct_token_can_read_write() {
         let policy = need_write_pw();
-        assert_eq!(
+        assert!(matches!(
             token_to_principal(Some(WRITE_PW.to_string()), &policy),
             Ok(Principal::Writer)
-        );
+        ));
 
         let context = UserContext {
             principal: Principal::Writer,
@@ -220,7 +228,10 @@ mod tests {
     #[test]
     fn test_write_pw_anonymous_only_read() {
         let policy = need_write_pw();
-        assert_eq!(token_to_principal(None, &policy), Ok(Principal::Anonymous));
+        assert!(matches!(
+            token_to_principal(None, &policy),
+            Ok(Principal::Anonymous)
+        ));
 
         let context = UserContext {
             principal: Principal::Anonymous,
@@ -233,16 +244,19 @@ mod tests {
 
     #[test]
     fn test_read_only_disallows_token() {
-        assert_eq!(
+        assert!(matches!(
             token_to_principal(Some(READ_PW.to_string()), &read_only_write_off()),
-            Err("TOKEN_NOT_NEEDED".to_string())
-        )
+            Err(ApiError::UselessAccessToken)
+        ))
     }
 
     #[test]
     fn test_read_only_can_read_cant_write() {
         let policy = read_only_write_off();
-        assert_eq!(token_to_principal(None, &policy), Ok(Principal::Anonymous));
+        assert!(matches!(
+            token_to_principal(None, &policy),
+            Ok(Principal::Anonymous)
+        ));
 
         let context = UserContext {
             principal: Principal::Anonymous,
@@ -255,19 +269,19 @@ mod tests {
 
     #[test]
     fn test_read_pw_write_off_disallows_anon() {
-        assert_eq!(
+        assert!(matches!(
             token_to_principal(None, &read_pw_write_off()),
-            Err("UNAUTHORIZED".to_string())
-        );
+            Err(ApiError::NeedAccessToken)
+        ));
     }
 
     #[test]
     fn test_read_pw_write_off_only_read() {
         let policy = read_pw_write_off();
-        assert_eq!(
+        assert!(matches!(
             token_to_principal(Some(READ_PW.to_string()), &policy),
             Ok(Principal::Reader)
-        );
+        ));
         let context = UserContext {
             principal: Principal::Reader,
             policy,
@@ -279,19 +293,19 @@ mod tests {
 
     #[test]
     fn test_read_write_pw_disallows_anon() {
-        assert_eq!(
+        assert!(matches!(
             token_to_principal(None, &read_pw_write_pw()),
-            Err("UNAUTHORIZED".to_string())
-        );
+            Err(ApiError::NeedAccessToken)
+        ));
     }
 
     #[test]
     fn test_read_write_pw_reader_can_only_read() {
         let policy = read_pw_write_pw();
-        assert_eq!(
+        assert!(matches!(
             token_to_principal(Some(READ_PW.to_string()), &policy),
             Ok(Principal::Reader)
-        );
+        ));
         let context = UserContext {
             principal: Principal::Reader,
             policy,
@@ -304,10 +318,10 @@ mod tests {
     #[test]
     fn test_read_write_pw_writer_can_read_write() {
         let policy = read_pw_write_pw();
-        assert_eq!(
+        assert!(matches!(
             token_to_principal(Some(WRITE_PW.to_string()), &policy),
             Ok(Principal::Writer)
-        );
+        ));
         let context = UserContext {
             principal: Principal::Writer,
             policy,
