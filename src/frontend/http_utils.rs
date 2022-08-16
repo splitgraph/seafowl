@@ -47,11 +47,11 @@ use warp::{Rejection, Reply};
 
 #[derive(Debug)]
 pub enum ApiError {
-    Forbidden,
     DataFusionError(DataFusionError),
     HashMismatch(String, String),
     NotReadOnlyQuery,
     ReadOnlyEndpointDisabled,
+    WriteForbidden,
     NeedAccessToken,
     UselessAccessToken,
     WrongAccessToken,
@@ -69,7 +69,6 @@ impl From<DataFusionError> for ApiError {
 impl ApiError {
     fn status_code_body(self: &ApiError) -> (StatusCode, String) {
         match self {
-            ApiError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN".to_string()),
             // TODO: figure out which DF errors to propagate, we have ones that are the server's fault
             // here too (e.g. ResourcesExhaused) and potentially some that leak internal information
             // (e.g. ObjectStore?)
@@ -78,9 +77,10 @@ impl ApiError {
             ApiError::HashMismatch(expected, got) => (StatusCode::BAD_REQUEST, format!("Invalid hash: expected {0:?}, got {1:?}. Resend your query with {0:?}", expected, got)),
             ApiError::NotReadOnlyQuery => (StatusCode::METHOD_NOT_ALLOWED, "NOT_READ_ONLY_QUERY".to_string()),
             ApiError::ReadOnlyEndpointDisabled => (StatusCode::METHOD_NOT_ALLOWED, "READ_ONLY_ENDPOINT_DISABLED".to_string()),
+            ApiError::WriteForbidden => (StatusCode::FORBIDDEN, "WRITE_FORBIDDEN".to_string()),
             ApiError::NeedAccessToken => (StatusCode::UNAUTHORIZED, "NEED_ACCESS_TOKEN".to_string()),
             ApiError::UselessAccessToken => (StatusCode::BAD_REQUEST, "USELESS_ACCESS_TOKEN".to_string()),
-            ApiError::WrongAccessToken => (StatusCode::FORBIDDEN, "INVALID_ACCESS_TOKEN".to_string()),
+            ApiError::WrongAccessToken => (StatusCode::UNAUTHORIZED, "INVALID_ACCESS_TOKEN".to_string()),
             ApiError::InvalidAuthorizationHeader => (StatusCode::UNAUTHORIZED, "INVALID_AUTHORIZATION_HEADER".to_string()),
         }
     }
