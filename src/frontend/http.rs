@@ -452,7 +452,7 @@ mod tests {
     use test_case::test_case;
 
     use crate::auth::AccessPolicy;
-    use crate::config::schema::AccessSettings;
+
     use crate::{
         context::{test_utils::in_memory_context, SeafowlContext},
         frontend::http::{filters, ETAG, QUERY_HEADER},
@@ -504,10 +504,7 @@ mod tests {
     }
 
     fn free_for_all() -> AccessPolicy {
-        AccessPolicy {
-            read: AccessSettings::Any,
-            write: AccessSettings::Any,
-        }
+        AccessPolicy::free_for_all()
     }
 
     const SELECT_QUERY: &str = "SELECT COUNT(*) AS c FROM test_table";

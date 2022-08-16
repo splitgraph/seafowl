@@ -31,6 +31,45 @@ impl AccessPolicy {
             write: config.write_access.clone(),
         }
     }
+
+    pub fn free_for_all() -> Self {
+        Self {
+            read: AccessSettings::Any,
+            write: AccessSettings::Any,
+        }
+    }
+
+    pub fn with_read_disabled(self) -> Self {
+        Self {
+            read: AccessSettings::Off,
+            write: self.write,
+        }
+    }
+
+    pub fn with_read_password(self, password: &str) -> Self {
+        Self {
+            read: AccessSettings::Password {
+                sha256_hash: str_to_hex_hash(password),
+            },
+            write: self.write,
+        }
+    }
+
+    pub fn with_write_disabled(self) -> Self {
+        Self {
+            read: self.read,
+            write: AccessSettings::Off,
+        }
+    }
+
+    pub fn with_write_password(self, password: &str) -> Self {
+        Self {
+            read: self.read,
+            write: AccessSettings::Password {
+                sha256_hash: str_to_hex_hash(password),
+            },
+        }
+    }
 }
 
 pub fn token_to_principal(
@@ -100,62 +139,35 @@ impl UserContext {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        auth::{Action, UserContext},
-        config::schema::AccessSettings,
-    };
+    use crate::auth::{Action, UserContext};
 
     use super::{token_to_principal, AccessPolicy, Principal};
 
     const READ_PW: &str = "read_password";
     const WRITE_PW: &str = "write_password";
 
-    const READ_SHA: &str =
-        "e604c988653812541f3ea980d29d3109cbe8fc1b0fb64edb71d17a8a8efd409d";
-    const WRITE_SHA: &str =
-        "b786e07f52fc72d32b2163b6f63aa16344fd8d2d84df87b6c231ab33cd5aa125";
-
     fn free_for_all() -> AccessPolicy {
-        AccessPolicy {
-            read: AccessSettings::Any,
-            write: AccessSettings::Any,
-        }
+        AccessPolicy::free_for_all()
     }
 
     fn need_write_pw() -> AccessPolicy {
-        AccessPolicy {
-            read: AccessSettings::Any,
-            write: AccessSettings::Password {
-                sha256_hash: WRITE_SHA.to_string(),
-            },
-        }
+        AccessPolicy::free_for_all().with_write_password(WRITE_PW)
     }
 
     fn read_only_write_off() -> AccessPolicy {
-        AccessPolicy {
-            read: AccessSettings::Any,
-            write: AccessSettings::Off,
-        }
+        AccessPolicy::free_for_all().with_write_disabled()
     }
 
     fn read_pw_write_off() -> AccessPolicy {
-        AccessPolicy {
-            read: AccessSettings::Password {
-                sha256_hash: READ_SHA.to_string(),
-            },
-            write: AccessSettings::Off,
-        }
+        AccessPolicy::free_for_all()
+            .with_write_disabled()
+            .with_read_password(READ_PW)
     }
 
     fn read_pw_write_pw() -> AccessPolicy {
-        AccessPolicy {
-            read: AccessSettings::Password {
-                sha256_hash: READ_SHA.to_string(),
-            },
-            write: AccessSettings::Password {
-                sha256_hash: WRITE_SHA.to_string(),
-            },
-        }
+        AccessPolicy::free_for_all()
+            .with_write_password(WRITE_PW)
+            .with_read_password(READ_PW)
     }
 
     #[test]
