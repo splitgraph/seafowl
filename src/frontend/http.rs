@@ -1,6 +1,8 @@
 use arrow::csv::ReaderBuilder;
 use arrow::datatypes::Schema;
 use arrow::error::ArrowError;
+use datafusion::error::DataFusionError;
+use datafusion::physical_plan::ExecutionPlan;
 use std::io::Cursor;
 use std::{convert::Infallible, net::SocketAddr, sync::Arc};
 use warp::Rejection;
@@ -32,6 +34,8 @@ use crate::{
     data_types::TableVersionId,
     provider::SeafowlTable,
 };
+
+use super::http_utils::{into_response, ApiError};
 
 const QUERY_HEADER: &str = "X-Seafowl-Query";
 const IF_NONE_MATCH: &str = "If-None-Match";
@@ -96,34 +100,43 @@ pub fn is_read_only(plan: &LogicalPlan) -> bool {
     )
 }
 
+/// Execute a physical plan and output its results to a JSON Lines format
+async fn physical_plan_to_json(
+    context: Arc<dyn SeafowlContext>,
+    physical: Arc<dyn ExecutionPlan>,
+) -> Result<Vec<u8>, DataFusionError> {
+    let batches = context.collect(physical).await?;
+    let mut buf = Vec::new();
+    let mut writer = LineDelimitedWriter::new(&mut buf);
+    writer
+        .write_batches(&batches)
+        .map_err(DataFusionError::ArrowError)?;
+    writer.finish().map_err(DataFusionError::ArrowError)?;
+    Ok(buf)
+}
+
 /// POST /q
 pub async fn uncached_read_write_query(
     user_context: UserContext,
     query: String,
     context: Arc<dyn SeafowlContext>,
-) -> Response {
+) -> Result<Vec<u8>, ApiError> {
     context.reload_schema().await;
     // TODO: handle/propagate errors
-    let logical = context.create_logical_plan(&query).await.unwrap();
+    let logical = context.create_logical_plan(&query).await?;
 
     if !user_context.can_perform_action(if is_read_only(&logical) {
         Action::Read
     } else {
         Action::Write
     }) {
-        return warp::reply::with_status("FORBIDDEN", StatusCode::FORBIDDEN)
-            .into_response();
+        return Err(ApiError::Forbidden);
     };
 
-    let physical = context.create_physical_plan(&logical).await.unwrap();
-    let batches = context.collect(physical).await.unwrap();
+    let physical = context.create_physical_plan(&logical).await?;
 
-    let mut buf = Vec::new();
-    let mut writer = LineDelimitedWriter::new(&mut buf);
-    writer.write_batches(&batches).unwrap();
-    writer.finish().unwrap();
-
-    buf.into_response()
+    let buf = physical_plan_to_json(context, physical).await?;
+    Ok(buf)
 }
 
 pub fn with_auth(
@@ -176,7 +189,7 @@ pub async fn cached_read_query(
     query: String,
     if_none_match: Option<String>,
     context: Arc<dyn SeafowlContext>,
-) -> Response {
+) -> Result<Response, ApiError> {
     // Ignore dots at the end
     let query_hash = query_hash.split('.').next().unwrap();
 
@@ -190,22 +203,16 @@ pub async fn cached_read_query(
 
     // Verify the query hash matches the query
     if query_hash != hash_str {
-        return warp::reply::with_status("HASH_MISMATCH", StatusCode::BAD_REQUEST)
-            .into_response();
-    }
+        return Err(ApiError::HashMismatch(hash_str, query_hash.to_string()));
+    };
 
     // Plan the query
-    // TODO handle error
-    let plan = context.create_logical_plan(&query).await.unwrap();
+    let plan = context.create_logical_plan(&query).await?;
     debug!("Query plan: {:?}", plan);
 
     // Write queries should come in as POST requests
     if !is_read_only(&plan) {
-        return warp::reply::with_status(
-            "NOT_READ_ONLY_QUERY",
-            StatusCode::METHOD_NOT_ALLOWED,
-        )
-        .into_response();
+        return Err(ApiError::NotReadOnlyQuery);
     };
 
     // Pre-execution check: if ETags match, we don't need to re-execute the query
@@ -214,21 +221,19 @@ pub async fn cached_read_query(
 
     if let Some(if_none_match) = if_none_match {
         if etag == if_none_match {
-            return warp::reply::with_status("NOT_MODIFIED", StatusCode::NOT_MODIFIED)
-                .into_response();
+            return Ok(warp::reply::with_status(
+                "NOT_MODIFIED",
+                StatusCode::NOT_MODIFIED,
+            )
+            .into_response());
         }
     }
 
     // Guess we'll have to actually run the query
-    let physical = context.create_physical_plan(&plan).await.unwrap();
-    let batches = context.collect(physical).await.unwrap();
+    let physical = context.create_physical_plan(&plan).await?;
+    let buf = physical_plan_to_json(context, physical).await?;
 
-    let mut buf = Vec::new();
-    let mut writer = LineDelimitedWriter::new(&mut buf);
-    writer.write_batches(&batches).unwrap();
-    writer.finish().unwrap();
-
-    warp::reply::with_header(buf, ETAG, etag).into_response()
+    Ok(warp::reply::with_header(buf, ETAG, etag).into_response())
 }
 
 /// POST /upload/[schema]/[table]
@@ -384,7 +389,8 @@ pub fn filters(
         )
         .and(warp::header::optional::<String>(IF_NONE_MATCH))
         .and(warp::any().map(move || ctx.clone()))
-        .then(cached_read_query);
+        .then(cached_read_query)
+        .map(into_response);
 
     // Uncached read/write query
     let ctx = context.clone();
@@ -396,7 +402,8 @@ pub fn filters(
             warp::body::json().map(|b: QueryBody| b.query),
         )
         .and(warp::any().map(move || ctx.clone()))
-        .then(uncached_read_write_query);
+        .then(uncached_read_write_query)
+        .map(into_response);
 
     // Upload endpoint
     let ctx = context.clone();
@@ -628,7 +635,6 @@ mod tests {
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(resp.body(), "HASH_MISMATCH");
     }
 
     #[tokio::test]
