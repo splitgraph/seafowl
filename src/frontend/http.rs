@@ -441,6 +441,7 @@ mod tests {
     use itertools::Itertools;
     use std::io::Cursor;
     use std::{collections::HashMap, sync::Arc};
+    use warp::{Filter, Rejection, Reply};
 
     use warp::http::Response;
     use warp::{
@@ -753,17 +754,26 @@ mod tests {
         assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V2_ETAG);
     }
 
+    async fn query_uncached_endpoint<R, H>(handler: &H, query: &'_ str) -> Response<Bytes>
+    where
+        R: Reply,
+        H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
+    {
+        request()
+            .method("POST")
+            .path("/q")
+            .json(&HashMap::from([("query", query)]))
+            .reply(handler)
+            .await
+    }
+
     #[tokio::test]
     async fn test_get_uncached_read_query() {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(context, free_for_all());
 
-        let resp = request()
-            .method("POST")
-            .path("/q")
-            .json(&HashMap::from([("query", SELECT_QUERY)]))
-            .reply(&handler)
-            .await;
+        let resp = query_uncached_endpoint(&handler, SELECT_QUERY).await;
+
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":1}\n");
     }
@@ -773,21 +783,11 @@ mod tests {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(context, free_for_all());
 
-        let resp = request()
-            .method("POST")
-            .path("/q")
-            .json(&HashMap::from([("query", INSERT_QUERY)]))
-            .reply(&handler)
-            .await;
+        let resp = query_uncached_endpoint(&handler, INSERT_QUERY).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "");
 
-        let resp = request()
-            .method("POST")
-            .path("/q")
-            .json(&HashMap::from([("query", SELECT_QUERY)]))
-            .reply(&handler)
-            .await;
+        let resp = query_uncached_endpoint(&handler, SELECT_QUERY).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":2}\n");
     }
