@@ -35,7 +35,7 @@ use crate::{
     provider::SeafowlTable,
 };
 
-use super::http_utils::{into_response, ApiError};
+use super::http_utils::{handle_rejection, into_response, ApiError};
 
 const QUERY_HEADER: &str = "X-Seafowl-Query";
 const IF_NONE_MATCH: &str = "If-None-Match";
@@ -417,6 +417,7 @@ pub fn filters(
         .or(uncached_read_write_query_route)
         .or(upload_route)
         .with(cors)
+        .recover(handle_rejection)
 }
 
 pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) {

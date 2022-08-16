@@ -27,11 +27,23 @@
 //   .map(into_response)
 //   ```
 //
-
+//   4) Some errors (raised in filters that e.g. extract the authz context) can't be forwarded
+//   like this, so we also use the Rejections mechanism just for those, implementing Reject for
+//   ApiError and making a small handler that turns the error into a real HTTP response. We need
+//   to add the handler to our filter as follows:
+//
+//   ```
+//   .or(some_route)
+//   .or(some_other_route)
+//   .recover(handle_rejection)
+//   ```
+//
+//   (maybe we need a recover for every route to minimize the amount of back and forth with Warp?)
 use datafusion::error::DataFusionError;
 
 use warp::hyper::{Body, Response, StatusCode};
-use warp::Reply;
+use warp::reject::Reject;
+use warp::{Rejection, Reply};
 
 #[derive(Debug)]
 pub enum ApiError {
@@ -50,7 +62,7 @@ impl From<DataFusionError> for ApiError {
 }
 
 impl ApiError {
-    fn status_code_body(self: ApiError) -> (StatusCode, String) {
+    fn status_code_body(self: &ApiError) -> (StatusCode, String) {
         match self {
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN".to_string()),
             // TODO: figure out which DF errors to propagate, we have ones that are the server's fault
@@ -62,10 +74,8 @@ impl ApiError {
             ApiError::NotReadOnlyQuery => (StatusCode::METHOD_NOT_ALLOWED, "NOT_READ_ONLY_QUERY".to_string()),
         }
     }
-}
 
-impl Reply for ApiError {
-    fn into_response(self) -> Response<Body> {
+    fn response(&self) -> Response<Body> {
         let (status, body) = self.status_code_body();
         Response::builder()
             .status(status)
@@ -74,9 +84,32 @@ impl Reply for ApiError {
     }
 }
 
+impl Reply for ApiError {
+    fn into_response(self) -> Response<Body> {
+        self.response()
+    }
+}
+
+// While most errors come in without using the Rejections mechanism,
+// the filters that we call via and() (e.g. authorization context) can't do
+// that, since we're not returning Replies with them when the filter runs.
+// Instead, we raise them as Rejections and have a special rejection handler.
+impl Reject for ApiError {}
+
 pub fn into_response<S: Reply, E: Reply>(reply_res: Result<S, E>) -> Response<Body> {
     match reply_res {
         Ok(resp) => resp.into_response(),
         Err(err) => err.into_response(),
+    }
+}
+
+pub async fn handle_rejection(r: Rejection) -> Result<impl Reply, Rejection> {
+    if let Some(e) = r.find::<ApiError>() {
+        Ok(e.response())
+    } else {
+        // https://github.com/seanmonstar/warp/issues/451 claims we need to reimplement
+        // the standard Warp rejections handler (e.g. for missing headers), but it seems
+        // like we can just forward the rejection and it'll try and keep handling it.
+        Err(r)
     }
 }
