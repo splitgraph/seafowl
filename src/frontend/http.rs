@@ -138,30 +138,34 @@ pub async fn uncached_read_write_query(
     Ok(buf)
 }
 
+fn header_to_user_context(
+    header: Option<String>,
+    policy: &AccessPolicy,
+) -> Result<UserContext, ApiError> {
+    let token = header
+        .map(|h| {
+            if h.starts_with(BEARER_PREFIX) {
+                Ok(h.trim_start_matches(BEARER_PREFIX).to_string())
+            } else {
+                Err(ApiError::InvalidAuthorizationHeader)
+            }
+        })
+        .transpose()?;
+
+    token_to_principal(token, policy).map(|principal| UserContext {
+        principal,
+        policy: policy.clone(),
+    })
+}
+
 pub fn with_auth(
     policy: AccessPolicy,
 ) -> impl Filter<Extract = (UserContext,), Error = Rejection> + Clone {
     warp::header::optional::<String>(AUTHORIZATION).and_then(
         move |header: Option<String>| {
-            let token = match header {
-                Some(h) => {
-                    if !h.starts_with(BEARER_PREFIX) {
-                        return future::err(warp::reject::reject());
-                    };
-
-                    Some(h.trim_start_matches(BEARER_PREFIX).to_string())
-                }
-                None => None,
-            };
-
-            // TODO propagate a 401 here
-            match token_to_principal(token, &policy) {
-                Ok(principal) => future::ok(UserContext {
-                    principal,
-                    policy: policy.clone(),
-                }),
-                Err(_) => future::err(warp::reject::reject()),
-            }
+            future::ready(
+                header_to_user_context(header, &policy).map_err(warp::reject::custom),
+            )
         },
     )
 }
