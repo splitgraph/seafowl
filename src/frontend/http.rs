@@ -641,6 +641,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_cors() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(context, free_for_all());
+
+        let resp = request()
+            .method("OPTIONS")
+            .path("/q/somehash")
+            .header("Access-Control-Request-Method", "GET")
+            .header("Access-Control-Request-Headers", "x-seafowl-query")
+            .header("Origin", "https://example.org")
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("Access-Control-Allow-Origin").unwrap(),
+            "https://example.org"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("Access-Control-Allow-Methods")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .split(',')
+                .map(|s| s.trim())
+                .sorted()
+                .collect::<Vec<&str>>(),
+            vec!["GET", "POST"]
+        );
+    }
+
+    #[tokio::test]
     async fn test_get_cached_write_query_error() {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(context, free_for_all());
@@ -903,6 +935,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_password_writes_writer_can_write() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            AccessPolicy::free_for_all().with_write_password("somepw"),
+        );
+
+        let resp =
+            query_uncached_endpoint_token(&handler, "DROP TABLE test_table", "somepw")
+                .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn test_password_writes_anonymous_cant_write() {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(
@@ -916,6 +962,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_password_read_writes_anonymous_cant_access() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            AccessPolicy::free_for_all()
+                .with_write_password("somepw")
+                .with_read_password("somereadpw"),
+        );
+
+        let resp = query_uncached_endpoint(&handler, "SELECT 1").await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.body(), "NEED_ACCESS_TOKEN");
+    }
+
+    #[tokio::test]
+    async fn test_password_read_writes_reader_cant_write() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            AccessPolicy::free_for_all()
+                .with_write_password("somepw")
+                .with_read_password("somereadpw"),
+        );
+
+        let resp = query_uncached_endpoint_token(
+            &handler,
+            "DROP TABLE test_table",
+            "somereadpw",
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.body(), "WRITE_FORBIDDEN");
+    }
+
+    #[tokio::test]
+    async fn test_password_read_writes_writer_can_write() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            AccessPolicy::free_for_all()
+                .with_write_password("somepw")
+                .with_read_password("somereadpw"),
+        );
+
+        let resp =
+            query_uncached_endpoint_token(&handler, "DROP TABLE test_table", "somepw")
+                .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_read_only_anonymous_cant_write() {
+        let context = in_memory_context_with_single_table().await;
+        let handler =
+            filters(context, AccessPolicy::free_for_all().with_write_disabled());
+
+        let resp = query_uncached_endpoint(&handler, "DROP TABLE test_table").await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.body(), "WRITE_FORBIDDEN");
+    }
+
+    #[tokio::test]
+    async fn test_read_only_useless_access_token() {
+        let context = in_memory_context_with_single_table().await;
+        let handler =
+            filters(context, AccessPolicy::free_for_all().with_write_disabled());
+
+        let resp =
+            query_uncached_endpoint_token(&handler, "DROP TABLE test_table", "somepw")
+                .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.body(), "USELESS_ACCESS_TOKEN");
+    }
+
+    #[tokio::test]
     async fn test_password_writes_anonymous_wrong_token() {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(
@@ -926,6 +1047,26 @@ mod tests {
         let resp = query_uncached_endpoint_token(&handler, "SELECT 1", "otherpw").await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(resp.body(), "INVALID_ACCESS_TOKEN");
+    }
+
+    #[tokio::test]
+    async fn test_password_writes_anonymous_invalid_header() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            AccessPolicy::free_for_all().with_write_password("somepw"),
+        );
+
+        let resp = request()
+            .method("POST")
+            .path("/q")
+            .json(&HashMap::from([("query", "SELECT 1")]))
+            .header(AUTHORIZATION, "InvalidAuthzHeader")
+            .reply(&handler)
+            .await;
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.body(), "INVALID_AUTHORIZATION_HEADER");
     }
 
     #[tokio::test]
