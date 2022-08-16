@@ -36,6 +36,8 @@ use crate::{
 const QUERY_HEADER: &str = "X-Seafowl-Query";
 const IF_NONE_MATCH: &str = "If-None-Match";
 const ETAG: &str = "ETag";
+const AUTHORIZATION: &str = "Authorization";
+const BEARER_PREFIX: &str = "Bearer ";
 
 #[derive(Default)]
 struct ETagBuilderVisitor {
@@ -127,15 +129,15 @@ pub async fn uncached_read_write_query(
 pub fn with_auth(
     policy: AccessPolicy,
 ) -> impl Filter<Extract = (UserContext,), Error = Rejection> + Clone {
-    warp::header::optional::<String>("Authorization").and_then(
+    warp::header::optional::<String>(AUTHORIZATION).and_then(
         move |header: Option<String>| {
             let token = match header {
                 Some(h) => {
-                    if !h.starts_with("Bearer ") {
+                    if !h.starts_with(BEARER_PREFIX) {
                         return future::err(warp::reject::reject());
                     };
 
-                    Some(h.trim_start_matches("Bearer ").to_string())
+                    Some(h.trim_start_matches(BEARER_PREFIX).to_string())
                 }
                 None => None,
             };
