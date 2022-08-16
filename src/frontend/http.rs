@@ -461,6 +461,8 @@ mod tests {
         frontend::http::{filters, ETAG, QUERY_HEADER},
     };
 
+    use super::AUTHORIZATION;
+
     /// Build an in-memory context with a single table
     /// We implicitly assume here that this table is the only one in this context
     /// and has version ID 1 (otherwise the hashes won't match).
@@ -754,17 +756,45 @@ mod tests {
         assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V2_ETAG);
     }
 
+    async fn _query_uncached_endpoint<R, H>(
+        handler: &H,
+        query: &'_ str,
+        token: Option<&str>,
+    ) -> Response<Bytes>
+    where
+        R: Reply,
+        H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
+    {
+        let mut builder = request()
+            .method("POST")
+            .path("/q")
+            .json(&HashMap::from([("query", query)]));
+
+        if let Some(t) = token {
+            builder = builder.header(AUTHORIZATION, format!("Bearer {}", t));
+        }
+
+        builder.reply(handler).await
+    }
+
     async fn query_uncached_endpoint<R, H>(handler: &H, query: &'_ str) -> Response<Bytes>
     where
         R: Reply,
         H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
     {
-        request()
-            .method("POST")
-            .path("/q")
-            .json(&HashMap::from([("query", query)]))
-            .reply(handler)
-            .await
+        _query_uncached_endpoint(handler, query, None).await
+    }
+
+    async fn query_uncached_endpoint_token<R, H>(
+        handler: &H,
+        query: &'_ str,
+        token: &str,
+    ) -> Response<Bytes>
+    where
+        R: Reply,
+        H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
+    {
+        _query_uncached_endpoint(handler, query, Some(token)).await
     }
 
     #[tokio::test]
