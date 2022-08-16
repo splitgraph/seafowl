@@ -875,9 +875,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // This is actually CREATE TABLE AS
                 let physical = self.create_physical_plan(&input).await?;
 
-                let _res = self
-                    .execute_plan_to_table(&physical, Some(name), None)
-                    .await;
+                self.execute_plan_to_table(&physical, Some(name), None)
+                    .await?;
 
                 Ok(make_dummy_exec())
             }
@@ -911,13 +910,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                         SeafowlExtensionNode::Insert(Insert { table, input, .. }) => {
                             let physical = self.create_physical_plan(input).await?;
 
-                            let _res = self
-                                .execute_plan_to_table(
-                                    &physical,
-                                    None,
-                                    Some(table.table_version_id),
-                                )
-                                .await;
+                            self.execute_plan_to_table(
+                                &physical,
+                                None,
+                                Some(table.table_version_id),
+                            )
+                            .await?;
 
                             Ok(make_dummy_exec())
                         }

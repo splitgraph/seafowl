@@ -1,5 +1,6 @@
 use arrow::csv::ReaderBuilder;
 use arrow::datatypes::Schema;
+use arrow::error::ArrowError;
 use std::io::Cursor;
 use std::{net::SocketAddr, sync::Arc};
 
@@ -240,8 +241,10 @@ pub async fn upload(
 
                     let mut cursor = Cursor::new(&value);
                     let csv_reader = builder.build(&mut cursor).unwrap();
-                    let partition: Vec<RecordBatch> =
-                        csv_reader.into_iter().map(|item| item.unwrap()).collect();
+                    let partition: Vec<RecordBatch> = csv_reader
+                        .into_iter()
+                        .collect::<Result<Vec<RecordBatch>, ArrowError>>()
+                        .unwrap();
 
                     (schema, partition)
                 }
@@ -252,10 +255,10 @@ pub async fn upload(
                     let schema = parquet_reader.get_schema().unwrap();
 
                     let partition: Vec<RecordBatch> = parquet_reader
-                        .get_record_reader(100000) // TODO: Probably a constant or even a config somewhere
+                        .get_record_reader(1024)
                         .unwrap()
-                        .map(|item| item.unwrap())
-                        .collect();
+                        .collect::<Result<Vec<RecordBatch>, ArrowError>>()
+                        .unwrap();
 
                     (schema, partition)
                 }
@@ -342,8 +345,8 @@ pub fn filters(
 
     cached_read_query_route
         .or(uncached_read_write_query_route)
-        .with(cors)
         .or(upload_route)
+        .with(cors)
 }
 
 pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) {
@@ -453,7 +456,7 @@ mod tests {
         let mut body: Vec<u8> = vec![];
 
         if let Some(schema_json) = schema_json {
-            body = "--42\r\n\
+            body = "--0123456789\r\n\
                 Content-Disposition: form-data; name=\"schema\"\n\
                 Content-Type: application/json\n\n"
                 .to_string()
@@ -465,7 +468,7 @@ mod tests {
 
         body.append(
             &mut format!(
-                "--42\r\n\
+                "--0123456789\r\n\
                 Content-Disposition: form-data; name=\"data\"; filename=\"{}\"\n\
                 Content-Type: application/octet-stream\n\n",
                 filename
@@ -475,7 +478,7 @@ mod tests {
         );
 
         body.append(&mut file_content);
-        body.append(&mut "--42--".as_bytes().to_vec());
+        body.append(&mut "--0123456789--".as_bytes().to_vec());
 
         request()
             .method("POST")
@@ -484,7 +487,7 @@ mod tests {
             .header("User-Agent", "curl/7.64.1")
             .header("Accept", "*/*")
             .header("Content-Length", 232)
-            .header("Content-Type", "multipart/form-data; boundary=42")
+            .header("Content-Type", "multipart/form-data; boundary=0123456789")
             .body(body)
             .reply(&handler)
             .await
