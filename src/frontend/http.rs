@@ -180,32 +180,17 @@ pub async fn upload(
     let mut csv_schema: Option<Schema> = None;
     let mut filename = String::new();
     for p in parts {
-        if p.name() == "has_header"
-            || p.name() == "schema" && p.content_type() == Some("application/json")
-        {
-            let header_part = p.name() == "has_header";
+        if p.name() == "has_header" {
+            let value_bytes = load_part(p).await.unwrap();
 
-            let value_bytes = p
-                .stream()
-                .try_fold(Vec::new(), |mut vec, data| {
-                    vec.put(data);
-                    async move { Ok(vec) }
-                })
-                .await
-                .map_err(|e| {
-                    eprintln!("Error reading part's data: {}", e);
-                    warp::reject::reject()
-                })
-                .unwrap();
+            has_header = String::from_utf8(value_bytes).unwrap().starts_with("true");
+            debug!("Form part has_header is: {}", has_header);
+        } else if p.name() == "schema" && p.content_type() == Some("application/json") {
+            let value_bytes = load_part(p).await.unwrap();
 
-            if header_part {
-                has_header = String::from_utf8(value_bytes).unwrap().starts_with("true");
-                debug!("Form part has_header is: {}", has_header);
-            } else {
-                let schema_json: Value =
-                    serde_json::from_slice(value_bytes.as_slice()).unwrap();
-                csv_schema = Some(Schema::from(&schema_json).unwrap());
-            }
+            let schema_json: Value =
+                serde_json::from_slice(value_bytes.as_slice()).unwrap();
+            csv_schema = Some(Schema::from(&schema_json).unwrap());
         } else if p.name() == "data" || p.name() == "file" {
             filename = p.filename().unwrap().to_string();
 
@@ -214,56 +199,12 @@ pub async fn upload(
             // since we could be writing the contents of the stream out into a temp file on the disk
             // to have a smaller memory footprint. However, for this to be supported warp first
             // needs to support streaming here: https://github.com/seanmonstar/warp/issues/323
-            let value = p
-                .stream()
-                .try_fold(Vec::new(), |mut vec, data| {
-                    vec.put(data);
-                    async move { Ok(vec) }
-                })
-                .await
-                .map_err(|e| {
-                    eprintln!("Error reading part's data: {}", e);
-                    warp::reject::reject()
-                })
-                .unwrap();
+            let source = load_part(p).await.unwrap();
 
             // Parse the schema and load the file contents into a vector of record batches
             let (schema, partition) = match filename.split('.').last().unwrap() {
-                "csv" => {
-                    // If the schema part wasn't specified we'll need to infer it
-                    let builder = match csv_schema.clone() {
-                        Some(schema) => ReaderBuilder::new()
-                            .with_schema(Arc::new(schema.clone()))
-                            .has_header(has_header), // .with_escape(b'\\'); // default is None, change to \
-                        None => ReaderBuilder::new()
-                            .infer_schema(None)
-                            .has_header(has_header),
-                    };
-
-                    let mut cursor = Cursor::new(&value);
-                    let csv_reader = builder.build(&mut cursor).unwrap();
-                    let schema = csv_reader.schema().as_ref().clone();
-                    let partition: Vec<RecordBatch> = csv_reader
-                        .into_iter()
-                        .collect::<Result<Vec<RecordBatch>, ArrowError>>()
-                        .unwrap();
-
-                    (schema, partition)
-                }
-                "parquet" => {
-                    let mut parquet_reader =
-                        ParquetFileArrowReader::try_new(Bytes::from(value)).unwrap();
-
-                    let schema = parquet_reader.get_schema().unwrap();
-
-                    let partition: Vec<RecordBatch> = parquet_reader
-                        .get_record_reader(1024)
-                        .unwrap()
-                        .collect::<Result<Vec<RecordBatch>, ArrowError>>()
-                        .unwrap();
-
-                    (schema, partition)
-                }
+                "csv" => load_csv_bytes(source, csv_schema.clone(), has_header).unwrap(),
+                "parquet" => load_parquet_bytes(source).unwrap(),
                 _ => {
                     return warp::reply::with_status(
                         format!("File {} not supported", filename),
@@ -302,6 +243,60 @@ pub async fn upload(
     }
 
     warp::reply::with_status(Ok("done"), StatusCode::OK).into_response()
+}
+
+async fn load_part(p: Part) -> Result<Vec<u8>, warp::Rejection> {
+    p.stream()
+        .try_fold(Vec::new(), |mut vec, data| {
+            vec.put(data);
+            async move { Ok(vec) }
+        })
+        .await
+        .map_err(|e| {
+            eprintln!("Error reading part's data: {}", e);
+            warp::reject::reject()
+        })
+}
+
+fn load_csv_bytes(
+    source: Vec<u8>,
+    schema: Option<Schema>,
+    has_header: bool,
+) -> Result<(Schema, Vec<RecordBatch>), ArrowError> {
+    // If the schema part wasn't specified we'll need to infer it
+    let builder = match schema {
+        Some(schema) => ReaderBuilder::new()
+            .with_schema(Arc::new(schema))
+            .has_header(has_header),
+        None => ReaderBuilder::new()
+            .infer_schema(None)
+            .has_header(has_header),
+    };
+
+    let mut cursor = Cursor::new(source);
+    let csv_reader = builder.build(&mut cursor).unwrap();
+    let schema = csv_reader.schema().as_ref().clone();
+    let partition: Vec<RecordBatch> = csv_reader
+        .into_iter()
+        .collect::<Result<Vec<RecordBatch>, ArrowError>>()
+        .unwrap();
+
+    Ok((schema, partition))
+}
+
+fn load_parquet_bytes(source: Vec<u8>) -> Result<(Schema, Vec<RecordBatch>), ArrowError> {
+    let mut parquet_reader =
+        ParquetFileArrowReader::try_new(Bytes::from(source)).unwrap();
+
+    let schema = parquet_reader.get_schema().unwrap();
+
+    let partition: Vec<RecordBatch> = parquet_reader
+        .get_record_reader(1024)
+        .unwrap()
+        .collect::<Result<Vec<RecordBatch>, ArrowError>>()
+        .unwrap();
+
+    Ok((schema, partition))
 }
 
 pub fn filters(
@@ -760,31 +755,31 @@ SELECT
         "csv",
         true,
         Some(true);
-        "CSV file upload schema supplied w/ headers")
+        "CSV file schema supplied w/ headers")
     ]
     #[test_case(
         "csv",
         true,
         Some(false);
-        "CSV file upload schema supplied w/o headers")
+        "CSV file schema supplied w/o headers")
     ]
     #[test_case(
         "csv",
         false,
         Some(true);
-        "CSV file upload schema inferred w/ headers")
+        "CSV file schema inferred w/ headers")
     ]
     #[test_case(
         "csv",
         false,
         Some(false);
-        "CSV file upload schema inferred w/o headers")
+        "CSV file schema inferred w/o headers")
     ]
     #[test_case(
         "parquet",
         false,
         None;
-        "Parquet file upload")
+        "Parquet file")
     ]
     #[tokio::test]
     async fn test_upload_base(
@@ -859,15 +854,6 @@ SELECT
         }
         form_data.set_position(0);
 
-        let has_headers = if let Some(headers) = add_headers {
-            if headers {
-                Some("true")
-            } else {
-                Some("false")
-            }
-        } else {
-            None
-        };
         let resp = mock_upload_request(
             format!("test.{}", file_format).as_str(),
             form_data.into_inner(),
@@ -878,7 +864,7 @@ SELECT
             } else {
                 None
             },
-            has_headers,
+            add_headers.map(|h| if h { "true" } else { "false" }),
             context.clone(),
         )
         .await;
@@ -897,7 +883,7 @@ SELECT
 
         // Generate expected output from the input batch that was used in the multipart request
         if !include_schema && add_headers == Some(false) {
-            // Rename the column names as they will be inferred without a schema
+            // Rename the columns, as they will be inferred without a schema
             input_batch = RecordBatch::try_from_iter_with_nullable(vec![
                 ("column_1", input_batch.column(0).clone(), false),
                 ("column_2", input_batch.column(1).clone(), false),
