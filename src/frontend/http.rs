@@ -793,6 +793,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_error_parse() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(context, free_for_all());
+
+        let resp = query_uncached_endpoint(&handler, "SLEECT 1").await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.body(),
+            "SQL error: ParserError(\"Expected an SQL statement, found: SLEECT\")"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_error_parse_seafowl() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(context, free_for_all());
+
+        let resp =
+            query_uncached_endpoint(&handler, "CREATE FUNCTION what_function").await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.body(),
+            "SQL error: ParserError(\"Expected AS, found: EOF\")"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_error_plan_missing_table() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(context, free_for_all());
+
+        let resp = query_uncached_endpoint(&handler, "SELECT * FROM missing_table").await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.body(),
+            "Error during planning: 'default.public.missing_table' not found"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_error_execution() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(context, free_for_all());
+
+        let resp = query_uncached_endpoint(&handler, "SELECT 1/0").await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.body(), "Arrow error: Divide by zero error");
+    }
+
+    #[tokio::test]
     async fn test_http_type_conversion() {
         let context = Arc::new(in_memory_context().await);
         let handler = filters(context, free_for_all());
