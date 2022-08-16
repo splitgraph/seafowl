@@ -122,7 +122,6 @@ pub async fn uncached_read_write_query(
     context: Arc<dyn SeafowlContext>,
 ) -> Result<Vec<u8>, ApiError> {
     context.reload_schema().await;
-    // TODO: handle/propagate errors
     let logical = context.create_logical_plan(&query).await?;
 
     if !user_context.can_perform_action(if is_read_only(&logical) {
@@ -173,12 +172,9 @@ pub fn cached_read_query_authz(
     policy: AccessPolicy,
 ) -> impl Filter<Extract = (), Error = Rejection> + Clone {
     warp::any()
-        .and_then(move || {
-            match policy.read {
-                AccessSettings::Any => future::ok(()),
-                // TODO errors
-                _ => future::err(warp::reject::reject()),
-            }
+        .and_then(move || match policy.read {
+            AccessSettings::Any => future::ok(()),
+            _ => future::err(warp::reject::custom(ApiError::ReadOnlyEndpointDisabled)),
         })
         .untuple_one()
 }
@@ -370,7 +366,7 @@ fn load_parquet_bytes(source: Vec<u8>) -> Result<(Schema, Vec<RecordBatch>), Arr
 pub fn filters(
     context: Arc<dyn SeafowlContext>,
     access_policy: AccessPolicy,
-) -> impl Filter<Extract = impl Reply, Error = warp::Rejection> + Clone {
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let cors = warp::cors()
         .allow_any_origin()
         .allow_headers(vec!["X-Seafowl-Query", "Authorization", "Content-Type"])
@@ -440,8 +436,10 @@ mod tests {
     use datafusion::from_slice::FromSlice;
     use datafusion::parquet::arrow::ArrowWriter;
     use itertools::Itertools;
+
     use std::io::Cursor;
     use std::{collections::HashMap, sync::Arc};
+
     use warp::{Filter, Rejection, Reply};
 
     use warp::http::Response;
@@ -838,6 +836,24 @@ mod tests {
         let resp = query_uncached_endpoint(&handler, "SELECT 1/0").await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(resp.body(), "Arrow error: Divide by zero error");
+    }
+
+    #[tokio::test]
+    async fn test_password_read_disables_cached_get() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            AccessPolicy::free_for_all().with_read_password("somepw"),
+        );
+
+        let resp = request()
+            .method("GET")
+            .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
+            .header(QUERY_HEADER, SELECT_QUERY)
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(resp.body(), "READ_ONLY_ENDPOINT_DISABLED");
     }
 
     #[tokio::test]
