@@ -240,9 +240,13 @@ pub async fn cached_read_query(
 pub async fn upload(
     schema_name: String,
     table_name: String,
+    user_context: UserContext,
     form: FormData,
     context: Arc<dyn SeafowlContext>,
-) -> Response {
+) -> Result<Response, ApiError> {
+    if !user_context.can_perform_action(Action::Write) {
+        return Err(ApiError::WriteForbidden);
+    };
     let parts: Vec<Part> = form.try_collect().await.unwrap();
 
     let mut has_header = true;
@@ -275,11 +279,11 @@ pub async fn upload(
                 "csv" => load_csv_bytes(source, csv_schema.clone(), has_header).unwrap(),
                 "parquet" => load_parquet_bytes(source).unwrap(),
                 _ => {
-                    return warp::reply::with_status(
+                    return Ok(warp::reply::with_status(
                         format!("File {} not supported", filename),
                         StatusCode::BAD_REQUEST,
                     )
-                    .into_response();
+                    .into_response())
                 }
             };
 
@@ -294,24 +298,24 @@ pub async fn upload(
                 .plan_to_table(execution_plan, schema_name.clone(), table_name.clone())
                 .await
             {
-                return warp::reply::with_status(
+                return Ok(warp::reply::with_status(
                     error.to_string(),
                     StatusCode::BAD_REQUEST,
                 )
-                .into_response();
+                .into_response());
             }
         }
     }
 
     if filename.is_empty() {
-        return warp::reply::with_status(
+        return Ok(warp::reply::with_status(
             "No part containing file found in the request!",
             StatusCode::BAD_REQUEST,
         )
-        .into_response();
+        .into_response());
     }
 
-    warp::reply::with_status(Ok("done"), StatusCode::OK).into_response()
+    Ok(warp::reply::with_status(Ok("done"), StatusCode::OK).into_response())
 }
 
 async fn load_part(p: Part) -> Result<Vec<u8>, warp::Rejection> {
@@ -396,7 +400,7 @@ pub fn filters(
     let ctx = context.clone();
     let uncached_read_write_query_route = warp::path!("q")
         .and(warp::post())
-        .and(with_auth(access_policy))
+        .and(with_auth(access_policy.clone()))
         .and(
             // Extract the query from the JSON body
             warp::body::json().map(|b: QueryBody| b.query),
@@ -409,9 +413,11 @@ pub fn filters(
     let ctx = context.clone();
     let upload_route = warp::path!("upload" / String / String)
         .and(warp::post())
+        .and(with_auth(access_policy))
         .and(warp::multipart::form())
         .and(warp::any().map(move || ctx.clone()))
-        .then(upload);
+        .then(upload)
+        .map(into_response);
 
     cached_read_query_route
         .or(uncached_read_write_query_route)
