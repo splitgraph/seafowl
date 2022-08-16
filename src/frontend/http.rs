@@ -129,7 +129,7 @@ pub async fn uncached_read_write_query(
     } else {
         Action::Write
     }) {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::WriteForbidden);
     };
 
     let physical = context.create_physical_plan(&logical).await?;
@@ -888,6 +888,44 @@ mod tests {
             .await;
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(resp.body(), "READ_ONLY_ENDPOINT_DISABLED");
+    }
+
+    #[tokio::test]
+    async fn test_password_writes_anonymous_can_read() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            AccessPolicy::free_for_all().with_write_password("somepw"),
+        );
+
+        let resp = query_uncached_endpoint(&handler, "SELECT * FROM test_table").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_password_writes_anonymous_cant_write() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            AccessPolicy::free_for_all().with_write_password("somepw"),
+        );
+
+        let resp = query_uncached_endpoint(&handler, "DROP TABLE test_table").await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.body(), "WRITE_FORBIDDEN");
+    }
+
+    #[tokio::test]
+    async fn test_password_writes_anonymous_wrong_token() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            AccessPolicy::free_for_all().with_write_password("somepw"),
+        );
+
+        let resp = query_uncached_endpoint_token(&handler, "SELECT 1", "otherpw").await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.body(), "INVALID_ACCESS_TOKEN");
     }
 
     #[tokio::test]
