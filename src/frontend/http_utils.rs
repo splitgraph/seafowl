@@ -51,6 +51,7 @@ pub enum ApiError {
     DataFusionError(DataFusionError),
     HashMismatch(String, String),
     NotReadOnlyQuery,
+    ReadOnlyEndpointDisabled,
 }
 
 // Wrap DataFusion errors so that we can automagically return an
@@ -72,6 +73,7 @@ impl ApiError {
             // Mismatched hash
             ApiError::HashMismatch(expected, got) => (StatusCode::BAD_REQUEST, format!("Invalid hash: expected {0:?}, got {1:?}. Resend your query with {0:?}", expected, got)),
             ApiError::NotReadOnlyQuery => (StatusCode::METHOD_NOT_ALLOWED, "NOT_READ_ONLY_QUERY".to_string()),
+            ApiError::ReadOnlyEndpointDisabled => (StatusCode::METHOD_NOT_ALLOWED, "READ_ONLY_ENDPOINT_DISABLED".to_string())
         }
     }
 
