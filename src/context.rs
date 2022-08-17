@@ -919,13 +919,15 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Ok(make_dummy_exec())
             }
             LogicalPlan::CreateCatalog(CreateCatalog {
-                catalog_name,
+                catalog_name: _,
                 if_not_exists: _,
                 schema: _,
             }) => {
-                // CREATE DATABASE
-                self.table_catalog.create_database(catalog_name).await;
-                Ok(make_dummy_exec())
+                // CREATE DATABASE: currently unsupported (we can create one but the context
+                // is tied to a database and the user can't query a different one)
+                return Err(Error::Plan(
+                    "Creating new databases is currently unsupported!".to_string(),
+                ));
             }
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name,
@@ -952,8 +954,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Ok(make_dummy_exec())
             }
             LogicalPlan::CreateView(_) => {
-                // CREATE VIEW
-                Ok(make_dummy_exec())
+                return Err(Error::Plan(
+                    "Creating views is currently unsupported!".to_string(),
+                ))
             }
             LogicalPlan::Extension(Extension { ref node }) => {
                 // Other custom nodes we made like CREATE TABLE/INSERT/UPDATE/DELETE/ALTER
