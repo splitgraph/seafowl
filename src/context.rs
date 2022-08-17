@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use base64::decode;
 use bytes::Bytes;
+use datafusion::datasource::TableProvider;
 use datafusion::sql::planner::convert_simple_data_type;
 use std::fs::File;
 
@@ -382,16 +383,18 @@ impl DefaultSeafowlContext {
     pub fn inner(&self) -> &SessionContext {
         &self.inner
     }
-    /// Resolve a table reference into a Seafowl table
-    fn try_get_seafowl_table(
+
+    /// Get a provider for a given table, return Err if it doesn't exist
+    fn get_table_provider(
         &self,
-        table_name: impl Into<String> + std::fmt::Debug,
-    ) -> Result<SeafowlTable> {
+        table_name: impl Into<String>,
+    ) -> Result<Arc<dyn TableProvider>> {
         let table_name = table_name.into();
         let table_ref = TableReference::from(table_name.as_str());
+
         let resolved_ref = table_ref.resolve(&self.database, "public");
-        let table_provider = self
-            .inner
+
+        self.inner
             .catalog(resolved_ref.catalog)
             .ok_or_else(|| {
                 Error::Plan(format!(
@@ -409,7 +412,17 @@ impl DefaultSeafowlContext {
                     "'{}.{}.{}' not found",
                     resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
                 ))
-            })?;
+            })
+    }
+
+    /// Resolve a table reference into a Seafowl table
+    fn try_get_seafowl_table(
+        &self,
+        table_name: impl Into<String> + std::fmt::Debug,
+    ) -> Result<SeafowlTable> {
+        let table_name = table_name.into();
+        let table_provider = self.get_table_provider(&table_name)?;
+
         let seafowl_table = match table_provider.as_any().downcast_ref::<SeafowlTable>() {
             Some(seafowl_table) => Ok(seafowl_table),
             None => Err(Error::Plan(format!(
@@ -626,6 +639,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Statement::AlterTable { name, operation: AlterTableOperation::RenameTable {table_name: new_name }} => {
                     let table_name = name.to_string();
                     let table = self.try_get_seafowl_table(table_name)?;
+
+                    if self.get_table_provider(new_name.to_string()).is_ok() {
+                        return Err(Error::Plan(
+                            format!("Target table {:?} already exists", new_name.to_string())
+                        ))
+                    }
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::RenameTable(RenameTable {
