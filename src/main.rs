@@ -1,3 +1,4 @@
+use clap::AppSettings::NoAutoVersion;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -29,9 +30,18 @@ extern crate log;
 const DEFAULT_CONFIG_PATH: &str = "seafowl.toml";
 
 #[derive(Debug, Parser)]
+#[clap(name = "seafowl", global_settings = &[NoAutoVersion])]
 struct Args {
     #[clap(short, long, default_value=DEFAULT_CONFIG_PATH)]
     config_path: PathBuf,
+
+    #[clap(
+        short = 'V',
+        long = "--version",
+        help = "Print version information",
+        takes_value = false
+    )]
+    version: bool,
 }
 
 fn prepare_frontends(
@@ -69,8 +79,42 @@ fn prepare_frontends(
     result
 }
 
+fn print_version_info(f: &mut impl std::io::Write) -> std::io::Result<()> {
+    writeln!(
+        f,
+        "Seafowl {} ({} {})",
+        env!("VERGEN_GIT_SEMVER"),
+        env!("VERGEN_GIT_SHA"),
+        env!("VERGEN_GIT_COMMIT_TIMESTAMP")
+    )?;
+
+    writeln!(
+        f,
+        "\nBuilt by rustc {} on {} at {}",
+        env!("VERGEN_RUSTC_SEMVER"),
+        env!("VERGEN_RUSTC_HOST_TRIPLE"),
+        env!("VERGEN_BUILD_TIMESTAMP")
+    )?;
+    writeln!(
+        f,
+        "Target: {} {}",
+        env!("VERGEN_CARGO_PROFILE"),
+        env!("VERGEN_CARGO_TARGET_TRIPLE"),
+    )?;
+    writeln!(f, "Features: {}", env!("VERGEN_CARGO_FEATURES"))?;
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
+    let args = Args::parse();
+
+    if args.version {
+        print_version_info(&mut std::io::stdout()).unwrap();
+        return;
+    }
+
     let mut builder = pretty_env_logger::formatted_timed_builder();
 
     builder
@@ -82,7 +126,6 @@ async fn main() {
         .init();
 
     info!("Starting Seafowl");
-    let args = Args::parse();
 
     let config_path = &args.config_path;
 
