@@ -2,17 +2,26 @@
 
 [Home page](https://seafowl.io) |
 [Documentation](https://www.splitgraph.com/docs/seafowl/getting-started/introduction) |
+[Nightly builds](https://nightly.link/splitgraph/seafowl/workflows/nightly/main)
 [Download](https://github.com/splitgraph/seafowl/releases)
 
 Seafowl is an analytical database designed for modern data-driven Web applications.
 
 ## Work in progress
 
-**This repository is an active work in progress and we do not yet provide pre-compiled builds or
-build instructions.**
+**This repository is an active work in progress. Read on to find out more about our goals for the
+initial release or star/watch this repository to stay informed on our progress!**
 
-**Read on to find out more about our goals for the initial release or star/watch this repository to
-stay informed on our progress!**
+### Nightly builds
+
+While we do not yet provide official release builds or build instructions, we produce nightly builds
+after each merge to `main`. You can find them in GitHub Actions artifacts (only if you're logged in,
+see [this issue](https://github.com/actions/upload-artifact/issues/51)) or **via
+[nightly.link](https://nightly.link/splitgraph/seafowl/workflows/nightly/main)**:
+
+- [Linux (x86_64-unknown-linux-gnu)](https://nightly.link/splitgraph/seafowl/workflows/nightly/main/seafowl-nightly-x86_64-unknown-linux-gnu.zip)
+- [OSX (x86_64-apple-darwin)](https://nightly.link/splitgraph/seafowl/workflows/nightly/main/seafowl-nightly-x86_64-apple-darwin.zip)
+- [Windows (x86_64-pc-windows-msvc)](https://nightly.link/splitgraph/seafowl/workflows/nightly/main/seafowl-nightly-x86_64-pc-windows-msvc.zip)
 
 ## Initial release roadmap
 
