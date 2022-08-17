@@ -278,8 +278,7 @@ fn load_csv_bytes(
     let schema = csv_reader.schema().as_ref().clone();
     let partition: Vec<RecordBatch> = csv_reader
         .into_iter()
-        .collect::<Result<Vec<RecordBatch>, ArrowError>>()
-        .unwrap();
+        .collect::<Result<Vec<RecordBatch>, ArrowError>>()?;
 
     Ok((schema, partition))
 }
@@ -293,8 +292,8 @@ fn load_parquet_bytes(source: Vec<u8>) -> Result<(Schema, Vec<RecordBatch>), Arr
     let partition: Vec<RecordBatch> = parquet_reader
         .get_record_reader(1024)
         .unwrap()
-        .collect::<Result<Vec<RecordBatch>, ArrowError>>()
-        .unwrap();
+        .collect::<Result<Vec<RecordBatch>, ArrowError>>(
+    )?;
 
     Ok((schema, partition))
 }
