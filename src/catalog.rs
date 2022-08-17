@@ -63,6 +63,13 @@ pub trait TableCatalog: Sync + Send + Debug {
         from_version: TableVersionId,
     ) -> TableVersionId;
 
+    async fn move_table(
+        &self,
+        table_id: TableId,
+        new_table_name: &str,
+        new_collection_id: Option<CollectionId>,
+    ) -> ();
+
     async fn drop_table(&self, table_id: TableId);
 
     async fn drop_collection(&self, collection_id: CollectionId);
@@ -284,6 +291,18 @@ impl TableCatalog for DefaultCatalog {
             .create_new_table_version(from_version)
             .await
             .expect("TODO create version error")
+    }
+
+    async fn move_table(
+        &self,
+        table_id: TableId,
+        new_table_name: &str,
+        new_collection_id: Option<CollectionId>,
+    ) {
+        self.repository
+            .move_table(table_id, new_table_name, new_collection_id)
+            .await
+            .expect("TODO move table error")
     }
 
     async fn drop_table(&self, table_id: TableId) {
