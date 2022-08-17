@@ -70,9 +70,11 @@ read_access = "any"
 # startup of Seafowl to get the password or set this to a different hash.
 write_access = "{}"
 "#,
-        DEFAULT_DATA_DIR,
-        dsn,
-        random_password()
+        // Use `escape_default` here since on Windows, these paths
+        // use backslashes which toml treats as escapes.
+        DEFAULT_DATA_DIR.escape_default(),
+        dsn.escape_default(),
+        random_password().escape_default()
     );
 
     let config = load_config_from_string(&config_str, false).unwrap();
