@@ -358,6 +358,12 @@ pub trait SeafowlContext: Send + Sync {
         &self,
         physical_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Vec<RecordBatch>>;
+    async fn plan_to_table(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        schema_name: String,
+        table_name: String,
+    ) -> Result<bool>;
 }
 
 impl DefaultSeafowlContext {
@@ -474,6 +480,63 @@ impl DefaultSeafowlContext {
     ) -> Result<SendableRecordBatchStream> {
         let task_context = Arc::new(TaskContext::from(self.inner()));
         physical_plan.execute(partition, task_context)
+    }
+
+    // Execute the plan, repartition to Parquet files, upload them to object store and add metadata
+    // records for table/partitions.
+    async fn execute_plan_to_table(
+        &self,
+        physical_plan: &Arc<dyn ExecutionPlan>,
+        name: Option<String>,
+        from_table_version: Option<TableVersionId>,
+    ) -> Result<bool> {
+        let disk_manager = self.inner.runtime_env().disk_manager.clone();
+
+        let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
+        let store = self
+            .inner
+            .runtime_env()
+            .object_store(object_store_url.clone())?;
+
+        let partitions = plan_to_object_store(
+            &self.inner.state(),
+            physical_plan,
+            store,
+            disk_manager,
+            self.max_partition_size,
+        )
+        .await?;
+
+        // Create/Update table metadata
+        let new_table_version_id;
+        match (name, from_table_version) {
+            (Some(name), _) => {
+                // Create an empty table with an empty version
+                (_, new_table_version_id) = self
+                    .exec_create_table(&name, &physical_plan.schema().to_dfschema_ref()?)
+                    .await?;
+            }
+            (_, Some(from_table_version)) => {
+                // Duplicate the table version into a new one
+                new_table_version_id = self
+                    .table_catalog
+                    .create_new_table_version(from_table_version)
+                    .await;
+            }
+            _ => {
+                return Err(Error::Internal(
+                    "Either name or source table version need to be supplied".to_string(),
+                ));
+            }
+        }
+
+        // Attach the partitions to the table
+        let partition_ids = self.partition_catalog.create_partitions(partitions).await;
+        self.partition_catalog
+            .append_partitions_to_table(partition_ids, new_table_version_id)
+            .await;
+
+        Ok(true)
     }
 }
 
@@ -812,35 +875,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // This is actually CREATE TABLE AS
                 let physical = self.create_physical_plan(&input).await?;
 
-                // Execute the plan and write it out to temporary Parquet files.
-                let disk_manager = self.inner.runtime_env().disk_manager.clone();
-
-                let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
-                let store = self
-                    .inner
-                    .runtime_env()
-                    .object_store(object_store_url.clone())?;
-
-                let partitions = plan_to_object_store(
-                    &self.inner.state(),
-                    &physical,
-                    store,
-                    disk_manager,
-                    self.max_partition_size,
-                )
-                .await?;
-
-                // Create an empty table with an empty version
-                let (_, table_version_id) = self
-                    .exec_create_table(&name, &physical.schema().to_dfschema_ref()?)
+                self.execute_plan_to_table(&physical, Some(name), None)
                     .await?;
-
-                // Attach the partitions to the empty table
-                let partition_ids =
-                    self.partition_catalog.create_partitions(partitions).await;
-                self.partition_catalog
-                    .append_partitions_to_table(partition_ids, table_version_id)
-                    .await;
 
                 Ok(make_dummy_exec())
             }
@@ -874,40 +910,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                         SeafowlExtensionNode::Insert(Insert { table, input, .. }) => {
                             let physical = self.create_physical_plan(input).await?;
 
-                            // Execute the plan and write it out to temporary Parquet files.
-                            let disk_manager =
-                                self.inner.runtime_env().disk_manager.clone();
-
-                            let object_store_url =
-                                ObjectStoreUrl::parse("seafowl://").unwrap();
-                            let store = self
-                                .inner
-                                .runtime_env()
-                                .object_store(object_store_url.clone())?;
-
-                            let partitions = plan_to_object_store(
-                                &self.inner.state(),
+                            self.execute_plan_to_table(
                                 &physical,
-                                store,
-                                disk_manager,
-                                self.max_partition_size,
+                                None,
+                                Some(table.table_version_id),
                             )
                             .await?;
-
-                            // Duplicate the table version into a new one
-                            let new_version_id = self
-                                .table_catalog
-                                .create_new_table_version(table.table_version_id)
-                                .await;
-
-                            // Attach the partitions to the table
-                            let partition_ids = self
-                                .partition_catalog
-                                .create_partitions(partitions)
-                                .await;
-                            self.partition_catalog
-                                .append_partitions_to_table(partition_ids, new_version_id)
-                                .await;
 
                             Ok(make_dummy_exec())
                         }
@@ -999,6 +1007,53 @@ impl SeafowlContext for DefaultSeafowlContext {
     ) -> Result<Vec<RecordBatch>> {
         let stream = self.execute_stream(physical_plan).await?;
         stream.err_into().try_collect().await
+    }
+
+    /// Create a new table and insert data generated by the provided execution plan
+    async fn plan_to_table(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        schema_name: String,
+        table_name: String,
+    ) -> Result<bool> {
+        let mut full_table_name = Some(format!("{}.{}", schema_name, table_name));
+        let mut from_table_version = None;
+
+        // Ensure the schema exists prior to creating the table
+        match self
+            .table_catalog
+            .get_collection_id_by_name(&self.database, &schema_name)
+            .await
+        {
+            Some(_) => {
+                if let Ok(table) =
+                    self.try_get_seafowl_table(full_table_name.clone().unwrap())
+                {
+                    // Table exists, see if the schemas match
+                    if table.schema.arrow_schema != plan.schema() {
+                        return Err(DataFusionError::Execution(
+                            format!(
+                                "The table {} already exists but has a different schema than the one provided.",
+                                full_table_name.clone().unwrap())
+                            )
+                        );
+                    }
+
+                    // Instead of creating a new table, just insert the data into a new version
+                    // of an existing table
+                    full_table_name = None;
+                    from_table_version = Some(table.table_version_id);
+                }
+            }
+            None => {
+                self.table_catalog
+                    .create_collection(self.database_id, &schema_name)
+                    .await;
+            }
+        };
+
+        self.execute_plan_to_table(&plan, full_table_name, from_table_version)
+            .await
     }
 }
 
