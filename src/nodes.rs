@@ -67,12 +67,23 @@ pub struct CreateFunction {
 }
 
 #[derive(Debug, Clone)]
+pub struct RenameTable {
+    /// The table to rename
+    pub table: Arc<SeafowlTable>,
+    /// New name (including the schema name)
+    pub new_name: String,
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
+}
+
+#[derive(Debug, Clone)]
 pub enum SeafowlExtensionNode {
     CreateTable(CreateTable),
     Insert(Insert),
     Update(Update),
     Delete(Delete),
     CreateFunction(CreateFunction),
+    RenameTable(RenameTable),
 }
 
 impl SeafowlExtensionNode {
@@ -110,6 +121,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 output_schema,
                 ..
             }) => output_schema,
+            SeafowlExtensionNode::RenameTable(RenameTable { output_schema, .. }) => {
+                output_schema
+            }
         }
     }
 
@@ -136,6 +150,11 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             }
             SeafowlExtensionNode::CreateFunction(CreateFunction { name, .. }) => {
                 write!(f, "CreateFunction: {}", name)
+            }
+            SeafowlExtensionNode::RenameTable(RenameTable {
+                table, new_name, ..
+            }) => {
+                write!(f, "RenameTable: {} to {}", table.name, new_name)
             }
         }
     }

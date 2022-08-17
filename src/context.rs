@@ -30,8 +30,8 @@ use object_store::{path::Path, ObjectStore};
 use sha2::Digest;
 use sha2::Sha256;
 use sqlparser::ast::{
-    ColumnDef as SQLColumnDef, ColumnOption, Ident, Statement, TableFactor,
-    TableWithJoins,
+    AlterTableOperation, ColumnDef as SQLColumnDef, ColumnOption, Ident, Statement,
+    TableFactor, TableWithJoins,
 };
 use std::io::Read;
 
@@ -63,7 +63,7 @@ use tempfile::NamedTempFile;
 
 use crate::catalog::PartitionCatalog;
 use crate::data_types::{TableId, TableVersionId};
-use crate::nodes::{CreateFunction, SeafowlExtensionNode};
+use crate::nodes::{CreateFunction, RenameTable, SeafowlExtensionNode};
 use crate::provider::{PartitionColumn, SeafowlPartition, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
@@ -620,6 +620,20 @@ impl SeafowlContext for DefaultSeafowlContext {
                             output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
+                },
+
+                // ALTER TABLE ... RENAME TO
+                Statement::AlterTable { name, operation: AlterTableOperation::RenameTable {table_name: new_name }} => {
+                    let table_name = name.to_string();
+                    let table = self.try_get_seafowl_table(table_name)?;
+
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(SeafowlExtensionNode::RenameTable(RenameTable {
+                            table: Arc::from(table),
+                            new_name: new_name.to_string(),
+                            output_schema: Arc::new(DFSchema::empty())
+                        })),
+                    }))
                 }
 
                 // Other CREATE TABLE: SqlToRel only allows CreateTableAs statements and makes
@@ -667,8 +681,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                     // (it doesn't seem to actually do casts at runtime, but ArrowWriter should forcefully
                     // cast the columns when we're writing to Parquet)
 
-                    // TODO: we might need to pad out the result with NULL columns so that it has _exactly_
-                    // the same shape as the rest of the table
                     let plan = LogicalPlan::Projection(Projection {
                         expr: target_schema.fields().iter().zip(plan.schema().field_names()).map(|(table_field, query_field_name)| {
                             // Generate CAST (source_col AS table_col_type) AS table_col
@@ -998,6 +1010,46 @@ impl SeafowlContext for DefaultSeafowlContext {
                             // Persist the function in the metadata storage
                             self.function_catalog
                                 .create_function(self.database_id, name, details)
+                                .await;
+
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::RenameTable(RenameTable {
+                            table,
+                            new_name,
+                            ..
+                        }) => {
+                            let table_ref = TableReference::from(new_name.as_str());
+
+                            let (new_table_name, new_schema_id) = match table_ref {
+                                // Rename the table (keep same schema)
+                                TableReference::Bare { table } => (table, None),
+                                // Rename the table / move its schema
+                                TableReference::Partial { schema, table } => {
+                                    let collection_id = self
+                                        .table_catalog
+                                        .get_collection_id_by_name(&self.database, schema)
+                                        .await
+                                        .ok_or_else(|| {
+                                            Error::Plan(format!(
+                                                "Schema {:?} does not exist!",
+                                                schema
+                                            ))
+                                        })?;
+
+                                    (table, Some(collection_id))
+                                }
+                                // Catalog specified: raise an error
+                                TableReference::Full { .. } => {
+                                    return Err(Error::Plan(
+                                        "Changing the table's database is not supported!"
+                                            .to_string(),
+                                    ))
+                                }
+                            };
+
+                            self.table_catalog
+                                .move_table(table.table_id, new_table_name, new_schema_id)
                                 .await;
 
                             Ok(make_dummy_exec())

@@ -53,6 +53,24 @@ async fn list_columns_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch>
         .unwrap()
 }
 
+/// Get a batch of results with all tables in a database
+async fn list_tables_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch> {
+    context
+        .collect(
+            context
+                .plan_query(
+                    "SELECT table_schema, table_name
+        FROM information_schema.tables
+        WHERE table_catalog = 'default'
+        ORDER BY table_schema, table_name",
+                )
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
 async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &str) {
     let plan = context
         .plan_query(
@@ -392,7 +410,7 @@ async fn test_create_table_as() {
 }
 
 #[tokio::test]
-async fn test_create_table_and_drop() {
+async fn test_create_table_move_and_drop() {
     // Create two tables, insert some data into them
 
     let context = make_context_with_pg().await;
@@ -424,13 +442,77 @@ async fn test_create_table_and_drop() {
 
     assert_batches_eq!(expected, &results);
 
-    // Drop the first table
-
+    // Rename the first table
+    context
+        .collect(
+            context
+                .plan_query("ALTER TABLE test_table_1 RENAME TO test_table_3")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     context.reload_schema().await;
 
-    let plan = context.plan_query("DROP TABLE test_table_1").await.unwrap();
-    context.collect(plan).await.unwrap();
+    let results = list_tables_query(&context).await;
 
+    let expected = vec![
+        "+--------------------+--------------+",
+        "| table_schema       | table_name   |",
+        "+--------------------+--------------+",
+        "| information_schema | columns      |",
+        "| information_schema | tables       |",
+        "| public             | test_table_2 |",
+        "| public             | test_table_3 |",
+        "+--------------------+--------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // TODO: Move the table into a non-existent schema
+
+    // Create a schema and move the table to it
+    context
+        .collect(
+            context
+                .plan_query("CREATE SCHEMA new_schema")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    context.reload_schema().await;
+
+    context
+        .collect(
+            context
+                .plan_query("ALTER TABLE test_table_3 RENAME TO new_schema.test_table_3")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    context.reload_schema().await;
+
+    let results = list_tables_query(&context).await;
+
+    let expected = vec![
+        "+--------------------+--------------+",
+        "| table_schema       | table_name   |",
+        "+--------------------+--------------+",
+        "| information_schema | columns      |",
+        "| information_schema | tables       |",
+        "| new_schema         | test_table_3 |",
+        "| public             | test_table_2 |",
+        "+--------------------+--------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Drop test_table_3
+    let plan = context
+        .plan_query("DROP TABLE new_schema.test_table_3")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
     context.reload_schema().await;
 
     let results = list_columns_query(&context).await;
