@@ -380,6 +380,8 @@ pub fn filters(
         .allow_headers(vec!["X-Seafowl-Query", "Authorization", "Content-Type"])
         .allow_methods(vec!["GET", "POST"]);
 
+    let log = warp::log(module_path!());
+
     // Cached read query
     let ctx = context.clone();
     let cached_read_query_route = warp::path!("q" / String)
@@ -423,6 +425,7 @@ pub fn filters(
         .or(uncached_read_write_query_route)
         .or(upload_route)
         .with(cors)
+        .with(log)
         .recover(handle_rejection)
 }
 
