@@ -1152,7 +1152,6 @@ SELECT
         add_headers: Option<bool>,
     ) {
         let context = in_memory_context_with_single_table().await;
-        let _handler = filters(context.clone(), free_for_all());
 
         let table_name = format!("{}_table", file_format);
 
