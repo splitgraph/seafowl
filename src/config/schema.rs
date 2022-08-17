@@ -358,11 +358,6 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
     fn test_parse_config_basic() {
         let config = load_config_from_string(TEST_CONFIG_BASIC, false).unwrap();
 
-        let sha256_hash = match &config.frontend.http.as_ref().unwrap().write_access {
-            AccessSettings::Password { sha256_hash } => sha256_hash.clone(),
-            _ => panic!("write_access didn't default to a password!"),
-        };
-
         assert_eq!(
             config,
             SeafowlConfig {
@@ -380,7 +375,7 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
                         bind_host: "0.0.0.0".to_string(),
                         bind_port: 80,
                         read_access: AccessSettings::Any,
-                        write_access: AccessSettings::Password { sha256_hash }
+                        write_access: AccessSettings::Off,
                     })
                 },
                 misc: Misc {
@@ -425,7 +420,13 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
 
     #[test]
     fn test_default_config() {
-        // Just run the default config builder to make sure the config parses
-        let (_config_str, _config) = build_default_config();
+        // Run the default config builder to make sure the config parses
+        let (_config_str, config) = build_default_config();
+
+        // Make sure we default to requiring a password for writes
+        match &config.frontend.http.as_ref().unwrap().write_access {
+            AccessSettings::Password { sha256_hash: _ } => (),
+            _ => panic!("write_access didn't default to a password!"),
+        };
     }
 }
