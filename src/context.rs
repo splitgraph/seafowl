@@ -31,8 +31,8 @@ use object_store::{path::Path, ObjectStore};
 use sha2::Digest;
 use sha2::Sha256;
 use sqlparser::ast::{
-    AlterTableOperation, ColumnDef as SQLColumnDef, ColumnOption, Ident, Statement,
-    TableFactor, TableWithJoins,
+    AlterTableOperation, ColumnDef as SQLColumnDef, ColumnOption, Ident, ObjectType,
+    Statement, TableFactor, TableWithJoins,
 };
 use std::io::Read;
 
@@ -64,7 +64,7 @@ use tempfile::NamedTempFile;
 
 use crate::catalog::PartitionCatalog;
 use crate::data_types::{TableId, TableVersionId};
-use crate::nodes::{CreateFunction, RenameTable, SeafowlExtensionNode};
+use crate::nodes::{CreateFunction, DropSchema, RenameTable, SeafowlExtensionNode};
 use crate::provider::{PartitionColumn, SeafowlPartition, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
@@ -607,7 +607,20 @@ impl SeafowlContext for DefaultSeafowlContext {
                 | Statement::CreateView { .. }
                 | Statement::CreateSchema { .. }
                 | Statement::CreateDatabase { .. }
-                | Statement::Drop { .. } => query_planner.sql_statement_to_plan(*s),
+                | Statement::Drop { object_type: ObjectType::Table, .. } => query_planner.sql_statement_to_plan(*s),
+
+                | Statement::Drop { object_type: ObjectType::Schema,
+                    if_exists: _,
+                    names,
+                    cascade: _,
+                    purge: _, } => {
+                        let name = names.first().unwrap().to_string();
+
+                        Ok(LogicalPlan::Extension(Extension {
+                            node: Arc::new(SeafowlExtensionNode::DropSchema(DropSchema { name, output_schema: Arc::new(DFSchema::empty()) }))
+                        }))
+                    },
+
 
                 // CREATE TABLE (create empty table with columns)
                 Statement::CreateTable {
@@ -914,7 +927,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                 self.table_catalog.create_database(catalog_name).await;
                 Ok(make_dummy_exec())
             }
-            // TODO DROP DATABASE / SCHEMA
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name,
                 input,
@@ -1070,6 +1082,17 @@ impl SeafowlContext for DefaultSeafowlContext {
                             self.table_catalog
                                 .move_table(table.table_id, new_table_name, new_schema_id)
                                 .await;
+
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
+                            if let Some(collection_id) = self
+                                .table_catalog
+                                .get_collection_id_by_name(&self.database, name)
+                                .await
+                            {
+                                self.table_catalog.drop_collection(collection_id).await
+                            };
 
                             Ok(make_dummy_exec())
                         }

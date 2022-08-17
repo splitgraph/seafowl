@@ -560,6 +560,124 @@ async fn test_create_table_move_and_drop() {
 }
 
 #[tokio::test]
+async fn test_create_table_drop_schema() {
+    let context = make_context_with_pg().await;
+
+    for table_name in ["test_table_1", "test_table_2"] {
+        create_table_and_insert(&context, table_name).await;
+    }
+
+    context.reload_schema().await;
+
+    // Create a schema and move the table to it
+    context
+        .collect(
+            context
+                .plan_query("CREATE SCHEMA new_schema")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    context.reload_schema().await;
+
+    context
+        .collect(
+            context
+                .plan_query("ALTER TABLE test_table_2 RENAME TO new_schema.test_table_2")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    context.reload_schema().await;
+
+    let results = list_tables_query(&context).await;
+
+    let expected = vec![
+        "+--------------------+--------------+",
+        "| table_schema       | table_name   |",
+        "+--------------------+--------------+",
+        "| information_schema | columns      |",
+        "| information_schema | tables       |",
+        "| new_schema         | test_table_2 |",
+        "| public             | test_table_1 |",
+        "+--------------------+--------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // DROP the public schema for the fun of it
+    context
+        .collect(context.plan_query("DROP SCHEMA public").await.unwrap())
+        .await
+        .unwrap();
+    context.reload_schema().await;
+
+    let results = list_tables_query(&context).await;
+
+    let expected = vec![
+        "+--------------------+--------------+",
+        "| table_schema       | table_name   |",
+        "+--------------------+--------------+",
+        "| information_schema | columns      |",
+        "| information_schema | tables       |",
+        "| new_schema         | test_table_2 |",
+        "+--------------------+--------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // DROP the new_schema
+    context
+        .collect(context.plan_query("DROP SCHEMA new_schema").await.unwrap())
+        .await
+        .unwrap();
+    context.reload_schema().await;
+
+    let results = list_tables_query(&context).await;
+
+    let expected = vec![
+        "+--------------------+------------+",
+        "| table_schema       | table_name |",
+        "+--------------------+------------+",
+        "| information_schema | columns    |",
+        "| information_schema | tables     |",
+        "+--------------------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Recreate the public schema and add a table to it
+    context
+        .collect(context.plan_query("CREATE SCHEMA public").await.unwrap())
+        .await
+        .unwrap();
+    context.reload_schema().await;
+
+    context
+        .collect(
+            context
+                .plan_query("CREATE TABLE test_table_1 (key INTEGER)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    context.reload_schema().await;
+
+    let results = list_tables_query(&context).await;
+
+    let expected = vec![
+        "+--------------------+--------------+",
+        "| table_schema       | table_name   |",
+        "+--------------------+--------------+",
+        "| information_schema | columns      |",
+        "| information_schema | tables       |",
+        "| public             | test_table_1 |",
+        "+--------------------+--------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
 async fn test_create_and_reload_function() {
     let context = make_context_with_pg().await;
 

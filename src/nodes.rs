@@ -77,6 +77,14 @@ pub struct RenameTable {
 }
 
 #[derive(Debug, Clone)]
+pub struct DropSchema {
+    /// The schema to drop
+    pub name: String,
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
+}
+
+#[derive(Debug, Clone)]
 pub enum SeafowlExtensionNode {
     CreateTable(CreateTable),
     Insert(Insert),
@@ -84,6 +92,7 @@ pub enum SeafowlExtensionNode {
     Delete(Delete),
     CreateFunction(CreateFunction),
     RenameTable(RenameTable),
+    DropSchema(DropSchema),
 }
 
 impl SeafowlExtensionNode {
@@ -124,6 +133,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::RenameTable(RenameTable { output_schema, .. }) => {
                 output_schema
             }
+            SeafowlExtensionNode::DropSchema(DropSchema { output_schema, .. }) => {
+                output_schema
+            }
         }
     }
 
@@ -155,6 +167,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 table, new_name, ..
             }) => {
                 write!(f, "RenameTable: {} to {}", table.name, new_name)
+            }
+            SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
+                write!(f, "DropSchema: {}", name)
             }
         }
     }
