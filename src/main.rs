@@ -1,4 +1,9 @@
-use std::{env, path::PathBuf, pin::Pin, sync::Arc};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
+};
 
 use clap::Parser;
 
@@ -8,7 +13,7 @@ use pretty_env_logger::env_logger;
 use seafowl::{
     config::{
         context::build_context,
-        schema::{load_config, SeafowlConfig},
+        schema::{build_default_config, load_config, SeafowlConfig, DEFAULT_DATA_DIR},
     },
     context::SeafowlContext,
     frontend::http::run_server,
@@ -21,9 +26,11 @@ extern crate pretty_env_logger;
 #[macro_use]
 extern crate log;
 
+const DEFAULT_CONFIG_PATH: &str = "seafowl.toml";
+
 #[derive(Debug, Parser)]
 struct Args {
-    #[clap(short, long)]
+    #[clap(short, long, default_value=DEFAULT_CONFIG_PATH)]
     config_path: PathBuf,
 }
 
@@ -40,6 +47,9 @@ fn prepare_frontends(
             "Starting the PostgreSQL frontend on {}:{}",
             pg.bind_host, pg.bind_port
         );
+        warn!(
+            "The PostgreSQL frontend doesn't have authentication or encryption and should only be used in development!"
+        );
         result.push(server.boxed());
     };
 
@@ -48,6 +58,10 @@ fn prepare_frontends(
         info!(
             "Starting the HTTP frontend on {}:{}",
             http.bind_host, http.bind_port
+        );
+        info!(
+            "HTTP access settings: read {}, write {}",
+            http.read_access, http.write_access
         );
         result.push(server.boxed());
     };
@@ -69,7 +83,27 @@ async fn main() {
 
     info!("Starting Seafowl");
     let args = Args::parse();
-    let config = load_config(&args.config_path).expect("Error loading config");
+
+    let config_path = &args.config_path;
+
+    // If the user overrode the config file, raise an error if it doesn't exist
+    let default_path = Path::new(DEFAULT_CONFIG_PATH);
+
+    let config = if config_path.exists() || config_path != default_path {
+        info!("Loading the configuration from {}", config_path.display());
+        load_config(config_path).expect("Error loading config")
+    } else {
+        // Generate a default config
+        let (config_str, config) = build_default_config();
+        info!(
+            "Writing a default configuration file to {}",
+            DEFAULT_CONFIG_PATH
+        );
+        fs::create_dir_all(DEFAULT_DATA_DIR).unwrap();
+        fs::write(DEFAULT_CONFIG_PATH, config_str).unwrap();
+
+        config
+    };
 
     let context = Arc::new(build_context(&config).await);
 
