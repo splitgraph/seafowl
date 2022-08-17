@@ -1,9 +1,10 @@
-use std::{path::PathBuf, pin::Pin, sync::Arc};
+use std::{env, path::PathBuf, pin::Pin, sync::Arc};
 
 use clap::Parser;
 
 use futures::{future::join_all, Future, FutureExt};
 
+use pretty_env_logger::env_logger;
 use seafowl::{
     config::{
         context::build_context,
@@ -56,7 +57,15 @@ fn prepare_frontends(
 
 #[tokio::main]
 async fn main() {
-    pretty_env_logger::init_timed();
+    let mut builder = pretty_env_logger::formatted_timed_builder();
+
+    builder
+        .parse_filters(
+            env::var(env_logger::DEFAULT_FILTER_ENV)
+                .unwrap_or_else(|_| "sqlx=warn,info".to_string())
+                .as_str(),
+        )
+        .init();
 
     info!("Starting Seafowl");
     let args = Args::parse();
