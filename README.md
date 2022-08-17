@@ -2,10 +2,13 @@
 
 [Home page](https://seafowl.io) |
 [Documentation](https://www.splitgraph.com/docs/seafowl/getting-started/introduction) |
-[Nightly builds](https://nightly.link/splitgraph/seafowl/workflows/nightly/main)
+[Nightly builds](https://nightly.link/splitgraph/seafowl/workflows/nightly/main) |
 [Download](https://github.com/splitgraph/seafowl/releases)
 
-Seafowl is an analytical database designed for modern data-driven Web applications.
+Seafowl is an analytical database for modern data-driven Web applications.
+
+It lets you deliver data to your visualizations, dashboards and notebooks by running SQL straight
+from the user's browser, without having to write custom API endpoints.
 
 ## Work in progress
 
@@ -25,38 +28,39 @@ see [this issue](https://github.com/actions/upload-artifact/issues/51)) or **via
 
 ## Initial release roadmap
 
-### Fast analytical queries
+### Fast analytics...
 
-Seafowl is built around [Apache DataFusion](https://github.com/apache/arrow-datafusion), a powerful
-and extensible SQL query engine that uses Apache Arrow and Apache Parquet.
+Seafowl is built around
+[Apache DataFusion](https://arrow.apache.org/datafusion/user-guide/introduction.html), a fast and
+extensible query execution framework. It uses [Apache Parquet](https://parquet.apache.org/) columnar
+storage, making it perfect for analytical workloads.
 
-Besides fast analytical `SELECT` queries, Seafowl also supports writes and `CREATE TABLE AS`
-statements, making it easy to ingest your data into it.
+For `SELECT` queries, Seafowl supports a large subset of the PostgreSQL dialect. If there's
+something missing, you can
+[write a user-defined function](https://splitgraph.com/docs/seafowl/guides/custom-udf-wasi) for
+Seafowl in anything that compiles to WebAssembly.
 
-Seafowl's architecture is inspired by modern cloud data warehouses like Snowflake and Google
-BigQuery, as well as the lessons we learned over the past few years of working on
-[Splitgraph](https://www,splitgraph.com/) and [sgr](https://github.com/splitgraph/sgr/):
+In addition, you can write data to Seafowl by
+[uploading a CSV or a Parquet file](https://splitgraph.com/docs/seafowl/guides/uploading-csv-parquet),
+creating an external table or using
+[standard SQL statements](https://splitgraph.com/docs/seafowl/guides/writing-sql-queries).
 
-- **Separation of storage and compute**. You can store Seafowl data in object storage or on a
-  persistent volume and spin up Seafowl instances on-demand to satisfy incoming queries.
-- **Partition pruning**. Seafowl splits tables into partitions (stored as Parquet files) and indexes
-  them to satisfy filter queries without scanning through the whole table.
-- **Extensibility**. You can write user-defined-functions (UDFs) in any language that compiles to
-  WebAssembly (WASM) and add them to Seafowl.
+### ...at the edge
 
-### Designed for data-driven Web applications
+Seafowl is designed to be deployed to modern serverless environments. It ships as a single binary,
+making it simple to run anywhere.
 
-Seafowl lets you provide data for your dashboards and visualizations without building complex API
-endpoints, just by executing SQL straight from the user's browser.
+Seafowl's architecture is inspired by modern cloud data warehouses like Snowflake or BigQuery,
+letting you separate storage and compute. You can store Seafowl data in an object storage like S3 or
+Minio and scale to zero. Or, you can
+[build a self-contained Docker image](https://splitgraph.com/docs/seafowl/guides/baking-dataset-docker-image)
+with Seafowl and your data, letting you deploy your data to any platform that supports Docker.
 
-Seafowl's query execution endpoint is HTTP cache and CDN-friendly. You can put Seafowl behind a
-cache like Varnish or a CDN like Cloudflare and have query results cached globally and delivered to
-your users in milliseconds.
-
-### Runnable on serverless providers
-
-We're intending for Seafowl to be runnable on modern serverless platforms like Fly.io, Cloudflare
-Workers and Deno Deploy.
+Seafowl's query execution API follows HTTP cache semantics. This means you can
+[put Seafowl behind a CDN](https://splitgraph.com/docs/seafowl/guides/querying-cache-cdn) like
+Cloudflare or a cache like Varnish and have query results cached and delivered to your users in
+milliseconds. Even without a cache, you can get the benefits of caching query results in your user's
+browser.
 
 ## Post-initial release roadmap
 
