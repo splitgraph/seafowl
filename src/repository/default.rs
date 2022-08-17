@@ -310,6 +310,21 @@ impl Repository for $repo {
         Ok(new_version)
     }
 
+    async fn move_table(
+        &self,
+        table_id: TableId,
+        new_table_name: &str,
+        new_collection_id: Option<CollectionId>,
+    ) -> Result<(), Error> {
+        let query = if let Some(new_collection_id) = new_collection_id {
+            sqlx::query("UPDATE \"table\" SET name = $1, collection_id = $2 WHERE id = $3").bind(new_table_name).bind(new_collection_id).bind(table_id)
+        } else {
+            sqlx::query("UPDATE \"table\" SET name = $1 WHERE id = $2").bind(new_table_name).bind(table_id)
+        };
+        query.execute(&self.executor).await?;
+        Ok(())
+    }
+
     async fn create_function(
         &self,
         database_id: DatabaseId,

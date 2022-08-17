@@ -108,6 +108,13 @@ pub trait Repository: Send + Sync + Debug {
         from_version: TableVersionId,
     ) -> Result<TableVersionId, Error>;
 
+    async fn move_table(
+        &self,
+        table_id: TableId,
+        new_table_name: &str,
+        new_collection_id: Option<CollectionId>,
+    ) -> Result<(), Error>;
+
     async fn create_function(
         &self,
         database_id: DatabaseId,
@@ -205,10 +212,12 @@ pub mod tests {
 
     pub async fn run_generic_repository_tests(repository: Arc<dyn Repository>) {
         test_get_collections_empty(repository.clone()).await;
-        let (database_id, table_version_id) =
+        let (database_id, table_id, table_version_id) =
             test_create_database_collection_table(repository.clone()).await;
-        test_create_append_partition(repository.clone(), table_version_id).await;
-        test_create_functions(repository, database_id).await;
+        let new_version_id =
+            test_create_append_partition(repository.clone(), table_version_id).await;
+        test_create_functions(repository.clone(), database_id).await;
+        test_rename_table(repository, database_id, table_id, new_version_id).await;
     }
 
     async fn test_get_collections_empty(repository: Arc<dyn Repository>) {
@@ -221,10 +230,36 @@ pub mod tests {
         );
     }
 
+    fn expected(
+        version: TableVersionId,
+        collection_name: String,
+        table_name: String,
+    ) -> Vec<AllDatabaseColumnsResult> {
+        vec![
+            AllDatabaseColumnsResult {
+                collection_name: collection_name.clone(),
+                table_name: table_name.clone(),
+                table_id: 1,
+                table_version_id: version,
+                column_name: "date".to_string(),
+                column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}".to_string(),
+            },
+            AllDatabaseColumnsResult {
+                collection_name,
+                table_name,
+                table_id: 1,
+                table_version_id: version,
+                column_name: "value".to_string(),
+                column_type: "{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"
+                    .to_string(),
+            },
+        ]
+    }
+
     async fn test_create_database_collection_table(
         repository: Arc<dyn Repository>,
-    ) -> (DatabaseId, TableVersionId) {
-        let (database_id, _, _, table_version_id) =
+    ) -> (DatabaseId, TableId, TableVersionId) {
+        let (database_id, _, table_id, table_version_id) =
             make_database_with_single_table(repository.clone()).await;
 
         // Test loading all columns
@@ -234,30 +269,10 @@ pub mod tests {
             .await
             .expect("Error getting all columns");
 
-        fn expected(version: TableVersionId) -> Vec<AllDatabaseColumnsResult> {
-            vec![
-                AllDatabaseColumnsResult {
-                    collection_name: "testcol".to_string(),
-                    table_name: "testtable".to_string(),
-                    table_id: 1,
-                    table_version_id: version,
-                    column_name: "date".to_string(),
-                    column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}"
-                        .to_string(),
-                },
-                AllDatabaseColumnsResult {
-                    collection_name: "testcol".to_string(),
-                    table_name: "testtable".to_string(),
-                    table_id: 1,
-                    table_version_id: version,
-                    column_name: "value".to_string(),
-                    column_type: "{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"
-                        .to_string(),
-                },
-            ]
-        }
-
-        assert_eq!(all_columns, expected(1));
+        assert_eq!(
+            all_columns,
+            expected(1, "testcol".to_string(), "testtable".to_string())
+        );
 
         // Duplicate the table
         let new_version_id = repository
@@ -271,15 +286,22 @@ pub mod tests {
             .await
             .expect("Error getting all columns");
 
-        assert_eq!(all_columns, expected(new_version_id));
+        assert_eq!(
+            all_columns,
+            expected(
+                new_version_id,
+                "testcol".to_string(),
+                "testtable".to_string()
+            )
+        );
 
-        (database_id, table_version_id)
+        (database_id, table_id, table_version_id)
     }
 
     async fn test_create_append_partition(
         repository: Arc<dyn Repository>,
         table_version_id: TableVersionId,
-    ) {
+    ) -> TableVersionId {
         let partition = get_test_partition();
 
         // Create a partition
@@ -351,6 +373,8 @@ pub mod tests {
             .unwrap();
 
         assert_eq!(all_partitions, expected_partitions);
+
+        new_version_id
     }
 
     async fn test_create_functions(
@@ -394,5 +418,56 @@ pub mod tests {
             volatility: "Volatile".to_string(),
         }];
         assert_eq!(all_functions, expected_functions);
+    }
+
+    async fn test_rename_table(
+        repository: Arc<dyn Repository>,
+        database_id: DatabaseId,
+        table_id: TableId,
+        table_version_id: TableVersionId,
+    ) {
+        // Rename the table to something else
+        repository
+            .move_table(table_id, "testtable2", None)
+            .await
+            .unwrap();
+
+        let all_columns = repository
+            .get_all_columns_in_database(database_id)
+            .await
+            .expect("Error getting all columns");
+
+        assert_eq!(
+            all_columns,
+            expected(
+                table_version_id,
+                "testcol".to_string(),
+                "testtable2".to_string()
+            )
+        );
+
+        // Create a new schema and move the table to it
+        let collection_id = repository
+            .create_collection(database_id, "testcol2")
+            .await
+            .unwrap();
+        repository
+            .move_table(table_id, "testtable2", Some(collection_id))
+            .await
+            .unwrap();
+
+        let all_columns = repository
+            .get_all_columns_in_database(database_id)
+            .await
+            .expect("Error getting all columns");
+
+        assert_eq!(
+            all_columns,
+            expected(
+                table_version_id,
+                "testcol2".to_string(),
+                "testtable2".to_string()
+            )
+        );
     }
 }
