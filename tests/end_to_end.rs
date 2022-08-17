@@ -442,7 +442,15 @@ async fn test_create_table_move_and_drop() {
 
     assert_batches_eq!(expected, &results);
 
-    // Rename the first table
+    // Rename the first table to an already existing name
+    assert!(context
+        .plan_query("ALTER TABLE test_table_1 RENAME TO test_table_2")
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("Target table \"test_table_2\" already exists"));
+
+    // Rename the first table to a new name
     context
         .collect(
             context
@@ -468,7 +476,13 @@ async fn test_create_table_move_and_drop() {
     ];
     assert_batches_eq!(expected, &results);
 
-    // TODO: Move the table into a non-existent schema
+    // Move the table into a non-existent schema
+    assert!(context
+        .plan_query("ALTER TABLE test_table_3 RENAME TO new_schema.test_table_3")
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("Schema \"new_schema\" does not exist!"));
 
     // Create a schema and move the table to it
     context
