@@ -44,17 +44,15 @@ jobs:
         if: matrix.build == 'linux' || matrix.build == 'macos'
         run: strip "target/release/seafowl"
 
-      - name: Build artifact name
+      - name: Prepare artifact name
         shell: bash
         run: |
-          artifact_name="seafowl-nightly-$(echo ${GITHUB_SHA} | cut -c1-8)-${{ matrix.target }}"
+          echo "ARTIFACT=seafowl-nightly-${{ matrix.target }}" >> $GITHUB_ENV
 
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             echo "SOURCE=target/release/seafowl.exe" >> $GITHUB_ENV
-            echo "ARTIFACT=$artifact_name.exe" >> $GITHUB_ENV
           else
             echo "SOURCE=target/release/seafowl" >> $GITHUB_ENV
-            echo "ARTIFACT=$artifact_name" >> $GITHUB_ENV
           fi
 
       - uses: actions/upload-artifact@v3
