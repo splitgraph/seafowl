@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::{
+    fmt::{self, Display},
+    path::Path,
+};
 
 use config::{Config, ConfigError, File, FileFormat};
 use hex::encode;
@@ -6,6 +9,9 @@ use log::info;
 use rand::distributions::{Alphanumeric, DistString};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+pub const DEFAULT_DATA_DIR: &str = "seafowl-data";
+pub const DEFAULT_SQLITE_DB: &str = "seafowl.sqlite";
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct SeafowlConfig {
@@ -25,6 +31,53 @@ pub enum ObjectStore {
     InMemory(InMemory),
     #[cfg(feature = "object-store-s3")]
     S3(S3),
+}
+
+/// Build a default config file and struct
+pub fn build_default_config() -> (String, SeafowlConfig) {
+    let dsn = Path::new(DEFAULT_DATA_DIR)
+        .join(DEFAULT_SQLITE_DB)
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Construct a template. We can't generate a default `SeafowlConfig` struct, since
+    // we can't serialize it back with comments.
+    let config_str = format!(
+        r#"# Default Seafowl config
+# For more information, see https://www.splitgraph.com/docs/seafowl/reference/seafowl-toml-configuration
+
+# Store the data (Parquet files) on the local disk
+[object_store]
+type = "local"
+data_dir = "{}"
+
+# Store the catalog on the local disk
+[catalog]
+type = "sqlite"
+dsn = "{}"
+
+# Configure the HTTP frontend
+[frontend.http]
+bind_host = "127.0.0.1"
+bind_port = 8080
+
+# By default, make Seafowl readable by anyone...
+read_access = "any"
+
+# ...and writeable by users with a password.
+# We store the password's SHA hash here. See the logs from the first
+# startup of Seafowl to get the password or set this to a different hash.
+write_access = "{}"
+"#,
+        DEFAULT_DATA_DIR,
+        dsn,
+        random_password()
+    );
+
+    let config = load_config_from_string(&config_str, false).unwrap();
+
+    (config_str, config)
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -97,6 +150,17 @@ pub enum AccessSettings {
     Password { sha256_hash: String },
 }
 
+impl Display for AccessSettings {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.write_str(match self {
+            AccessSettings::Any => "any",
+            AccessSettings::Off => "off",
+            AccessSettings::Password { sha256_hash: _ } => "password",
+        })?;
+        Ok(())
+    }
+}
+
 impl<'de> Deserialize<'de> for AccessSettings {
     fn deserialize<D>(d: D) -> Result<Self, D::Error>
     where
@@ -119,18 +183,19 @@ pub fn str_to_hex_hash(input: &str) -> String {
     encode(hasher.finalize())
 }
 
-impl AccessSettings {
-    pub fn with_random_password() -> Self {
-        let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 32);
-        let sha256_hash = str_to_hex_hash(&password);
+pub fn random_password() -> String {
+    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 32);
+    let sha256_hash = str_to_hex_hash(&password);
 
-        info!("Writing to Seafowl will require a password. Randomly generated password: {:}", password);
-        info!("The SHA-256 hash will be stored in the config as follows:");
-        info!("[frontend.http]");
-        info!("write_access = \"{:}\"", sha256_hash);
+    info!(
+        "Writing to Seafowl will require a password. Randomly generated password: {:}",
+        password
+    );
+    info!("The SHA-256 hash will be stored in the config as follows:");
+    info!("[frontend.http]");
+    info!("write_access = \"{:}\"", sha256_hash);
 
-        Self::Password { sha256_hash }
-    }
+    sha256_hash
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -148,7 +213,7 @@ impl Default for HttpFrontend {
             bind_host: "127.0.0.1".to_string(),
             bind_port: 8080,
             read_access: AccessSettings::Any,
-            write_access: AccessSettings::with_random_password(),
+            write_access: AccessSettings::Off,
         }
     }
 }
@@ -209,8 +274,8 @@ pub fn load_config_from_string(
 #[cfg(test)]
 mod tests {
     use super::{
-        load_config_from_string, AccessSettings, Catalog, Frontend, HttpFrontend, Local,
-        ObjectStore, Postgres, SeafowlConfig, S3,
+        build_default_config, load_config_from_string, AccessSettings, Catalog, Frontend,
+        HttpFrontend, Local, ObjectStore, Postgres, SeafowlConfig, S3,
     };
     use crate::config::schema::Misc;
 
@@ -356,5 +421,11 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
         assert!(error
             .to_string()
             .contains("You are using an in-memory catalog with a non in-memory"))
+    }
+
+    #[test]
+    fn test_default_config() {
+        // Just run the default config builder to make sure the config parses
+        let (_config_str, _config) = build_default_config();
     }
 }
