@@ -42,6 +42,9 @@ const IF_NONE_MATCH: &str = "If-None-Match";
 const ETAG: &str = "ETag";
 const AUTHORIZATION: &str = "Authorization";
 const BEARER_PREFIX: &str = "Bearer ";
+// We have a very lax CORS on this, so we don't mind browsers
+// caching it for as long as possible.
+const CORS_MAXAGE: u32 = 86400;
 
 #[derive(Default)]
 struct ETagBuilderVisitor {
@@ -378,7 +381,8 @@ pub fn filters(
     let cors = warp::cors()
         .allow_any_origin()
         .allow_headers(vec!["X-Seafowl-Query", "Authorization", "Content-Type"])
-        .allow_methods(vec!["GET", "POST"]);
+        .allow_methods(vec!["GET", "POST"])
+        .max_age(CORS_MAXAGE);
 
     let log = warp::log(module_path!());
 
