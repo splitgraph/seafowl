@@ -299,11 +299,7 @@ async fn test_upload_base(
     if let Some(has_headers) = add_headers {
         curl_args.append(&mut vec![
             "-F".to_string(),
-            if has_headers {
-                "has_header=true".to_string()
-            } else {
-                "has_header=false".to_string()
-            },
+            format!("has_header={}", has_headers),
         ])
     }
     curl_args.append(&mut vec![
