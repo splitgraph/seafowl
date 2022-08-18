@@ -1,3 +1,5 @@
+mod http;
+
 use std::env;
 use std::sync::Arc;
 
