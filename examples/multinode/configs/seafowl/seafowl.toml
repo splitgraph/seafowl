@@ -1,0 +1,15 @@
+[object_store]
+type = "s3"
+access_key_id = "minioadmin"
+secret_access_key = "minioadmin"
+endpoint = "http://minio:9000"
+bucket = "seafowl"
+
+[catalog]
+type = "postgres"
+dsn = "postgresql://seafowl:seafowl@catalog:5432/seafowl"
+
+[frontend.http]
+bind_host = "0.0.0.0"
+read_access = "any"
+write_access = "any"
