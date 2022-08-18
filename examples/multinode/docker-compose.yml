@@ -1,0 +1,61 @@
+services:
+  minio:
+    image: quay.io/minio/minio:RELEASE.2022-08-13T21-54-44Z
+    entrypoint: sh
+    command: -c 'mkdir -p /data/seafowl/ && minio server --console-address ":9001" /data'
+    expose:
+      - "9000"
+      - "9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    volumes:
+      - minio-data:/data
+
+  # Seafowl instance (RW); run with docker compose up --scale seafowl=3 -d seafowl
+  seafowl:
+    build:
+      dockerfile: Dockerfile
+      context: ./seafowl
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "-H",
+          "Content-Type: application/json",
+          "http://localhost:8080/q",
+          "-d",
+          '{"query": "SELECT 1"}',
+        ]
+      interval: 30s
+      timeout: 1s
+      retries: 3
+    deploy:
+      restart_policy:
+        condition: on-failure
+    volumes:
+      - ./configs/seafowl:/etc/seafowl
+
+  catalog:
+    image: postgres:14.5
+    environment:
+      POSTGRES_USER: seafowl
+      POSTGRES_PASSWORD: seafowl
+      POSTGRES_DB: seafowl
+    volumes:
+      - catalog-data:/var/lib/postgresql/data
+
+  nginx:
+    image: nginx:1.23.1
+    ports:
+      - "8080:80"
+    volumes:
+      - ./configs/nginx:/etc/nginx/
+
+volumes:
+  minio-data: {}
+  catalog-data: {}
