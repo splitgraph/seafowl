@@ -1,6 +1,6 @@
 use clap::AppSettings::NoAutoVersion;
 use std::{
-    env, fs,
+    env, fs, io,
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
@@ -18,6 +18,7 @@ use seafowl::{
     },
     context::SeafowlContext,
     frontend::http::run_server,
+    utils::run_one_off_command,
 };
 
 #[cfg(feature = "frontend-postgres")]
@@ -42,6 +43,9 @@ struct Args {
         takes_value = false
     )]
     version: bool,
+
+    #[clap(short, long, help = "Run a one-off command and exit")]
+    one_off: Option<String>,
 }
 
 fn prepare_frontends(
@@ -149,6 +153,11 @@ async fn main() {
     };
 
     let context = Arc::new(build_context(&config).await);
+
+    if let Some(one_off_cmd) = args.one_off {
+        run_one_off_command(context, &one_off_cmd, io::stdout()).await;
+        return;
+    };
 
     let frontends = prepare_frontends(context, &config);
 
