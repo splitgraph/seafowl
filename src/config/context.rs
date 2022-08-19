@@ -18,7 +18,7 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 use crate::repository::postgres::PostgresRepository;
 
 #[cfg(feature = "object-store-s3")]
-use object_store::aws::new_s3;
+use object_store::aws::AmazonS3Builder;
 
 use super::schema::{self, S3};
 
@@ -64,17 +64,16 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             bucket,
         }) => {
             // Use endpoint instead of partition
-            let store = new_s3(
-                Some(access_key_id),
-                Some(secret_access_key),
-                "",
-                bucket,
-                Some(endpoint.clone()),
-                None as Option<&str>,
-                std::num::NonZeroUsize::new(16).unwrap(),
-                true,
-            )
-            .expect("Error creating object store");
+            let store = AmazonS3Builder::new()
+                .with_access_key_id(access_key_id)
+                .with_secret_access_key(secret_access_key)
+                .with_region("")
+                .with_bucket_name(bucket)
+                .with_endpoint(endpoint.clone())
+                .with_token(None as Option<&str>)
+                .with_allow_http(true)
+                .build()
+                .expect("Error creating object store");
             Arc::new(store)
         }
     }

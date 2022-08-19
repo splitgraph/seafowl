@@ -2,7 +2,6 @@
 
 use async_trait::async_trait;
 use base64::decode;
-use bytes::Bytes;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::planner::convert_simple_data_type;
 use std::fs::File;
@@ -26,7 +25,6 @@ use hashbrown::HashMap;
 use hex::encode;
 #[cfg(test)]
 use mockall::automock;
-use object_store::memory::InMemory;
 use object_store::{path::Path, ObjectStore};
 use sha2::Digest;
 use sha2::Sha256;
@@ -34,7 +32,7 @@ use sqlparser::ast::{
     AlterTableOperation, ColumnDef as SQLColumnDef, ColumnOption, Ident, ObjectType,
     Statement, TableFactor, TableWithJoins,
 };
-use std::io::Read;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 
 use std::iter::zip;
 use std::sync::Arc;
@@ -61,6 +59,7 @@ use datafusion::{
     sql::{planner::SqlToRel, TableReference},
 };
 use tempfile::NamedTempFile;
+use tokio::io::AsyncWriteExt;
 
 use crate::catalog::PartitionCatalog;
 use crate::data_types::{TableId, TableVersionId};
@@ -119,38 +118,6 @@ fn compound_identifier_to_column(ids: &[Ident]) -> Result<Column> {
             var_names,
         ))),
     }
-}
-
-/// Load the Statistics for a Parquet file in memory
-async fn get_parquet_file_statistics_bytes(
-    data: Bytes,
-    schema: SchemaRef,
-) -> Result<Statistics> {
-    // DataFusion's methods for this are all private (see fetch_statistics / summarize_min_max)
-    // and require the ObjectStore abstraction since they are normally used in the context
-    // of a TableProvider sending a Range request to object storage to get min/max values
-    // for a Parquet file. We are currently interested in getting statistics for a temporary
-    // file we just wrote out, before uploading it to object storage.
-
-    // A more fancy way to get this working would be making an ObjectStore
-    // that serves as a write-through cache so that we can use it both when downloading and uploading
-    // Parquet files.
-
-    // Create a dummy object store pointing to our temporary directory (we don't know if
-    // DiskManager will always put all files in the same dir)
-    let dummy_object_store: Arc<dyn ObjectStore> = Arc::from(InMemory::new());
-    let dummy_path = Path::from("data");
-    dummy_object_store.put(&dummy_path, data).await.unwrap();
-
-    let parquet = ParquetFormat::default();
-    let meta = dummy_object_store
-        .head(&dummy_path)
-        .await
-        .expect("Temporary object not found");
-    let stats = parquet
-        .infer_stats(&dummy_object_store, schema, &meta)
-        .await?;
-    Ok(stats)
 }
 
 /// Serialize data for the physical partition index from Parquet file statistics
@@ -289,36 +256,54 @@ pub async fn plan_to_object_store(
         let store = store.clone();
         let handle: tokio::task::JoinHandle<Result<SeafowlPartition>> =
             tokio::task::spawn(async move {
-                // TODO: the object_store crate doesn't support multi-part uploads / uploading a file
-                // from a local path. This means we have to read the file back into memory in full.
-                // https://github.com/influxdata/object_store_rs/issues/9
-                //
-                // Another implication is that we could just keep everything in memory (point ArrowWriter to a byte buffer,
-                // call get_parquet_file_statistics on that, upload the file) and run the output routine for each partition
-                // sequentially.
+                // In order to avoid loading the file in memory all at once, we need to stream over
+                // the file twice; first to generate a content-addressable object store filename...
+                // TODO: what is the optimal size of chunk and the BufReader's internal buffer?
+                // By default BufReader will store DEFAULT_BUF_SIZE = 8 * 1024 bytes, so it would
+                // make sense that our chunk is les than that. Do we even want BufReader?
+                let mut reader = BufReader::new(partition_file_handle);
+                let mut chunk: [u8; 4 * 1024] = [0; 4 * 1024];
+                let mut hasher = Sha256::new();
+                loop {
+                    let bytes_read = reader.read(chunk.as_mut_slice())?;
+                    if bytes_read == 0 {
+                        break;
+                    }
+                    hasher.update(&chunk);
+                }
 
-                let mut buf = Vec::new();
-                partition_file_handle
-                    .read_to_end(&mut buf)
-                    .expect("Error reading the temporary file");
-                let data = Bytes::from(buf);
+                let hash_str = encode(hasher.finalize());
+                let object_storage_id = hash_str + ".parquet";
 
-                // Index the Parquet file (get its min-max values)
-                let partition_stats =
-                    get_parquet_file_statistics_bytes(data.clone(), physical.schema())
-                        .await?;
+                // ... and then actually stream the file to the object store
+                let (_, mut writer) = store
+                    .put_multipart(&Path::from(object_storage_id.clone()))
+                    .await
+                    .expect("TODO: handle multipart client error");
+                reader.seek(SeekFrom::Start(0))?;
+                loop {
+                    let bytes_read = reader.read(chunk.as_mut_slice())?;
+                    if bytes_read == 0 {
+                        break;
+                    }
+                    // TODO: call abort_multipart to clean up leftover junk if something goes wrong
+                    writer.write_all(chunk.as_slice()).await?;
+                }
+                writer.shutdown().await?;
 
+                // Next, fetch the object statistics (get its min-max values)
+                let parquet = ParquetFormat::default();
+                let meta = store
+                    .head(&Path::from(object_storage_id.clone()))
+                    .await
+                    .expect("Temporary object not found");
+                let partition_stats = parquet
+                    .infer_stats(&store, physical.schema(), &meta)
+                    .await?;
                 let columns =
                     build_partition_columns(&partition_stats, physical.schema());
 
-                let mut hasher = Sha256::new();
-                hasher.update(&data);
-                let hash_str = encode(hasher.finalize());
-                let object_storage_id = hash_str + ".parquet";
-                store
-                    .put(&Path::from(object_storage_id.clone()), data)
-                    .await?;
-
+                // Finally, create the corresponding partition metadata object
                 let partition = SeafowlPartition {
                     object_storage_id: Arc::from(object_storage_id),
                     row_count: partition_stats
