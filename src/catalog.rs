@@ -42,7 +42,41 @@ pub enum Error {
     DatabaseAlreadyExists { name: String },
     CollectionAlreadyExists { name: String },
     FunctionAlreadyExists { name: String },
+    FunctionDeserializationError { reason: String },
     SqlxError(sqlx::Error),
+}
+
+// TODO janky, we want to:
+//  - use the ? operator to avoid a lot of map_err
+//  - but there are 2 distinct error types, so we have to be able to convert them into a single type
+//  - don't want to impl From<serde_json::Error> for Error  (since serde parse errors
+//    might not just be for FunctionDeserializationError)
+//
+//  Currently, we have a struct that we automatically convert both errors into (storing their messages)
+//  and then use one map_err to make the final Error::FunctionDeserializationError.
+//
+//  - could use Box<dyn Error>?
+//  - should maybe avoid just passing the to_string() of the error reason, but this is for internal
+//    use right now anyway (we made a mistake serializing the function into the DB, it's our fault)
+
+struct CreateFunctionError {
+    message: String,
+}
+
+impl From<strum::ParseError> for CreateFunctionError {
+    fn from(val: strum::ParseError) -> Self {
+        Self {
+            message: val.to_string(),
+        }
+    }
+}
+
+impl From<serde_json::Error> for CreateFunctionError {
+    fn from(val: serde_json::Error) -> Self {
+        Self {
+            message: val.to_string(),
+        }
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -75,6 +109,9 @@ impl From<Error> for DataFusionError {
             // Raised by append_partitions_to_table (partition not created before appending it)
             Error::PartitionDoesNotExist => DataFusionError::Internal(
                 "Error linking partitions: unknown partition ID".to_string(),
+            ),
+            Error::FunctionDeserializationError { reason } => DataFusionError::Internal(
+                format!("Error deserializing function: {:?}", reason),
             ),
 
             // Errors that are the user's fault.
@@ -535,6 +572,34 @@ impl PartitionCatalog for DefaultCatalog {
     }
 }
 
+impl DefaultCatalog {
+    fn parse_create_function_details(
+        item: &AllDatabaseFunctionsResult,
+    ) -> std::result::Result<CreateFunctionDetails, CreateFunctionError> {
+        let AllDatabaseFunctionsResult {
+            id: _,
+            name: _,
+            entrypoint,
+            language,
+            input_types,
+            return_type,
+            data,
+            volatility,
+        } = item;
+
+        Ok(CreateFunctionDetails {
+            entrypoint: entrypoint.to_string(),
+            language: CreateFunctionLanguage::from_str(language.as_str())?,
+            input_types: serde_json::from_str::<Vec<CreateFunctionWASMType>>(
+                input_types,
+            )?,
+            return_type: CreateFunctionWASMType::from_str(return_type.as_str())?,
+            data: data.to_string(),
+            volatility: CreateFunctionVolatility::from_str(volatility.as_str())?,
+        })
+    }
+}
+
 #[async_trait]
 impl FunctionCatalog for DefaultCatalog {
     async fn create_function(
@@ -570,43 +635,19 @@ impl FunctionCatalog for DefaultCatalog {
             .await
             .map_err(Self::to_sqlx_error)?;
 
-        let functions = all_functions
+        all_functions
             .iter()
             .map(|item| {
-                let AllDatabaseFunctionsResult {
-                    id,
-                    name,
-                    entrypoint,
-                    language,
-                    input_types,
-                    return_type,
-                    data,
-                    volatility,
-                } = item;
-
-                let details = CreateFunctionDetails {
-                    entrypoint: entrypoint.clone(),
-                    language: CreateFunctionLanguage::from_str(language.as_str())
-                        .unwrap(),
-                    input_types: serde_json::from_str::<Vec<CreateFunctionWASMType>>(
-                        input_types,
-                    )
-                    .expect("Couldn't deserialize input types!"),
-                    return_type: CreateFunctionWASMType::from_str(return_type.as_str())
-                        .unwrap(),
-                    data: data.clone(),
-                    volatility: CreateFunctionVolatility::from_str(volatility.as_str())
-                        .unwrap(),
-                };
-
-                SeafowlFunction {
-                    function_id: *id,
-                    name: name.clone(),
-                    details,
-                }
+                Self::parse_create_function_details(item)
+                    .map(|details| SeafowlFunction {
+                        function_id: item.id,
+                        name: item.name.to_owned(),
+                        details,
+                    })
+                    .map_err(|e| Error::FunctionDeserializationError {
+                        reason: e.message,
+                    })
             })
-            .collect::<Vec<SeafowlFunction>>();
-
-        Ok(functions)
+            .collect::<Result<Vec<SeafowlFunction>>>()
     }
 }
