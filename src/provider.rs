@@ -131,8 +131,7 @@ impl TableProvider for SeafowlTable {
         let partitions = self
             .catalog
             .load_table_partitions(self.table_version_id)
-            .await
-            .unwrap();
+            .await?;
 
         // This code is partially taken from ListingTable but adapted to use an arbitrary
         // list of Parquet URLs rather than all files in a given directory.
@@ -153,8 +152,7 @@ impl TableProvider for SeafowlTable {
                     range: None,
                 }]) as Result<_>
             }))
-            .await
-            .expect("general error with partitioned file lists");
+            .await?;
 
         let config = FileScanConfig {
             object_store_url,
