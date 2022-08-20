@@ -99,7 +99,7 @@ pub trait Repository: Send + Sync + Debug {
         &self,
         collection_id: CollectionId,
         table_name: &str,
-        schema: Schema,
+        schema: &Schema,
     ) -> Result<(TableId, TableVersionId), Error>;
 
     async fn create_partitions(
@@ -213,7 +213,7 @@ pub mod tests {
         };
 
         let (table_id, table_version_id) = repository
-            .create_table(collection_id, "testtable", schema)
+            .create_table(collection_id, "testtable", &schema)
             .await
             .expect("Error creating table");
 
