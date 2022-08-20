@@ -450,13 +450,15 @@ impl DefaultSeafowlContext {
             .table_catalog
             .get_collection_id_by_name(&self.database, schema_name)
             .await
+            .unwrap()
             .ok_or_else(|| {
                 Error::Plan(format!("Schema {:?} does not exist!", schema_name))
             })?;
         Ok(self
             .table_catalog
             .create_table(collection_id, table_name, &sf_schema)
-            .await)
+            .await
+            .unwrap())
     }
 
     fn register_function(
@@ -546,7 +548,8 @@ impl DefaultSeafowlContext {
                 new_table_version_id = self
                     .table_catalog
                     .create_new_table_version(from_table_version)
-                    .await;
+                    .await
+                    .unwrap();
             }
             _ => {
                 return Err(Error::Internal(
@@ -556,10 +559,15 @@ impl DefaultSeafowlContext {
         }
 
         // Attach the partitions to the table
-        let partition_ids = self.partition_catalog.create_partitions(partitions).await;
+        let partition_ids = self
+            .partition_catalog
+            .create_partitions(partitions)
+            .await
+            .unwrap();
         self.partition_catalog
             .append_partitions_to_table(partition_ids, new_table_version_id)
-            .await;
+            .await
+            .unwrap();
 
         Ok(true)
     }
@@ -572,13 +580,19 @@ impl SeafowlContext for DefaultSeafowlContext {
         // session won't reflect the changes without recreating the context.
         self.inner.register_catalog(
             &self.database,
-            Arc::new(self.table_catalog.load_database(self.database_id).await),
+            Arc::new(
+                self.table_catalog
+                    .load_database(self.database_id)
+                    .await
+                    .unwrap(),
+            ),
         );
 
         // Register all functions in the database
         self.function_catalog
             .get_all_functions_in_database(self.database_id)
             .await
+            .unwrap()
             .iter()
             .try_for_each(|f| self.register_function(&f.name, &f.details))
             .expect("Failed to reload functions");
@@ -915,7 +929,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // Create a schema and register it
                 self.table_catalog
                     .create_collection(self.database_id, schema_name)
-                    .await;
+                    .await
+                    .unwrap();
                 Ok(make_dummy_exec())
             }
             LogicalPlan::CreateCatalog(CreateCatalog {
@@ -950,7 +965,7 @@ impl SeafowlContext for DefaultSeafowlContext {
             }) => {
                 // DROP TABLE
                 let table = self.try_get_seafowl_table(name)?;
-                self.table_catalog.drop_table(table.table_id).await;
+                self.table_catalog.drop_table(table.table_id).await.unwrap();
                 Ok(make_dummy_exec())
             }
             LogicalPlan::CreateView(_) => {
@@ -1044,7 +1059,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                             // Persist the function in the metadata storage
                             self.function_catalog
                                 .create_function(self.database_id, name, details)
-                                .await;
+                                .await
+                                .unwrap();
 
                             Ok(make_dummy_exec())
                         }
@@ -1064,6 +1080,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                         .table_catalog
                                         .get_collection_id_by_name(&self.database, schema)
                                         .await
+                                        .unwrap()
                                         .ok_or_else(|| {
                                             Error::Plan(format!(
                                                 "Schema {:?} does not exist!",
@@ -1084,7 +1101,8 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                             self.table_catalog
                                 .move_table(table.table_id, new_table_name, new_schema_id)
-                                .await;
+                                .await
+                                .unwrap();
 
                             Ok(make_dummy_exec())
                         }
@@ -1093,8 +1111,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 .table_catalog
                                 .get_collection_id_by_name(&self.database, name)
                                 .await
+                                .unwrap()
                             {
-                                self.table_catalog.drop_collection(collection_id).await
+                                self.table_catalog
+                                    .drop_collection(collection_id)
+                                    .await
+                                    .unwrap()
                             };
 
                             Ok(make_dummy_exec())
@@ -1131,6 +1153,7 @@ impl SeafowlContext for DefaultSeafowlContext {
             .table_catalog
             .get_collection_id_by_name(&self.database, &schema_name)
             .await
+            .unwrap()
         {
             Some(_) => {
                 if let Ok(table) =
@@ -1155,7 +1178,8 @@ impl SeafowlContext for DefaultSeafowlContext {
             None => {
                 self.table_catalog
                     .create_collection(self.database_id, &schema_name)
-                    .await;
+                    .await
+                    .unwrap();
             }
         };
 
@@ -1214,8 +1238,11 @@ pub mod test_utils {
         let catalog = Arc::new(DefaultCatalog {
             repository: Arc::new(repository),
         });
-        let default_db = catalog.create_database("default").await;
-        catalog.create_collection(default_db, "public").await;
+        let default_db = catalog.create_database("default").await.unwrap();
+        catalog
+            .create_collection(default_db, "public")
+            .await
+            .unwrap();
 
         let context = DefaultSeafowlContext {
             inner: session,
@@ -1254,11 +1281,11 @@ pub mod test_utils {
             .expect_load_table_partitions()
             .with(predicate::eq(1))
             .returning(|_| {
-                vec![SeafowlPartition {
+                Ok(vec![SeafowlPartition {
                     object_storage_id: Arc::from("some-file.parquet"),
                     row_count: 3,
                     columns: Arc::new(vec![]),
-                }]
+                }])
             });
 
         setup_partition_catalog(&mut partition_catalog);
@@ -1288,18 +1315,22 @@ pub mod test_utils {
         table_catalog
             .expect_load_database()
             .with(predicate::eq(0))
-            .returning(move |_| SeafowlDatabase {
-                name: Arc::from("testdb"),
-                collections: collections.clone(),
+            .returning(move |_| {
+                Ok(SeafowlDatabase {
+                    name: Arc::from("testdb"),
+                    collections: collections.clone(),
+                })
             });
 
         let mut function_catalog = MockFunctionCatalog::new();
         function_catalog
             .expect_create_function()
-            .returning(move |_, _, _| 1);
+            .returning(move |_, _, _| Ok(1));
 
-        session
-            .register_catalog("testdb", Arc::new(table_catalog.load_database(0).await));
+        session.register_catalog(
+            "testdb",
+            Arc::new(table_catalog.load_database(0).await.unwrap()),
+        );
 
         setup_table_catalog(&mut table_catalog);
 
@@ -1708,20 +1739,20 @@ mod tests {
                                 ],)
                             },]
                     })
-                    .return_const(vec![2]);
+                    .return_once(|_| Ok(vec![2]));
 
                 // NB: even though this result isn't consumed by the caller, we need
                 // to return a unit here, otherwise this will fail pretending the
                 // expectation failed.
                 partitions
                     .expect_append_partitions_to_table()
-                    .with(predicate::eq(vec![2]), predicate::eq(1)).return_const(());
+                    .with(predicate::eq(vec![2]), predicate::eq(1)).return_once(|_, _| Ok(()));
             },
             |tables| {
                 tables
                     .expect_create_new_table_version()
                     .with(predicate::eq(0))
-                    .return_const(1);
+                    .return_once(|_| Ok(1));
             },
         )
         .await;
