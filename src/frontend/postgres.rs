@@ -34,8 +34,6 @@ impl Portal for SeafowlPortal {
         {
             record_batch_to_rows(&arrow_batch, batch)?;
         }
-        // Reload the schema after every query
-        self.context.reload_schema().await;
         Ok(())
     }
 }

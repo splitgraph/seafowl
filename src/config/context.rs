@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     catalog::{DefaultCatalog, FunctionCatalog, PartitionCatalog, TableCatalog},
-    context::{DefaultSeafowlContext, SeafowlContext},
+    context::DefaultSeafowlContext,
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
 use datafusion::{
@@ -124,7 +124,8 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
     // query) and per database (since the context is supposed to be limited to the database
     // the user is connected to), but in this case we can just use the same context everywhere, but reload
     // it before we run the query.
-    let context = DefaultSeafowlContext {
+
+    DefaultSeafowlContext {
         inner: context,
         table_catalog: tables,
         partition_catalog: partitions,
@@ -132,15 +133,13 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
         database: "default".to_string(),
         database_id: default_db,
         max_partition_size: cfg.misc.max_partition_size,
-    };
-
-    // Register our database with DataFusion
-    context.reload_schema().await;
-    context
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::context::SeafowlContext;
+
     use super::*;
 
     #[tokio::test]

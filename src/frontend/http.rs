@@ -124,7 +124,6 @@ pub async fn uncached_read_write_query(
     query: String,
     context: Arc<dyn SeafowlContext>,
 ) -> Result<Vec<u8>, ApiError> {
-    context.reload_schema().await;
     let logical = context.create_logical_plan(&query).await?;
 
     if !user_context.can_perform_action(if is_read_only(&logical) {
@@ -196,7 +195,6 @@ pub async fn cached_read_query(
     // Ignore dots at the end
     let query_hash = query_hash.split('.').next().unwrap();
 
-    context.reload_schema().await;
     let hash_str = str_to_hex_hash(&query);
 
     debug!(
@@ -483,7 +481,6 @@ mod tests {
             )
             .await
             .unwrap();
-        context.reload_schema().await;
 
         context
             .collect(
@@ -494,7 +491,6 @@ mod tests {
             )
             .await
             .unwrap();
-        context.reload_schema().await;
         context
     }
 
@@ -509,7 +505,6 @@ mod tests {
             )
             .await
             .unwrap();
-        context.reload_schema().await;
         context
     }
 

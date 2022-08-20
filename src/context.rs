@@ -344,9 +344,6 @@ pub async fn plan_to_object_store(
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait SeafowlContext: Send + Sync {
-    /// Reload the context to apply / pick up new schema changes
-    async fn reload_schema(&self);
-
     /// Create a logical plan for a query
     async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan>;
 
@@ -382,6 +379,29 @@ pub trait SeafowlContext: Send + Sync {
 impl DefaultSeafowlContext {
     pub fn inner(&self) -> &SessionContext {
         &self.inner
+    }
+
+    /// Reload the context to apply / pick up new schema changes
+    async fn reload_schema(&self) -> Result<()> {
+        // DataFusion's table catalog interface is not async, which means that we aren't really
+        // supposed to perform IO when loading a list of tables in a schema / list of schemas.
+        // This means that we need to know what tables we have before planning a query. We hence
+        // load the whole schema for a single database into memory before every query (otherwise
+        // writes applied by a different Seafowl instance won't be visible by us).
+
+        // This does incur a latency cost to every query.
+
+        self.inner.register_catalog(
+            &self.database,
+            Arc::new(self.table_catalog.load_database(self.database_id).await?),
+        );
+
+        // Register all functions in the database
+        self.function_catalog
+            .get_all_functions_in_database(self.database_id)
+            .await?
+            .iter()
+            .try_for_each(|f| self.register_function(&f.name, &f.details))
     }
 
     /// Get a provider for a given table, return Err if it doesn't exist
@@ -449,16 +469,14 @@ impl DefaultSeafowlContext {
         let collection_id = self
             .table_catalog
             .get_collection_id_by_name(&self.database, schema_name)
-            .await
-            .unwrap()
+            .await?
             .ok_or_else(|| {
                 Error::Plan(format!("Schema {:?} does not exist!", schema_name))
             })?;
         Ok(self
             .table_catalog
             .create_table(collection_id, table_name, &sf_schema)
-            .await
-            .unwrap())
+            .await?)
     }
 
     fn register_function(
@@ -548,8 +566,7 @@ impl DefaultSeafowlContext {
                 new_table_version_id = self
                     .table_catalog
                     .create_new_table_version(from_table_version)
-                    .await
-                    .unwrap();
+                    .await?;
             }
             _ => {
                 return Err(Error::Internal(
@@ -575,30 +592,10 @@ impl DefaultSeafowlContext {
 
 #[async_trait]
 impl SeafowlContext for DefaultSeafowlContext {
-    async fn reload_schema(&self) {
-        // TODO: this loads all collection/table names into memory, so creating tables within the same
-        // session won't reflect the changes without recreating the context.
-        self.inner.register_catalog(
-            &self.database,
-            Arc::new(
-                self.table_catalog
-                    .load_database(self.database_id)
-                    .await
-                    .unwrap(),
-            ),
-        );
-
-        // Register all functions in the database
-        self.function_catalog
-            .get_all_functions_in_database(self.database_id)
-            .await
-            .unwrap()
-            .iter()
-            .try_for_each(|f| self.register_function(&f.name, &f.details))
-            .expect("Failed to reload functions");
-    }
-
     async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
+        // Reload the schema before planning a query
+        self.reload_schema().await?;
+
         let mut statements = DFParser::parse_sql(sql)?;
 
         if statements.len() != 1 {
@@ -1246,7 +1243,7 @@ pub mod test_utils {
             .await
             .unwrap();
 
-        let context = DefaultSeafowlContext {
+        DefaultSeafowlContext {
             inner: session,
             table_catalog: catalog.clone(),
             partition_catalog: catalog.clone(),
@@ -1254,9 +1251,7 @@ pub mod test_utils {
             database: "default".to_string(),
             database_id: default_db,
             max_partition_size: 1024 * 1024,
-        };
-        context.reload_schema().await;
-        context
+        }
     }
 
     pub async fn mock_context() -> DefaultSeafowlContext {
@@ -1328,6 +1323,9 @@ pub mod test_utils {
         function_catalog
             .expect_create_function()
             .returning(move |_, _, _| Ok(1));
+        function_catalog
+            .expect_get_all_functions_in_database()
+            .returning(|_| Ok(vec![]));
 
         session.register_catalog(
             "testdb",

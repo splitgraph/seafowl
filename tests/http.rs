@@ -312,8 +312,6 @@ async fn test_upload_base(
     let status = child.wait().await.unwrap();
     dbg!("Upload status is {}", status);
 
-    context.reload_schema().await;
-
     // Verify the newly created table contents
     let plan = context
         .plan_query(format!("SELECT * FROM test_upload.{}", table_name).as_str())
@@ -357,7 +355,6 @@ async fn test_upload_to_existing_table() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
     context
         .collect(
             context
@@ -367,7 +364,6 @@ async fn test_upload_to_existing_table() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     // Prepare the schema that matches the existing table + some data
     let schema = Arc::new(Schema::new(vec![Field::new(
@@ -402,8 +398,6 @@ async fn test_upload_to_existing_table() {
         .unwrap();
     let status = child.wait().await.unwrap();
     dbg!("Upload status is {}", status);
-
-    context.reload_schema().await;
 
     // Verify the newly created table contents
     let plan = context
