@@ -29,15 +29,18 @@ use crate::{
 
 #[derive(Debug)]
 pub enum Error {
-    DatabaseDoesNotExist,
-    CollectionDoesNotExist,
-    TableDoesNotExist,
-    TableVersionDoesNotExist,
+    DatabaseDoesNotExist { id: DatabaseId },
+    CollectionDoesNotExist { id: CollectionId },
+    TableDoesNotExist { id: TableId },
+    TableVersionDoesNotExist { id: TableVersionId },
+    // We were inserting a vector of partitions and can't find which one
+    // caused the error without parsing the error message, so just
+    // pretend we don't know.
     PartitionDoesNotExist,
-    TableAlreadyExists,
-    DatabaseAlreadyExists,
-    CollectionAlreadyExists,
-    FunctionAlreadyExists,
+    TableAlreadyExists { name: String },
+    DatabaseAlreadyExists { name: String },
+    CollectionAlreadyExists { name: String },
+    FunctionAlreadyExists { name: String },
     SqlxError(sqlx::Error),
 }
 
@@ -265,10 +268,12 @@ impl TableCatalog for DefaultCatalog {
             .await
             .map_err(|e| match e {
                 RepositoryError::UniqueConstraintViolation(_) => {
-                    Error::TableAlreadyExists
+                    Error::TableAlreadyExists {
+                        name: table_name.to_string(),
+                    }
                 }
                 RepositoryError::FKConstraintViolation(_) => {
-                    Error::CollectionDoesNotExist
+                    Error::CollectionDoesNotExist { id: collection_id }
                 }
                 RepositoryError::SqlxError(e) => Error::SqlxError(e),
             })
@@ -307,7 +312,9 @@ impl TableCatalog for DefaultCatalog {
             .await
             .map_err(|e| match e {
                 RepositoryError::UniqueConstraintViolation(_) => {
-                    Error::DatabaseAlreadyExists
+                    Error::DatabaseAlreadyExists {
+                        name: database_name.to_string(),
+                    }
                 }
                 _ => Self::to_sqlx_error(e),
             })
@@ -323,7 +330,9 @@ impl TableCatalog for DefaultCatalog {
             .await
             .map_err(|e| match e {
                 RepositoryError::UniqueConstraintViolation(_) => {
-                    Error::CollectionAlreadyExists
+                    Error::CollectionAlreadyExists {
+                        name: collection_name.to_string(),
+                    }
                 }
                 _ => Self::to_sqlx_error(e),
             })
@@ -338,7 +347,7 @@ impl TableCatalog for DefaultCatalog {
             .await
             .map_err(|e| match e {
                 RepositoryError::FKConstraintViolation(_) => {
-                    Error::TableVersionDoesNotExist
+                    Error::TableVersionDoesNotExist { id: from_version }
                 }
                 _ => Self::to_sqlx_error(e),
             })
@@ -355,13 +364,18 @@ impl TableCatalog for DefaultCatalog {
             .await
             .map_err(|e| match e {
                 RepositoryError::FKConstraintViolation(_) => {
-                    Error::CollectionDoesNotExist
+                    // We only FK on collection_id, so this will be Some
+                    Error::CollectionDoesNotExist {
+                        id: new_collection_id.unwrap(),
+                    }
                 }
                 RepositoryError::UniqueConstraintViolation(_) => {
-                    Error::TableAlreadyExists
+                    Error::TableAlreadyExists {
+                        name: new_table_name.to_string(),
+                    }
                 }
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    Error::TableDoesNotExist
+                    Error::TableDoesNotExist { id: table_id }
                 }
                 _ => Self::to_sqlx_error(e),
             })
@@ -373,7 +387,7 @@ impl TableCatalog for DefaultCatalog {
             .await
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    Error::TableDoesNotExist
+                    Error::TableDoesNotExist { id: table_id }
                 }
                 _ => Self::to_sqlx_error(e),
             })
@@ -385,7 +399,7 @@ impl TableCatalog for DefaultCatalog {
             .await
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    Error::CollectionDoesNotExist
+                    Error::CollectionDoesNotExist { id: collection_id }
                 }
                 _ => Self::to_sqlx_error(e),
             })
@@ -397,7 +411,7 @@ impl TableCatalog for DefaultCatalog {
             .await
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    Error::DatabaseDoesNotExist
+                    Error::DatabaseDoesNotExist { id: database_id }
                 }
                 _ => Self::to_sqlx_error(e),
             })
@@ -449,7 +463,9 @@ impl PartitionCatalog for DefaultCatalog {
                     // Kinda janky but we'd prefer to be able to know if the error is because
                     // a table version or a physical partition doesn't exist
                     if se.to_string().contains("table_version_id") {
-                        Error::TableVersionDoesNotExist
+                        Error::TableVersionDoesNotExist {
+                            id: table_version_id,
+                        }
                     } else if se.to_string().contains("physical_partition_id") {
                         Error::PartitionDoesNotExist
                     } else {
@@ -473,10 +489,14 @@ impl FunctionCatalog for DefaultCatalog {
             .create_function(database_id, function_name, details)
             .await
             .map_err(|e| match e {
-                RepositoryError::FKConstraintViolation(_) => Error::DatabaseDoesNotExist,
+                RepositoryError::FKConstraintViolation(_) => {
+                    Error::DatabaseDoesNotExist { id: database_id }
+                }
                 RepositoryError::UniqueConstraintViolation(_) => {
                     // TODO overwrite function defns instead?
-                    Error::FunctionAlreadyExists
+                    Error::FunctionAlreadyExists {
+                        name: function_name.to_string(),
+                    }
                 }
                 _ => Self::to_sqlx_error(e),
             })
