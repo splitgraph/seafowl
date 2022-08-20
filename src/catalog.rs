@@ -55,7 +55,7 @@ pub trait TableCatalog: Sync + Send + Debug {
         &self,
         collection_id: CollectionId,
         table_name: &str,
-        schema: Schema,
+        schema: &Schema,
     ) -> (TableId, TableVersionId);
 
     async fn create_new_table_version(
@@ -233,7 +233,7 @@ impl TableCatalog for DefaultCatalog {
         &self,
         collection_id: CollectionId,
         table_name: &str,
-        schema: Schema,
+        schema: &Schema,
     ) -> (TableId, TableVersionId) {
         self.repository
             .create_table(collection_id, table_name, schema)

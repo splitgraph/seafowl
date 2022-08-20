@@ -177,7 +177,7 @@ impl Repository for $repo {
         &self,
         collection_id: CollectionId,
         table_name: &str,
-        schema: Schema,
+        schema: &Schema,
     ) -> Result<(TableId, TableVersionId), Error> {
         // Create new (empty) table
         let new_table_id: i64 = sqlx::query(

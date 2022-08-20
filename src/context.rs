@@ -455,7 +455,7 @@ impl DefaultSeafowlContext {
             })?;
         Ok(self
             .table_catalog
-            .create_table(collection_id, table_name, sf_schema)
+            .create_table(collection_id, table_name, &sf_schema)
             .await)
     }
 
