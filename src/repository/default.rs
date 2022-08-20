@@ -200,16 +200,18 @@ impl Repository for $repo {
 
         // Create columns
         // TODO this breaks if we have more than (bind limit) columns
-        let mut builder: QueryBuilder<_> =
-            QueryBuilder::new("INSERT INTO table_column(table_version_id, name, type) ");
-        builder.push_values(schema.to_column_names_types(), |mut b, col| {
-            b.push_bind(new_version_id)
-                .push_bind(col.0)
-                .push_bind(col.1);
-        });
+        if !schema.arrow_schema.fields().is_empty() {
+            let mut builder: QueryBuilder<_> =
+                QueryBuilder::new("INSERT INTO table_column(table_version_id, name, type) ");
+            builder.push_values(schema.to_column_names_types(), |mut b, col| {
+                b.push_bind(new_version_id)
+                    .push_bind(col.0)
+                    .push_bind(col.1);
+            });
 
-        let query = builder.build();
-        query.execute(&self.executor).await.map_err($repo::interpret_error)?;
+            let query = builder.build();
+            query.execute(&self.executor).await.map_err($repo::interpret_error)?;
+        }
 
         Ok((new_table_id, new_version_id))
     }
