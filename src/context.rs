@@ -1129,6 +1129,11 @@ impl SeafowlContext for DefaultSeafowlContext {
         schema_name: String,
         table_name: String,
     ) -> Result<bool> {
+        // Reload the schema since `try_get_seafowl_table` relies on using DataFusion's
+        // TableProvider interface (which we need to pre-populate with up to date
+        // information on our tables)
+        self.reload_schema().await?;
+
         // Ensure the schema exists prior to creating the table
         let (full_table_name, from_table_version) = {
             let new_table_name = format!("{}.{}", schema_name, table_name);

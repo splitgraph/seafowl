@@ -289,10 +289,11 @@ pub async fn upload(
             };
 
             // Create an execution plan for yielding the record batches we just generated
-            let execution_plan = Arc::new(
-                MemoryExec::try_new(&[partition], Arc::new(schema.clone()), None)
-                    .unwrap(),
-            );
+            let execution_plan = Arc::new(MemoryExec::try_new(
+                &[partition],
+                Arc::new(schema.clone()),
+                None,
+            )?);
 
             // Execute the plan and persist objects as well as table/partition metadata
             if let Err(error) = context
