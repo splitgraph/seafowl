@@ -2,6 +2,7 @@ use std::str::FromStr;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
+use datafusion::error::DataFusionError;
 use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
@@ -45,6 +46,63 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Implement a global converter into a DataFusionError from the catalog error type.
+/// These might be raised from different parts of query execution and in different contexts,
+/// but we want roughly the same message in each case anyway, so we can take advantage of
+/// the ? operator and automatic error conversion.
+impl From<Error> for DataFusionError {
+    fn from(val: Error) -> Self {
+        match val {
+            // These errors are raised by routines that already take an ID instead of
+            // a database/schema/table name and so the ID is supposed to be valid. An error
+            // in this case is an internal consistency issue.
+            Error::DatabaseDoesNotExist { id } => DataFusionError::Internal(format!(
+                "Database with ID {} doesn't exist",
+                id
+            )),
+            Error::CollectionDoesNotExist { id } => {
+                DataFusionError::Internal(format!("Schema with ID {} doesn't exist", id))
+            }
+            Error::TableDoesNotExist { id } => {
+                DataFusionError::Internal(format!("Table with ID {} doesn't exist", id))
+            }
+            // Raised by append_partitions_to_table and create_new_table_version (non-existent version), also internal issue
+            Error::TableVersionDoesNotExist { id } => DataFusionError::Internal(format!(
+                "Table version with ID {} doesn't exist",
+                id
+            )),
+            // Raised by append_partitions_to_table (partition not created before appending it)
+            Error::PartitionDoesNotExist => DataFusionError::Internal(
+                "Error linking partitions: unknown partition ID".to_string(),
+            ),
+
+            // Errors that are the user's fault.
+
+            // Even though these are "execution" errors, we raise them from the plan stage,
+            // where we manipulate data in the catalog because that's the only chance we get at
+            // being async, so we follow DataFusion's convention and return these as Plan errors.
+            Error::TableAlreadyExists { name } => {
+                DataFusionError::Plan(format!("Table {:?} already exists", name))
+            }
+            Error::DatabaseAlreadyExists { name } => {
+                DataFusionError::Plan(format!("Database {:?} already exists", name))
+            }
+            Error::CollectionAlreadyExists { name } => {
+                DataFusionError::Plan(format!("Schema {:?} already exists", name))
+            }
+            Error::FunctionAlreadyExists { name } => {
+                DataFusionError::Plan(format!("Function {:?} already exists", name))
+            }
+
+            // Miscellaneous sqlx error. We want to log it but it's not worth showing to the user.
+            Error::SqlxError(e) => DataFusionError::Internal(format!(
+                "Internal SQL error: {:?}",
+                e.to_string()
+            )),
+        }
+    }
+}
 
 #[cfg_attr(test, automock)]
 #[async_trait]
