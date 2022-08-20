@@ -299,7 +299,8 @@ async fn test_table_partitioning_and_rechunking() {
     let partitions = context
         .partition_catalog
         .load_table_partitions(3 as TableVersionId)
-        .await;
+        .await
+        .unwrap();
 
     // Ensure we have 2 partitions, originating from 2 INSERTS
     assert_eq!(partitions.len(), 2);
@@ -333,7 +334,8 @@ async fn test_table_partitioning_and_rechunking() {
     let partitions = context
         .partition_catalog
         .load_table_partitions(4 as TableVersionId)
-        .await;
+        .await
+        .unwrap();
 
     // Ensure we have re-chunked the 2 partitions into 1
     assert_eq!(partitions.len(), 1);

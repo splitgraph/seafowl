@@ -94,14 +94,21 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
     let (tables, partitions, functions) = build_catalog(cfg).await;
 
     // Create default DB/collection
-    let default_db = match tables.get_database_id_by_name("default").await {
+    let default_db = match tables.get_database_id_by_name("default").await.unwrap() {
         Some(id) => id,
-        None => tables.create_database("default").await,
+        None => tables.create_database("default").await.unwrap(),
     };
 
-    match tables.get_collection_id_by_name("default", "public").await {
+    match tables
+        .get_collection_id_by_name("default", "public")
+        .await
+        .unwrap()
+    {
         Some(id) => id,
-        None => tables.create_collection(default_db, "public").await,
+        None => tables
+            .create_collection(default_db, "public")
+            .await
+            .unwrap(),
     };
 
     // Register the datafusion catalog (in-memory)

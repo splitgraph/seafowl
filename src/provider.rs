@@ -131,7 +131,8 @@ impl TableProvider for SeafowlTable {
         let partitions = self
             .catalog
             .load_table_partitions(self.table_version_id)
-            .await;
+            .await
+            .unwrap();
 
         // This code is partially taken from ListingTable but adapted to use an arbitrary
         // list of Parquet URLs rather than all files in a given directory.
@@ -298,11 +299,11 @@ mod tests {
             .expect_load_table_partitions()
             .with(predicate::eq(1))
             .returning(|_| {
-                vec![SeafowlPartition {
+                Ok(vec![SeafowlPartition {
                     object_storage_id: Arc::from("some-file.parquet"),
                     row_count: 3,
                     columns: Arc::new(vec![]),
-                }]
+                }])
             });
 
         let table = SeafowlTable {
