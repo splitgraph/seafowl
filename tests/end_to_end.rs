@@ -93,7 +93,6 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
     context.collect(plan).await.unwrap();
 
     // reregister / reload the catalog
-    context.reload_schema().await;
 
     // Insert some data (with some columns missing, different order)
     let plan = context
@@ -110,8 +109,6 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
-
-    context.reload_schema().await;
 }
 
 #[tokio::test]
@@ -158,7 +155,6 @@ async fn test_create_table() {
     context.collect(plan).await.unwrap();
 
     // reregister / reload the catalog
-    context.reload_schema().await;
 
     // Check table columns
     let results = list_columns_query(&context).await;
@@ -254,8 +250,6 @@ async fn test_insert_two_different_schemas() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    context.reload_schema().await;
-
     let plan = context
         .plan_query("SELECT * FROM test_table")
         .await
@@ -323,8 +317,6 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(partitions[1].row_count, 3);
     assert_eq!(partitions[1].columns.len(), 2);
 
-    context.reload_schema().await;
-
     let plan = context
         .plan_query("CREATE TABLE table_rechunked AS SELECT * FROM test_table")
         .await
@@ -350,7 +342,6 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(partitions[0].columns.len(), 5);
 
     // Ensure table contents
-    context.reload_schema().await;
     let plan = context
         .plan_query("SELECT some_value, some_int_value FROM table_rechunked")
         .await
@@ -396,8 +387,6 @@ async fn test_create_table_as() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    context.reload_schema().await;
-
     let plan = context.plan_query("SELECT * FROM test_ctas").await.unwrap();
     let results = context.collect(plan).await.unwrap();
 
@@ -422,8 +411,6 @@ async fn test_create_table_move_and_drop() {
     for table_name in ["test_table_1", "test_table_2"] {
         create_table_and_insert(&context, table_name).await;
     }
-
-    context.reload_schema().await;
 
     let results = list_columns_query(&context).await;
 
@@ -464,7 +451,6 @@ async fn test_create_table_move_and_drop() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -498,7 +484,6 @@ async fn test_create_table_move_and_drop() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     context
         .collect(
@@ -509,7 +494,6 @@ async fn test_create_table_move_and_drop() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -531,7 +515,6 @@ async fn test_create_table_move_and_drop() {
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
-    context.reload_schema().await;
 
     let results = list_columns_query(&context).await;
 
@@ -554,8 +537,6 @@ async fn test_create_table_move_and_drop() {
     let plan = context.plan_query("DROP TABLE test_table_2").await.unwrap();
     context.collect(plan).await.unwrap();
 
-    context.reload_schema().await;
-
     let results = list_columns_query(&context).await;
 
     let expected = vec!["++", "++"];
@@ -571,8 +552,6 @@ async fn test_create_table_drop_schema() {
         create_table_and_insert(&context, table_name).await;
     }
 
-    context.reload_schema().await;
-
     // Create a schema and move the table to it
     context
         .collect(
@@ -583,7 +562,6 @@ async fn test_create_table_drop_schema() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     context
         .collect(
@@ -594,7 +572,6 @@ async fn test_create_table_drop_schema() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -615,7 +592,6 @@ async fn test_create_table_drop_schema() {
         .collect(context.plan_query("DROP SCHEMA public").await.unwrap())
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -635,7 +611,6 @@ async fn test_create_table_drop_schema() {
         .collect(context.plan_query("DROP SCHEMA new_schema").await.unwrap())
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -654,7 +629,6 @@ async fn test_create_table_drop_schema() {
         .collect(context.plan_query("CREATE SCHEMA public").await.unwrap())
         .await
         .unwrap();
-    context.reload_schema().await;
 
     context
         .collect(
@@ -665,7 +639,6 @@ async fn test_create_table_drop_schema() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -701,7 +674,6 @@ async fn test_create_and_reload_function() {
     context.collect(plan).await.unwrap();
 
     // Reload to make sure we picked up the stored function from the metadata store
-    context.reload_schema().await;
 
     let results = context
         .collect(
