@@ -576,15 +576,10 @@ impl DefaultSeafowlContext {
         }
 
         // Attach the partitions to the table
-        let partition_ids = self
-            .partition_catalog
-            .create_partitions(partitions)
-            .await
-            .unwrap();
+        let partition_ids = self.partition_catalog.create_partitions(partitions).await?;
         self.partition_catalog
             .append_partitions_to_table(partition_ids, new_table_version_id)
-            .await
-            .unwrap();
+            .await?;
 
         Ok(true)
     }
@@ -926,8 +921,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // Create a schema and register it
                 self.table_catalog
                     .create_collection(self.database_id, schema_name)
-                    .await
-                    .unwrap();
+                    .await?;
                 Ok(make_dummy_exec())
             }
             LogicalPlan::CreateCatalog(CreateCatalog {
@@ -962,7 +956,7 @@ impl SeafowlContext for DefaultSeafowlContext {
             }) => {
                 // DROP TABLE
                 let table = self.try_get_seafowl_table(name)?;
-                self.table_catalog.drop_table(table.table_id).await.unwrap();
+                self.table_catalog.drop_table(table.table_id).await?;
                 Ok(make_dummy_exec())
             }
             LogicalPlan::CreateView(_) => {
@@ -1056,8 +1050,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                             // Persist the function in the metadata storage
                             self.function_catalog
                                 .create_function(self.database_id, name, details)
-                                .await
-                                .unwrap();
+                                .await?;
 
                             Ok(make_dummy_exec())
                         }
@@ -1076,8 +1069,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     let collection_id = self
                                         .table_catalog
                                         .get_collection_id_by_name(&self.database, schema)
-                                        .await
-                                        .unwrap()
+                                        .await?
                                         .ok_or_else(|| {
                                             Error::Plan(format!(
                                                 "Schema {:?} does not exist!",
@@ -1098,8 +1090,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                             self.table_catalog
                                 .move_table(table.table_id, new_table_name, new_schema_id)
-                                .await
-                                .unwrap();
+                                .await?;
 
                             Ok(make_dummy_exec())
                         }
@@ -1107,13 +1098,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                             if let Some(collection_id) = self
                                 .table_catalog
                                 .get_collection_id_by_name(&self.database, name)
-                                .await
-                                .unwrap()
+                                .await?
                             {
-                                self.table_catalog
-                                    .drop_collection(collection_id)
-                                    .await
-                                    .unwrap()
+                                self.table_catalog.drop_collection(collection_id).await?
                             };
 
                             Ok(make_dummy_exec())
