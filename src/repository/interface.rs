@@ -227,7 +227,9 @@ pub mod tests {
         let new_version_id =
             test_create_append_partition(repository.clone(), table_version_id).await;
         test_create_functions(repository.clone(), database_id).await;
-        test_rename_table(repository, database_id, table_id, new_version_id).await;
+        test_rename_table(repository.clone(), database_id, table_id, new_version_id)
+            .await;
+        test_error_propagation(repository, table_id).await;
     }
 
     async fn test_get_collections_empty(repository: Arc<dyn Repository>) {
@@ -479,5 +481,61 @@ pub mod tests {
                 "testtable2".to_string()
             )
         );
+    }
+
+    async fn test_error_propagation(repository: Arc<dyn Repository>, table_id: TableId) {
+        // Nonexistent table ID
+        assert!(matches!(
+            repository
+                .move_table(-1, "doesntmatter", None)
+                .await
+                .unwrap_err(),
+            Error::SqlxError(sqlx::Error::RowNotFound)
+        ));
+
+        // Existing table ID, moved to a nonexistent collection (FK violation)
+        assert!(matches!(
+            repository
+                .move_table(table_id, "doesntmatter", Some(-1))
+                .await
+                .unwrap_err(),
+            Error::FKConstraintViolation(_)
+        ));
+
+        // Make a new table in the existing collection with the same name
+        let schema = Schema {
+            arrow_schema: Arc::new(ArrowSchema::empty()),
+        };
+
+        let collection_id_1 = repository
+            .get_collection_id_by_name("testdb", "testcol")
+            .await
+            .unwrap();
+        let collection_id_2 = repository
+            .get_collection_id_by_name("testdb", "testcol2")
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            repository
+                .create_table(collection_id_2, "testtable2", &schema)
+                .await
+                .unwrap_err(),
+            Error::UniqueConstraintViolation(_)
+        ));
+
+        // Make a new table in the previous collection, try renaming
+        let (new_table_id, _) = repository
+            .create_table(collection_id_1, "testtable2", &schema)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            repository
+                .move_table(new_table_id, "testtable2", Some(collection_id_2))
+                .await
+                .unwrap_err(),
+            Error::UniqueConstraintViolation(_)
+        ));
     }
 }
