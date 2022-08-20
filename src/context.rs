@@ -1145,41 +1145,43 @@ impl SeafowlContext for DefaultSeafowlContext {
         schema_name: String,
         table_name: String,
     ) -> Result<bool> {
-        let mut full_table_name = Some(format!("{}.{}", schema_name, table_name));
-        let mut from_table_version = None;
-
         // Ensure the schema exists prior to creating the table
-        match self
-            .table_catalog
-            .get_collection_id_by_name(&self.database, &schema_name)
-            .await
-            .unwrap()
-        {
-            Some(_) => {
-                if let Ok(table) =
-                    self.try_get_seafowl_table(full_table_name.clone().unwrap())
-                {
-                    // Table exists, see if the schemas match
-                    if table.schema.arrow_schema != plan.schema() {
-                        return Err(DataFusionError::Execution(
+        let (full_table_name, from_table_version) = {
+            let new_table_name = format!("{}.{}", schema_name, table_name);
+
+            match self
+                .table_catalog
+                .get_collection_id_by_name(&self.database, &schema_name)
+                .await?
+            {
+                Some(_) => {
+                    if let Ok(table) = self.try_get_seafowl_table(&new_table_name) {
+                        // Table exists, see if the schemas match
+                        if table.schema.arrow_schema != plan.schema() {
+                            return Err(DataFusionError::Execution(
                             format!(
                                 "The table {} already exists but has a different schema than the one provided.",
-                                full_table_name.clone().unwrap())
+                                new_table_name)
                             )
                         );
-                    }
+                        }
 
-                    // Instead of creating a new table, just insert the data into a new version
-                    // of an existing table
-                    full_table_name = None;
-                    from_table_version = Some(table.table_version_id);
+                        // Instead of creating a new table, just insert the data into a new version
+                        // of an existing table
+                        (None, Some(table.table_version_id))
+                    } else {
+                        // Table doesn't exist or isn't a Seafowl table
+                        // We assume it doesn't exist for now
+                        (Some(new_table_name), None)
+                    }
                 }
-            }
-            None => {
-                self.table_catalog
-                    .create_collection(self.database_id, &schema_name)
-                    .await
-                    .unwrap();
+                None => {
+                    self.table_catalog
+                        .create_collection(self.database_id, &schema_name)
+                        .await?;
+
+                    (Some(new_table_name), None)
+                }
             }
         };
 
