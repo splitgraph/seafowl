@@ -122,8 +122,8 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
     // Convergence doesn't support connecting to different DB names. We are supposed
     // to do one context per query (as we need to load the schema before executing every
     // query) and per database (since the context is supposed to be limited to the database
-    // the user is connected to), but in this case we can just use the same context everywhere, but reload
-    // it before we run the query.
+    // the user is connected to), but in this case we can just use the same context everywhere
+    // (it will reload its schema before running the query)
 
     DefaultSeafowlContext {
         inner: context,

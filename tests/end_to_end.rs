@@ -92,8 +92,6 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    // reregister / reload the catalog
-
     // Insert some data (with some columns missing, different order)
     let plan = context
         .plan_query(
@@ -153,8 +151,6 @@ async fn test_create_table() {
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
-
-    // reregister / reload the catalog
 
     // Check table columns
     let results = list_columns_query(&context).await;
@@ -655,25 +651,52 @@ async fn test_create_table_drop_schema() {
 }
 
 #[tokio::test]
-async fn test_create_and_reload_function() {
+async fn test_create_table_schema_already_exists() {
     let context = make_context_with_pg().await;
 
-    let plan = context
-        .plan_query(
-            r#"CREATE FUNCTION sintau AS '
-            {
-                "entrypoint": "sintau",
-                "language": "wasm",
-                "input_types": ["f32"],
-                "return_type": "f32",
-                "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
-            }';"#,
+    context
+        .collect(
+            context
+                .plan_query("CREATE TABLE some_table(key INTEGER)")
+                .await
+                .unwrap(),
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
+    let err = context
+        .plan_query("CREATE TABLE some_table(key INTEGER)")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Error during planning: Table \"some_table\" already exists"
+    );
 
-    // Reload to make sure we picked up the stored function from the metadata store
+    let err = context
+        .plan_query("CREATE SCHEMA public")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Error during planning: Schema \"public\" already exists"
+    );
+}
+
+#[tokio::test]
+async fn test_create_and_run_function() {
+    let context = make_context_with_pg().await;
+
+    let function_query = r#"CREATE FUNCTION sintau AS '
+    {
+        "entrypoint": "sintau",
+        "language": "wasm",
+        "input_types": ["f32"],
+        "return_type": "f32",
+        "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
+    }';"#;
+
+    let plan = context.plan_query(function_query).await.unwrap();
+    context.collect(plan).await.unwrap();
 
     let results = context
         .collect(
@@ -702,4 +725,12 @@ async fn test_create_and_reload_function() {
     ];
 
     assert_batches_eq!(expected, &results);
+
+    // Run the same query again to make sure we raise an error if the function already exists
+    let err = context.plan_query(function_query).await.unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "Error during planning: Function \"sintau\" already exists"
+    );
 }
