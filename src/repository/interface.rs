@@ -2,8 +2,6 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 
-use sqlx::Error;
-
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     data_types::{
@@ -46,6 +44,18 @@ pub struct AllDatabaseFunctionsResult {
     pub data: String,
     pub volatility: String,
 }
+
+/// Wrapper for conversion of database-specific error codes into actual errors
+#[derive(Debug)]
+pub enum Error {
+    UniqueConstraintViolation(sqlx::Error),
+    FKConstraintViolation(sqlx::Error),
+
+    // All other errors
+    SqlxError(sqlx::Error),
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[async_trait]
 pub trait Repository: Send + Sync + Debug {

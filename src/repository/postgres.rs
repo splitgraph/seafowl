@@ -5,7 +5,7 @@ use futures::TryStreamExt;
 use sqlx::{
     migrate::{MigrateDatabase, Migrator},
     postgres::PgPoolOptions,
-    Error, Executor, PgPool, Postgres, QueryBuilder, Row,
+    Executor, PgPool, Postgres, QueryBuilder, Row,
 };
 
 use crate::{
@@ -22,7 +22,9 @@ use crate::{
 
 use super::{
     default::RepositoryQueries,
-    interface::{AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Repository},
+    interface::{
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Error, Repository, Result,
+    },
 };
 
 #[derive(Debug)]
@@ -56,7 +58,10 @@ impl PostgresRepository {
         "#,
     };
 
-    pub async fn try_new(dsn: String, schema_name: String) -> Result<Self, Error> {
+    pub async fn try_new(
+        dsn: String,
+        schema_name: String,
+    ) -> std::result::Result<Self, sqlx::Error> {
         if !Postgres::database_exists(&dsn).await? {
             let _ = Postgres::create_database(&dsn).await;
         }
@@ -72,7 +77,10 @@ impl PostgresRepository {
         Ok(repo)
     }
 
-    pub async fn connect(dsn: String, schema_name: String) -> Result<Self, Error> {
+    pub async fn connect(
+        dsn: String,
+        schema_name: String,
+    ) -> std::result::Result<Self, sqlx::Error> {
         let schema_name_2 = schema_name.clone();
 
         let pool = PgPoolOptions::new()
@@ -95,6 +103,20 @@ impl PostgresRepository {
             executor: pool,
             schema_name: schema_name_2,
         })
+    }
+
+    pub fn interpret_error(error: sqlx::Error) -> Error {
+        if let sqlx::Error::Database(ref d) = error {
+            // Reference: https://www.postgresql.org/docs/current/errcodes-appendix.html
+            if let Some(code) = d.code() {
+                if code == "23505" {
+                    return Error::UniqueConstraintViolation(error);
+                } else if code == "23503" {
+                    return Error::FKConstraintViolation(error);
+                }
+            }
+        }
+        Error::SqlxError(error)
     }
 }
 

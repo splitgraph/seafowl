@@ -22,7 +22,7 @@ use crate::{
     },
     repository::interface::{
         AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTablePartitionsResult,
-        Repository,
+        Error as RepositoryError, Repository,
     },
     schema::Schema,
 };
@@ -252,7 +252,7 @@ impl TableCatalog for DefaultCatalog {
             .await
         {
             Ok(id) => Some(id),
-            Err(sqlx::error::Error::RowNotFound) => None,
+            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => None,
             Err(e) => panic!("TODO SQL error: {:?}", e),
         }
     }
@@ -260,7 +260,7 @@ impl TableCatalog for DefaultCatalog {
     async fn get_database_id_by_name(&self, database_name: &str) -> Option<DatabaseId> {
         match self.repository.get_database_id_by_name(database_name).await {
             Ok(id) => Some(id),
-            Err(sqlx::error::Error::RowNotFound) => None,
+            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => None,
             Err(e) => panic!("TODO SQL error: {:?}", e),
         }
     }
