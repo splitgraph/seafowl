@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
+    catalog,
     catalog::{DefaultCatalog, FunctionCatalog, PartitionCatalog, TableCatalog},
     context::DefaultSeafowlContext,
     repository::{interface::Repository, sqlite::SqliteRepository},
@@ -80,7 +81,9 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
     }
 }
 
-pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext {
+pub async fn build_context(
+    cfg: &schema::SeafowlConfig,
+) -> Result<DefaultSeafowlContext, catalog::Error> {
     let session_config = SessionConfig::new()
         .with_information_schema(true)
         .with_default_catalog_and_schema("default", "public");
@@ -94,21 +97,17 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
     let (tables, partitions, functions) = build_catalog(cfg).await;
 
     // Create default DB/collection
-    let default_db = match tables.get_database_id_by_name("default").await.unwrap() {
+    let default_db = match tables.get_database_id_by_name("default").await? {
         Some(id) => id,
         None => tables.create_database("default").await.unwrap(),
     };
 
     match tables
         .get_collection_id_by_name("default", "public")
-        .await
-        .unwrap()
+        .await?
     {
         Some(id) => id,
-        None => tables
-            .create_collection(default_db, "public")
-            .await
-            .unwrap(),
+        None => tables.create_collection(default_db, "public").await?,
     };
 
     // Register the datafusion catalog (in-memory)
@@ -125,7 +124,7 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
     // the user is connected to), but in this case we can just use the same context everywhere
     // (it will reload its schema before running the query)
 
-    DefaultSeafowlContext {
+    Ok(DefaultSeafowlContext {
         inner: context,
         table_catalog: tables,
         partition_catalog: partitions,
@@ -133,7 +132,7 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> DefaultSeafowlContext
         database: "default".to_string(),
         database_id: default_db,
         max_partition_size: cfg.misc.max_partition_size,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -167,7 +166,7 @@ mod tests {
             },
         };
 
-        let context = build_context(&config).await;
+        let context = build_context(&config).await.unwrap();
 
         // Run a query against the context to test it works
         let results = context
