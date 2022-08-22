@@ -56,6 +56,15 @@ pub enum ApiError {
     UselessAccessToken,
     WrongAccessToken,
     InvalidAuthorizationHeader,
+    UploadMissingFile,
+    UploadMissingFilename,
+    UploadMissingFilenameExtension(String),
+    UploadSchemaDeserializationError(serde_json::Error),
+    UploadSchemaParseError(datafusion::arrow::error::ArrowError),
+    UploadFileLoadError(Box<dyn std::error::Error + Send + Sync>),
+    UploadBodyLoadError(warp::Error),
+    UploadHasHeaderParseError,
+    UploadUnsupportedFileFormat(String),
 }
 
 // Wrap DataFusion errors so that we can automagically return an
@@ -70,10 +79,9 @@ impl ApiError {
     fn status_code_body(self: &ApiError) -> (StatusCode, String) {
         match self {
             // TODO: figure out which DF errors to propagate, we have ones that are the server's fault
-            // here too (e.g. ResourcesExhaused) and potentially some that leak internal information
-            // (e.g. ObjectStore?)
+            // here too (e.g. ResourcesExhausted) and potentially some that leak internal
+            // information (e.g. ObjectStore?)
             ApiError::DataFusionError(e) => (StatusCode::BAD_REQUEST, e.to_string()),
-            // Mismatched hash
             ApiError::HashMismatch(expected, got) => (StatusCode::BAD_REQUEST, format!("Invalid hash: expected {0:?}, got {1:?}. Resend your query with {0:?}", expected, got)),
             ApiError::NotReadOnlyQuery => (StatusCode::METHOD_NOT_ALLOWED, "NOT_READ_ONLY_QUERY".to_string()),
             ApiError::ReadOnlyEndpointDisabled => (StatusCode::METHOD_NOT_ALLOWED, "READ_ONLY_ENDPOINT_DISABLED".to_string()),
@@ -82,6 +90,15 @@ impl ApiError {
             ApiError::UselessAccessToken => (StatusCode::BAD_REQUEST, "USELESS_ACCESS_TOKEN".to_string()),
             ApiError::WrongAccessToken => (StatusCode::UNAUTHORIZED, "INVALID_ACCESS_TOKEN".to_string()),
             ApiError::InvalidAuthorizationHeader => (StatusCode::UNAUTHORIZED, "INVALID_AUTHORIZATION_HEADER".to_string()),
+            ApiError::UploadMissingFile => (StatusCode::BAD_REQUEST, "No part containing file found in the request!".to_string()),
+            ApiError::UploadMissingFilename => (StatusCode::BAD_REQUEST, "No filename found in the request!".to_string()),
+            ApiError::UploadMissingFilenameExtension(filename) => (StatusCode::BAD_REQUEST, format!("File {} missing extension", filename)),
+            ApiError::UploadSchemaDeserializationError(e) => (StatusCode::BAD_REQUEST, format!("Error deserializing the file schema: {:}", e)),
+            ApiError::UploadSchemaParseError(e) => (StatusCode::BAD_REQUEST, format!("Error parsing the file schema: {:}", e)),
+            ApiError::UploadBodyLoadError(e) => (StatusCode::BAD_REQUEST, format!("Error loading the upload body: {:}", e)),
+            ApiError::UploadFileLoadError(e) => (StatusCode::BAD_REQUEST, format!("Error loading the upload file: {:}", e)),
+            ApiError::UploadHasHeaderParseError => (StatusCode::BAD_REQUEST, "Invalid has_header".to_string()),
+            ApiError::UploadUnsupportedFileFormat(filename) => (StatusCode::BAD_REQUEST, format!("File {} not supported", filename)),
         }
     }
 

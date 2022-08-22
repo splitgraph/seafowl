@@ -3,6 +3,7 @@ use arrow::datatypes::Schema;
 use arrow::error::ArrowError;
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::ExecutionPlan;
+use std::error::Error;
 use std::io::Cursor;
 use std::{convert::Infallible, net::SocketAddr, sync::Arc};
 use warp::Rejection;
@@ -11,6 +12,7 @@ use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::RecordBatch;
 use bytes::{BufMut, Bytes};
 use datafusion::parquet::arrow::{ArrowReader, ParquetFileArrowReader};
+
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::{
     datasource::DefaultTableSource,
@@ -20,7 +22,7 @@ use futures::{future, TryStreamExt};
 use hex::encode;
 use log::debug;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use warp::multipart::{FormData, Part};
 use warp::reply::Response;
@@ -248,45 +250,55 @@ pub async fn upload(
     if !user_context.can_perform_action(Action::Write) {
         return Err(ApiError::WriteForbidden);
     };
-    let parts: Vec<Part> = form.try_collect().await.unwrap();
+    let parts: Vec<Part> = form
+        .try_collect()
+        .await
+        .map_err(ApiError::UploadBodyLoadError)?;
 
     let mut has_header = true;
     let mut csv_schema: Option<Schema> = None;
     let mut filename = String::new();
     for p in parts {
         if p.name() == "has_header" {
-            let value_bytes = load_part(p).await.unwrap();
+            let value_bytes =
+                load_part(p).await.map_err(ApiError::UploadBodyLoadError)?;
 
-            has_header = String::from_utf8(value_bytes).unwrap().starts_with("true");
+            has_header = String::from_utf8(value_bytes)
+                .map_err(|_| ApiError::UploadHasHeaderParseError)?
+                .starts_with("true");
             debug!("Form part has_header is: {}", has_header);
         } else if p.name() == "schema" && p.content_type() == Some("application/json") {
-            let value_bytes = load_part(p).await.unwrap();
+            let value_bytes =
+                load_part(p).await.map_err(ApiError::UploadBodyLoadError)?;
 
-            let schema_json: Value =
-                serde_json::from_slice(value_bytes.as_slice()).unwrap();
-            csv_schema = Some(Schema::from(&schema_json).unwrap());
+            csv_schema = Some(
+                Schema::from(
+                    &serde_json::from_slice::<serde_json::Value>(value_bytes.as_slice())
+                        .map_err(ApiError::UploadSchemaDeserializationError)?,
+                )
+                .map_err(ApiError::UploadSchemaParseError)?,
+            );
         } else if p.name() == "data" || p.name() == "file" {
-            filename = p.filename().unwrap().to_string();
+            filename = p.filename().ok_or(ApiError::UploadMissingFile)?.to_string();
 
             // Load the file content from the request
             // TODO: we're actually buffering the entire file into memory here which is sub-optimal,
             // since we could be writing the contents of the stream out into a temp file on the disk
             // to have a smaller memory footprint. However, for this to be supported warp first
             // needs to support streaming here: https://github.com/seanmonstar/warp/issues/323
-            let source = load_part(p).await.unwrap();
+            let source = load_part(p).await.map_err(ApiError::UploadBodyLoadError)?;
 
             // Parse the schema and load the file contents into a vector of record batches
-            let (schema, partition) = match filename.split('.').last().unwrap() {
-                "csv" => load_csv_bytes(source, csv_schema.clone(), has_header).unwrap(),
-                "parquet" => load_parquet_bytes(source).unwrap(),
-                _ => {
-                    return Ok(warp::reply::with_status(
-                        format!("File {} not supported", filename),
-                        StatusCode::BAD_REQUEST,
-                    )
-                    .into_response())
-                }
-            };
+            let (schema, partition) =
+                match filename.split('.').last().ok_or_else(|| {
+                    ApiError::UploadMissingFilenameExtension(filename.clone())
+                })? {
+                    "csv" => load_csv_bytes(source, csv_schema.clone(), has_header)
+                        .map_err(|e| ApiError::UploadFileLoadError(e.into()))?,
+                    "parquet" => load_parquet_bytes(source)
+                        .map_err(ApiError::UploadFileLoadError)?,
+                    _ => return Err(ApiError::UploadUnsupportedFileFormat(filename)),
+                };
 
             // Create an execution plan for yielding the record batches we just generated
             let execution_plan = Arc::new(MemoryExec::try_new(
@@ -296,41 +308,26 @@ pub async fn upload(
             )?);
 
             // Execute the plan and persist objects as well as table/partition metadata
-            if let Err(error) = context
+            context
                 .plan_to_table(execution_plan, schema_name.clone(), table_name.clone())
-                .await
-            {
-                return Ok(warp::reply::with_status(
-                    error.to_string(),
-                    StatusCode::BAD_REQUEST,
-                )
-                .into_response());
-            }
+                .await?;
         }
     }
 
     if filename.is_empty() {
-        return Ok(warp::reply::with_status(
-            "No part containing file found in the request!",
-            StatusCode::BAD_REQUEST,
-        )
-        .into_response());
+        return Err(ApiError::UploadMissingFile);
     }
 
     Ok(warp::reply::with_status(Ok("done"), StatusCode::OK).into_response())
 }
 
-async fn load_part(p: Part) -> Result<Vec<u8>, warp::Rejection> {
+async fn load_part(p: Part) -> Result<Vec<u8>, warp::Error> {
     p.stream()
         .try_fold(Vec::new(), |mut vec, data| {
             vec.put(data);
             async move { Ok(vec) }
         })
         .await
-        .map_err(|e| {
-            eprintln!("Error reading part's data: {}", e);
-            warp::reject::reject()
-        })
 }
 
 fn load_csv_bytes(
@@ -349,7 +346,7 @@ fn load_csv_bytes(
     };
 
     let mut cursor = Cursor::new(source);
-    let csv_reader = builder.build(&mut cursor).unwrap();
+    let csv_reader = builder.build(&mut cursor)?;
     let schema = csv_reader.schema().as_ref().clone();
     let partition: Vec<RecordBatch> = csv_reader
         .into_iter()
@@ -358,17 +355,20 @@ fn load_csv_bytes(
     Ok((schema, partition))
 }
 
-fn load_parquet_bytes(source: Vec<u8>) -> Result<(Schema, Vec<RecordBatch>), ArrowError> {
-    let mut parquet_reader =
-        ParquetFileArrowReader::try_new(Bytes::from(source)).unwrap();
+/// Load a Parquet file from a byte vector and returns its schema/batches
+fn load_parquet_bytes(
+    source: Vec<u8>,
+) -> Result<(Schema, Vec<RecordBatch>), Box<dyn Error + Send + Sync>> {
+    // We have to return a boxed error here, since this could return either a
+    // ParquetError or an ArrowError
+    // (could also return an ApiError::UploadFileLoadError with a string?)
+    let mut parquet_reader = ParquetFileArrowReader::try_new(Bytes::from(source))?;
 
-    let schema = parquet_reader.get_schema().unwrap();
+    let schema = parquet_reader.get_schema()?;
 
     let partition: Vec<RecordBatch> = parquet_reader
-        .get_record_reader(1024)
-        .unwrap()
-        .collect::<Result<Vec<RecordBatch>, ArrowError>>(
-    )?;
+        .get_record_reader(1024)?
+        .collect::<Result<Vec<RecordBatch>, ArrowError>>()?;
 
     Ok((schema, partition))
 }
