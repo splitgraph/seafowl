@@ -1,4 +1,5 @@
 use clap::AppSettings::NoAutoVersion;
+use std::process::exit;
 use std::{
     env, fs, io,
     path::{Path, PathBuf},
@@ -20,6 +21,10 @@ use seafowl::{
     frontend::http::run_server,
     utils::run_one_off_command,
 };
+use tokio::signal::ctrl_c;
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::broadcast::{channel, Sender};
+use tokio::task::JoinHandle;
 
 #[cfg(feature = "frontend-postgres")]
 use seafowl::frontend::postgres::run_pg_server;
@@ -51,8 +56,9 @@ struct Args {
 fn prepare_frontends(
     context: Arc<dyn SeafowlContext>,
     config: &SeafowlConfig,
-) -> Vec<Pin<Box<dyn Future<Output = ()>>>> {
-    let mut result: Vec<Pin<Box<dyn Future<Output = ()>>>> = Vec::new();
+    shutdown: &Sender<()>,
+) -> Vec<Pin<Box<dyn Future<Output = ()> + Send>>> {
+    let mut result: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = Vec::new();
 
     #[cfg(feature = "frontend-postgres")]
     if let Some(pg) = &config.frontend.postgres {
@@ -64,11 +70,20 @@ fn prepare_frontends(
         warn!(
             "The PostgreSQL frontend doesn't have authentication or encryption and should only be used in development!"
         );
-        result.push(server.boxed());
+
+        let mut shutdown_r = shutdown.subscribe();
+        result.push(Box::pin(async move {
+            let handle = tokio::spawn(server);
+
+            shutdown_r.recv().await.unwrap();
+            info!("Shutting down the PostgreSQL frontend");
+            handle.abort()
+        }));
     };
 
     if let Some(http) = &config.frontend.http {
-        let server = run_server(context, http.to_owned());
+        let shutdown_r = shutdown.subscribe();
+        let server = run_server(context, http.to_owned(), shutdown_r);
         info!(
             "Starting the HTTP frontend on {}:{}",
             http.bind_host, http.bind_port
@@ -159,11 +174,36 @@ async fn main() {
         return;
     };
 
-    let frontends = prepare_frontends(context, &config);
+    // Ref: https://tokio.rs/tokio/topics/shutdown#waiting-for-things-to-finish-shutting-down
+    let (shutdown, _) = channel(1);
+
+    let frontends = prepare_frontends(context, &config, &shutdown);
 
     if frontends.is_empty() {
-        warn!("No frontends configured. You will not be able to connect to Seafowl.")
+        error!(
+            "No frontends configured. You will not be able to connect to Seafowl.\n
+Run Seafowl with --one-off instead to run a one-off command from the CLI."
+        );
+        exit(-1);
     }
 
-    join_all(frontends).await;
+    // Start all frontends
+    let handles: Vec<JoinHandle<()>> = frontends.into_iter().map(tokio::spawn).collect();
+
+    // Wait for a termination signal
+    let mut sigterm =
+        signal(SignalKind::terminate()).expect("Error subscribing to the SIGTERM signal");
+    tokio::select! {
+        // Ctrl+C: SIGINT on UNIX, termination request on Windows (?)
+        _ = ctrl_c() => {},
+        // SIGTERM on UNIX
+        _ = sigterm.recv() => {},
+
+    }
+    info!("Shutting down...");
+    shutdown.send(()).expect("Error during graceful shutdown");
+
+    // Wait for all other components to stop
+    join_all(handles).await;
+    info!("Exiting cleanly.");
 }

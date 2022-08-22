@@ -20,10 +20,11 @@ use datafusion::{
 };
 use futures::{future, TryStreamExt};
 use hex::encode;
-use log::debug;
+use log::{debug, info};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use tokio::sync::broadcast::Receiver;
 use warp::multipart::{FormData, Part};
 use warp::reply::Response;
 use warp::{hyper::StatusCode, Filter, Reply};
@@ -432,18 +433,26 @@ pub fn filters(
         .recover(handle_rejection)
 }
 
-pub async fn run_server(context: Arc<dyn SeafowlContext>, config: HttpFrontend) {
+pub async fn run_server(
+    context: Arc<dyn SeafowlContext>,
+    config: HttpFrontend,
+    mut shutdown: Receiver<()>,
+) {
     let filters = filters(context, AccessPolicy::from_config(&config));
 
     let socket_addr: SocketAddr = format!("{}:{}", config.bind_host, config.bind_port)
         .parse()
         .expect("Error parsing the listen address");
-    warp::serve(filters).run(socket_addr).await;
+    let (_, future) =
+        warp::serve(filters).bind_with_graceful_shutdown(socket_addr, async move {
+            shutdown.recv().await.unwrap();
+            info!("Shutting down Warp...");
+        });
+    future.await
 }
 
 #[cfg(test)]
 mod tests {
-
     use bytes::Bytes;
 
     use itertools::Itertools;
