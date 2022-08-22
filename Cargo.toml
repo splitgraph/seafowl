@@ -44,7 +44,7 @@ sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "sqlite" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
 tempfile = "3"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal"] }
 url = "2.2"
 warp = "0.3"
 
