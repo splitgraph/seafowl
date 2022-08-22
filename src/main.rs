@@ -152,7 +152,7 @@ async fn main() {
         config
     };
 
-    let context = Arc::new(build_context(&config).await);
+    let context = Arc::new(build_context(&config).await.unwrap());
 
     if let Some(one_off_cmd) = args.one_off {
         run_one_off_command(context, &one_off_cmd, io::stdout()).await;
