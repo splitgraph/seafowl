@@ -459,3 +459,28 @@ async fn test_upload_to_existing_table() {
 
     terminate.send(()).unwrap();
 }
+
+#[tokio::test]
+async fn test_upload_not_writer_authz() {
+    let (addr, server, terminate, _context) = make_read_only_http_server().await;
+
+    tokio::task::spawn(server);
+
+    let output = Command::new("curl")
+        .args(&[
+            "-H",
+            "Authorization: Bearer wrong_password",
+            "-F",
+            "data='doesntmatter'",
+            format!("http://{}/upload/public/test_table", addr).as_str(),
+        ])
+        .output()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        "INVALID_ACCESS_TOKEN".to_string(),
+        String::from_utf8(output.stdout).unwrap()
+    );
+    terminate.send(()).unwrap();
+}
