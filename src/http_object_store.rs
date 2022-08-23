@@ -3,22 +3,22 @@ use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes};
 use chrono::Utc;
 use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures::{stream, Stream, StreamExt};
 use log::warn;
 use object_store::path::Path;
 use object_store::{GetResult, ListResult, ObjectMeta, ObjectStore};
 
+use datafusion::prelude::SessionContext;
+use reqwest::{header, Client, RequestBuilder, StatusCode};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
-use warp::hyper::body::{to_bytes, HttpBody};
-use warp::hyper::client::HttpConnector;
-use warp::hyper::header::CONTENT_LENGTH;
-use warp::hyper::{Body, Client, Method, Request, StatusCode};
+use std::sync::Arc;
 
 #[derive(Debug)]
-struct HttpObjectStore {
-    client: Client<HttpConnector>,
+pub struct HttpObjectStore {
+    client: Client,
+    scheme: String,
 }
 
 impl Display for HttpObjectStore {
@@ -31,13 +31,9 @@ impl Display for HttpObjectStore {
 enum HttpObjectStoreError {
     WritesUnsupported,
     NoContentLengthResponse,
-    HttpError(warp::hyper::Error),
-}
-
-impl From<warp::hyper::Error> for HttpObjectStoreError {
-    fn from(e: warp::hyper::Error) -> Self {
-        Self::HttpError(e)
-    }
+    ListingUnsupported,
+    InvalidRangeError,
+    HttpClientError(reqwest::Error),
 }
 
 impl From<HttpObjectStoreError> for object_store::Error {
@@ -49,6 +45,12 @@ impl From<HttpObjectStoreError> for object_store::Error {
     }
 }
 
+impl From<reqwest::Error> for HttpObjectStoreError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::HttpClientError(e)
+    }
+}
+
 impl Display for HttpObjectStoreError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -56,28 +58,46 @@ impl Display for HttpObjectStoreError {
             Self::NoContentLengthResponse => {
                 writeln!(f, "Server did not respond with a Content-Length header")
             }
-            Self::HttpError(e) => writeln!(f, "HTTP error: {:?}", e),
+            Self::ListingUnsupported => writeln!(f, "HTTP doesn't support listing"),
+            Self::InvalidRangeError => {
+                writeln!(f, "Invalid range passed to the HTTP store")
+            }
+            Self::HttpClientError(e) => writeln!(f, "HTTP error: {:?}", e),
         }
     }
 }
 
 impl Error for HttpObjectStoreError {}
-//
-// impl HttpObjectStore {
-//     pub fn new() -> Self {
-//         Self {
-//             client: Client::new(),
-//         }
-//     }
-// }
 
-async fn range_to_bytes<T, E>(
-    body: T,
+impl HttpObjectStore {
+    pub fn new(scheme: String) -> Self {
+        Self {
+            client: Client::new(),
+            // DataFusion strips the URL scheme when passing it to us (e.g. http://), so we
+            // have to record it in the object in order to reconstruct the actual full URL.
+            scheme,
+        }
+    }
+
+    fn get_uri(&self, path: &Path) -> String {
+        format!("{}://{}", &self.scheme, path)
+    }
+
+    fn request_builder(&self, path: &Path) -> RequestBuilder {
+        self.client.get(self.get_uri(path)).header(
+            "User-Agent",
+            format!("Seafowl/{}", env!("VERGEN_GIT_SEMVER")),
+        )
+    }
+}
+
+async fn range_to_bytes<S, E>(
+    body: S,
     range: &Range<usize>,
-) -> Result<Bytes, warp::hyper::Error>
+) -> Result<Bytes, HttpObjectStoreError>
 where
-    E: Debug,
-    T: HttpBody<Error = E>,
+    E: Into<HttpObjectStoreError>,
+    S: Stream<Item = Result<Bytes, E>>,
 {
     let mut vec = Vec::with_capacity(range.end - range.start);
     let mut body = Box::pin(body);
@@ -86,7 +106,11 @@ where
     let mut pos: usize = 0;
 
     while pos < range.end {
-        let mut buf = body.data().await.unwrap().unwrap();
+        let mut buf = body
+            .next()
+            .await
+            .ok_or(HttpObjectStoreError::InvalidRangeError)?
+            .map_err(|e| e.into())?;
         let buf_len = buf.remaining();
 
         if pos < range.start {
@@ -119,21 +143,16 @@ impl ObjectStore for HttpObjectStore {
     }
 
     async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-        let request = Request::builder().uri(location.to_string()).header(
-            "User-Agent",
-            format!("Seafowl/{}", env!("VERGEN_GIT_SEMVER")),
-        );
-
         let response = self
-            .client
-            .request(request.body(Body::empty()).unwrap())
+            .request_builder(location)
+            .send()
             .await
-            .map_err(HttpObjectStoreError::HttpError)?;
+            .map_err(HttpObjectStoreError::HttpClientError)?;
 
-        let body = response.into_body();
+        let body = response.bytes_stream();
 
         Ok(GetResult::Stream(
-            body.map(|c| c.map_err(|e| HttpObjectStoreError::HttpError(e).into()))
+            body.map(|c| c.map_err(|e| HttpObjectStoreError::HttpClientError(e).into()))
                 .boxed(),
         ))
     }
@@ -143,54 +162,38 @@ impl ObjectStore for HttpObjectStore {
         location: &Path,
         range: Range<usize>,
     ) -> object_store::Result<Bytes> {
-        let request = Request::builder()
-            .uri(location.to_string())
-            .header(
-                "User-Agent",
-                format!("Seafowl/{}", env!("VERGEN_GIT_SEMVER")),
-            )
-            .header("Range", format!("bytes={}-{}", range.start, range.end));
-
         let response = self
-            .client
-            .request(request.body(Body::empty()).unwrap())
+            .request_builder(location)
+            .header("Range", format!("bytes={}-{}", range.start, range.end))
+            .send()
             .await
-            .map_err(HttpObjectStoreError::HttpError)?;
+            .map_err(HttpObjectStoreError::HttpClientError)?;
 
         // If the server returned a 206: it understood our range query
         if response.status() == StatusCode::PARTIAL_CONTENT {
-            Ok(to_bytes(response.into_body())
+            Ok(response
+                .bytes()
                 .await
-                .map_err(HttpObjectStoreError::HttpError)?)
+                .map_err(HttpObjectStoreError::HttpClientError)?)
         } else {
             // Slice the range out ourselves
             warn!(
                 "The server doesn't support Range requests. Complete object downloaded."
             );
-            Ok(range_to_bytes(response.into_body(), &range)
-                .await
-                .map_err(HttpObjectStoreError::HttpError)?)
+            Ok(range_to_bytes(response.bytes_stream(), &range).await?)
         }
     }
 
     async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        let request = Request::builder()
-            .method(Method::HEAD)
-            .uri(location.to_string())
-            .header(
-                "User-Agent",
-                format!("Seafowl/{}", env!("VERGEN_GIT_SEMVER")),
-            );
-
         let response = self
-            .client
-            .request(request.body(Body::empty()).unwrap())
+            .request_builder(location)
+            .send()
             .await
-            .unwrap();
+            .map_err(HttpObjectStoreError::HttpClientError)?;
 
         let length = response
             .headers()
-            .get(CONTENT_LENGTH)
+            .get(header::CONTENT_LENGTH)
             .ok_or(HttpObjectStoreError::NoContentLengthResponse)?
             .to_str()
             .map_err(|_| HttpObjectStoreError::NoContentLengthResponse)?
@@ -215,11 +218,24 @@ impl ObjectStore for HttpObjectStore {
 
     async fn list(
         &self,
-        _prefix: Option<&Path>,
+        prefix: Option<&Path>,
     ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>> {
-        todo!()
-        // DF: If the prefix is a file, use a head request, otherwise list
-        // let is_dir = self.url.as_str().ends_with('/');
+        // DataFusion uses the HEAD request instead of it's listing a single file
+        // (path doesn't end with a slash). Since HTTP doesn't support listing anyway,
+        // this makes our job easier.
+
+        match prefix {
+            None => Err(HttpObjectStoreError::ListingUnsupported.into()),
+            Some(p) => {
+                let p_str = p.to_string();
+                if p_str.ends_with('/') {
+                    Err(HttpObjectStoreError::ListingUnsupported.into())
+                } else {
+                    // Use the HEAD implementation instead
+                    Ok(Box::pin(stream::iter(vec![self.head(p).await])))
+                }
+            }
+        }
     }
 
     async fn list_with_delimiter(
@@ -245,4 +261,18 @@ impl ObjectStore for HttpObjectStore {
             source: Box::new(HttpObjectStoreError::WritesUnsupported),
         })
     }
+}
+
+pub fn add_http_object_store(context: &SessionContext) {
+    context.runtime_env().register_object_store(
+        "http",
+        "anyhost",
+        Arc::new(HttpObjectStore::new("http".to_string())),
+    );
+
+    context.runtime_env().register_object_store(
+        "https",
+        "anyhost",
+        Arc::new(HttpObjectStore::new("https".to_string())),
+    );
 }
