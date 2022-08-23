@@ -870,6 +870,21 @@ impl SeafowlContext for DefaultSeafowlContext {
                 ref table_partition_cols,
                 ref if_not_exists,
             }) => {
+                // HTTP hack
+                let location: String = if location.starts_with("http://") {
+                    format!(
+                        "http://anyhost/{}",
+                        location.strip_prefix("http://").unwrap()
+                    )
+                } else if location.starts_with("https://") {
+                    format!(
+                        "https://anyhost/{}",
+                        location.strip_prefix("https://").unwrap()
+                    )
+                } else {
+                    location.into()
+                };
+
                 let (file_format, file_extension) = match file_type {
                     FileType::CSV => (
                         Arc::new(
@@ -1218,6 +1233,7 @@ pub mod test_utils {
         prelude::SessionConfig,
     };
 
+    use crate::http_object_store::add_http_object_store;
     use std::collections::HashMap as StdHashMap;
 
     use super::*;
@@ -1232,6 +1248,10 @@ pub mod test_utils {
         context
             .runtime_env()
             .register_object_store("seafowl", "", object_store);
+
+        // Register the HTTP object store for external tables
+        add_http_object_store(&context);
+
         context
     }
 

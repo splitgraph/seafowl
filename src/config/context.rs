@@ -18,6 +18,7 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
 
+use crate::http_object_store::add_http_object_store;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::new_s3;
 
@@ -93,6 +94,9 @@ pub async fn build_context(
     context
         .runtime_env()
         .register_object_store("seafowl", "", object_store);
+
+    // Register the HTTP object store for external tables
+    add_http_object_store(&context);
 
     let (tables, partitions, functions) = build_catalog(cfg).await;
 
