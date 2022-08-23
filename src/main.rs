@@ -22,9 +22,9 @@ use seafowl::{
     utils::run_one_off_command,
 };
 use tokio::signal::ctrl_c;
+#[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::broadcast::{channel, Sender};
-use tokio::task::JoinHandle;
 
 #[cfg(feature = "frontend-postgres")]
 use seafowl::frontend::postgres::run_pg_server;
@@ -177,9 +177,9 @@ async fn main() {
     // Ref: https://tokio.rs/tokio/topics/shutdown#waiting-for-things-to-finish-shutting-down
     let (shutdown, _) = channel(1);
 
-    let frontends = prepare_frontends(context, &config, &shutdown);
+    let mut tasks = prepare_frontends(context, &config, &shutdown);
 
-    if frontends.is_empty() {
+    if tasks.is_empty() {
         error!(
             "No frontends configured. You will not be able to connect to Seafowl.\n
 Run Seafowl with --one-off instead to run a one-off command from the CLI."
@@ -187,23 +187,37 @@ Run Seafowl with --one-off instead to run a one-off command from the CLI."
         exit(-1);
     }
 
-    // Start all frontends
-    let handles: Vec<JoinHandle<()>> = frontends.into_iter().map(tokio::spawn).collect();
+    // Add a task that will wait for a termination signal and tell frontends to stop
+    tasks.push(
+        async move {
+            // Wait for a termination signal
+            #[cfg(unix)]
+            {
+                let mut sigterm = signal(SignalKind::terminate())
+                    .expect("Error subscribing to the SIGTERM signal");
+                tokio::select! {
+                    // Ctrl+C: SIGINT
+                    _ = ctrl_c() => {},
+                    // SIGTERM
+                    _ = sigterm.recv() => {},
+                }
+            }
 
-    // Wait for a termination signal
-    let mut sigterm =
-        signal(SignalKind::terminate()).expect("Error subscribing to the SIGTERM signal");
-    tokio::select! {
-        // Ctrl+C: SIGINT on UNIX, termination request on Windows (?)
-        _ = ctrl_c() => {},
-        // SIGTERM on UNIX
-        _ = sigterm.recv() => {},
+            #[cfg(not(unix))]
+            {
+                tokio::select! {
+                    // Ctrl+C: termination request on Windows (?)
+                    _ = ctrl_c() => {},
+                }
+            }
 
-    }
-    info!("Shutting down...");
-    shutdown.send(()).expect("Error during graceful shutdown");
+            info!("Shutting down...");
+            shutdown.send(()).expect("Error during graceful shutdown");
+        }
+        .boxed(),
+    );
 
-    // Wait for all other components to stop
-    join_all(handles).await;
+    // Start everything and wait for it to exit (gracefully or ungracefully)
+    join_all(tasks).await;
     info!("Exiting cleanly.");
 }
