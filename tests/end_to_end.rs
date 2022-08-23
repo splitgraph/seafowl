@@ -33,7 +33,7 @@ schema = "{}""#,
 
     // Ignore the "in-memory object store / persistent catalog" error in e2e tests (we'll discard
     // the PG instance anyway)
-    let config = load_config_from_string(&config_text, true).unwrap();
+    let config = load_config_from_string(&config_text, true, None).unwrap();
     build_context(&config).await.unwrap()
 }
 
