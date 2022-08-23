@@ -1,10 +1,16 @@
 mod http;
 
+use arrow::array::Int32Array;
+use arrow::datatypes::{DataType, Field, Schema};
 use std::env;
 use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
 use datafusion::{assert_batches_eq, assert_contains};
+use datafusion::parquet::arrow::ArrowWriter;
+
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
@@ -775,4 +781,87 @@ async fn test_create_and_run_function() {
         err.to_string(),
         "Error during planning: Function \"sintau\" already exists"
     );
+}
+
+#[tokio::test]
+async fn test_create_external_table_http() {
+    // Make a simple Parquet file
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "col_1",
+        DataType::Int32,
+        true,
+    )]));
+
+    let input_batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )
+    .unwrap();
+
+    let mut buf = Vec::new();
+
+    {
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, None).unwrap();
+        writer.write(&input_batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    let body_length = buf.len();
+
+    // Make a mock server that returns this file
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/some/file.parquet"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_bytes(buf)
+                .append_header(
+                    "Content-Disposition",
+                    "attachment; filename=\"file.parquet\"",
+                )
+                .append_header("Content-Length", body_length.to_string().as_str()),
+        )
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("HEAD"))
+        .and(path("/some/file.parquet"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("Content-Length", body_length.to_string().as_str()),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let url = format!("{}/some/file.parquet", &mock_server.uri());
+
+    let context = make_context_with_pg().await;
+
+    let table_query = format!(
+        "CREATE EXTERNAL TABLE datafusion.public.file
+        STORED AS PARQUET
+        LOCATION '{}'",
+        url
+    );
+
+    let plan = context.plan_query(table_query.as_str()).await.unwrap();
+    context.collect(plan).await.unwrap();
+
+    // Test standard query
+    let plan = context
+        .plan_query("SELECT * FROM datafusion.public.file")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+    let expected = vec![
+        "+-------+",
+        "| col_1 |",
+        "+-------+",
+        "| 1     |",
+        "| 2     |",
+        "| 3     |",
+        "+-------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
 }
