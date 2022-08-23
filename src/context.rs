@@ -363,7 +363,7 @@ pub trait SeafowlContext: Send + Sync {
     /// the query.
     async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// Create a phyiscal plan from a logical plan.
+    /// Create a physical plan from a logical plan.
     /// Note that for some statements like INSERT, this will also execute
     /// the query.
     async fn create_physical_plan(
@@ -838,7 +838,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                 ))),
             },
             DFStatement::DescribeTable(s) => query_planner.describe_table_to_plan(s),
-            // Stub out the standard DataFusion CREATE EXTERNAL TABLE statements since we don't support them
             DFStatement::CreateExternalTable(c) => {
                 query_planner.external_table_to_plan(c)
             }
@@ -857,6 +856,10 @@ impl SeafowlContext for DefaultSeafowlContext {
         // Similarly to DataFrame::sql, run certain logical plans outside of the actual execution flow
         // and produce a dummy physical plan instead
         match plan {
+            // CREATE EXTERNAL TABLE copied from DataFusion's source code
+            // It uses ListingTable which queries data at a given location using the ObjectStore
+            // abstraction (URL: scheme://some-path.to.file.parquet) and it's easier to reuse this
+            // mechanism in our case too.
             LogicalPlan::CreateExternalTable(CreateExternalTable {
                 ref schema,
                 ref name,
