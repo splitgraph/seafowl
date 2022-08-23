@@ -87,6 +87,7 @@ impl Repository for $repo {
         &self,
         table_version_id: TableVersionId,
     ) -> Result<Vec<AllTablePartitionsResult>, Error> {
+        // TODO: fetch null count as well
         let partitions = sqlx::query_as(
             r#"SELECT
             physical_partition.id AS table_partition_id,
@@ -241,6 +242,7 @@ impl Repository for $repo {
             })
             .collect();
 
+        // TODO: insert null_count too
         let mut builder: QueryBuilder<_> =
         QueryBuilder::new("INSERT INTO physical_partition_column(physical_partition_id, name, type, min_value, max_value) ");
         builder.push_values(columns, |mut b, (rid, c)| {

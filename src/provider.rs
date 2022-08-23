@@ -1,7 +1,11 @@
+use arrow::array::ArrayRef;
+use std::ops::Deref;
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 
+use datafusion::common::Column;
+use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::{
     arrow::datatypes::SchemaRef as ArrowSchemaRef,
     catalog::{catalog::CatalogProvider, schema::SchemaProvider},
@@ -23,6 +27,7 @@ use datafusion::{
 };
 
 use futures::future;
+use log::debug;
 
 use object_store::path::Path;
 
@@ -89,6 +94,7 @@ pub struct PartitionColumn {
     pub r#type: Arc<str>,
     pub min_value: Arc<Option<Vec<u8>>>,
     pub max_value: Arc<Option<Vec<u8>>>,
+    pub null_count: Option<i128>,
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +111,45 @@ pub struct SeafowlTable {
     // load the partitions somewhere in the SchemaProvider because none of the functions
     // there are async.
     pub catalog: Arc<dyn PartitionCatalog>,
+}
+
+impl SeafowlTable {
+    // Prune away partitions that are refuted by the provided filter expressions
+    async fn prune(&self, partitions: &mut Vec<SeafowlPartition>, filters: &[Expr]) {
+        let stats = SeafowlPartitionStatistics::from_partitions(partitions.deref());
+
+        let mut partition_mask = vec![true; partitions.len()];
+
+        for expr in filters {
+            match PruningPredicate::try_new(expr.clone(), self.schema()) {
+                Ok(predicate) => match predicate.prune(&stats) {
+                    Ok(expr_mask) => {
+                        partition_mask = partition_mask
+                            .iter()
+                            .zip(expr_mask)
+                            .map(|(&a, b)| a || b)
+                            .collect()
+                    }
+                    Err(error) => {
+                        debug!(
+                            "Failed pruning the partitions for expr {:?}: {}",
+                            expr, error
+                        );
+                        return;
+                    }
+                },
+                Err(error) => {
+                    debug!(
+                        "Failed constructing a pruning predicate for expr {:?}: {}",
+                        expr, error
+                    );
+                    return;
+                }
+            }
+        }
+
+        partitions.retain(|_| *partition_mask.iter().next().unwrap());
+    }
 }
 
 #[async_trait]
@@ -128,10 +173,13 @@ impl TableProvider for SeafowlTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        let partitions = self
+        let mut partitions = self
             .catalog
             .load_table_partitions(self.table_version_id)
             .await;
+
+        // Try to prune away redundant partitions
+        self.prune(&mut partitions, filters).await;
 
         // This code is partially taken from ListingTable but adapted to use an arbitrary
         // list of Parquet URLs rather than all files in a given directory.
@@ -141,10 +189,9 @@ impl TableProvider for SeafowlTable {
         let store = ctx.runtime_env.object_store(object_store_url.clone())?;
 
         // Build a list of lists of PartitionedFile groups (one file = one partition for the scan)
-        // TODO: use filters and apply them to partitions here (grab the code from list_files_for_scan)
         let partitioned_file_lists: Vec<Vec<PartitionedFile>> =
-            future::try_join_all(partitions.iter().map(|r| async {
-                let path = Path::parse(&r.object_storage_id)?;
+            future::try_join_all(partitions.iter().map(|p| async {
+                let path = Path::parse(&p.object_storage_id)?;
                 let meta = store.head(&path).await?;
                 Ok(vec![PartitionedFile {
                     object_meta: meta,
@@ -172,6 +219,56 @@ impl TableProvider for SeafowlTable {
             partitions: Arc::new(partitions),
             inner: plan,
         }))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeafowlPartitionStatistics {
+    pub partition_count: i32,
+    pub column_statistics: HashMap<String, SeafowlPartitionColumnStatistics>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeafowlPartitionColumnStatistics {
+    pub min_values: Option<ArrayRef>,
+    pub max_values: Option<ArrayRef>,
+    pub null_counts: Option<ArrayRef>,
+}
+
+impl SeafowlPartitionStatistics {
+    fn from_partitions(_partitions: &Vec<SeafowlPartition>) -> Self {
+        // TODO: actually construct the stats from partitions
+        Self {
+            partition_count: 0,
+            column_statistics: HashMap::new(),
+        }
+    }
+}
+
+impl PruningStatistics for SeafowlPartitionStatistics {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        match self.column_statistics.get(column.name.as_str()) {
+            Some(stats) => stats.min_values.clone(),
+            None => None,
+        }
+    }
+
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        match self.column_statistics.get(column.name.as_str()) {
+            Some(stats) => stats.max_values.clone(),
+            None => None,
+        }
+    }
+
+    fn num_containers(&self) -> usize {
+        self.partition_count as usize
+    }
+
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        match self.column_statistics.get(column.name.as_str()) {
+            Some(stats) => stats.null_counts.clone(),
+            None => None,
+        }
     }
 }
 

@@ -158,10 +158,12 @@ fn build_partition_columns(
     partition_stats: &Statistics,
     schema: SchemaRef,
 ) -> Vec<PartitionColumn> {
-    // TODO PhysicalPartitionColumn might not be the right data structure here (lacks ID etc)
+    // TODO PartitionColumn might not be the right data structure here (lacks ID etc)
     match &partition_stats.column_statistics {
         Some(column_statistics) => zip(column_statistics, schema.fields())
             .map(|(stats, column)| {
+                // TODO: the to_string will discard the timezone for Timestamp* values, and will
+                // therefore hinder the ability to recreate them once needed for partition pruning
                 let min_value = stats
                     .min_value
                     .as_ref()
@@ -176,6 +178,7 @@ fn build_partition_columns(
                     r#type: Arc::from(column.data_type().to_json().to_string()),
                     min_value: Arc::new(min_value),
                     max_value: Arc::new(max_value),
+                    null_count: stats.null_count.map(|nc| nc as i128),
                 }
             })
             .collect(),
@@ -187,6 +190,7 @@ fn build_partition_columns(
                 r#type: Arc::from(column.data_type().to_json().to_string()),
                 min_value: Arc::new(None),
                 max_value: Arc::new(None),
+                null_count: None,
             })
             .collect(),
     }
@@ -776,8 +780,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                     table_name,
                     selection,
                 } => {
-                    // Same as Update but we just filter out the selection
-                    let table_schema: DFSchema = DFSchema::empty();
+                    // Get the actual table schema, since DF needs to validate unqualified columns
+                    // (i.e. ones referenced only by column name, lacking the relation name)
+                    let table_name = table_name.to_string();
+                    let seafowl_table = self.try_get_seafowl_table(&table_name)?;
+                    let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
 
                     let selection_expr = match selection {
                         None => None,
