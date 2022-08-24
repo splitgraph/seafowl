@@ -20,6 +20,7 @@ use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::{CreateExternalTable, DFField, DropTable, Expr, FileType};
 
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
+use crate::object_store::http::try_prepare_http_url;
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
@@ -881,20 +882,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                 ref table_partition_cols,
                 ref if_not_exists,
             }) => {
-                // HTTP hack
-                let location: String = if location.starts_with("http://") {
-                    format!(
-                        "http://anyhost/{}",
-                        location.strip_prefix("http://").unwrap()
-                    )
-                } else if location.starts_with("https://") {
-                    format!(
-                        "https://anyhost/{}",
-                        location.strip_prefix("https://").unwrap()
-                    )
-                } else {
-                    location.into()
-                };
+                let location =
+                    try_prepare_http_url(location).unwrap_or_else(|| location.into());
 
                 let (file_format, file_extension) = match file_type {
                     FileType::CSV => (
@@ -1233,6 +1222,7 @@ pub mod test_utils {
             DefaultCatalog, MockFunctionCatalog, MockPartitionCatalog, MockTableCatalog,
             TableCatalog,
         },
+        object_store::http::add_http_object_store,
         provider::{SeafowlCollection, SeafowlDatabase},
         repository::sqlite::SqliteRepository,
     };
@@ -1244,7 +1234,6 @@ pub mod test_utils {
         prelude::SessionConfig,
     };
 
-    use crate::http_object_store::add_http_object_store;
     use std::collections::HashMap as StdHashMap;
 
     use super::*;

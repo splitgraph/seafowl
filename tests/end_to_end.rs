@@ -1,7 +1,3 @@
-mod http;
-
-use arrow::array::Int32Array;
-use arrow::datatypes::{DataType, Field, Schema};
 use std::env;
 use std::sync::Arc;
 
@@ -18,6 +14,11 @@ use seafowl::context::DefaultSeafowlContext;
 use seafowl::context::SeafowlContext;
 use seafowl::data_types::TableVersionId;
 use seafowl::repository::postgres::testutils::get_random_schema;
+
+// Hack because integration tests do not set cfg(test)
+// https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
+#[path = "../src/object_store/testutils.rs"]
+mod http_testutils;
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
@@ -785,54 +786,35 @@ async fn test_create_and_run_function() {
 
 #[tokio::test]
 async fn test_create_external_table_http() {
-    // Make a simple Parquet file
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "col_1",
-        DataType::Int32,
-        true,
-    )]));
+    /*
+    Test CREATE EXTERNAL TABLE works with an HTTP mock server.
 
-    let input_batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-    )
-    .unwrap();
+    This also works with https + actual S3 (tested manually), even though it sends a bunch of small Range requests,
+    so it's not suitable for anything but ingestion (need batch coalescing)
 
-    let mut buf = Vec::new();
+    SELECT * FROM datafusion.public.supply_chains LIMIT 1 results in:
 
-    {
-        let mut writer = ArrowWriter::try_new(&mut buf, schema, None).unwrap();
-        writer.write(&input_batch).unwrap();
-        writer.close().unwrap();
-    }
+    bytes_scanned{filename=seafowl-public.s3.eu-west-1.amazonaws.com/tutorial/trase-supply-chains.parquet}=232699
 
-    let body_length = buf.len();
+    2022-08-23T19:00:58.240Z DEBUG hyper::proto::h1::io                            > flushed 171 bytes
+    2022-08-23T19:00:58.283Z DEBUG hyper::proto::h1::io                            > parsed 10 headers
+    2022-08-23T19:00:58.283Z DEBUG hyper::proto::h1::conn                          > incoming body is content-length (83 bytes)
+    2022-08-23T19:00:58.283Z DEBUG hyper::proto::h1::conn                          > incoming body completed
+    2022-08-23T19:00:58.284Z DEBUG hyper::client::pool                             > pooling idle connection for ("https", seafowl-public.s3.eu-west-1.amazonaws.com)
+    2022-08-23T19:00:58.285Z DEBUG reqwest::async_impl::client                     > response '206 Partial Content' for https://seafowl-public.s3.eu-west-1.amazonaws.com/tutorial/trase-supply-chains.parquet
+    2022-08-23T19:00:58.285Z DEBUG hyper::client::pool                             > reuse idle connection for ("https", seafowl-public.s3.eu-west-1.amazonaws.com)
+    2022-08-23T19:00:58.286Z DEBUG hyper::proto::h1::io                            > flushed 171 bytes
+    2022-08-23T19:00:58.329Z DEBUG hyper::proto::h1::io                            > parsed 10 headers
+    2022-08-23T19:00:58.329Z DEBUG hyper::proto::h1::conn                          > incoming body is content-length (98 bytes)
+    2022-08-23T19:00:58.329Z DEBUG hyper::proto::h1::conn                          > incoming body completed
+    2022-08-23T19:00:58.329Z DEBUG hyper::client::pool                             > pooling idle connection for ("https", seafowl-public.s3.eu-west-1.amazonaws.com)
+    2022-08-23T19:00:58.329Z DEBUG reqwest::async_impl::client                     > response '206 Partial Content' for https://seafowl-public.s3.eu-west-1.amazonaws.com/tutorial/trase-supply-chains.parquet
+    2022-08-23T19:00:58.508Z INFO  seafowl::frontend::http                         > 127.0.0.1:59574 "POST /q HTTP/1.1" 200 "-" "curl/7.68.0" 4.063829991s
+    2022-08-23T19:00:58.509Z DEBUG hyper::proto::h1::io                            > flushed 4541 bytes
+    2022-08-23T19:00:58.509Z DEBUG hyper::proto::h1::conn                          > read eof
+    */
 
-    // Make a mock server that returns this file
-    let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/some/file.parquet"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_bytes(buf)
-                .append_header(
-                    "Content-Disposition",
-                    "attachment; filename=\"file.parquet\"",
-                )
-                .append_header("Content-Length", body_length.to_string().as_str()),
-        )
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("HEAD"))
-        .and(path("/some/file.parquet"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .append_header("Content-Length", body_length.to_string().as_str()),
-        )
-        .mount(&mock_server)
-        .await;
-
+    let (mock_server, _) = http_testutils::make_mock_parquet_server(true).await;
     let url = format!("{}/some/file.parquet", &mock_server.uri());
 
     let context = make_context_with_pg().await;

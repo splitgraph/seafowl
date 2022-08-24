@@ -18,7 +18,7 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
 
-use crate::http_object_store::add_http_object_store;
+use crate::object_store::http::add_http_object_store;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::new_s3;
 
