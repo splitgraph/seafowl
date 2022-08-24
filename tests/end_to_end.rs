@@ -730,6 +730,40 @@ async fn test_create_table_schema_already_exists() {
 }
 
 #[tokio::test]
+async fn test_create_table_in_staging_schema() {
+    let context = make_context_with_pg().await;
+    context
+        .collect(
+            context
+                .plan_query("CREATE TABLE some_table(key INTEGER)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let expected_err = "Error during planning: The staging schema can only be referenced via CREATE EXTERNAL TABLE";
+
+    let err = context
+        .plan_query("CREATE TABLE staging.some_table(key INTEGER)")
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.to_string(), expected_err,);
+
+    let err = context.plan_query("DROP SCHEMA staging").await.unwrap_err();
+
+    assert_eq!(err.to_string(), expected_err,);
+
+    let err = context
+        .plan_query("ALTER TABLE some_table RENAME TO staging.some_table")
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.to_string(), expected_err,);
+}
+
+#[tokio::test]
 async fn test_create_and_run_function() {
     let context = make_context_with_pg().await;
 
@@ -888,7 +922,6 @@ async fn test_create_external_table_http() {
         )
         .await
         .unwrap_err();
-    dbg!(&err);
     assert!(err
         .to_string()
         .contains("Invalid URL scheme for location \"seafowl://file\""));
@@ -901,7 +934,6 @@ async fn test_create_external_table_http() {
         )
         .await
         .unwrap_err();
-    dbg!(&err);
     assert!(err
         .to_string()
         .contains("No suitable object store found for seafowl://file"));
