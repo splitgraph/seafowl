@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     catalog,
     catalog::{DefaultCatalog, FunctionCatalog, PartitionCatalog, TableCatalog},
-    context::DefaultSeafowlContext,
+    context::{DefaultSeafowlContext, INTERNAL_OBJECT_STORE_SCHEME},
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
 use datafusion::{
@@ -91,9 +91,11 @@ pub async fn build_context(
     let context = SessionContext::with_config(session_config);
 
     let object_store = build_object_store(cfg);
-    context
-        .runtime_env()
-        .register_object_store("seafowl", "", object_store);
+    context.runtime_env().register_object_store(
+        INTERNAL_OBJECT_STORE_SCHEME,
+        "",
+        object_store,
+    );
 
     // Register the HTTP object store for external tables
     add_http_object_store(&context);
