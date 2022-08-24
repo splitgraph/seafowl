@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use base64::decode;
 use bytes::Bytes;
 use datafusion::datasource::TableProvider;
-use datafusion::sql::planner::convert_simple_data_type;
+
 use std::fs::File;
 
 use datafusion::datasource::file_format::avro::{AvroFormat, DEFAULT_AVRO_EXTENSION};
@@ -20,6 +20,9 @@ use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::{CreateExternalTable, DFField, DropTable, Expr, FileType};
 
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
+use crate::datafusion::utils::{
+    build_schema, compound_identifier_to_column, normalize_ident,
+};
 use crate::object_store::http::try_prepare_http_url;
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
@@ -32,8 +35,7 @@ use object_store::{path::Path, ObjectStore};
 use sha2::Digest;
 use sha2::Sha256;
 use sqlparser::ast::{
-    AlterTableOperation, ColumnDef as SQLColumnDef, ColumnOption, Ident, ObjectType,
-    Statement, TableFactor, TableWithJoins,
+    AlterTableOperation, ObjectType, Statement, TableFactor, TableWithJoins,
 };
 use std::io::Read;
 
@@ -43,7 +45,7 @@ use std::sync::Arc;
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::{
     arrow::{
-        datatypes::{Field, Schema, SchemaRef},
+        datatypes::{Schema, SchemaRef},
         record_batch::RecordBatch,
     },
     datasource::file_format::{parquet::ParquetFormat, FileFormat},
@@ -81,53 +83,6 @@ pub const INTERNAL_OBJECT_STORE_SCHEME: &str = "seafowl";
 
 pub fn internal_object_store_url() -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME)).unwrap()
-}
-
-// Copied from datafusion::sql::utils (private)
-
-// Normalize an identifier to a lowercase string unless the identifier is quoted.
-fn normalize_ident(id: &Ident) -> String {
-    match id.quote_style {
-        Some(_) => id.value.clone(),
-        None => id.value.to_ascii_lowercase(),
-    }
-}
-
-// Copied from SqlRel (private there)
-fn build_schema(columns: Vec<SQLColumnDef>) -> Result<Schema> {
-    let mut fields = Vec::with_capacity(columns.len());
-
-    for column in columns {
-        let data_type = convert_simple_data_type(&column.data_type)?;
-        let allow_null = column
-            .options
-            .iter()
-            .any(|x| x.option == ColumnOption::Null);
-        fields.push(Field::new(
-            &normalize_ident(&column.name),
-            data_type,
-            allow_null,
-        ));
-    }
-
-    Ok(Schema::new(fields))
-}
-
-/// End copied functions
-
-fn compound_identifier_to_column(ids: &[Ident]) -> Result<Column> {
-    // OK, this one is partially taken from the planner for SQLExpr::CompoundIdentifier
-    let mut var_names: Vec<_> = ids.iter().map(normalize_ident).collect();
-    match (var_names.pop(), var_names.pop()) {
-        (Some(name), Some(relation)) if var_names.is_empty() => Ok(Column {
-            relation: Some(relation),
-            name,
-        }),
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported compound identifier '{:?}'",
-            var_names,
-        ))),
-    }
 }
 
 /// Load the Statistics for a Parquet file in memory
@@ -1397,7 +1352,7 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use arrow::array::Int32Array;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use std::sync::Arc;
 
     use datafusion::execution::disk_manager::DiskManagerConfig;
