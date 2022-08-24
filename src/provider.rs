@@ -83,14 +83,14 @@ impl SchemaProvider for SeafowlCollection {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SeafowlPartition {
     pub object_storage_id: Arc<str>,
     pub row_count: i32,
     pub columns: Arc<Vec<PartitionColumn>>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartitionColumn {
     pub name: Arc<str>,
     pub r#type: Arc<str>,
@@ -113,58 +113,6 @@ pub struct SeafowlTable {
     // load the partitions somewhere in the SchemaProvider because none of the functions
     // there are async.
     pub catalog: Arc<dyn PartitionCatalog>,
-}
-
-impl SeafowlTable {
-    // Prune away partitions that are refuted by the provided filter expressions
-    async fn prune(&self, partitions: &mut Vec<SeafowlPartition>, filters: &[Expr]) {
-        let stats = match SeafowlPartitionStatistics::from_partitions(
-            partitions.deref(),
-            self.schema(),
-        ) {
-            Ok(stats) => stats,
-            Err(error) => {
-                warn!(
-                    "Failed constructing statistics for table {} (version: {}): {}",
-                    self.name, self.table_version_id, error
-                );
-                return;
-            }
-        };
-
-        let mut partition_mask = vec![true; partitions.len()];
-
-        for expr in filters {
-            match PruningPredicate::try_new(expr.clone(), self.schema()) {
-                Ok(predicate) => match predicate.prune(&stats) {
-                    Ok(expr_mask) => {
-                        partition_mask = partition_mask
-                            .iter()
-                            .zip(expr_mask)
-                            .map(|(&a, b)| a || b)
-                            .collect()
-                    }
-                    Err(error) => {
-                        warn!(
-                            "Failed pruning the partitions for expr {:?}: {}",
-                            expr, error
-                        );
-                        return;
-                    }
-                },
-                Err(error) => {
-                    warn!(
-                        "Failed constructing a pruning predicate for expr {:?}: {}",
-                        expr, error
-                    );
-                    return;
-                }
-            }
-        }
-
-        let mut iter = partition_mask.iter();
-        partitions.retain(|_| *iter.next().unwrap());
-    }
 }
 
 #[async_trait]
@@ -193,9 +141,20 @@ impl TableProvider for SeafowlTable {
             .load_table_partitions(self.table_version_id)
             .await;
 
+        // Try to prune away redundant partitions
         if !filters.is_empty() {
-            // Try to prune away redundant partitions
-            self.prune(&mut partitions, filters).await;
+            match SeafowlPruningStatistics::from_partitions(
+                partitions.clone(),
+                self.schema(),
+            ) {
+                Ok(pruning_stats) => partitions = pruning_stats.prune(filters).await,
+                Err(error) => {
+                    warn!(
+                        "Failed constructing pruning statistics for table {} (version: {}): {}",
+                        self.name, self.table_version_id, error
+                    )
+                }
+            };
         }
 
         // This code is partially taken from ListingTable but adapted to use an arbitrary
@@ -240,17 +199,19 @@ impl TableProvider for SeafowlTable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SeafowlPartitionStatistics {
+pub struct SeafowlPruningStatistics {
     pub partition_count: usize,
+    pub schema: SchemaRef,
+    pub partitions: Arc<Vec<SeafowlPartition>>,
     pub min_values: HashMap<String, Vec<ScalarValue>>,
     pub max_values: HashMap<String, Vec<ScalarValue>>,
     pub null_counts: HashMap<String, Vec<Option<u64>>>,
 }
 
-impl SeafowlPartitionStatistics {
-    // Generate a map of min/max/null stats per column, parsing the serialized values stored in partitions
+impl SeafowlPruningStatistics {
+    // Generate maps of min/max/null stats per column, parsing the serialized values stored in partitions
     fn from_partitions(
-        partitions: &Vec<SeafowlPartition>,
+        partitions: Vec<SeafowlPartition>,
         schema: SchemaRef,
     ) -> Result<Self> {
         let partition_count = partitions.len();
@@ -288,12 +249,15 @@ impl SeafowlPartitionStatistics {
 
         Ok(Self {
             partition_count,
+            schema,
+            partitions: Arc::new(partitions),
             min_values,
             max_values,
             null_counts,
         })
     }
 
+    // Try to deserialize min/max statistics stored as raw bytes
     fn parse_bytes_value(
         bytes_value: &Arc<Option<Vec<u8>>>,
         data_type: &DataType,
@@ -309,27 +273,75 @@ impl SeafowlPartitionStatistics {
             None => Ok(ScalarValue::Utf8(None)),
         }
     }
-}
 
-impl PruningStatistics for SeafowlPartitionStatistics {
-    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        match self.min_values.get(column.name.as_str()) {
-            Some(stats) => match ScalarValue::iter_to_array(stats.clone().into_iter()) {
-                Ok(array) => Some(array),
-                Err(_) => None,
-            },
+    // Prune away partitions that are refuted by the provided filter expressions
+    async fn prune(&self, filters: &[Expr]) -> Vec<SeafowlPartition> {
+        let mut partitions = self.partitions.deref().clone();
+
+        if filters.is_empty() {
+            // No qualifiers means we need all partitions
+            return partitions;
+        }
+
+        let mut partition_mask = vec![true; self.partition_count];
+
+        for expr in filters {
+            match PruningPredicate::try_new(expr.clone(), self.schema.clone()) {
+                Ok(predicate) => match predicate.prune(self) {
+                    Ok(expr_mask) => {
+                        partition_mask = partition_mask
+                            .iter()
+                            .zip(expr_mask)
+                            .map(|(&a, b)| a || b)
+                            .collect()
+                    }
+                    Err(error) => {
+                        warn!(
+                            "Failed pruning the partitions for expr {:?}: {}",
+                            expr, error
+                        );
+                        return partitions;
+                    }
+                },
+                Err(error) => {
+                    warn!(
+                        "Failed constructing a pruning predicate for expr {:?}: {}",
+                        expr, error
+                    );
+                    return partitions;
+                }
+            }
+        }
+
+        let mut iter = partition_mask.iter();
+        partitions.retain(|_| *iter.next().unwrap());
+        partitions
+    }
+
+    // Try to convert the vector of min/max scalar values for a column into a generic array reference
+    fn get_values_array(&self, values: Option<&Vec<ScalarValue>>) -> Option<ArrayRef> {
+        match values {
+            Some(stats) => {
+                match ScalarValue::iter_to_array(stats.clone().into_iter()) {
+                    Ok(array) => Some(array),
+                    Err(error) => {
+                        warn!("Failed to convert vector of min/max values {:?} to array: {}", values, error);
+                        None
+                    }
+                }
+            }
             None => None,
         }
     }
+}
+
+impl PruningStatistics for SeafowlPruningStatistics {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.get_values_array(self.min_values.get(column.name.as_str()))
+    }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        match self.max_values.get(column.name.as_str()) {
-            Some(stats) => match ScalarValue::iter_to_array(stats.clone().into_iter()) {
-                Ok(array) => Some(array),
-                Err(_) => None,
-            },
-            None => None,
-        }
+        self.get_values_array(self.max_values.get(column.name.as_str()))
     }
 
     fn num_containers(&self) -> usize {
