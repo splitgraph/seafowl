@@ -265,15 +265,20 @@ impl SeafowlPruningStatistics {
     /// use datafusion::scalar::ScalarValue;
     /// use seafowl::provider::SeafowlPruningStatistics;
     ///
-    /// // Parse missing value into a corresponding None
-    /// let value = Arc::new(None);
-    /// assert_eq!(SeafowlPruningStatistics::parse_bytes_value(&value, &DataType::Int16).unwrap(), ScalarValue::Int16(None));
-    /// assert_eq!(SeafowlPruningStatistics::parse_bytes_value(&value, &DataType::Boolean).unwrap(), ScalarValue::Boolean(None));
+    /// fn parse(value: &Arc<Option<Vec<u8>>>, dt: &DataType) -> ScalarValue {
+    ///     SeafowlPruningStatistics::parse_bytes_value(&value, &dt).unwrap()
+    /// }
     ///
-    /// let value = Arc::from(Some(30.to_string().as_bytes().to_vec()));
-    /// assert_eq!(SeafowlPruningStatistics::parse_bytes_value(&value, &DataType::Int32).unwrap(), ScalarValue::Int32(Some(30)));
-    /// assert_eq!(SeafowlPruningStatistics::parse_bytes_value(&value, &DataType::Float32).unwrap(), ScalarValue::Float32(Some(30.0)));
-    /// assert_eq!(SeafowlPruningStatistics::parse_bytes_value(&value, &DataType::Utf8).unwrap(), ScalarValue::Utf8(Some("30".to_string())));
+    /// // Parse missing value into a corresponding None
+    /// let val = Arc::new(None);
+    /// assert_eq!(parse(&val, &DataType::Int16), ScalarValue::Int16(None));
+    /// assert_eq!(parse(&val, &DataType::Boolean), ScalarValue::Boolean(None));
+    ///
+    /// // Parse some actual value
+    /// let val = Arc::from(Some(42.to_string().as_bytes().to_vec()));
+    /// assert_eq!(parse(&val, &DataType::Int32), ScalarValue::Int32(Some(42)));
+    /// assert_eq!(parse(&val, &DataType::Float32), ScalarValue::Float32(Some(42.0)));
+    /// assert_eq!(parse(&val, &DataType::Utf8), ScalarValue::Utf8(Some("42".to_string())));
     /// ```
     pub fn parse_bytes_value(
         bytes_value: &Arc<Option<Vec<u8>>>,
