@@ -74,6 +74,14 @@ use crate::{
     schema::Schema as SeafowlSchema,
 };
 
+// Scheme used for URLs referencing the object store that we use to register
+// with DataFusion's object store registry.
+pub const INTERNAL_OBJECT_STORE_SCHEME: &str = "seafowl";
+
+pub fn internal_object_store_url() -> ObjectStoreUrl {
+    ObjectStoreUrl::parse(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME)).unwrap()
+}
+
 // Copied from datafusion::sql::utils (private)
 
 // Normalize an identifier to a lowercase string unless the identifier is quoted.
@@ -445,6 +453,14 @@ impl DefaultSeafowlContext {
             })
     }
 
+    fn get_internal_object_store(&self) -> Arc<dyn ObjectStore> {
+        let object_store_url = internal_object_store_url();
+        self.inner
+            .runtime_env()
+            .object_store(object_store_url)
+            .unwrap()
+    }
+
     /// Resolve a table reference into a Seafowl table
     fn try_get_seafowl_table(
         &self,
@@ -546,12 +562,7 @@ impl DefaultSeafowlContext {
         from_table_version: Option<TableVersionId>,
     ) -> Result<bool> {
         let disk_manager = self.inner.runtime_env().disk_manager.clone();
-
-        let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
-        let store = self
-            .inner
-            .runtime_env()
-            .object_store(object_store_url.clone())?;
+        let store = self.get_internal_object_store();
 
         let partitions = plan_to_object_store(
             &self.inner.state(),
@@ -1245,9 +1256,11 @@ pub mod test_utils {
 
         let context = SessionContext::with_config(session_config);
         let object_store = Arc::new(InMemory::new());
-        context
-            .runtime_env()
-            .register_object_store("seafowl", "", object_store);
+        context.runtime_env().register_object_store(
+            INTERNAL_OBJECT_STORE_SCHEME,
+            "",
+            object_store,
+        );
 
         // Register the HTTP object store for external tables
         add_http_object_store(&context);
@@ -1363,9 +1376,11 @@ pub mod test_utils {
         setup_table_catalog(&mut table_catalog);
 
         let object_store = Arc::new(InMemory::new());
-        session
-            .runtime_env()
-            .register_object_store("seafowl", "", object_store);
+        session.runtime_env().register_object_store(
+            INTERNAL_OBJECT_STORE_SCHEME,
+            "",
+            object_store,
+        );
 
         DefaultSeafowlContext {
             inner: session,
@@ -1801,12 +1816,7 @@ mod tests {
             .await
             .unwrap();
 
-        let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
-        let store = sf_context
-            .inner
-            .runtime_env()
-            .object_store(object_store_url.clone())
-            .unwrap();
+        let store = sf_context.get_internal_object_store();
         let uploaded_objects = store
             .list(None)
             .await

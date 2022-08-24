@@ -18,7 +18,6 @@ use datafusion::{
     datasource::{
         file_format::{parquet::ParquetFormat, FileFormat},
         listing::PartitionedFile,
-        object_store::ObjectStoreUrl,
         TableProvider,
     },
     execution::context::{SessionState, TaskContext},
@@ -36,13 +35,13 @@ use log::warn;
 
 use object_store::path::Path;
 
-use crate::data_types::FunctionId;
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     catalog::PartitionCatalog,
     data_types::{TableId, TableVersionId},
     schema::Schema,
 };
+use crate::{context::internal_object_store_url, data_types::FunctionId};
 
 pub struct SeafowlDatabase {
     pub name: Arc<str>,
@@ -163,8 +162,8 @@ impl TableProvider for SeafowlTable {
         // This code is partially taken from ListingTable but adapted to use an arbitrary
         // list of Parquet URLs rather than all files in a given directory.
 
-        // Get our object store (with a hardcoded schema)
-        let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
+        // Get our object store (with a hardcoded scheme)
+        let object_store_url = internal_object_store_url();
         let store = ctx.runtime_env.object_store(object_store_url.clone())?;
 
         // Build a list of lists of PartitionedFile groups (one file = one partition for the scan)
@@ -475,6 +474,7 @@ mod tests {
     use crate::provider::{PartitionColumn, SeafowlPruningStatistics};
     use crate::{
         catalog::MockPartitionCatalog,
+        context::INTERNAL_OBJECT_STORE_SCHEME,
         provider::{SeafowlPartition, SeafowlTable},
         schema,
     };
@@ -511,7 +511,7 @@ mod tests {
         let session_config = SessionConfig::new().with_information_schema(true);
         let context = SessionContext::with_config(session_config);
         context.runtime_env().register_object_store(
-            "seafowl",
+            INTERNAL_OBJECT_STORE_SCHEME,
             "",
             Arc::new(object_store),
         );
