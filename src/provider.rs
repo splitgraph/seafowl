@@ -13,7 +13,10 @@ use datafusion::physical_plan::DisplayFormatType;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::datatypes::SchemaRef as ArrowSchemaRef,
-    catalog::{catalog::CatalogProvider, schema::SchemaProvider},
+    catalog::{
+        catalog::CatalogProvider,
+        schema::{MemorySchemaProvider, SchemaProvider},
+    },
     common::{DataFusionError, Result},
     datasource::{
         file_format::{parquet::ParquetFormat, FileFormat},
@@ -35,17 +38,18 @@ use log::warn;
 
 use object_store::path::Path;
 
-use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     catalog::PartitionCatalog,
     data_types::{TableId, TableVersionId},
     schema::Schema,
 };
+use crate::{catalog::STAGING_SCHEMA, wasm_udf::data_types::CreateFunctionDetails};
 use crate::{context::internal_object_store_url, data_types::FunctionId};
 
 pub struct SeafowlDatabase {
     pub name: Arc<str>,
     pub collections: HashMap<Arc<str>, Arc<SeafowlCollection>>,
+    pub staging_schema: Arc<MemorySchemaProvider>,
 }
 
 impl CatalogProvider for SeafowlDatabase {
@@ -54,11 +58,19 @@ impl CatalogProvider for SeafowlDatabase {
     }
 
     fn schema_names(&self) -> Vec<String> {
-        self.collections.keys().map(|s| s.to_string()).collect()
+        self.collections
+            .keys()
+            .map(|s| s.to_string())
+            .chain([STAGING_SCHEMA.to_string()])
+            .collect()
     }
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        self.collections.get(name).map(|c| Arc::clone(c) as _)
+        if name == STAGING_SCHEMA {
+            Some(self.staging_schema.clone())
+        } else {
+            self.collections.get(name).map(|c| Arc::clone(c) as _)
+        }
     }
 }
 
@@ -101,7 +113,7 @@ pub struct PartitionColumn {
     pub null_count: Option<i32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SeafowlTable {
     pub name: Arc<str>,
     pub schema: Arc<Schema>,
@@ -115,6 +127,17 @@ pub struct SeafowlTable {
     // load the partitions somewhere in the SchemaProvider because none of the functions
     // there are async.
     pub catalog: Arc<dyn PartitionCatalog>,
+}
+
+impl std::fmt::Debug for SeafowlTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SeafowlTable")
+            .field("name", &self.name)
+            .field("schema", &self.schema)
+            .field("table_id", &self.table_id)
+            .field("table_version_id", &self.table_version_id)
+            .finish()
+    }
 }
 
 #[async_trait]

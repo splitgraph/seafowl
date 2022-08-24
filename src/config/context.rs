@@ -2,17 +2,14 @@ use std::sync::Arc;
 
 use crate::{
     catalog,
-    catalog::{DefaultCatalog, FunctionCatalog, PartitionCatalog, TableCatalog},
+    catalog::{
+        DefaultCatalog, FunctionCatalog, PartitionCatalog, TableCatalog, DEFAULT_DB,
+        DEFAULT_SCHEMA,
+    },
     context::{DefaultSeafowlContext, INTERNAL_OBJECT_STORE_SCHEME},
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
-use datafusion::{
-    catalog::{
-        catalog::{CatalogProvider, MemoryCatalogProvider},
-        schema::MemorySchemaProvider,
-    },
-    prelude::{SessionConfig, SessionContext},
-};
+use datafusion::prelude::{SessionConfig, SessionContext};
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
 #[cfg(feature = "catalog-postgres")]
@@ -46,7 +43,7 @@ async fn build_catalog(
         ),
     };
 
-    let catalog = Arc::new(DefaultCatalog { repository });
+    let catalog = Arc::new(DefaultCatalog::new(repository));
 
     (catalog.clone(), catalog.clone(), catalog)
 }
@@ -65,7 +62,7 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             endpoint,
             bucket,
         }) => {
-            // Use endpoint instead of partition
+            // Use endpoint instead of region
             let store = new_s3(
                 Some(access_key_id),
                 Some(secret_access_key),
@@ -87,7 +84,7 @@ pub async fn build_context(
 ) -> Result<DefaultSeafowlContext, catalog::Error> {
     let session_config = SessionConfig::new()
         .with_information_schema(true)
-        .with_default_catalog_and_schema("default", "public");
+        .with_default_catalog_and_schema(DEFAULT_DB, DEFAULT_SCHEMA);
     let context = SessionContext::with_config(session_config);
 
     let object_store = build_object_store(cfg);
@@ -103,26 +100,18 @@ pub async fn build_context(
     let (tables, partitions, functions) = build_catalog(cfg).await;
 
     // Create default DB/collection
-    let default_db = match tables.get_database_id_by_name("default").await? {
+    let default_db = match tables.get_database_id_by_name(DEFAULT_DB).await? {
         Some(id) => id,
-        None => tables.create_database("default").await.unwrap(),
+        None => tables.create_database(DEFAULT_DB).await.unwrap(),
     };
 
     match tables
-        .get_collection_id_by_name("default", "public")
+        .get_collection_id_by_name(DEFAULT_DB, DEFAULT_SCHEMA)
         .await?
     {
         Some(id) => id,
-        None => tables.create_collection(default_db, "public").await?,
+        None => tables.create_collection(default_db, DEFAULT_SCHEMA).await?,
     };
-
-    // Register the datafusion catalog (in-memory)
-    let default_catalog = MemoryCatalogProvider::new();
-
-    default_catalog
-        .register_schema("public", Arc::new(MemorySchemaProvider::new()))
-        .expect("memory catalog provider can register schema");
-    context.register_catalog("datafusion", Arc::new(default_catalog));
 
     // Convergence doesn't support connecting to different DB names. We are supposed
     // to do one context per query (as we need to load the schema before executing every
@@ -135,7 +124,7 @@ pub async fn build_context(
         table_catalog: tables,
         partition_catalog: partitions,
         function_catalog: functions,
-        database: "default".to_string(),
+        database: DEFAULT_DB.to_string(),
         database_id: default_db,
         max_partition_size: cfg.misc.max_partition_size,
     })

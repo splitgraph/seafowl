@@ -132,8 +132,6 @@ async fn test_information_schema() {
         "+---------------+--------------------+------------+------------+------------+",
         "| table_catalog | table_schema       | table_name | table_type | definition |",
         "+---------------+--------------------+------------+------------+------------+",
-        "| datafusion    | information_schema | columns    | VIEW       |            |",
-        "| datafusion    | information_schema | tables     | VIEW       |            |",
         "| default       | information_schema | columns    | VIEW       |            |",
         "| default       | information_schema | tables     | VIEW       |            |",
         "+---------------+--------------------+------------+------------+------------+",
@@ -819,19 +817,55 @@ async fn test_create_external_table_http() {
 
     let context = make_context_with_pg().await;
 
-    let table_query = format!(
-        "CREATE EXTERNAL TABLE datafusion.public.file
+    // Try creating a table in a non-staging schema
+    let err = context
+        .plan_query(
+            format!(
+                "CREATE EXTERNAL TABLE public.file
         STORED AS PARQUET
         LOCATION '{}'",
-        url
-    );
+                url
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Can only create external tables in the staging schema"));
 
-    let plan = context.plan_query(table_query.as_str()).await.unwrap();
+    // Create a table normally
+    let plan = context
+        .plan_query(
+            format!(
+                "CREATE EXTERNAL TABLE file
+        STORED AS PARQUET
+        LOCATION '{}'",
+                url
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
     context.collect(plan).await.unwrap();
+
+    // Test we see the table in the information_schema
+    let results = list_tables_query(&context).await;
+
+    let expected = vec![
+        "+--------------------+------------+",
+        "| table_schema       | table_name |",
+        "+--------------------+------------+",
+        "| information_schema | columns    |",
+        "| information_schema | tables     |",
+        "| staging            | file       |",
+        "+--------------------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
 
     // Test standard query
     let plan = context
-        .plan_query("SELECT * FROM datafusion.public.file")
+        .plan_query("SELECT * FROM staging.file")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
@@ -849,8 +883,11 @@ async fn test_create_external_table_http() {
 
     // Test we can't hit the Seafowl object store directly via CREATE EXTERNAL TABLE
     let err = context
-    .plan_query("CREATE EXTERNAL TABLE datafusion.public.internal STORED AS PARQUET LOCATION 'seafowl://file'")
-    .await.unwrap_err();
+        .plan_query(
+            "CREATE EXTERNAL TABLE internal STORED AS PARQUET LOCATION 'seafowl://file'",
+        )
+        .await
+        .unwrap_err();
     dbg!(&err);
     assert!(err
         .to_string()
@@ -859,8 +896,11 @@ async fn test_create_external_table_http() {
     // (also test that the DF object store registry doesn't normalize the case so that people can't
     // bypass this)
     let err = context
-    .plan_query("CREATE EXTERNAL TABLE datafusion.public.internal STORED AS PARQUET LOCATION 'SeAfOwL://file'")
-    .await.unwrap_err();
+        .plan_query(
+            "CREATE EXTERNAL TABLE internal STORED AS PARQUET LOCATION 'SeAfOwL://file'",
+        )
+        .await
+        .unwrap_err();
     dbg!(&err);
     assert!(err
         .to_string()

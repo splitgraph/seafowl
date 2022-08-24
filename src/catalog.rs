@@ -2,6 +2,7 @@ use std::str::FromStr;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
+use datafusion::catalog::schema::MemorySchemaProvider;
 use datafusion::error::DataFusionError;
 use itertools::Itertools;
 #[cfg(test)]
@@ -27,6 +28,10 @@ use crate::{
     },
     schema::Schema,
 };
+
+pub const DEFAULT_DB: &str = "default";
+pub const DEFAULT_SCHEMA: &str = "public";
+pub const STAGING_SCHEMA: &str = "staging";
 
 #[derive(Debug)]
 pub enum Error {
@@ -143,7 +148,7 @@ impl From<Error> for DataFusionError {
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait TableCatalog: Sync + Send + Debug {
+pub trait TableCatalog: Sync + Send {
     async fn load_database(&self, id: DatabaseId) -> Result<SeafowlDatabase>;
     async fn get_database_id_by_name(
         &self,
@@ -191,7 +196,7 @@ pub trait TableCatalog: Sync + Send + Debug {
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait PartitionCatalog: Sync + Send + Debug {
+pub trait PartitionCatalog: Sync + Send {
     // TODO: figure out content addressability (currently we'll create new partition meta records
     // even if the same partition already exists)
     async fn create_partitions(
@@ -213,7 +218,7 @@ pub trait PartitionCatalog: Sync + Send + Debug {
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait FunctionCatalog: Sync + Send + Debug {
+pub trait FunctionCatalog: Sync + Send {
     async fn create_function(
         &self,
         database_id: DatabaseId,
@@ -227,12 +232,23 @@ pub trait FunctionCatalog: Sync + Send + Debug {
     ) -> Result<Vec<SeafowlFunction>>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DefaultCatalog {
-    pub repository: Arc<dyn Repository>,
+    repository: Arc<dyn Repository>,
+
+    // DataFusion's in-memory schema provider for staging external tables
+    staging_schema: Arc<MemorySchemaProvider>,
 }
 
 impl DefaultCatalog {
+    pub fn new(repository: Arc<dyn Repository>) -> Self {
+        let staging_schema = Arc::new(MemorySchemaProvider::new());
+        Self {
+            repository,
+            staging_schema,
+        }
+    }
+
     fn to_sqlx_error(error: RepositoryError) -> Error {
         Error::SqlxError(match error {
             RepositoryError::UniqueConstraintViolation(e) => e,
@@ -348,8 +364,9 @@ impl TableCatalog for DefaultCatalog {
 
         Ok(SeafowlDatabase {
             // TODO load the database name too
-            name: Arc::from("default"),
+            name: Arc::from(DEFAULT_DB),
             collections,
+            staging_schema: self.staging_schema.clone(),
         })
     }
 

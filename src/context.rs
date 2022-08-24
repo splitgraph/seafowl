@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use base64::decode;
 use bytes::Bytes;
 use datafusion::datasource::TableProvider;
+use datafusion::sql::ResolvedTableReference;
 
 use std::fs::File;
 
@@ -65,7 +66,7 @@ use datafusion::{
 };
 use tempfile::NamedTempFile;
 
-use crate::catalog::PartitionCatalog;
+use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{TableId, TableVersionId};
 use crate::nodes::{CreateFunction, DropSchema, RenameTable, SeafowlExtensionNode};
 use crate::provider::{PartitionColumn, SeafowlPartition, SeafowlTable};
@@ -83,6 +84,19 @@ pub const INTERNAL_OBJECT_STORE_SCHEME: &str = "seafowl";
 
 pub fn internal_object_store_url() -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME)).unwrap()
+}
+
+fn quote_ident(val: &str) -> String {
+    val.replace('"', "\"\"")
+}
+
+fn reference_to_name(reference: &ResolvedTableReference) -> String {
+    format!(
+        "{}.{}.{}",
+        quote_ident(reference.catalog),
+        quote_ident(reference.schema),
+        quote_ident(reference.table)
+    )
 }
 
 /// Load the Statistics for a Parquet file in memory
@@ -386,7 +400,7 @@ impl DefaultSeafowlContext {
         let table_name = table_name.into();
         let table_ref = TableReference::from(table_name.as_str());
 
-        let resolved_ref = table_ref.resolve(&self.database, "public");
+        let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
 
         self.inner
             .catalog(resolved_ref.catalog)
@@ -837,6 +851,26 @@ impl SeafowlContext for DefaultSeafowlContext {
                 ref table_partition_cols,
                 ref if_not_exists,
             }) => {
+                // Check that the TableReference doesn't have a database/schema in it.
+                // We create all external tables in the staging schema (backed by DataFusion's
+                // in-memory schema provider) instead.
+                let reference: TableReference = name.as_str().into();
+                let resolved_reference =
+                    reference.resolve(&self.database, STAGING_SCHEMA);
+
+                if resolved_reference.catalog != self.database
+                    || resolved_reference.schema != STAGING_SCHEMA
+                {
+                    return Err(DataFusionError::Plan(format!(
+                        "Can only create external tables in the staging schema.
+                        Omit the schema/database altogether or use {}.{}.{}",
+                        &self.database, STAGING_SCHEMA, resolved_reference.table
+                    )));
+                }
+
+                // Replace the table name with the fully qualified one that has our staging schema
+                let name = &reference_to_name(&resolved_reference);
+
                 let location =
                     try_prepare_http_url(location).unwrap_or_else(|| location.into());
 
@@ -1186,7 +1220,7 @@ pub mod test_utils {
     use crate::{
         catalog::{
             DefaultCatalog, MockFunctionCatalog, MockPartitionCatalog, MockTableCatalog,
-            TableCatalog,
+            TableCatalog, DEFAULT_DB, DEFAULT_SCHEMA,
         },
         object_store::http::add_http_object_store,
         provider::{SeafowlCollection, SeafowlDatabase},
@@ -1197,6 +1231,7 @@ pub mod test_utils {
         arrow::datatypes::{
             DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
         },
+        catalog::schema::MemorySchemaProvider,
         prelude::SessionConfig,
     };
 
@@ -1230,12 +1265,10 @@ pub mod test_utils {
         let repository = SqliteRepository::try_new("sqlite://:memory:".to_string())
             .await
             .unwrap();
-        let catalog = Arc::new(DefaultCatalog {
-            repository: Arc::new(repository),
-        });
-        let default_db = catalog.create_database("default").await.unwrap();
+        let catalog = Arc::new(DefaultCatalog::new(Arc::new(repository)));
+        let default_db = catalog.create_database(DEFAULT_DB).await.unwrap();
         catalog
-            .create_collection(default_db, "public")
+            .create_collection(default_db, DEFAULT_SCHEMA)
             .await
             .unwrap();
 
@@ -1312,6 +1345,7 @@ pub mod test_utils {
                 Ok(SeafowlDatabase {
                     name: Arc::from("testdb"),
                     collections: collections.clone(),
+                    staging_schema: Arc::new(MemorySchemaProvider::new()),
                 })
             });
 
