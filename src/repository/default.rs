@@ -15,6 +15,11 @@
 ///     pub const QUERIES: RepositoryQueries = RepositoryQueries {
 ///         all_columns_in_database: "SELECT ...",
 ///     }
+///     pub fn interpret_error(error: sqlx::Error) -> Error {
+///         // Interpret the database-specific error code and turn some sqlx errors
+///         // into the Error enum values like UniqueConstraintViolation/FKConstraintViolation
+///         // ...
+///     }
 /// }
 ///
 /// implement_repository!(SqliteRepository)
@@ -68,7 +73,7 @@ impl Repository for $repo {
             .fetch(&self.executor)
             .map_ok(|row| row.get("name"))
             .try_collect()
-            .await?;
+            .await.map_err($repo::interpret_error)?;
         Ok(names)
     }
     async fn get_all_columns_in_database(
@@ -79,7 +84,7 @@ impl Repository for $repo {
         let columns = sqlx::query_as($repo::QUERIES.all_columns_in_database)
         .bind(database_id)
         .fetch_all(&self.executor)
-        .await?;
+        .await.map_err($repo::interpret_error)?;
         Ok(columns)
     }
 
@@ -106,7 +111,7 @@ impl Repository for $repo {
         "#,
         ).bind(table_version_id)
         .fetch_all(&self.executor)
-        .await?;
+        .await.map_err($repo::interpret_error)?;
         Ok(partitions)
     }
 
@@ -114,8 +119,8 @@ impl Repository for $repo {
         let id = sqlx::query(r#"INSERT INTO database (name) VALUES ($1) RETURNING (id)"#)
             .bind(database_name)
             .fetch_one(&self.executor)
-            .await?
-            .try_get("id")?;
+            .await.map_err($repo::interpret_error)?
+            .try_get("id").map_err($repo::interpret_error)?;
 
         Ok(id)
     }
@@ -135,8 +140,8 @@ impl Repository for $repo {
         .bind(database_name)
         .bind(collection_name)
         .fetch_one(&self.executor)
-        .await?
-        .try_get("id")?;
+        .await.map_err($repo::interpret_error)?
+        .try_get("id").map_err($repo::interpret_error)?;
 
         Ok(id)
     }
@@ -148,8 +153,8 @@ impl Repository for $repo {
         let id = sqlx::query(r#"SELECT id FROM database WHERE database.name = $1"#)
             .bind(database_name)
             .fetch_one(&self.executor)
-            .await?
-            .try_get("id")?;
+            .await.map_err($repo::interpret_error)?
+            .try_get("id").map_err($repo::interpret_error)?;
 
         Ok(id)
     }
@@ -163,8 +168,8 @@ impl Repository for $repo {
             r#"INSERT INTO "collection" (database_id, name) VALUES ($1, $2) RETURNING (id)"#,
         ).bind(database_id).bind(collection_name)
         .fetch_one(&self.executor)
-        .await?
-        .try_get("id")?;
+        .await.map_err($repo::interpret_error)?
+        .try_get("id").map_err($repo::interpret_error)?;
 
         Ok(id)
     }
@@ -173,7 +178,7 @@ impl Repository for $repo {
         &self,
         collection_id: CollectionId,
         table_name: &str,
-        schema: Schema,
+        schema: &Schema,
     ) -> Result<(TableId, TableVersionId), Error> {
         // Create new (empty) table
         let new_table_id: i64 = sqlx::query(
@@ -182,8 +187,8 @@ impl Repository for $repo {
         .bind(collection_id)
         .bind(table_name)
         .fetch_one(&self.executor)
-        .await?
-        .try_get("id")?;
+        .await.map_err($repo::interpret_error)?
+        .try_get("id").map_err($repo::interpret_error)?;
 
         // Create initial table version
         let new_version_id: i64 = sqlx::query(
@@ -191,21 +196,23 @@ impl Repository for $repo {
         )
         .bind(new_table_id)
         .fetch_one(&self.executor)
-        .await?
-        .try_get("id")?;
+        .await.map_err($repo::interpret_error)?
+        .try_get("id").map_err($repo::interpret_error)?;
 
         // Create columns
         // TODO this breaks if we have more than (bind limit) columns
-        let mut builder: QueryBuilder<_> =
-            QueryBuilder::new("INSERT INTO table_column(table_version_id, name, type) ");
-        builder.push_values(schema.to_column_names_types(), |mut b, col| {
-            b.push_bind(new_version_id)
-                .push_bind(col.0)
-                .push_bind(col.1);
-        });
+        if !schema.arrow_schema.fields().is_empty() {
+            let mut builder: QueryBuilder<_> =
+                QueryBuilder::new("INSERT INTO table_column(table_version_id, name, type) ");
+            builder.push_values(schema.to_column_names_types(), |mut b, col| {
+                b.push_bind(new_version_id)
+                    .push_bind(col.0)
+                    .push_bind(col.1);
+            });
 
-        let query = builder.build();
-        query.execute(&self.executor).await?;
+            let query = builder.build();
+            query.execute(&self.executor).await.map_err($repo::interpret_error)?;
+        }
 
         Ok((new_table_id, new_version_id))
     }
@@ -228,7 +235,7 @@ impl Repository for $repo {
         let query = builder.build();
         let partition_ids: Vec<PhysicalPartitionId> = query
             .fetch_all(&self.executor)
-            .await?
+            .await.map_err($repo::interpret_error)?
             .iter()
             .flat_map(|r| r.try_get("id"))
             .collect();
@@ -254,7 +261,7 @@ impl Repository for $repo {
         });
 
         let query = builder.build();
-        query.execute(&self.executor).await?;
+        query.execute(&self.executor).await.map_err($repo::interpret_error)?;
 
         Ok(partition_ids)
     }
@@ -272,7 +279,7 @@ impl Repository for $repo {
         });
 
         let query = builder.build();
-        query.execute(&self.executor).await?;
+        query.execute(&self.executor).await.map_err($repo::interpret_error)?;
 
         Ok(())
     }
@@ -288,8 +295,8 @@ impl Repository for $repo {
         )
         .bind(from_version)
         .fetch_one(&self.executor)
-        .await?
-        .try_get("id")?;
+        .await.map_err($repo::interpret_error)?
+        .try_get("id").map_err($repo::interpret_error)?;
 
         sqlx::query(
             "INSERT INTO table_column (table_version_id, name, type)
@@ -298,7 +305,7 @@ impl Repository for $repo {
         .bind(from_version)
         .bind(new_version)
         .execute(&self.executor)
-        .await?;
+        .await.map_err($repo::interpret_error)?;
 
         sqlx::query(
             "INSERT INTO table_partition (table_version_id, physical_partition_id)
@@ -307,7 +314,7 @@ impl Repository for $repo {
         .bind(from_version)
         .bind(new_version)
         .execute(&self.executor)
-        .await?;
+        .await.map_err($repo::interpret_error)?;
 
         Ok(new_version)
     }
@@ -318,12 +325,14 @@ impl Repository for $repo {
         new_table_name: &str,
         new_collection_id: Option<CollectionId>,
     ) -> Result<(), Error> {
+        // Do RETURNING(id) here and ask for the ID back with fetch_one() to force a
+        // row not found error if the table doesn't exist
         let query = if let Some(new_collection_id) = new_collection_id {
-            sqlx::query("UPDATE \"table\" SET name = $1, collection_id = $2 WHERE id = $3").bind(new_table_name).bind(new_collection_id).bind(table_id)
+            sqlx::query("UPDATE \"table\" SET name = $1, collection_id = $2 WHERE id = $3 RETURNING id").bind(new_table_name).bind(new_collection_id).bind(table_id)
         } else {
-            sqlx::query("UPDATE \"table\" SET name = $1 WHERE id = $2").bind(new_table_name).bind(table_id)
+            sqlx::query("UPDATE \"table\" SET name = $1 WHERE id = $2 RETURNING id").bind(new_table_name).bind(table_id)
         };
-        query.execute(&self.executor).await?;
+        query.fetch_one(&self.executor).await.map_err($repo::interpret_error)?;
         Ok(())
     }
 
@@ -349,8 +358,8 @@ impl Repository for $repo {
             .bind(details.data.clone())
             .bind(details.volatility.to_string())
             .fetch_one(&self.executor)
-            .await?
-            .try_get("id")?;
+            .await.map_err($repo::interpret_error)?
+            .try_get("id").map_err($repo::interpret_error)?;
 
         Ok(new_function_id)
     }
@@ -375,7 +384,7 @@ impl Repository for $repo {
         "#)
         .bind(database_id)
         .fetch_all(&self.executor)
-        .await?;
+        .await.map_err($repo::interpret_error)?;
 
         Ok(functions)
     }
@@ -390,7 +399,7 @@ impl Repository for $repo {
         sqlx::query("DELETE FROM \"table\" WHERE id = $1 RETURNING id")
             .bind(table_id)
             .fetch_one(&self.executor)
-            .await?;
+            .await.map_err($repo::interpret_error)?;
         Ok(())
     }
 
@@ -398,7 +407,7 @@ impl Repository for $repo {
         sqlx::query("DELETE FROM collection WHERE id = $1 RETURNING id")
             .bind(collection_id)
             .fetch_one(&self.executor)
-            .await?;
+            .await.map_err($repo::interpret_error)?;
         Ok(())
     }
 
@@ -406,7 +415,7 @@ impl Repository for $repo {
         sqlx::query("DELETE FROM database WHERE id = $1 RETURNING id")
             .bind(database_id)
             .fetch_one(&self.executor)
-            .await?;
+            .await.map_err($repo::interpret_error)?;
         Ok(())
     }
 }

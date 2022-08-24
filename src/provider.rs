@@ -139,7 +139,7 @@ impl TableProvider for SeafowlTable {
         let mut partitions = self
             .catalog
             .load_table_partitions(self.table_version_id)
-            .await;
+            .await?;
 
         // Try to prune away redundant partitions
         if !filters.is_empty() {
@@ -175,8 +175,7 @@ impl TableProvider for SeafowlTable {
                     range: None,
                 }]) as Result<_>
             }))
-            .await
-            .expect("general error with partitioned file lists");
+            .await?;
 
         let config = FileScanConfig {
             object_store_url,
@@ -482,11 +481,11 @@ mod tests {
             .expect_load_table_partitions()
             .with(predicate::eq(1))
             .returning(|_| {
-                vec![SeafowlPartition {
+                Ok(vec![SeafowlPartition {
                     object_storage_id: Arc::from("some-file.parquet"),
                     row_count: 3,
                     columns: Arc::new(vec![]),
-                }]
+                }])
             });
 
         let table = SeafowlTable {

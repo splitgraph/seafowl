@@ -1,6 +1,7 @@
 use clap::AppSettings::NoAutoVersion;
+use std::process::exit;
 use std::{
-    env, fs,
+    env, fs, io,
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
@@ -18,7 +19,12 @@ use seafowl::{
     },
     context::SeafowlContext,
     frontend::http::run_server,
+    utils::run_one_off_command,
 };
+use tokio::signal::ctrl_c;
+#[cfg(unix)]
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::broadcast::{channel, Sender};
 
 #[cfg(feature = "frontend-postgres")]
 use seafowl::frontend::postgres::run_pg_server;
@@ -42,13 +48,17 @@ struct Args {
         takes_value = false
     )]
     version: bool,
+
+    #[clap(short, long, help = "Run a one-off command and exit")]
+    one_off: Option<String>,
 }
 
 fn prepare_frontends(
     context: Arc<dyn SeafowlContext>,
     config: &SeafowlConfig,
-) -> Vec<Pin<Box<dyn Future<Output = ()>>>> {
-    let mut result: Vec<Pin<Box<dyn Future<Output = ()>>>> = Vec::new();
+    shutdown: &Sender<()>,
+) -> Vec<Pin<Box<dyn Future<Output = ()> + Send>>> {
+    let mut result: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = Vec::new();
 
     #[cfg(feature = "frontend-postgres")]
     if let Some(pg) = &config.frontend.postgres {
@@ -60,11 +70,20 @@ fn prepare_frontends(
         warn!(
             "The PostgreSQL frontend doesn't have authentication or encryption and should only be used in development!"
         );
-        result.push(server.boxed());
+
+        let mut shutdown_r = shutdown.subscribe();
+        result.push(Box::pin(async move {
+            let handle = tokio::spawn(server);
+
+            shutdown_r.recv().await.unwrap();
+            info!("Shutting down the PostgreSQL frontend");
+            handle.abort()
+        }));
     };
 
     if let Some(http) = &config.frontend.http {
-        let server = run_server(context, http.to_owned());
+        let shutdown_r = shutdown.subscribe();
+        let server = run_server(context, http.to_owned(), shutdown_r);
         info!(
             "Starting the HTTP frontend on {}:{}",
             http.bind_host, http.bind_port
@@ -148,13 +167,57 @@ async fn main() {
         config
     };
 
-    let context = Arc::new(build_context(&config).await);
+    let context = Arc::new(build_context(&config).await.unwrap());
 
-    let frontends = prepare_frontends(context, &config);
+    if let Some(one_off_cmd) = args.one_off {
+        run_one_off_command(context, &one_off_cmd, io::stdout()).await;
+        return;
+    };
 
-    if frontends.is_empty() {
-        warn!("No frontends configured. You will not be able to connect to Seafowl.")
+    // Ref: https://tokio.rs/tokio/topics/shutdown#waiting-for-things-to-finish-shutting-down
+    let (shutdown, _) = channel(1);
+
+    let mut tasks = prepare_frontends(context, &config, &shutdown);
+
+    if tasks.is_empty() {
+        error!(
+            "No frontends configured. You will not be able to connect to Seafowl.\n
+Run Seafowl with --one-off instead to run a one-off command from the CLI."
+        );
+        exit(-1);
     }
 
-    join_all(frontends).await;
+    // Add a task that will wait for a termination signal and tell frontends to stop
+    tasks.push(
+        async move {
+            // Wait for a termination signal
+            #[cfg(unix)]
+            {
+                let mut sigterm = signal(SignalKind::terminate())
+                    .expect("Error subscribing to the SIGTERM signal");
+                tokio::select! {
+                    // Ctrl+C: SIGINT
+                    _ = ctrl_c() => {},
+                    // SIGTERM
+                    _ = sigterm.recv() => {},
+                }
+            }
+
+            #[cfg(not(unix))]
+            {
+                tokio::select! {
+                    // Ctrl+C: termination request on Windows (?)
+                    _ = ctrl_c() => {},
+                }
+            }
+
+            info!("Shutting down...");
+            shutdown.send(()).expect("Error during graceful shutdown");
+        }
+        .boxed(),
+    );
+
+    // Start everything and wait for it to exit (gracefully or ungracefully)
+    join_all(tasks).await;
+    info!("Exiting cleanly.");
 }

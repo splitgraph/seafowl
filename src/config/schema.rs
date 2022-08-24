@@ -3,7 +3,7 @@ use std::{
     path::Path,
 };
 
-use config::{Config, ConfigError, File, FileFormat};
+use config::{Config, ConfigError, Environment, File, FileFormat, Map};
 use hex::encode;
 use log::info;
 use rand::distributions::{Alphanumeric, DistString};
@@ -12,6 +12,11 @@ use sha2::{Digest, Sha256};
 
 pub const DEFAULT_DATA_DIR: &str = "seafowl-data";
 pub const DEFAULT_SQLITE_DB: &str = "seafowl.sqlite";
+pub const ENV_PREFIX: &str = "SEAFOWL";
+// Shells don't support envvar names with dots, so use this instead
+// (otherwise the config crate can't distinguish between a separator and
+// an underscore as part of a config var name, e.g. object_store)
+pub const ENV_SEPARATOR: &str = "__";
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct SeafowlConfig {
@@ -77,7 +82,7 @@ write_access = "{}"
         random_password().escape_default()
     );
 
-    let config = load_config_from_string(&config_str, false).unwrap();
+    let config = load_config_from_string(&config_str, false, None).unwrap();
 
     (config_str, config)
 }
@@ -253,7 +258,8 @@ pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigErr
 
 pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
     let config = Config::builder()
-        .add_source(File::with_name(path.to_str().expect("Error parsing path")));
+        .add_source(File::with_name(path.to_str().expect("Error parsing path")))
+        .add_source(Environment::with_prefix(ENV_PREFIX).separator(ENV_SEPARATOR));
 
     config.build()?.try_deserialize().and_then(validate_config)
 }
@@ -262,9 +268,15 @@ pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
 pub fn load_config_from_string(
     config_str: &str,
     skip_validation: bool,
+    env_override: Option<Map<String, String>>,
 ) -> Result<SeafowlConfig, ConfigError> {
-    let config =
-        Config::builder().add_source(File::from_str(config_str, FileFormat::Toml));
+    let config = Config::builder()
+        .add_source(File::from_str(config_str, FileFormat::Toml))
+        .add_source(
+            Environment::with_prefix(ENV_PREFIX)
+                .separator(ENV_SEPARATOR)
+                .source(env_override),
+        );
 
     if skip_validation {
         config.build()?.try_deserialize()
@@ -279,7 +291,8 @@ mod tests {
         build_default_config, load_config_from_string, AccessSettings, Catalog, Frontend,
         HttpFrontend, Local, ObjectStore, Postgres, SeafowlConfig, S3,
     };
-    use crate::config::schema::Misc;
+    use crate::config::schema::{Misc, Sqlite};
+    use std::collections::HashMap;
 
     const TEST_CONFIG_S3: &str = r#"
 [object_store]
@@ -343,7 +356,7 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
     #[cfg(feature = "object-store-s3")]
     #[test]
     fn test_parse_config_with_s3() {
-        let config = load_config_from_string(TEST_CONFIG_S3, false).unwrap();
+        let config = load_config_from_string(TEST_CONFIG_S3, false, None).unwrap();
 
         assert_eq!(
             config.object_store,
@@ -358,7 +371,7 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
 
     #[test]
     fn test_parse_config_basic() {
-        let config = load_config_from_string(TEST_CONFIG_BASIC, false).unwrap();
+        let config = load_config_from_string(TEST_CONFIG_BASIC, false, None).unwrap();
 
         assert_eq!(
             config,
@@ -389,7 +402,7 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
 
     #[test]
     fn test_parse_config_custom_access() {
-        let config = load_config_from_string(TEST_CONFIG_ACCESS, false).unwrap();
+        let config = load_config_from_string(TEST_CONFIG_ACCESS, false, None).unwrap();
 
         assert_eq!(
             config.frontend.http.unwrap(),
@@ -407,14 +420,79 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
     }
 
     #[test]
+    fn test_parse_config_env_override() {
+        let env_vars = HashMap::from([
+            // Test overriding basic nested configs
+            (
+                "SEAFOWL__FRONTEND__HTTP__BIND_PORT".to_string(),
+                "8080".to_string(),
+            ),
+            (
+                "SEAFOWL__FRONTEND__HTTP__WRITE_ACCESS".to_string(),
+                "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
+                    .to_string(),
+            ),
+            // Test overriding tagged unions
+            (
+                "SEAFOWL__OBJECT_STORE__TYPE".to_string(),
+                "local".to_string(),
+            ),
+            (
+                "SEAFOWL__OBJECT_STORE__DATA_DIR".to_string(),
+                "some_other_path".to_string(),
+            ),
+            // Test that the residual catalog.schema doesn't break a catalog config where
+            // we don't use that parameter (sqlite)
+            ("SEAFOWL__CATALOG__TYPE".to_string(), "sqlite".to_string()),
+            (
+                "SEAFOWL__CATALOG__DSN".to_string(),
+                "sqlite://file.sqlite".to_string(),
+            ),
+        ]);
+
+        let config =
+            load_config_from_string(TEST_CONFIG_BASIC, false, Some(env_vars)).unwrap();
+
+        assert_eq!(
+            config,
+            SeafowlConfig {
+                object_store: ObjectStore::Local(Local {
+                    data_dir: "some_other_path".to_string(),
+                }),
+                catalog: Catalog::Sqlite(Sqlite {
+                    dsn: "sqlite://file.sqlite".to_string(),
+                }),
+                frontend: Frontend {
+                    #[cfg(feature = "frontend-postgres")]
+                    postgres: None,
+                    http: Some(HttpFrontend {
+                        bind_host: "0.0.0.0".to_string(),
+                        bind_port: 8080,
+                        read_access: AccessSettings::Any,
+                        write_access: AccessSettings::Password {
+                            sha256_hash:
+                            "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
+                                .to_string()
+                        },
+                    })
+                },
+                misc: Misc {
+                    max_partition_size: 1048576
+                },
+            }
+        )
+    }
+
+    #[test]
     fn test_parse_config_erroneous() {
-        let error = load_config_from_string(TEST_CONFIG_ERROR, false).unwrap_err();
+        let error = load_config_from_string(TEST_CONFIG_ERROR, false, None).unwrap_err();
         assert!(error.to_string().contains("missing field `data_dir`"))
     }
 
     #[test]
     fn test_parse_config_invalid() {
-        let error = load_config_from_string(TEST_CONFIG_INVALID, false).unwrap_err();
+        let error =
+            load_config_from_string(TEST_CONFIG_INVALID, false, None).unwrap_err();
         assert!(error
             .to_string()
             .contains("You are using an in-memory catalog with a non in-memory"))

@@ -11,4 +11,5 @@ pub mod nodes;
 pub mod provider;
 pub mod repository;
 pub mod schema;
+pub mod utils;
 pub mod wasm_udf;
