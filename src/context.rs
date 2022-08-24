@@ -455,7 +455,7 @@ impl DefaultSeafowlContext {
         schema: &Arc<DFSchema>,
     ) -> Result<(TableId, TableVersionId)> {
         let table_ref = TableReference::from(name);
-        let resolved_ref = table_ref.resolve(&self.database, "public");
+        let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
         let schema_name = resolved_ref.schema;
         let table_name = resolved_ref.table;
 
@@ -1242,7 +1242,7 @@ pub mod test_utils {
     pub fn make_session() -> SessionContext {
         let session_config = SessionConfig::new()
             .with_information_schema(true)
-            .with_default_catalog_and_schema("default", "public");
+            .with_default_catalog_and_schema(DEFAULT_DB, DEFAULT_SCHEMA);
 
         let context = SessionContext::with_config(session_config);
         let object_store = Arc::new(InMemory::new());
@@ -1277,7 +1277,7 @@ pub mod test_utils {
             table_catalog: catalog.clone(),
             partition_catalog: catalog.clone(),
             function_catalog: catalog,
-            database: "default".to_string(),
+            database: DEFAULT_DB.to_string(),
             database_id: default_db,
             max_partition_size: 1024 * 1024,
         }
