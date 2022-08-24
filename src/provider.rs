@@ -1,4 +1,5 @@
 use arrow::array::{ArrayRef, UInt64Array};
+use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType, SchemaRef};
 use std::ops::Deref;
 use std::{any::Any, collections::HashMap, sync::Arc};
@@ -256,8 +257,25 @@ impl SeafowlPruningStatistics {
         })
     }
 
-    // Try to deserialize min/max statistics stored as raw bytes
-    fn parse_bytes_value(
+    /// Try to deserialize min/max statistics stored as raw bytes
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow::datatypes::DataType;
+    /// use datafusion::scalar::ScalarValue;
+    /// use seafowl::provider::SeafowlPruningStatistics;
+    ///
+    /// // Parse missing value into a corresponding None
+    /// let value = Arc::new(None);
+    /// assert_eq!(SeafowlPruningStatistics::parse_bytes_value(&value, &DataType::Int16).unwrap(), ScalarValue::Int16(None));
+    /// assert_eq!(SeafowlPruningStatistics::parse_bytes_value(&value, &DataType::Boolean).unwrap(), ScalarValue::Boolean(None));
+    ///
+    /// let value = Arc::from(Some(30.to_string().as_bytes().to_vec()));
+    /// assert_eq!(SeafowlPruningStatistics::parse_bytes_value(&value, &DataType::Int32).unwrap(), ScalarValue::Int32(Some(30)));
+    /// assert_eq!(SeafowlPruningStatistics::parse_bytes_value(&value, &DataType::Float32).unwrap(), ScalarValue::Float32(Some(30.0)));
+    /// assert_eq!(SeafowlPruningStatistics::parse_bytes_value(&value, &DataType::Utf8).unwrap(), ScalarValue::Utf8(Some("30".to_string())));
+    /// ```
+    pub fn parse_bytes_value(
         bytes_value: &Arc<Option<Vec<u8>>>,
         data_type: &DataType,
     ) -> Result<ScalarValue> {
@@ -269,7 +287,15 @@ impl SeafowlPruningStatistics {
                     error
                 ))),
             },
-            None => Ok(ScalarValue::Utf8(None)),
+            None => {
+                // Try to cast the None value to the corresponding ScalarValue matching `data_type`,
+                // e.g. `ScalarValue::Int16(None)`, `ScalarValue::Boolean(None)`, etc.
+                let value = ScalarValue::Null;
+                let cast_options = CastOptions { safe: false };
+                let cast_arr =
+                    cast_with_options(&value.to_array(), data_type, &cast_options)?;
+                Ok(ScalarValue::try_from_array(&cast_arr, 0)?)
+            }
         }
     }
 
@@ -574,6 +600,20 @@ mod tests {
                         "{\"name\":\"int\",\"bitWidth\":32,\"isSigned\":true}"
                             .to_string(),
                     ),
+                    min_value: Arc::from(Some(20.to_string().as_bytes().to_vec())),
+                    max_value: Arc::from(None),
+                    null_count: Some(0),
+                }]),
+            },
+            SeafowlPartition {
+                object_storage_id: Arc::from("par3.parquet"),
+                row_count: 3,
+                columns: Arc::new(vec![PartitionColumn {
+                    name: Arc::from("some_int".to_string()),
+                    r#type: Arc::from(
+                        "{\"name\":\"int\",\"bitWidth\":32,\"isSigned\":true}"
+                            .to_string(),
+                    ),
                     min_value: Arc::from(Some(30.to_string().as_bytes().to_vec())),
                     max_value: Arc::from(Some(40.to_string().as_bytes().to_vec())),
                     null_count: Some(0),
@@ -583,7 +623,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "some_int",
             DataType::Int32,
-            false,
+            true,
         )]));
 
         // Create the main partition pruning handler
@@ -596,7 +636,8 @@ mod tests {
         let pruned = pruning_stats.prune(&[expr]).await;
 
         // Ensure pruning worked
-        assert_eq!(pruned.len(), 1);
+        assert_eq!(pruned.len(), 2);
         assert_eq!(pruned[0], partitions[1]);
+        assert_eq!(pruned[1], partitions[2]);
     }
 }
