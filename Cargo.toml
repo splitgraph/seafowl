@@ -16,9 +16,9 @@ async-trait = "0.1.41"
 base64 = "0.13.0"
 
 bytes = "1.1.0"
+chrono = { version = "0.4", default_features = false }
 clap = { version = "3.2.15", features = [ "derive" ] }
 config = "0.13.1"
-chrono = { version = "0.4", default_features = false }
 
 # PG wire protocol support
 convergence = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", optional = true }
