@@ -885,6 +885,17 @@ impl SeafowlContext for DefaultSeafowlContext {
                 let location =
                     try_prepare_http_url(location).unwrap_or_else(|| location.into());
 
+                // Disallow the seafowl:// scheme (which is registered with DataFusion as our internal
+                // object store but shouldn't be accessible via CREATE EXTERNAL TABLE)
+                if location
+                    .starts_with(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME).as_str())
+                {
+                    return Err(DataFusionError::Plan(format!(
+                        "Invalid URL scheme for location {:?}",
+                        location
+                    )));
+                }
+
                 let (file_format, file_extension) = match file_type {
                     FileType::CSV => (
                         Arc::new(
