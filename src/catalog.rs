@@ -48,6 +48,8 @@ pub enum Error {
     CollectionAlreadyExists { name: String },
     FunctionAlreadyExists { name: String },
     FunctionDeserializationError { reason: String },
+    // Creating a table in / dropping the staging schema
+    UsedStagingSchema,
     SqlxError(sqlx::Error),
 }
 
@@ -136,6 +138,10 @@ impl From<Error> for DataFusionError {
             Error::FunctionAlreadyExists { name } => {
                 DataFusionError::Plan(format!("Function {:?} already exists", name))
             }
+            Error::UsedStagingSchema => DataFusionError::Plan(
+                "The staging schema can only be referenced via CREATE EXTERNAL TABLE"
+                    .to_string(),
+            ),
 
             // Miscellaneous sqlx error. We want to log it but it's not worth showing to the user.
             Error::SqlxError(e) => DataFusionError::Internal(format!(
@@ -397,6 +403,10 @@ impl TableCatalog for DefaultCatalog {
         database_name: &str,
         collection_name: &str,
     ) -> Result<Option<CollectionId>> {
+        if database_name == DEFAULT_DB && collection_name == STAGING_SCHEMA {
+            return Err(Error::UsedStagingSchema);
+        }
+
         match self
             .repository
             .get_collection_id_by_name(database_name, collection_name)
@@ -438,6 +448,10 @@ impl TableCatalog for DefaultCatalog {
         database_id: DatabaseId,
         collection_name: &str,
     ) -> Result<CollectionId> {
+        if collection_name == STAGING_SCHEMA {
+            return Err(Error::UsedStagingSchema);
+        }
+
         self.repository
             .create_collection(database_id, collection_name)
             .await
