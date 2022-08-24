@@ -1,4 +1,5 @@
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, UInt64Array};
+use arrow::datatypes::{DataType, SchemaRef};
 use std::ops::Deref;
 use std::{any::Any, collections::HashMap, sync::Arc};
 
@@ -6,6 +7,7 @@ use async_trait::async_trait;
 
 use datafusion::common::Column;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::datatypes::SchemaRef as ArrowSchemaRef,
     catalog::{catalog::CatalogProvider, schema::SchemaProvider},
@@ -27,7 +29,7 @@ use datafusion::{
 };
 
 use futures::future;
-use log::debug;
+use log::warn;
 
 use object_store::path::Path;
 
@@ -94,7 +96,7 @@ pub struct PartitionColumn {
     pub r#type: Arc<str>,
     pub min_value: Arc<Option<Vec<u8>>>,
     pub max_value: Arc<Option<Vec<u8>>>,
-    pub null_count: Option<i128>,
+    pub null_count: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -116,7 +118,19 @@ pub struct SeafowlTable {
 impl SeafowlTable {
     // Prune away partitions that are refuted by the provided filter expressions
     async fn prune(&self, partitions: &mut Vec<SeafowlPartition>, filters: &[Expr]) {
-        let stats = SeafowlPartitionStatistics::from_partitions(partitions.deref());
+        let stats = match SeafowlPartitionStatistics::from_partitions(
+            partitions.deref(),
+            self.schema(),
+        ) {
+            Ok(stats) => stats,
+            Err(error) => {
+                warn!(
+                    "Failed constructing statistics for table {} (version: {}): {}",
+                    self.name, self.table_version_id, error
+                );
+                return;
+            }
+        };
 
         let mut partition_mask = vec![true; partitions.len()];
 
@@ -131,7 +145,7 @@ impl SeafowlTable {
                             .collect()
                     }
                     Err(error) => {
-                        debug!(
+                        warn!(
                             "Failed pruning the partitions for expr {:?}: {}",
                             expr, error
                         );
@@ -139,7 +153,7 @@ impl SeafowlTable {
                     }
                 },
                 Err(error) => {
-                    debug!(
+                    warn!(
                         "Failed constructing a pruning predicate for expr {:?}: {}",
                         expr, error
                     );
@@ -148,7 +162,8 @@ impl SeafowlTable {
             }
         }
 
-        partitions.retain(|_| *partition_mask.iter().next().unwrap());
+        let mut iter = partition_mask.iter();
+        partitions.retain(|_| *iter.next().unwrap());
     }
 }
 
@@ -178,8 +193,10 @@ impl TableProvider for SeafowlTable {
             .load_table_partitions(self.table_version_id)
             .await;
 
-        // Try to prune away redundant partitions
-        self.prune(&mut partitions, filters).await;
+        if !filters.is_empty() {
+            // Try to prune away redundant partitions
+            self.prune(&mut partitions, filters).await;
+        }
 
         // This code is partially taken from ListingTable but adapted to use an arbitrary
         // list of Parquet URLs rather than all files in a given directory.
@@ -222,51 +239,106 @@ impl TableProvider for SeafowlTable {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeafowlPartitionStatistics {
-    pub partition_count: i32,
-    pub column_statistics: HashMap<String, SeafowlPartitionColumnStatistics>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SeafowlPartitionColumnStatistics {
-    pub min_values: Option<ArrayRef>,
-    pub max_values: Option<ArrayRef>,
-    pub null_counts: Option<ArrayRef>,
+    pub partition_count: usize,
+    pub min_values: HashMap<String, Vec<ScalarValue>>,
+    pub max_values: HashMap<String, Vec<ScalarValue>>,
+    pub null_counts: HashMap<String, Vec<Option<u64>>>,
 }
 
 impl SeafowlPartitionStatistics {
-    fn from_partitions(_partitions: &Vec<SeafowlPartition>) -> Self {
-        // TODO: actually construct the stats from partitions
-        Self {
-            partition_count: 0,
-            column_statistics: HashMap::new(),
+    // Generate a map of min/max/null stats per column, parsing the serialized values stored in partitions
+    fn from_partitions(
+        partitions: &Vec<SeafowlPartition>,
+        schema: SchemaRef,
+    ) -> Result<Self> {
+        let partition_count = partitions.len();
+        let mut min_values = HashMap::new();
+        let mut max_values = HashMap::new();
+        let mut null_counts = HashMap::new();
+
+        for field in schema.fields() {
+            min_values.insert(
+                field.name().clone(),
+                vec![ScalarValue::Utf8(None); partition_count],
+            );
+            max_values.insert(
+                field.name().clone(),
+                vec![ScalarValue::Utf8(None); partition_count],
+            );
+            null_counts.insert(field.name().clone(), vec![None; partition_count]);
+        }
+
+        for (ind, partition) in partitions.iter().enumerate() {
+            for column in partition.columns.as_slice() {
+                let data_type = schema
+                    .field_with_name(column.name.deref())
+                    .unwrap()
+                    .data_type();
+
+                min_values.get_mut(column.name.as_ref()).unwrap()[ind] =
+                    Self::parse_bytes_value(&column.min_value, data_type)?;
+                max_values.get_mut(column.name.as_ref()).unwrap()[ind] =
+                    Self::parse_bytes_value(&column.max_value, data_type)?;
+                null_counts.get_mut(column.name.as_ref()).unwrap()[ind] =
+                    column.null_count;
+            }
+        }
+
+        Ok(Self {
+            partition_count,
+            min_values,
+            max_values,
+            null_counts,
+        })
+    }
+
+    fn parse_bytes_value(
+        bytes_value: &Arc<Option<Vec<u8>>>,
+        data_type: &DataType,
+    ) -> Result<ScalarValue> {
+        match bytes_value.as_ref() {
+            Some(bytes) => match String::from_utf8(bytes.clone()) {
+                Ok(string_val) => ScalarValue::try_from_string(string_val, data_type),
+                Err(error) => Err(DataFusionError::Internal(format!(
+                    "Failed to parse min/max value: {}",
+                    error
+                ))),
+            },
+            None => Ok(ScalarValue::Utf8(None)),
         }
     }
 }
 
 impl PruningStatistics for SeafowlPartitionStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        match self.column_statistics.get(column.name.as_str()) {
-            Some(stats) => stats.min_values.clone(),
+        match self.min_values.get(column.name.as_str()) {
+            Some(stats) => match ScalarValue::iter_to_array(stats.clone().into_iter()) {
+                Ok(array) => Some(array),
+                Err(_) => None,
+            },
             None => None,
         }
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        match self.column_statistics.get(column.name.as_str()) {
-            Some(stats) => stats.max_values.clone(),
+        match self.max_values.get(column.name.as_str()) {
+            Some(stats) => match ScalarValue::iter_to_array(stats.clone().into_iter()) {
+                Ok(array) => Some(array),
+                Err(_) => None,
+            },
             None => None,
         }
     }
 
     fn num_containers(&self) -> usize {
-        self.partition_count as usize
+        self.partition_count
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        match self.column_statistics.get(column.name.as_str()) {
-            Some(stats) => stats.null_counts.clone(),
+        match self.null_counts.get(column.name.as_str()) {
+            Some(stats) => Some(Arc::new(UInt64Array::from(stats.clone())) as ArrayRef),
             None => None,
         }
     }

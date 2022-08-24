@@ -162,6 +162,7 @@ pub mod tests {
                     r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                     min_value: Arc::new(None),
                     max_value: Arc::new(None),
+                    null_count: None,
                 },
                 PartitionColumn {
                     name: Arc::from("integer".to_string()),
@@ -171,12 +172,14 @@ pub mod tests {
                     ),
                     min_value: Arc::new(Some([49, 50].to_vec())),
                     max_value: Arc::new(Some([52, 50].to_vec())),
+                    null_count: None,
                 },
                 PartitionColumn {
                     name: Arc::from("varchar".to_string()),
                     r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                     min_value: Arc::new(None),
                     max_value: Arc::new(None),
+                    null_count: None,
                 },
             ]),
         }
