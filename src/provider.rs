@@ -314,60 +314,56 @@ impl SeafowlPruningStatistics {
 
     // Prune away partitions that are refuted by the provided filter expressions
     async fn prune(&self, filters: &[Expr]) -> Vec<SeafowlPartition> {
-        let mut partitions = self.partitions.deref().clone();
-
-        if filters.is_empty() {
-            // No qualifiers means we need all partitions
-            return partitions;
-        }
-
         let mut partition_mask = vec![true; self.partition_count];
 
-        for expr in filters {
-            match PruningPredicate::try_new(expr.clone(), self.schema.clone()) {
-                Ok(predicate) => match predicate.prune(self) {
-                    Ok(expr_mask) => {
-                        partition_mask = partition_mask
-                            .iter()
-                            .zip(expr_mask)
-                            .map(|(&a, b)| a && b)
-                            .collect()
-                    }
+        if !filters.is_empty() {
+            for expr in filters {
+                match PruningPredicate::try_new(expr.clone(), self.schema.clone()) {
+                    Ok(predicate) => match predicate.prune(self) {
+                        Ok(expr_mask) => {
+                            partition_mask = partition_mask
+                                .iter()
+                                .zip(expr_mask)
+                                .map(|(&a, b)| a && b)
+                                .collect()
+                        }
+                        Err(error) => {
+                            warn!(
+                                "Failed pruning the partitions for expr {:?}: {}",
+                                expr, error
+                            );
+                        }
+                    },
                     Err(error) => {
                         warn!(
-                            "Failed pruning the partitions for expr {:?}: {}",
+                            "Failed constructing a pruning predicate for expr {:?}: {}",
                             expr, error
                         );
                     }
-                },
-                Err(error) => {
-                    warn!(
-                        "Failed constructing a pruning predicate for expr {:?}: {}",
-                        expr, error
-                    );
                 }
             }
         }
 
-        let mut iter = partition_mask.iter();
-        partitions.retain(|_| *iter.next().unwrap());
-        partitions
+        self.partitions
+            .iter()
+            .zip(partition_mask.iter())
+            .filter_map(|(p, &keep)| if keep { Some(p.clone()) } else { None })
+            .collect()
     }
 
     // Try to convert the vector of min/max scalar values for a column into a generic array reference
     fn get_values_array(&self, values: Option<&Vec<ScalarValue>>) -> Option<ArrayRef> {
-        match values {
-            Some(stats) => {
-                match ScalarValue::iter_to_array(stats.clone().into_iter()) {
-                    Ok(array) => Some(array),
-                    Err(error) => {
-                        warn!("Failed to convert vector of min/max values {:?} to array: {}", values, error);
-                        None
-                    }
-                }
-            }
-            None => None,
-        }
+        values.and_then(|stats| {
+            ScalarValue::iter_to_array(stats.clone().into_iter())
+                .map_err(|e| {
+                    warn!(
+                        "Failed to convert vector of min/max values {:?} to array: {}",
+                        values, e
+                    );
+                    e
+                })
+                .ok()
+        })
     }
 }
 
@@ -385,10 +381,9 @@ impl PruningStatistics for SeafowlPruningStatistics {
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        match self.null_counts.get(column.name.as_str()) {
-            Some(stats) => Some(Arc::new(UInt64Array::from(stats.clone())) as ArrayRef),
-            None => None,
-        }
+        self.null_counts
+            .get(column.name.as_str())
+            .map(|stats| Arc::new(UInt64Array::from(stats.clone())) as ArrayRef)
     }
 }
 
@@ -453,7 +448,7 @@ mod tests {
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::{BufMut, Bytes, BytesMut};
-    use datafusion::logical_expr::{col, lit, Expr};
+    use datafusion::logical_expr::{col, lit, or, Expr};
     use datafusion::{
         arrow::{
             array::{ArrayRef, Int64Array},
@@ -596,6 +591,12 @@ mod tests {
         vec![col("some_int").gt(lit(15)), col("some_int").lt(lit(25))],
         vec![0, 1];
         "Multiple expressions")
+    ]
+    #[test_case(
+        vec![(Some(10), Some(20), None), (Some(20), Some(30), Some(0)), (Some(30), Some(40), Some(1))],
+        vec![or(col("some_int").eq(lit(15)), col("some_int").eq(lit(25))), col("some_int").gt(lit(20))],
+        vec![1];
+        "Disjunction + AND")
     ]
     #[test_case(
         vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(0))],
