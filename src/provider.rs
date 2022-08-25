@@ -7,6 +7,7 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 
 use datafusion::common::Column;
+use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::scalar::ScalarValue;
 use datafusion::{
@@ -195,6 +196,13 @@ impl TableProvider for SeafowlTable {
             partitions: Arc::new(partitions),
             inner: plan,
         }))
+    }
+
+    fn supports_filter_pushdown(
+        &self,
+        _filter: &Expr,
+    ) -> Result<TableProviderFilterPushDown> {
+        Ok(TableProviderFilterPushDown::Inexact)
     }
 }
 

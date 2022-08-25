@@ -313,6 +313,30 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(partitions[1].row_count, 3);
     assert_eq!(partitions[1].columns.len(), 2);
 
+    //
+    // Test partition pruning during scans works
+    //
+    let plan = context
+        .plan_query(
+            "SELECT some_value, some_int_value FROM test_table WHERE some_value > 45",
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+------------+----------------+",
+        "| some_value | some_int_value |",
+        "+------------+----------------+",
+        "| 46         | 5555           |",
+        "| 47         | 6666           |",
+        "+------------+----------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    //
+    // Re-chunk by creating a new table
+    //
     let plan = context
         .plan_query("CREATE TABLE table_rechunked AS SELECT * FROM test_table")
         .await
