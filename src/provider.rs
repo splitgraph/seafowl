@@ -321,7 +321,7 @@ impl SeafowlPruningStatistics {
             return partitions;
         }
 
-        let mut partition_mask = vec![false; self.partition_count];
+        let mut partition_mask = vec![true; self.partition_count];
 
         for expr in filters {
             match PruningPredicate::try_new(expr.clone(), self.schema.clone()) {
@@ -330,7 +330,7 @@ impl SeafowlPruningStatistics {
                         partition_mask = partition_mask
                             .iter()
                             .zip(expr_mask)
-                            .map(|(&a, b)| a || b)
+                            .map(|(&a, b)| a && b)
                             .collect()
                     }
                     Err(error) => {
@@ -338,7 +338,6 @@ impl SeafowlPruningStatistics {
                             "Failed pruning the partitions for expr {:?}: {}",
                             expr, error
                         );
-                        return partitions;
                     }
                 },
                 Err(error) => {
@@ -346,7 +345,6 @@ impl SeafowlPruningStatistics {
                         "Failed constructing a pruning predicate for expr {:?}: {}",
                         expr, error
                     );
-                    return partitions;
                 }
             }
         }
@@ -595,8 +593,8 @@ mod tests {
     ]
     #[test_case(
         vec![(Some(10), Some(20), None), (Some(20), Some(30), Some(0)), (Some(30), Some(40), Some(1))],
-        vec![col("some_int").lt(lit(15)), col("some_int").gt(lit(35))],
-        vec![0, 2];
+        vec![col("some_int").gt(lit(15)), col("some_int").lt(lit(25))],
+        vec![0, 1];
         "Multiple expressions")
     ]
     #[test_case(
