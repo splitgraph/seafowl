@@ -1,5 +1,5 @@
 use crate::config::schema::str_to_hex_hash;
-use bytes::{BufMut, Bytes};
+use bytes::{Buf, BufMut, Bytes};
 use log::{debug, error};
 /// On-disk byte-range-aware cache for HTTP requests
 /// Partially inspired by https://docs.rs/moka/latest/moka/future/struct.Cache.html#example-eviction-listener,
@@ -30,7 +30,7 @@ impl CacheFileManager {
     async fn write_file(
         &mut self,
         cache_key: CacheKey,
-        data: Bytes,
+        data: &Bytes,
     ) -> io::Result<PathBuf> {
         let mut path = self.base_path.to_path_buf();
         path.push(cache_key.as_filename());
@@ -93,17 +93,17 @@ pub struct HttpCache {
 }
 
 pub enum CacheError {
-    FetcherError(Box<dyn Error>),
+    FetcherError(Box<dyn Error + Send + Sync>),
     IoError(io::Error),
 }
 
 impl HttpCache {
     fn on_evict(
-        file_manager: Arc<RwLock<CacheFileManager>>,
+        file_manager: &Arc<RwLock<CacheFileManager>>,
         key: Arc<CacheKey>,
         value: CacheValue,
         cause: RemovalCause,
-    ) -> () {
+    ) {
         debug!(
             "An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
             key, value, cause
@@ -116,7 +116,7 @@ impl HttpCache {
 
             // Remove the data file. We must handle error cases here to
             // prevent the listener from panicking.
-            if let Err(e) = manager.remove_file(value.path).await {
+            if let Err(e) = manager.remove_file(&value.path).await {
                 error!("Failed to remove a data file at {:?}: {:?}", value.path, e);
             }
         });
@@ -130,9 +130,9 @@ impl HttpCache {
         let eviction_file_manager = file_manager.clone();
 
         let cache: Cache<CacheKey, CacheValue> = CacheBuilder::new(max_disk_size)
-            .weigher(|k, v: &CacheValue| v.size)
-            .eviction_listener_with_queued_delivery_mode(|k, v, cause| {
-                Self::on_evict(eviction_file_manager, k, v, cause)
+            .weigher(|_, v: &CacheValue| v.size as u32)
+            .eviction_listener_with_queued_delivery_mode(move |k, v, cause| {
+                Self::on_evict(&eviction_file_manager, k, v, cause)
             })
             .build();
 
@@ -155,8 +155,8 @@ impl HttpCache {
             &Url,
             &Range<u64>,
         )
-            -> Pin<Box<dyn Future<Output = Result<Bytes, Box<dyn Error>>>>>,
-    ) -> Result<Bytes, CacheError> {
+            -> Pin<Box<dyn Future<Output = Result<Bytes, Box<dyn Error + Send + Sync>>>>>,
+    ) -> Result<Bytes, Arc<CacheError>> {
         let range = (chunk as u64 * self.min_fetch_size)
             ..((chunk + 1) as u64 * self.min_fetch_size);
 
@@ -167,13 +167,13 @@ impl HttpCache {
 
         let value = self
             .cache
-            .try_get_with(key.clone(), async move {
+            .try_get_with::<_, CacheError>(key.clone(), async move {
                 let mut manager = self.file_manager.write().await;
                 let data = fetch_func(url, &range)
                     .await
                     .map_err(CacheError::FetcherError)?;
                 let path = manager
-                    .write_file(key, data)
+                    .write_file(key, &data)
                     .await
                     .map_err(CacheError::IoError)?;
 
@@ -189,7 +189,7 @@ impl HttpCache {
             let data = manager.read_file(value.path).await.unwrap();
             Ok(data)
         }
-    }
+    ,}
 
     pub async fn get_range(
         &self,
@@ -199,17 +199,33 @@ impl HttpCache {
             &Url,
             &Range<u64>,
         )
-            -> Pin<Box<dyn Future<Output = Result<Bytes, Box<dyn Error>>>>>,
-    ) -> Result<Bytes, CacheError> {
+            -> Pin<Box<dyn Future<Output = Result<Bytes, Box<dyn Error + Send + Sync>>>>>,
+    ) -> Result<Bytes, Arc<CacheError>> {
         // Expand the range to the next max_fetch_size (+ alignment)
         let start_chunk = (range.start / self.min_fetch_size) as u32;
         let end_chunk = (range.end / self.min_fetch_size) as u32;
 
         let mut result = Vec::with_capacity((range.end - range.start + 1) as usize);
 
-        // Do multiple fetches
-        let data = self.get_chunk(url, start_chunk, &fetch_func).await?;
-        // result.put(data[(range.start % self.min_fetch_size) as u64..data.len()]);
+        for chunk_num in start_chunk..(end_chunk + 1) {
+            let mut data = self.get_chunk(url, chunk_num, &fetch_func).await?;
+
+            let buf_start = if chunk_num == start_chunk {
+                let buf_start = (range.start % self.min_fetch_size) as usize;
+                data.advance(buf_start);
+                buf_start
+            } else {
+                0usize
+            };
+
+            let buf_end = if chunk_num == end_chunk {
+                (range.end % self.min_fetch_size) as usize
+            } else {
+                data.len()
+            };
+
+            result.put(data.take(buf_end - buf_start));
+        }
 
         Ok(result.into())
     }
