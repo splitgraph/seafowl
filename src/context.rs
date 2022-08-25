@@ -160,6 +160,9 @@ fn build_partition_columns(
 ) -> Vec<PartitionColumn> {
     // TODO PartitionColumn might not be the right data structure here (lacks ID etc)
     match &partition_stats.column_statistics {
+        // NB: Here we may end up with `null_count` being None, but DF pruning algorithm demands that
+        // the null count field be not nullable itself, and consequently for any such cases the
+        // pruning will fail, and we will default to using all partitions.
         Some(column_statistics) => zip(column_statistics, schema.fields())
             .map(|(stats, column)| {
                 // TODO: the to_string will discard the timezone for Timestamp* values, and will

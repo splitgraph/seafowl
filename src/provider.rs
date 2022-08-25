@@ -580,16 +580,36 @@ mod tests {
     }
 
     #[test_case(
-        vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(0)), (Some(30), Some(40), Some(0))],
+        vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(0)), (Some(30), Some(40), None)],
         vec![col("some_int").gt_eq(lit(25))],
         vec![1, 2];
         "Partition with missing max")
     ]
     #[test_case(
-        vec![(Some(10), Some(20), Some(0)), (Some(20), Some(30), Some(0)), (Some(30), Some(40), Some(0))],
+        vec![(Some(10), Some(20), None), (Some(20), Some(30), Some(0)), (Some(30), Some(40), Some(1))],
         vec![col("some_int").lt(lit(15)), col("some_int").gt(lit(35))],
         vec![0, 2];
         "Multiple expressions")
+    ]
+    #[test_case(
+        vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(0))],
+        vec![col("some_int").is_null()],
+        vec![];
+        "Null check zero nulls")
+    ]
+    #[test_case(
+        vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(1))],
+        vec![col("some_int").is_null()],
+        vec![1];
+        "Null check one null")
+    ]
+    // Pruning here fails with: `"Invalid argument error: Column 'some_int_null_count' is declared as non-nullable but contains null values"`
+    // so we default to using all partitions
+    #[test_case(
+        vec![(Some(10), Some(20), Some(0)), (Some(20), None, None)],
+        vec![col("some_int").is_null()],
+        vec![0, 1];
+        "Null check unknown nulls")
     ]
     #[tokio::test]
     async fn test_partition_pruning(
