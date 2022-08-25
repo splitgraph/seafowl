@@ -447,7 +447,7 @@ mod tests {
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::{BufMut, Bytes, BytesMut};
-    use datafusion::logical_expr::{col, lit};
+    use datafusion::logical_expr::{col, lit, Expr};
     use datafusion::{
         arrow::{
             array::{ArrayRef, Int64Array},
@@ -461,6 +461,7 @@ mod tests {
     };
     use mockall::predicate;
     use object_store::{memory::InMemory, path::Path, ObjectStore};
+    use test_case::test_case;
 
     use crate::provider::{PartitionColumn, SeafowlPruningStatistics};
     use crate::{
@@ -578,71 +579,65 @@ mod tests {
         assert_batches_eq!(expected, &results);
     }
 
+    #[test_case(
+        vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(0)), (Some(30), Some(40), Some(0))],
+        vec![col("some_int").gt_eq(lit(25))],
+        vec![1, 2];
+        "Partition with missing max")
+    ]
+    #[test_case(
+        vec![(Some(10), Some(20), Some(0)), (Some(20), Some(30), Some(0)), (Some(30), Some(40), Some(0))],
+        vec![col("some_int").lt(lit(15)), col("some_int").gt(lit(35))],
+        vec![0, 2];
+        "Multiple expressions")
+    ]
     #[tokio::test]
-    async fn test_partition_pruning() {
-        // Create some fake partitions
-        let partitions = vec![
-            SeafowlPartition {
-                object_storage_id: Arc::from("par1.parquet"),
-                row_count: 3,
-                columns: Arc::new(vec![PartitionColumn {
-                    name: Arc::from("some_int".to_string()),
-                    r#type: Arc::from(
-                        "{\"name\":\"int\",\"bitWidth\":32,\"isSigned\":true}"
-                            .to_string(),
-                    ),
-                    min_value: Arc::from(Some(10.to_string().as_bytes().to_vec())),
-                    max_value: Arc::from(Some(20.to_string().as_bytes().to_vec())),
-                    null_count: Some(0),
-                }]),
-            },
-            SeafowlPartition {
-                object_storage_id: Arc::from("par2.parquet"),
-                row_count: 3,
-                columns: Arc::new(vec![PartitionColumn {
-                    name: Arc::from("some_int".to_string()),
-                    r#type: Arc::from(
-                        "{\"name\":\"int\",\"bitWidth\":32,\"isSigned\":true}"
-                            .to_string(),
-                    ),
-                    min_value: Arc::from(Some(20.to_string().as_bytes().to_vec())),
-                    max_value: Arc::from(None),
-                    null_count: Some(0),
-                }]),
-            },
-            SeafowlPartition {
-                object_storage_id: Arc::from("par3.parquet"),
-                row_count: 3,
-                columns: Arc::new(vec![PartitionColumn {
-                    name: Arc::from("some_int".to_string()),
-                    r#type: Arc::from(
-                        "{\"name\":\"int\",\"bitWidth\":32,\"isSigned\":true}"
-                            .to_string(),
-                    ),
-                    min_value: Arc::from(Some(30.to_string().as_bytes().to_vec())),
-                    max_value: Arc::from(Some(40.to_string().as_bytes().to_vec())),
-                    null_count: Some(0),
-                }]),
-            },
-        ];
+    async fn test_partition_pruning(
+        part_stats: Vec<(Option<i32>, Option<i32>, Option<u64>)>,
+        filters: Vec<Expr>,
+        expected: Vec<usize>,
+    ) {
+        // Dummy schema for the tests
         let schema = Arc::new(Schema::new(vec![Field::new(
             "some_int",
             DataType::Int32,
             true,
         )]));
 
+        // Create some fake partitions
+        let mut partitions = vec![];
+        for (ind, (min, max, null_count)) in part_stats.iter().enumerate() {
+            let min_value = Arc::from(min.map(|v| v.to_string().as_bytes().to_vec()));
+            let max_value = Arc::from(max.map(|v| v.to_string().as_bytes().to_vec()));
+
+            partitions.push(SeafowlPartition {
+                object_storage_id: Arc::from(format!("par{}.parquet", ind)),
+                row_count: 3,
+                columns: Arc::new(vec![PartitionColumn {
+                    name: Arc::from("some_int".to_string()),
+                    r#type: Arc::from(
+                        "{\"name\":\"int\",\"bitWidth\":32,\"isSigned\":true}"
+                            .to_string(),
+                    ),
+                    min_value,
+                    max_value,
+                    null_count: *null_count,
+                }]),
+            })
+        }
+
         // Create the main partition pruning handler
         let pruning_stats =
             SeafowlPruningStatistics::from_partitions(partitions.clone(), schema)
                 .unwrap();
 
-        // Create a filter expression and prune
-        let expr = col("some_int").gt_eq(lit(25));
-        let pruned = pruning_stats.prune(&[expr]).await;
+        // Prune the partitions
+        let pruned = pruning_stats.prune(filters.as_slice()).await;
 
-        // Ensure pruning worked
-        assert_eq!(pruned.len(), 2);
-        assert_eq!(pruned[0], partitions[1]);
-        assert_eq!(pruned[1], partitions[2]);
+        // Ensure pruning worked correctly
+        assert_eq!(pruned.len(), expected.len());
+        for (ind, &i) in expected.iter().enumerate() {
+            assert_eq!(pruned[ind], partitions[i])
+        }
     }
 }
