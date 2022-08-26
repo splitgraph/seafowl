@@ -1,3 +1,4 @@
+use std::cmp::min;
 use std::sync::Arc;
 
 use arrow::array::Int32Array;
@@ -32,13 +33,16 @@ impl Respond for MockResponse {
             let start = range_vals.next().unwrap().parse::<u64>().unwrap() as usize;
             let end = range_vals.next().unwrap().parse::<u64>().unwrap() as usize;
 
+            let body = self.body[start..min(end + 1, self.body.len())].to_vec();
+            let body_len = body.len();
+
             ResponseTemplate::new(206) // Partial Content
-                .set_body_bytes(self.body[start..end].to_vec())
+                .set_body_bytes(body)
                 .append_header(
                     "Content-Disposition",
                     "attachment; filename=\"file.parquet\"",
                 )
-                .append_header("Content-Length", (end - start).to_string().as_str())
+                .append_header("Content-Length", body_len.to_string().as_str())
         } else {
             ResponseTemplate::new(200)
                 .set_body_bytes(self.body.clone())
