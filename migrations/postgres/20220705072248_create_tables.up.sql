@@ -43,7 +43,8 @@ CREATE TABLE physical_partition_column (
     name VARCHAR NOT NULL,
     type VARCHAR NOT NULL,
     min_value BYTEA,
-    max_value BYTEA
+    max_value BYTEA,
+    null_count INTEGER
 );
 
 CREATE TABLE table_partition (

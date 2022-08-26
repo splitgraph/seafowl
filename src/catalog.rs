@@ -2,6 +2,7 @@ use std::str::FromStr;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
+use datafusion::error::DataFusionError;
 use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
@@ -22,59 +23,170 @@ use crate::{
     },
     repository::interface::{
         AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTablePartitionsResult,
-        Repository,
+        Error as RepositoryError, Repository,
     },
     schema::Schema,
 };
 
-// TODO: this trait is basically a wrapper around Repository, apart from the custom logic
-// for converting rows of database / partition results into SeafowlDatabase/Partition structs;
-// merge the two? Will a different database than PG still use the AllDatabaseColumnsResult /
-// AllTablePartitionsResult structs?
+#[derive(Debug)]
+pub enum Error {
+    DatabaseDoesNotExist { id: DatabaseId },
+    CollectionDoesNotExist { id: CollectionId },
+    TableDoesNotExist { id: TableId },
+    TableVersionDoesNotExist { id: TableVersionId },
+    // We were inserting a vector of partitions and can't find which one
+    // caused the error without parsing the error message, so just
+    // pretend we don't know.
+    PartitionDoesNotExist,
+    TableAlreadyExists { name: String },
+    DatabaseAlreadyExists { name: String },
+    CollectionAlreadyExists { name: String },
+    FunctionAlreadyExists { name: String },
+    FunctionDeserializationError { reason: String },
+    SqlxError(sqlx::Error),
+}
+
+// TODO janky, we want to:
+//  - use the ? operator to avoid a lot of map_err
+//  - but there are 2 distinct error types, so we have to be able to convert them into a single type
+//  - don't want to impl From<serde_json::Error> for Error  (since serde parse errors
+//    might not just be for FunctionDeserializationError)
+//
+//  Currently, we have a struct that we automatically convert both errors into (storing their messages)
+//  and then use one map_err to make the final Error::FunctionDeserializationError.
+//
+//  - could use Box<dyn Error>?
+//  - should maybe avoid just passing the to_string() of the error reason, but this is for internal
+//    use right now anyway (we made a mistake serializing the function into the DB, it's our fault)
+
+struct CreateFunctionError {
+    message: String,
+}
+
+impl From<strum::ParseError> for CreateFunctionError {
+    fn from(val: strum::ParseError) -> Self {
+        Self {
+            message: val.to_string(),
+        }
+    }
+}
+
+impl From<serde_json::Error> for CreateFunctionError {
+    fn from(val: serde_json::Error) -> Self {
+        Self {
+            message: val.to_string(),
+        }
+    }
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Implement a global converter into a DataFusionError from the catalog error type.
+/// These might be raised from different parts of query execution and in different contexts,
+/// but we want roughly the same message in each case anyway, so we can take advantage of
+/// the ? operator and automatic error conversion.
+impl From<Error> for DataFusionError {
+    fn from(val: Error) -> Self {
+        match val {
+            // These errors are raised by routines that already take an ID instead of
+            // a database/schema/table name and so the ID is supposed to be valid. An error
+            // in this case is an internal consistency issue.
+            Error::DatabaseDoesNotExist { id } => DataFusionError::Internal(format!(
+                "Database with ID {} doesn't exist",
+                id
+            )),
+            Error::CollectionDoesNotExist { id } => {
+                DataFusionError::Internal(format!("Schema with ID {} doesn't exist", id))
+            }
+            Error::TableDoesNotExist { id } => {
+                DataFusionError::Internal(format!("Table with ID {} doesn't exist", id))
+            }
+            // Raised by append_partitions_to_table and create_new_table_version (non-existent version), also internal issue
+            Error::TableVersionDoesNotExist { id } => DataFusionError::Internal(format!(
+                "Table version with ID {} doesn't exist",
+                id
+            )),
+            // Raised by append_partitions_to_table (partition not created before appending it)
+            Error::PartitionDoesNotExist => DataFusionError::Internal(
+                "Error linking partitions: unknown partition ID".to_string(),
+            ),
+            Error::FunctionDeserializationError { reason } => DataFusionError::Internal(
+                format!("Error deserializing function: {:?}", reason),
+            ),
+
+            // Errors that are the user's fault.
+
+            // Even though these are "execution" errors, we raise them from the plan stage,
+            // where we manipulate data in the catalog because that's the only chance we get at
+            // being async, so we follow DataFusion's convention and return these as Plan errors.
+            Error::TableAlreadyExists { name } => {
+                DataFusionError::Plan(format!("Table {:?} already exists", name))
+            }
+            Error::DatabaseAlreadyExists { name } => {
+                DataFusionError::Plan(format!("Database {:?} already exists", name))
+            }
+            Error::CollectionAlreadyExists { name } => {
+                DataFusionError::Plan(format!("Schema {:?} already exists", name))
+            }
+            Error::FunctionAlreadyExists { name } => {
+                DataFusionError::Plan(format!("Function {:?} already exists", name))
+            }
+
+            // Miscellaneous sqlx error. We want to log it but it's not worth showing to the user.
+            Error::SqlxError(e) => DataFusionError::Internal(format!(
+                "Internal SQL error: {:?}",
+                e.to_string()
+            )),
+        }
+    }
+}
 
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait TableCatalog: Sync + Send + Debug {
-    async fn load_database(&self, id: DatabaseId) -> SeafowlDatabase;
-    async fn get_database_id_by_name(&self, database_name: &str) -> Option<DatabaseId>;
+    async fn load_database(&self, id: DatabaseId) -> Result<SeafowlDatabase>;
+    async fn get_database_id_by_name(
+        &self,
+        database_name: &str,
+    ) -> Result<Option<DatabaseId>>;
     async fn get_collection_id_by_name(
         &self,
         database_name: &str,
         collection_name: &str,
-    ) -> Option<CollectionId>;
+    ) -> Result<Option<CollectionId>>;
 
-    async fn create_database(&self, database_name: &str) -> DatabaseId;
+    async fn create_database(&self, database_name: &str) -> Result<DatabaseId>;
 
     async fn create_collection(
         &self,
         database_id: DatabaseId,
         collection_name: &str,
-    ) -> CollectionId;
+    ) -> Result<CollectionId>;
 
     async fn create_table(
         &self,
         collection_id: CollectionId,
         table_name: &str,
-        schema: Schema,
-    ) -> (TableId, TableVersionId);
+        schema: &Schema,
+    ) -> Result<(TableId, TableVersionId)>;
 
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
-    ) -> TableVersionId;
+    ) -> Result<TableVersionId>;
 
     async fn move_table(
         &self,
         table_id: TableId,
         new_table_name: &str,
         new_collection_id: Option<CollectionId>,
-    ) -> ();
+    ) -> Result<()>;
 
-    async fn drop_table(&self, table_id: TableId);
+    async fn drop_table(&self, table_id: TableId) -> Result<()>;
 
-    async fn drop_collection(&self, collection_id: CollectionId);
+    async fn drop_collection(&self, collection_id: CollectionId) -> Result<()>;
 
-    async fn drop_database(&self, database_id: DatabaseId);
+    async fn drop_database(&self, database_id: DatabaseId) -> Result<()>;
 }
 
 #[cfg_attr(test, automock)]
@@ -85,18 +197,18 @@ pub trait PartitionCatalog: Sync + Send + Debug {
     async fn create_partitions(
         &self,
         partitions: Vec<SeafowlPartition>,
-    ) -> Vec<PhysicalPartitionId>;
+    ) -> Result<Vec<PhysicalPartitionId>>;
 
     async fn load_table_partitions(
         &self,
         table_version_id: TableVersionId,
-    ) -> Vec<SeafowlPartition>;
+    ) -> Result<Vec<SeafowlPartition>>;
 
     async fn append_partitions_to_table(
         &self,
         partition_ids: Vec<PhysicalPartitionId>,
         table_version_id: TableVersionId,
-    );
+    ) -> Result<()>;
 }
 
 #[cfg_attr(test, automock)]
@@ -107,12 +219,12 @@ pub trait FunctionCatalog: Sync + Send + Debug {
         database_id: DatabaseId,
         function_name: &str,
         details: &CreateFunctionDetails,
-    ) -> FunctionId;
+    ) -> Result<FunctionId>;
 
     async fn get_all_functions_in_database(
         &self,
         database_id: DatabaseId,
-    ) -> Vec<SeafowlFunction>;
+    ) -> Result<Vec<SeafowlFunction>>;
 }
 
 #[derive(Clone, Debug)]
@@ -121,6 +233,14 @@ pub struct DefaultCatalog {
 }
 
 impl DefaultCatalog {
+    fn to_sqlx_error(error: RepositoryError) -> Error {
+        Error::SqlxError(match error {
+            RepositoryError::UniqueConstraintViolation(e) => e,
+            RepositoryError::FKConstraintViolation(e) => e,
+            RepositoryError::SqlxError(e) => e,
+        })
+    }
+
     fn build_partition<'a, I>(&self, partition_columns: I) -> SeafowlPartition
     where
         I: Iterator<Item = &'a AllTablePartitionsResult>,
@@ -136,6 +256,7 @@ impl DefaultCatalog {
                     r#type: Arc::from(partition.column_type.clone()),
                     min_value: Arc::new(partition.min_value.clone()),
                     max_value: Arc::new(partition.max_value.clone()),
+                    null_count: None, // TODO: set this from partition object
                 })
                 .collect(),
             ),
@@ -206,12 +327,15 @@ impl DefaultCatalog {
 
 #[async_trait]
 impl TableCatalog for DefaultCatalog {
-    async fn load_database(&self, database_id: DatabaseId) -> SeafowlDatabase {
+    async fn load_database(&self, database_id: DatabaseId) -> Result<SeafowlDatabase> {
         let all_columns = self
             .repository
             .get_all_columns_in_database(database_id)
             .await
-            .expect("TODO db load error");
+            .map_err(Self::to_sqlx_error)?;
+
+        // NB we can't distinguish between a database without tables and a database
+        // that doesn't exist at all due to our query.
 
         // Turn the list of all collections, tables and their columns into a nested map.
 
@@ -222,75 +346,107 @@ impl TableCatalog for DefaultCatalog {
             .map(|(cn, cc)| self.build_collection(cn, cc))
             .collect();
 
-        SeafowlDatabase {
+        Ok(SeafowlDatabase {
             // TODO load the database name too
-            name: Arc::from("database"),
+            name: Arc::from("default"),
             collections,
-        }
+        })
     }
 
     async fn create_table(
         &self,
         collection_id: CollectionId,
         table_name: &str,
-        schema: Schema,
-    ) -> (TableId, TableVersionId) {
+        schema: &Schema,
+    ) -> Result<(TableId, TableVersionId)> {
         self.repository
             .create_table(collection_id, table_name, schema)
             .await
-            .expect("TODO table create error")
+            .map_err(|e| match e {
+                RepositoryError::UniqueConstraintViolation(_) => {
+                    Error::TableAlreadyExists {
+                        name: table_name.to_string(),
+                    }
+                }
+                RepositoryError::FKConstraintViolation(_) => {
+                    Error::CollectionDoesNotExist { id: collection_id }
+                }
+                RepositoryError::SqlxError(e) => Error::SqlxError(e),
+            })
     }
 
     async fn get_collection_id_by_name(
         &self,
         database_name: &str,
         collection_name: &str,
-    ) -> Option<CollectionId> {
+    ) -> Result<Option<CollectionId>> {
         match self
             .repository
             .get_collection_id_by_name(database_name, collection_name)
             .await
         {
-            Ok(id) => Some(id),
-            Err(sqlx::error::Error::RowNotFound) => None,
-            Err(e) => panic!("TODO SQL error: {:?}", e),
+            Ok(id) => Ok(Some(id)),
+            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => Ok(None),
+            Err(e) => Err(Self::to_sqlx_error(e)),
         }
     }
 
-    async fn get_database_id_by_name(&self, database_name: &str) -> Option<DatabaseId> {
+    async fn get_database_id_by_name(
+        &self,
+        database_name: &str,
+    ) -> Result<Option<DatabaseId>> {
         match self.repository.get_database_id_by_name(database_name).await {
-            Ok(id) => Some(id),
-            Err(sqlx::error::Error::RowNotFound) => None,
-            Err(e) => panic!("TODO SQL error: {:?}", e),
+            Ok(id) => Ok(Some(id)),
+            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => Ok(None),
+            Err(e) => Err(Self::to_sqlx_error(e)),
         }
     }
 
-    async fn create_database(&self, database_name: &str) -> DatabaseId {
+    async fn create_database(&self, database_name: &str) -> Result<DatabaseId> {
         self.repository
             .create_database(database_name)
             .await
-            .expect("TODO create database error")
+            .map_err(|e| match e {
+                RepositoryError::UniqueConstraintViolation(_) => {
+                    Error::DatabaseAlreadyExists {
+                        name: database_name.to_string(),
+                    }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 
     async fn create_collection(
         &self,
         database_id: DatabaseId,
         collection_name: &str,
-    ) -> CollectionId {
+    ) -> Result<CollectionId> {
         self.repository
             .create_collection(database_id, collection_name)
             .await
-            .expect("TODO create collection error")
+            .map_err(|e| match e {
+                RepositoryError::UniqueConstraintViolation(_) => {
+                    Error::CollectionAlreadyExists {
+                        name: collection_name.to_string(),
+                    }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
-    ) -> TableVersionId {
+    ) -> Result<TableVersionId> {
         self.repository
             .create_new_table_version(from_version)
             .await
-            .expect("TODO create version error")
+            .map_err(|e| match e {
+                RepositoryError::FKConstraintViolation(_) => {
+                    Error::TableVersionDoesNotExist { id: from_version }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 
     async fn move_table(
@@ -298,32 +454,63 @@ impl TableCatalog for DefaultCatalog {
         table_id: TableId,
         new_table_name: &str,
         new_collection_id: Option<CollectionId>,
-    ) {
+    ) -> Result<()> {
         self.repository
             .move_table(table_id, new_table_name, new_collection_id)
             .await
-            .expect("TODO move table error")
+            .map_err(|e| match e {
+                RepositoryError::FKConstraintViolation(_) => {
+                    // We only FK on collection_id, so this will be Some
+                    Error::CollectionDoesNotExist {
+                        id: new_collection_id.unwrap(),
+                    }
+                }
+                RepositoryError::UniqueConstraintViolation(_) => {
+                    Error::TableAlreadyExists {
+                        name: new_table_name.to_string(),
+                    }
+                }
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::TableDoesNotExist { id: table_id }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 
-    async fn drop_table(&self, table_id: TableId) {
+    async fn drop_table(&self, table_id: TableId) -> Result<()> {
         self.repository
             .drop_table(table_id)
             .await
-            .expect("TODO drop table error")
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::TableDoesNotExist { id: table_id }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 
-    async fn drop_collection(&self, collection_id: CollectionId) {
+    async fn drop_collection(&self, collection_id: CollectionId) -> Result<()> {
         self.repository
             .drop_collection(collection_id)
             .await
-            .expect("TODO drop collection error")
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::CollectionDoesNotExist { id: collection_id }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 
-    async fn drop_database(&self, database_id: DatabaseId) {
+    async fn drop_database(&self, database_id: DatabaseId) -> Result<()> {
         self.repository
             .drop_database(database_id)
             .await
-            .expect("TODO drop database error")
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::DatabaseDoesNotExist { id: database_id }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 }
 
@@ -332,39 +519,85 @@ impl PartitionCatalog for DefaultCatalog {
     async fn create_partitions(
         &self,
         partitions: Vec<SeafowlPartition>,
-    ) -> Vec<PhysicalPartitionId> {
+    ) -> Result<Vec<PhysicalPartitionId>> {
         self.repository
             .create_partitions(partitions)
             .await
-            .expect("TODO create partition error")
+            .map_err(Self::to_sqlx_error)
     }
 
     async fn load_table_partitions(
         &self,
         table_version_id: TableVersionId,
-    ) -> Vec<SeafowlPartition> {
+    ) -> Result<Vec<SeafowlPartition>> {
+        // NB: currently the query can't distinguish between a non-existent table version
+        // and an empty table version
         let all_partitions = self
             .repository
             .get_all_partitions_in_table(table_version_id)
             .await
-            .expect("TODO db load error");
-        all_partitions
+            .map_err(Self::to_sqlx_error)?;
+
+        Ok(all_partitions
             .iter()
             .group_by(|col| col.table_partition_id)
             .into_iter()
             .map(|(_, cs)| self.build_partition(cs))
-            .collect()
+            .collect())
     }
 
     async fn append_partitions_to_table(
         &self,
         partition_ids: Vec<PhysicalPartitionId>,
         table_version_id: TableVersionId,
-    ) {
+    ) -> Result<()> {
         self.repository
             .append_partitions_to_table(partition_ids, table_version_id)
             .await
-            .expect("TODO attach partition error")
+            .map_err(|e| match e {
+                RepositoryError::FKConstraintViolation(ref se) => {
+                    // Kinda janky but we'd prefer to be able to know if the error is because
+                    // a table version or a physical partition doesn't exist
+                    if se.to_string().contains("table_version_id") {
+                        Error::TableVersionDoesNotExist {
+                            id: table_version_id,
+                        }
+                    } else if se.to_string().contains("physical_partition_id") {
+                        Error::PartitionDoesNotExist
+                    } else {
+                        Self::to_sqlx_error(e)
+                    }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
+    }
+}
+
+impl DefaultCatalog {
+    fn parse_create_function_details(
+        item: &AllDatabaseFunctionsResult,
+    ) -> std::result::Result<CreateFunctionDetails, CreateFunctionError> {
+        let AllDatabaseFunctionsResult {
+            id: _,
+            name: _,
+            entrypoint,
+            language,
+            input_types,
+            return_type,
+            data,
+            volatility,
+        } = item;
+
+        Ok(CreateFunctionDetails {
+            entrypoint: entrypoint.to_string(),
+            language: CreateFunctionLanguage::from_str(language.as_str())?,
+            input_types: serde_json::from_str::<Vec<CreateFunctionWASMType>>(
+                input_types,
+            )?,
+            return_type: CreateFunctionWASMType::from_str(return_type.as_str())?,
+            data: data.to_string(),
+            volatility: CreateFunctionVolatility::from_str(volatility.as_str())?,
+        })
     }
 }
 
@@ -375,60 +608,47 @@ impl FunctionCatalog for DefaultCatalog {
         database_id: DatabaseId,
         function_name: &str,
         details: &CreateFunctionDetails,
-    ) -> FunctionId {
+    ) -> Result<FunctionId> {
         self.repository
             .create_function(database_id, function_name, details)
             .await
-            .expect("TODO create function error")
+            .map_err(|e| match e {
+                RepositoryError::FKConstraintViolation(_) => {
+                    Error::DatabaseDoesNotExist { id: database_id }
+                }
+                RepositoryError::UniqueConstraintViolation(_) => {
+                    // TODO overwrite function defns instead?
+                    Error::FunctionAlreadyExists {
+                        name: function_name.to_string(),
+                    }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 
     async fn get_all_functions_in_database(
         &self,
         database_id: DatabaseId,
-    ) -> Vec<SeafowlFunction> {
+    ) -> Result<Vec<SeafowlFunction>> {
         let all_functions = self
             .repository
             .get_all_functions_in_database(database_id)
             .await
-            .expect("TODO get all functions in database error");
+            .map_err(Self::to_sqlx_error)?;
 
-        let functions = all_functions
+        all_functions
             .iter()
             .map(|item| {
-                let AllDatabaseFunctionsResult {
-                    id,
-                    name,
-                    entrypoint,
-                    language,
-                    input_types,
-                    return_type,
-                    data,
-                    volatility,
-                } = item;
-
-                let details = CreateFunctionDetails {
-                    entrypoint: entrypoint.clone(),
-                    language: CreateFunctionLanguage::from_str(language.as_str())
-                        .unwrap(),
-                    input_types: serde_json::from_str::<Vec<CreateFunctionWASMType>>(
-                        input_types,
-                    )
-                    .expect("Couldn't deserialize input types!"),
-                    return_type: CreateFunctionWASMType::from_str(return_type.as_str())
-                        .unwrap(),
-                    data: data.clone(),
-                    volatility: CreateFunctionVolatility::from_str(volatility.as_str())
-                        .unwrap(),
-                };
-
-                SeafowlFunction {
-                    function_id: *id,
-                    name: name.clone(),
-                    details,
-                }
+                Self::parse_create_function_details(item)
+                    .map(|details| SeafowlFunction {
+                        function_id: item.id,
+                        name: item.name.to_owned(),
+                        details,
+                    })
+                    .map_err(|e| Error::FunctionDeserializationError {
+                        reason: e.message,
+                    })
             })
-            .collect::<Vec<SeafowlFunction>>();
-
-        functions
+            .collect::<Result<Vec<SeafowlFunction>>>()
     }
 }

@@ -4,7 +4,7 @@ use std::env;
 use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
-use datafusion::assert_batches_eq;
+use datafusion::{assert_batches_eq, assert_contains};
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
@@ -33,8 +33,8 @@ schema = "{}""#,
 
     // Ignore the "in-memory object store / persistent catalog" error in e2e tests (we'll discard
     // the PG instance anyway)
-    let config = load_config_from_string(&config_text, true).unwrap();
-    build_context(&config).await
+    let config = load_config_from_string(&config_text, true, None).unwrap();
+    build_context(&config).await.unwrap()
 }
 
 /// Get a batch of results with all tables and columns in a database
@@ -92,9 +92,6 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    // reregister / reload the catalog
-    context.reload_schema().await;
-
     // Insert some data (with some columns missing, different order)
     let plan = context
         .plan_query(
@@ -110,8 +107,6 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
-
-    context.reload_schema().await;
 }
 
 #[tokio::test]
@@ -156,9 +151,6 @@ async fn test_create_table() {
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
-
-    // reregister / reload the catalog
-    context.reload_schema().await;
 
     // Check table columns
     let results = list_columns_query(&context).await;
@@ -254,8 +246,6 @@ async fn test_insert_two_different_schemas() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    context.reload_schema().await;
-
     let plan = context
         .plan_query("SELECT * FROM test_table")
         .await
@@ -299,7 +289,8 @@ async fn test_table_partitioning_and_rechunking() {
     let partitions = context
         .partition_catalog
         .load_table_partitions(3 as TableVersionId)
-        .await;
+        .await
+        .unwrap();
 
     // Ensure we have 2 partitions, originating from 2 INSERTS
     assert_eq!(partitions.len(), 2);
@@ -322,8 +313,48 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(partitions[1].row_count, 3);
     assert_eq!(partitions[1].columns.len(), 2);
 
-    context.reload_schema().await;
+    //
+    // Test partition pruning during scans works
+    //
 
+    // Assert that only a single partition is going to be used
+    let plan = context
+        .plan_query(
+            "EXPLAIN SELECT some_value, some_int_value FROM test_table WHERE some_value > 45",
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let formatted = arrow::util::pretty::pretty_format_batches(results.as_slice())
+        .unwrap()
+        .to_string();
+
+    let actual_lines: Vec<&str> = formatted.trim().lines().collect();
+    assert_contains!(actual_lines[10], "partitions=[a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet]");
+
+    // Assert query results
+    let plan = context
+        .plan_query(
+            "SELECT some_value, some_int_value FROM test_table WHERE some_value > 45",
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+------------+----------------+",
+        "| some_value | some_int_value |",
+        "+------------+----------------+",
+        "| 46         | 5555           |",
+        "| 47         | 6666           |",
+        "+------------+----------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    //
+    // Re-chunk by creating a new table
+    //
     let plan = context
         .plan_query("CREATE TABLE table_rechunked AS SELECT * FROM test_table")
         .await
@@ -333,7 +364,8 @@ async fn test_table_partitioning_and_rechunking() {
     let partitions = context
         .partition_catalog
         .load_table_partitions(4 as TableVersionId)
-        .await;
+        .await
+        .unwrap();
 
     // Ensure we have re-chunked the 2 partitions into 1
     assert_eq!(partitions.len(), 1);
@@ -348,7 +380,6 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(partitions[0].columns.len(), 5);
 
     // Ensure table contents
-    context.reload_schema().await;
     let plan = context
         .plan_query("SELECT some_value, some_int_value FROM table_rechunked")
         .await
@@ -394,8 +425,6 @@ async fn test_create_table_as() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    context.reload_schema().await;
-
     let plan = context.plan_query("SELECT * FROM test_ctas").await.unwrap();
     let results = context.collect(plan).await.unwrap();
 
@@ -420,8 +449,6 @@ async fn test_create_table_move_and_drop() {
     for table_name in ["test_table_1", "test_table_2"] {
         create_table_and_insert(&context, table_name).await;
     }
-
-    context.reload_schema().await;
 
     let results = list_columns_query(&context).await;
 
@@ -462,7 +489,6 @@ async fn test_create_table_move_and_drop() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -496,7 +522,6 @@ async fn test_create_table_move_and_drop() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     context
         .collect(
@@ -507,7 +532,6 @@ async fn test_create_table_move_and_drop() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -529,7 +553,6 @@ async fn test_create_table_move_and_drop() {
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
-    context.reload_schema().await;
 
     let results = list_columns_query(&context).await;
 
@@ -552,8 +575,6 @@ async fn test_create_table_move_and_drop() {
     let plan = context.plan_query("DROP TABLE test_table_2").await.unwrap();
     context.collect(plan).await.unwrap();
 
-    context.reload_schema().await;
-
     let results = list_columns_query(&context).await;
 
     let expected = vec!["++", "++"];
@@ -569,8 +590,6 @@ async fn test_create_table_drop_schema() {
         create_table_and_insert(&context, table_name).await;
     }
 
-    context.reload_schema().await;
-
     // Create a schema and move the table to it
     context
         .collect(
@@ -581,7 +600,6 @@ async fn test_create_table_drop_schema() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     context
         .collect(
@@ -592,7 +610,6 @@ async fn test_create_table_drop_schema() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -613,7 +630,6 @@ async fn test_create_table_drop_schema() {
         .collect(context.plan_query("DROP SCHEMA public").await.unwrap())
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -633,7 +649,6 @@ async fn test_create_table_drop_schema() {
         .collect(context.plan_query("DROP SCHEMA new_schema").await.unwrap())
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -652,7 +667,6 @@ async fn test_create_table_drop_schema() {
         .collect(context.plan_query("CREATE SCHEMA public").await.unwrap())
         .await
         .unwrap();
-    context.reload_schema().await;
 
     context
         .collect(
@@ -663,7 +677,6 @@ async fn test_create_table_drop_schema() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     let results = list_tables_query(&context).await;
 
@@ -680,26 +693,52 @@ async fn test_create_table_drop_schema() {
 }
 
 #[tokio::test]
-async fn test_create_and_reload_function() {
+async fn test_create_table_schema_already_exists() {
     let context = make_context_with_pg().await;
 
-    let plan = context
-        .plan_query(
-            r#"CREATE FUNCTION sintau AS '
-            {
-                "entrypoint": "sintau",
-                "language": "wasm",
-                "input_types": ["f32"],
-                "return_type": "f32",
-                "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
-            }';"#,
+    context
+        .collect(
+            context
+                .plan_query("CREATE TABLE some_table(key INTEGER)")
+                .await
+                .unwrap(),
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
+    let err = context
+        .plan_query("CREATE TABLE some_table(key INTEGER)")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Error during planning: Table \"some_table\" already exists"
+    );
 
-    // Reload to make sure we picked up the stored function from the metadata store
-    context.reload_schema().await;
+    let err = context
+        .plan_query("CREATE SCHEMA public")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Error during planning: Schema \"public\" already exists"
+    );
+}
+
+#[tokio::test]
+async fn test_create_and_run_function() {
+    let context = make_context_with_pg().await;
+
+    let function_query = r#"CREATE FUNCTION sintau AS '
+    {
+        "entrypoint": "sintau",
+        "language": "wasm",
+        "input_types": ["f32"],
+        "return_type": "f32",
+        "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
+    }';"#;
+
+    let plan = context.plan_query(function_query).await.unwrap();
+    context.collect(plan).await.unwrap();
 
     let results = context
         .collect(
@@ -728,4 +767,12 @@ async fn test_create_and_reload_function() {
     ];
 
     assert_batches_eq!(expected, &results);
+
+    // Run the same query again to make sure we raise an error if the function already exists
+    let err = context.plan_query(function_query).await.unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "Error during planning: Function \"sintau\" already exists"
+    );
 }

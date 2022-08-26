@@ -55,8 +55,8 @@ dsn = ":memory:"
 # sha hash of "write_password"
 write_access = "b786e07f52fc72d32b2163b6f63aa16344fd8d2d84df87b6c231ab33cd5aa125""#;
 
-    let config = load_config_from_string(config_text, false).unwrap();
-    let context = Arc::from(build_context(&config).await);
+    let config = load_config_from_string(config_text, false, None).unwrap();
+    let context = Arc::from(build_context(&config).await.unwrap());
 
     let filters = filters(
         context.clone(),
@@ -312,8 +312,6 @@ async fn test_upload_base(
     let status = child.wait().await.unwrap();
     dbg!("Upload status is {}", status);
 
-    context.reload_schema().await;
-
     // Verify the newly created table contents
     let plan = context
         .plan_query(format!("SELECT * FROM test_upload.{}", table_name).as_str())
@@ -357,7 +355,6 @@ async fn test_upload_to_existing_table() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
     context
         .collect(
             context
@@ -367,7 +364,6 @@ async fn test_upload_to_existing_table() {
         )
         .await
         .unwrap();
-    context.reload_schema().await;
 
     // Prepare the schema that matches the existing table + some data
     let schema = Arc::new(Schema::new(vec![Field::new(
@@ -402,8 +398,6 @@ async fn test_upload_to_existing_table() {
         .unwrap();
     let status = child.wait().await.unwrap();
     dbg!("Upload status is {}", status);
-
-    context.reload_schema().await;
 
     // Verify the newly created table contents
     let plan = context
@@ -463,5 +457,30 @@ async fn test_upload_to_existing_table() {
         String::from_utf8(output.stdout).unwrap()
     );
 
+    terminate.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn test_upload_not_writer_authz() {
+    let (addr, server, terminate, _context) = make_read_only_http_server().await;
+
+    tokio::task::spawn(server);
+
+    let output = Command::new("curl")
+        .args(&[
+            "-H",
+            "Authorization: Bearer wrong_password",
+            "-F",
+            "data='doesntmatter'",
+            format!("http://{}/upload/public/test_table", addr).as_str(),
+        ])
+        .output()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        "INVALID_ACCESS_TOKEN".to_string(),
+        String::from_utf8(output.stdout).unwrap()
+    );
     terminate.send(()).unwrap();
 }

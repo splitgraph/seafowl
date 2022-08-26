@@ -5,7 +5,7 @@ use futures::TryStreamExt;
 use sqlx::{
     migrate::Migrator,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    Error, Pool, QueryBuilder, Row, Sqlite,
+    Pool, QueryBuilder, Row, Sqlite,
 };
 
 use crate::{
@@ -23,7 +23,9 @@ use crate::implement_repository;
 
 use super::{
     default::RepositoryQueries,
-    interface::{AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Repository},
+    interface::{
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Error, Repository, Result,
+    },
 };
 
 #[derive(Debug)]
@@ -64,13 +66,31 @@ impl SqliteRepository {
         "#,
     };
 
-    pub async fn try_new(dsn: String) -> Result<Self, Error> {
+    pub async fn try_new(dsn: String) -> std::result::Result<Self, sqlx::Error> {
         let options = SqliteConnectOptions::from_str(&dsn)?.create_if_missing(true);
 
         let pool = SqlitePoolOptions::new().connect_with(options).await?;
         let repo = Self { executor: pool };
         repo.setup().await;
         Ok(repo)
+    }
+
+    pub fn interpret_error(error: sqlx::Error) -> Error {
+        if let sqlx::Error::Database(ref d) = error {
+            // Reference: https://www.sqlite.org/rescode.html
+            let message = d.message();
+
+            // For some reason, sqlx doesn't return the proper errcode for FK violations,
+            // even though it's calling sqlite3_extended_errcode which is meant to return full codes.
+            // Unique constraint violations do return the correct code though.
+            if message.contains("FOREIGN KEY constraint failed") {
+                return Error::FKConstraintViolation(error);
+            }
+            if message.contains("UNIQUE constraint failed") {
+                return Error::UniqueConstraintViolation(error);
+            }
+        }
+        Error::SqlxError(error)
     }
 }
 

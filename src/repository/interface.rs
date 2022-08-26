@@ -2,8 +2,6 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 
-use sqlx::Error;
-
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     data_types::{
@@ -33,6 +31,7 @@ pub struct AllTablePartitionsResult {
     pub row_count: i32,
     pub min_value: Option<Vec<u8>>,
     pub max_value: Option<Vec<u8>>,
+    pub null_count: Option<i32>,
 }
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
@@ -46,6 +45,18 @@ pub struct AllDatabaseFunctionsResult {
     pub data: String,
     pub volatility: String,
 }
+
+/// Wrapper for conversion of database-specific error codes into actual errors
+#[derive(Debug)]
+pub enum Error {
+    UniqueConstraintViolation(sqlx::Error),
+    FKConstraintViolation(sqlx::Error),
+
+    // All other errors
+    SqlxError(sqlx::Error),
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[async_trait]
 pub trait Repository: Send + Sync + Debug {
@@ -89,7 +100,7 @@ pub trait Repository: Send + Sync + Debug {
         &self,
         collection_id: CollectionId,
         table_name: &str,
-        schema: Schema,
+        schema: &Schema,
     ) -> Result<(TableId, TableVersionId), Error>;
 
     async fn create_partitions(
@@ -162,6 +173,7 @@ pub mod tests {
                     r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                     min_value: Arc::new(None),
                     max_value: Arc::new(None),
+                    null_count: Some(1),
                 },
                 PartitionColumn {
                     name: Arc::from("integer".to_string()),
@@ -171,12 +183,14 @@ pub mod tests {
                     ),
                     min_value: Arc::new(Some([49, 50].to_vec())),
                     max_value: Arc::new(Some([52, 50].to_vec())),
+                    null_count: Some(0),
                 },
                 PartitionColumn {
                     name: Arc::from("varchar".to_string()),
                     r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                     min_value: Arc::new(None),
                     max_value: Arc::new(None),
+                    null_count: None,
                 },
             ]),
         }
@@ -203,7 +217,7 @@ pub mod tests {
         };
 
         let (table_id, table_version_id) = repository
-            .create_table(collection_id, "testtable", schema)
+            .create_table(collection_id, "testtable", &schema)
             .await
             .expect("Error creating table");
 
@@ -217,7 +231,9 @@ pub mod tests {
         let new_version_id =
             test_create_append_partition(repository.clone(), table_version_id).await;
         test_create_functions(repository.clone(), database_id).await;
-        test_rename_table(repository, database_id, table_id, new_version_id).await;
+        test_rename_table(repository.clone(), database_id, table_id, new_version_id)
+            .await;
+        test_error_propagation(repository, table_id).await;
     }
 
     async fn test_get_collections_empty(repository: Arc<dyn Repository>) {
@@ -338,6 +354,7 @@ pub mod tests {
                 row_count: 2,
                 min_value: None,
                 max_value: None,
+                null_count: Some(1),
             },
             AllTablePartitionsResult {
                 table_partition_id: *partition_id,
@@ -348,6 +365,7 @@ pub mod tests {
                 row_count: 2,
                 min_value: Some([49, 50].to_vec()),
                 max_value: Some([52, 50].to_vec()),
+                null_count: Some(0),
             },
             AllTablePartitionsResult {
                 table_partition_id: *partition_id,
@@ -357,6 +375,7 @@ pub mod tests {
                 row_count: 2,
                 min_value: None,
                 max_value: None,
+                null_count: None,
             },
         ];
         assert_eq!(all_partitions, expected_partitions);
@@ -469,5 +488,61 @@ pub mod tests {
                 "testtable2".to_string()
             )
         );
+    }
+
+    async fn test_error_propagation(repository: Arc<dyn Repository>, table_id: TableId) {
+        // Nonexistent table ID
+        assert!(matches!(
+            repository
+                .move_table(-1, "doesntmatter", None)
+                .await
+                .unwrap_err(),
+            Error::SqlxError(sqlx::Error::RowNotFound)
+        ));
+
+        // Existing table ID, moved to a nonexistent collection (FK violation)
+        assert!(matches!(
+            repository
+                .move_table(table_id, "doesntmatter", Some(-1))
+                .await
+                .unwrap_err(),
+            Error::FKConstraintViolation(_)
+        ));
+
+        // Make a new table in the existing collection with the same name
+        let schema = Schema {
+            arrow_schema: Arc::new(ArrowSchema::empty()),
+        };
+
+        let collection_id_1 = repository
+            .get_collection_id_by_name("testdb", "testcol")
+            .await
+            .unwrap();
+        let collection_id_2 = repository
+            .get_collection_id_by_name("testdb", "testcol2")
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            repository
+                .create_table(collection_id_2, "testtable2", &schema)
+                .await
+                .unwrap_err(),
+            Error::UniqueConstraintViolation(_)
+        ));
+
+        // Make a new table in the previous collection, try renaming
+        let (new_table_id, _) = repository
+            .create_table(collection_id_1, "testtable2", &schema)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            repository
+                .move_table(new_table_id, "testtable2", Some(collection_id_2))
+                .await
+                .unwrap_err(),
+            Error::UniqueConstraintViolation(_)
+        ));
     }
 }
