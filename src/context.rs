@@ -161,12 +161,15 @@ fn build_partition_columns(
     // TODO PartitionColumn might not be the right data structure here (lacks ID etc)
     match &partition_stats.column_statistics {
         // NB: Here we may end up with `null_count` being None, but DF pruning algorithm demands that
-        // the null count field be not nullable itself, and consequently for any such cases the
+        // the null count field be not nullable itself. Consequently for any such cases the
         // pruning will fail, and we will default to using all partitions.
         Some(column_statistics) => zip(column_statistics, schema.fields())
             .map(|(stats, column)| {
                 // TODO: the to_string will discard the timezone for Timestamp* values, and will
-                // therefore hinder the ability to recreate them once needed for partition pruning
+                // therefore hinder the ability to recreate them once needed for partition pruning.
+                // However, since DF stats rely on Parquet stats that problem won't come up until
+                // 1) Parquet starts collecting stats for Timestamp* types (`parquet::file::statistics::Statistics` enum)
+                // 2) DF pattern matches those types in `summarize_min_max`.
                 let min_value = stats
                     .min_value
                     .as_ref()

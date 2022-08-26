@@ -4,7 +4,7 @@ use std::env;
 use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
-use datafusion::assert_batches_eq;
+use datafusion::{assert_batches_eq, assert_contains};
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
@@ -326,22 +326,12 @@ async fn test_table_partitioning_and_rechunking() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
-        "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-        "| plan_type     | plan                                                                                                                                                                                                              |",
-        "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-        "| logical_plan  | Projection: #test_table.some_value, #test_table.some_int_value                                                                                                                                                    |",
-        "|               |   Filter: #test_table.some_value > Int64(45)                                                                                                                                                                      |",
-        "|               |     TableScan: test_table projection=[some_int_value, some_value], partial_filters=[#test_table.some_value > Int64(45)]                                                                                           |",
-        "| physical_plan | ProjectionExec: expr=[some_value@1 as some_value, some_int_value@0 as some_int_value]                                                                                                                             |",
-        "|               |   CoalesceBatchesExec: target_batch_size=4096                                                                                                                                                                     |",
-        "|               |     FilterExec: some_value@1 > CAST(45 AS Float32)                                                                                                                                                                |",
-        "|               |       RepartitionExec: partitioning=RoundRobinBatch(8)                                                                                                                                                            |",
-        "|               |         ParquetExec: limit=None, partitions=[a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet], predicate=some_value_max@0 > CAST(45 AS Float32), projection=[some_int_value, some_value] |",
-        "|               |                                                                                                                                                                                                                   |",
-        "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &results);
+    let formatted = arrow::util::pretty::pretty_format_batches(results.as_slice())
+        .unwrap()
+        .to_string();
+
+    let actual_lines: Vec<&str> = formatted.trim().lines().collect();
+    assert_contains!(actual_lines[10], "partitions=[a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet]");
 
     // Assert query results
     let plan = context
