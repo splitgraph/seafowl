@@ -159,10 +159,11 @@ mod tests {
                     bind_port: 80,
                     read_access: schema::AccessSettings::Any,
                     write_access: schema::AccessSettings::Any,
+                    upload_data_max_length: 256 * 1024 * 1024,
                 }),
             },
             misc: schema::Misc {
-                max_partition_size: 1048576,
+                max_partition_size: 1024 * 1024,
             },
         };
 

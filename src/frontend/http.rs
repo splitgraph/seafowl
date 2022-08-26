@@ -376,8 +376,10 @@ fn load_parquet_bytes(
 
 pub fn filters(
     context: Arc<dyn SeafowlContext>,
-    access_policy: AccessPolicy,
+    config: HttpFrontend,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    let access_policy = AccessPolicy::from_config(&config);
+
     let cors = warp::cors()
         .allow_any_origin()
         .allow_headers(vec!["X-Seafowl-Query", "Authorization", "Content-Type"])
@@ -420,7 +422,7 @@ pub fn filters(
     let upload_route = warp::path!("upload" / String / String)
         .and(warp::post())
         .and(with_auth(access_policy))
-        .and(warp::multipart::form())
+        .and(warp::multipart::form().max_length(config.upload_data_max_length))
         .and(warp::any().map(move || ctx.clone()))
         .then(upload)
         .map(into_response);
@@ -438,7 +440,7 @@ pub async fn run_server(
     config: HttpFrontend,
     mut shutdown: Receiver<()>,
 ) {
-    let filters = filters(context, AccessPolicy::from_config(&config));
+    let filters = filters(context, config.clone());
 
     let socket_addr: SocketAddr = format!("{}:{}", config.bind_host, config.bind_port)
         .parse()
@@ -469,12 +471,21 @@ mod tests {
 
     use crate::auth::AccessPolicy;
 
+    use crate::config::schema::HttpFrontend;
     use crate::{
         context::{test_utils::in_memory_context, SeafowlContext},
         frontend::http::{filters, ETAG, QUERY_HEADER},
     };
 
     use super::AUTHORIZATION;
+
+    fn http_config_from_access_policy(access_policy: AccessPolicy) -> HttpFrontend {
+        HttpFrontend {
+            read_access: access_policy.read,
+            write_access: access_policy.write,
+            ..HttpFrontend::default()
+        }
+    }
 
     /// Build an in-memory context with a single table
     /// We implicitly assume here that this table is the only one in this context
@@ -537,7 +548,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_hash_mismatch() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
@@ -551,7 +562,7 @@ mod tests {
     #[tokio::test]
     async fn test_cors() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("OPTIONS")
@@ -583,7 +594,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_write_query_error() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
@@ -598,7 +609,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_etag() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
@@ -614,7 +625,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_query() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
@@ -630,7 +641,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_etag_query_in_body() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
@@ -646,7 +657,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cached_no_etag_extension() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
@@ -664,7 +675,7 @@ mod tests {
         // Pass the same ETag as If-None-Match, should return a 301
 
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
@@ -682,7 +693,7 @@ mod tests {
         // Pass the same ETag as If-None-Match, but the table version changed -> reruns the query
 
         let context = in_memory_context_with_modified_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
@@ -740,7 +751,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_uncached_read_query() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = query_uncached_endpoint(&handler, SELECT_QUERY).await;
 
@@ -751,7 +762,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_uncached_write_query() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = query_uncached_endpoint(&handler, INSERT_QUERY).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -765,7 +776,7 @@ mod tests {
     #[tokio::test]
     async fn test_error_parse() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = query_uncached_endpoint(&handler, "SLEECT 1").await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -778,7 +789,7 @@ mod tests {
     #[tokio::test]
     async fn test_error_parse_seafowl() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp =
             query_uncached_endpoint(&handler, "CREATE FUNCTION what_function").await;
@@ -792,7 +803,7 @@ mod tests {
     #[tokio::test]
     async fn test_error_plan_missing_table() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = query_uncached_endpoint(&handler, "SELECT * FROM missing_table").await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -805,7 +816,7 @@ mod tests {
     #[tokio::test]
     async fn test_error_execution() {
         let context = in_memory_context_with_single_table().await;
-        let handler = filters(context, free_for_all());
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = query_uncached_endpoint(&handler, "SELECT 1/0").await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -817,7 +828,9 @@ mod tests {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(
             context,
-            AccessPolicy::free_for_all().with_read_password("somepw"),
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_read_password("somepw"),
+            ),
         );
 
         let resp = request()
@@ -835,7 +848,9 @@ mod tests {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(
             context,
-            AccessPolicy::free_for_all().with_write_password("somepw"),
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_password("somepw"),
+            ),
         );
 
         let resp = query_uncached_endpoint(&handler, "SELECT * FROM test_table").await;
@@ -847,7 +862,9 @@ mod tests {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(
             context,
-            AccessPolicy::free_for_all().with_write_password("somepw"),
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_password("somepw"),
+            ),
         );
 
         let resp =
@@ -861,7 +878,9 @@ mod tests {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(
             context,
-            AccessPolicy::free_for_all().with_write_password("somepw"),
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_password("somepw"),
+            ),
         );
 
         let resp = query_uncached_endpoint(&handler, "DROP TABLE test_table").await;
@@ -874,9 +893,11 @@ mod tests {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(
             context,
-            AccessPolicy::free_for_all()
-                .with_write_password("somepw")
-                .with_read_password("somereadpw"),
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all()
+                    .with_write_password("somepw")
+                    .with_read_password("somereadpw"),
+            ),
         );
 
         let resp = query_uncached_endpoint(&handler, "SELECT 1").await;
@@ -889,9 +910,11 @@ mod tests {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(
             context,
-            AccessPolicy::free_for_all()
-                .with_write_password("somepw")
-                .with_read_password("somereadpw"),
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all()
+                    .with_write_password("somepw")
+                    .with_read_password("somereadpw"),
+            ),
         );
 
         let resp = query_uncached_endpoint_token(
@@ -909,9 +932,11 @@ mod tests {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(
             context,
-            AccessPolicy::free_for_all()
-                .with_write_password("somepw")
-                .with_read_password("somereadpw"),
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all()
+                    .with_write_password("somepw")
+                    .with_read_password("somereadpw"),
+            ),
         );
 
         let resp =
@@ -923,8 +948,12 @@ mod tests {
     #[tokio::test]
     async fn test_read_only_anonymous_cant_write() {
         let context = in_memory_context_with_single_table().await;
-        let handler =
-            filters(context, AccessPolicy::free_for_all().with_write_disabled());
+        let handler = filters(
+            context,
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_disabled(),
+            ),
+        );
 
         let resp = query_uncached_endpoint(&handler, "DROP TABLE test_table").await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -934,8 +963,12 @@ mod tests {
     #[tokio::test]
     async fn test_read_only_useless_access_token() {
         let context = in_memory_context_with_single_table().await;
-        let handler =
-            filters(context, AccessPolicy::free_for_all().with_write_disabled());
+        let handler = filters(
+            context,
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_disabled(),
+            ),
+        );
 
         let resp =
             query_uncached_endpoint_token(&handler, "DROP TABLE test_table", "somepw")
@@ -949,7 +982,9 @@ mod tests {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(
             context,
-            AccessPolicy::free_for_all().with_write_password("somepw"),
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_password("somepw"),
+            ),
         );
 
         let resp = query_uncached_endpoint_token(&handler, "SELECT 1", "otherpw").await;
@@ -962,7 +997,9 @@ mod tests {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(
             context,
-            AccessPolicy::free_for_all().with_write_password("somepw"),
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_password("somepw"),
+            ),
         );
 
         let resp = request()
@@ -980,7 +1017,10 @@ mod tests {
     #[tokio::test]
     async fn test_http_type_conversion() {
         let context = Arc::new(in_memory_context().await);
-        let handler = filters(context, free_for_all());
+        let handler = filters(
+            context,
+            http_config_from_access_policy(AccessPolicy::free_for_all()),
+        );
 
         let query = r#"
 SELECT
