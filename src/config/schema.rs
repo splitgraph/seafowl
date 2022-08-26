@@ -212,6 +212,7 @@ pub struct HttpFrontend {
     pub bind_port: u16,
     pub read_access: AccessSettings,
     pub write_access: AccessSettings,
+    pub upload_data_max_length: u64,
 }
 
 impl Default for HttpFrontend {
@@ -221,6 +222,7 @@ impl Default for HttpFrontend {
             bind_port: 8080,
             read_access: AccessSettings::Any,
             write_access: AccessSettings::Off,
+            upload_data_max_length: 256 * 1024 * 1024,
         }
     }
 }
@@ -234,7 +236,7 @@ pub struct Misc {
 impl Default for Misc {
     fn default() -> Self {
         Self {
-            max_partition_size: 1048576,
+            max_partition_size: 1024 * 1024,
         }
     }
 }
@@ -338,6 +340,7 @@ bind_host = "0.0.0.0"
 bind_port = 80
 read_access = "any"
 write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
+upload_data_max_length = 1024
 "#;
 
     const TEST_CONFIG_ERROR: &str = r#"
@@ -391,10 +394,11 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
                         bind_port: 80,
                         read_access: AccessSettings::Any,
                         write_access: AccessSettings::Off,
+                        upload_data_max_length: 268435456
                     })
                 },
                 misc: Misc {
-                    max_partition_size: 1048576
+                    max_partition_size: 1024 * 1024
                 },
             }
         )
@@ -415,6 +419,7 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
                         "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
                             .to_string()
                 },
+                upload_data_max_length: 1024
             }
         );
     }
@@ -474,10 +479,11 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
                             "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
                                 .to_string()
                         },
+                        upload_data_max_length: 268435456
                     })
                 },
                 misc: Misc {
-                    max_partition_size: 1048576
+                    max_partition_size: 1024 * 1024
                 },
             }
         )

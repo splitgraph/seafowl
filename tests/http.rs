@@ -5,7 +5,6 @@ use tokio::process::Command;
 
 use futures::Future;
 use futures::FutureExt;
-use seafowl::auth::AccessPolicy;
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 
@@ -58,10 +57,7 @@ write_access = "b786e07f52fc72d32b2163b6f63aa16344fd8d2d84df87b6c231ab33cd5aa125
     let config = load_config_from_string(config_text, false, None).unwrap();
     let context = Arc::from(build_context(&config).await.unwrap());
 
-    let filters = filters(
-        context.clone(),
-        AccessPolicy::from_config(&config.frontend.http.unwrap()),
-    );
+    let filters = filters(context.clone(), config.frontend.http.unwrap());
     let (tx, rx) = oneshot::channel();
     let (addr, server) = warp::serve(filters).bind_with_graceful_shutdown(
         // Pass port :0 to pick a random free port
