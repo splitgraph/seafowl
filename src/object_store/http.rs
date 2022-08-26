@@ -34,8 +34,8 @@ enum HttpObjectStoreError {
     WritesUnsupported,
     NoContentLengthResponse,
     ListingUnsupported,
-    InvalidRangeError,
     HttpClientError(reqwest::Error),
+    RangesUnsupported,
 }
 
 impl From<HttpObjectStoreError> for object_store::Error {
@@ -61,8 +61,8 @@ impl Display for HttpObjectStoreError {
                 writeln!(f, "Server did not respond with a Content-Length header")
             }
             Self::ListingUnsupported => writeln!(f, "HTTP doesn't support listing"),
-            Self::InvalidRangeError => {
-                writeln!(f, "Invalid range passed to the HTTP store")
+            Self::RangesUnsupported => {
+                writeln!(f, "This server does not support byte range fetches")
             }
             Self::HttpClientError(e) => writeln!(f, "HTTP error: {:?}", e),
         }
@@ -105,51 +105,6 @@ impl HttpObjectStore {
     }
 }
 
-/// Slice a range out of a stream of `Bytes` buffers
-async fn range_to_bytes<S, E>(
-    body: S,
-    range: &Range<usize>,
-) -> Result<Bytes, HttpObjectStoreError>
-where
-    E: Into<HttpObjectStoreError>,
-    S: Stream<Item = Result<Bytes, E>>,
-{
-    let mut vec = Vec::with_capacity(range.end - range.start);
-    let mut body = Box::pin(body);
-
-    // Skip bytes until we reach the start
-    let mut pos: usize = 0;
-
-    while pos < range.end {
-        let mut buf = body
-            .next()
-            .await
-            .ok_or(HttpObjectStoreError::InvalidRangeError)?
-            .map_err(|e| e.into())?;
-        let buf_len = buf.remaining();
-
-        if pos < range.start {
-            if buf_len > range.start - pos {
-                // This buffer spans the range start. Skip up to the start and
-                // add the rest to the buffer.
-                buf.advance(range.start - pos);
-                // Take up to the required length in case the buffer also spans the end
-                vec.put(buf.take(range.end - range.start));
-            }
-        } else if buf_len >= range.end - pos {
-            // This buffer spans the range end. Add what's missing to the buffer
-            // and break out of the loop.
-            vec.put(buf.take(range.end - pos));
-            break;
-        } else {
-            vec.put(buf)
-        }
-        pos += buf_len;
-    }
-
-    Ok(vec.into())
-}
-
 #[async_trait]
 impl ObjectStore for HttpObjectStore {
     async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
@@ -188,11 +143,7 @@ impl ObjectStore for HttpObjectStore {
                 .await
                 .map_err(HttpObjectStoreError::HttpClientError)?)
         } else {
-            // Slice the range out ourselves
-            warn!(
-                "The server doesn't support Range requests. Complete object downloaded."
-            );
-            Ok(range_to_bytes(response.bytes_stream(), &range).await?)
+            Err(HttpObjectStoreError::RangesUnsupported.into())
         }
     }
 
@@ -207,6 +158,19 @@ impl ObjectStore for HttpObjectStore {
             .map_err(|_| HttpObjectStoreError::NoContentLengthResponse)?
             .parse::<u64>()
             .map_err(|_| HttpObjectStoreError::NoContentLengthResponse)?;
+
+        // Currently, we only support HTTP servers that support Range fetches
+        if response
+            .headers()
+            .get(header::ACCEPT_RANGES)
+            .ok_or(HttpObjectStoreError::RangesUnsupported)?
+            .to_str()
+            .map_err(|_| HttpObjectStoreError::RangesUnsupported)?
+            .to_lowercase()
+            != "bytes"
+        {
+            return Err(HttpObjectStoreError::RangesUnsupported.into());
+        }
 
         Ok(ObjectMeta {
             location: location.clone(),
@@ -351,20 +315,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, body);
-
-        // Get with a range (the mock server doesn't support that, but we slice it manually)
-        let result = store
-            .get_range(&Path::from(url.as_str()), 12..34)
-            .await
-            .unwrap();
-        assert_eq!(result, body[12..34]);
-
-        // Get with a range that exceeds the size
-        let err = store
-            .get_range(&Path::from(url.as_str()), 12..345678)
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("Invalid range passed"));
     }
 
     #[tokio::test]
@@ -375,7 +325,7 @@ mod tests {
         let server_uri = server_uri.strip_prefix("http://").unwrap();
         let url = format!("{}/some/file.parquet", &server_uri);
 
-        // Get with a range (the mock server doesn't support that, but we slice it manually)
+        // Get with a range
         let result = store
             .get_range(&Path::from(url.as_str()), 12..34)
             .await
