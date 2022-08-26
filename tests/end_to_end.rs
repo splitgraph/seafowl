@@ -3,10 +3,6 @@ use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
 use datafusion::{assert_batches_eq, assert_contains};
-use datafusion::parquet::arrow::ArrowWriter;
-
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
