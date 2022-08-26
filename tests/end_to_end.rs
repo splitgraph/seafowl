@@ -316,6 +316,8 @@ async fn test_table_partitioning_and_rechunking() {
     //
     // Test partition pruning during scans works
     //
+
+    // Assert that only a single partition is goind to be used
     let plan = context
         .plan_query(
             "EXPLAIN SELECT some_value, some_int_value FROM test_table WHERE some_value > 45",
@@ -325,15 +327,23 @@ async fn test_table_partitioning_and_rechunking() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+------------+----------------+",
-        "| some_value | some_int_value |",
-        "+------------+----------------+",
-        "| 46         | 5555           |",
-        "| 47         | 6666           |",
-        "+------------+----------------+",
+        "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+        "| plan_type     | plan                                                                                                                                                                                                              |",
+        "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+        "| logical_plan  | Projection: #test_table.some_value, #test_table.some_int_value                                                                                                                                                    |",
+        "|               |   Filter: #test_table.some_value > Int64(45)                                                                                                                                                                      |",
+        "|               |     TableScan: test_table projection=[some_int_value, some_value], partial_filters=[#test_table.some_value > Int64(45)]                                                                                           |",
+        "| physical_plan | ProjectionExec: expr=[some_value@1 as some_value, some_int_value@0 as some_int_value]                                                                                                                             |",
+        "|               |   CoalesceBatchesExec: target_batch_size=4096                                                                                                                                                                     |",
+        "|               |     FilterExec: some_value@1 > CAST(45 AS Float32)                                                                                                                                                                |",
+        "|               |       RepartitionExec: partitioning=RoundRobinBatch(8)                                                                                                                                                            |",
+        "|               |         ParquetExec: limit=None, partitions=[a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet], predicate=some_value_max@0 > CAST(45 AS Float32), projection=[some_int_value, some_value] |",
+        "|               |                                                                                                                                                                                                                   |",
+        "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &results);
 
+    // Assert query results
     let plan = context
         .plan_query(
             "SELECT some_value, some_int_value FROM test_table WHERE some_value > 45",

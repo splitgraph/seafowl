@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use datafusion::common::Column;
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_plan::DisplayFormatType;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::datatypes::SchemaRef as ArrowSchemaRef,
@@ -426,6 +427,14 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         self.inner.execute(partition, context)
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        self.inner.fmt_as(t, f)
     }
 
     fn statistics(&self) -> Statistics {
