@@ -184,7 +184,7 @@ fn build_partition_columns(
                     r#type: Arc::from(column.data_type().to_json().to_string()),
                     min_value: Arc::new(min_value),
                     max_value: Arc::new(max_value),
-                    null_count: stats.null_count.map(|nc| nc as u64),
+                    null_count: stats.null_count.map(|nc| nc as i32),
                 }
             })
             .collect(),

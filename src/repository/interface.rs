@@ -31,6 +31,7 @@ pub struct AllTablePartitionsResult {
     pub row_count: i32,
     pub min_value: Option<Vec<u8>>,
     pub max_value: Option<Vec<u8>>,
+    pub null_count: Option<i32>,
 }
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
@@ -172,7 +173,7 @@ pub mod tests {
                     r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                     min_value: Arc::new(None),
                     max_value: Arc::new(None),
-                    null_count: None,
+                    null_count: Some(1),
                 },
                 PartitionColumn {
                     name: Arc::from("integer".to_string()),
@@ -182,7 +183,7 @@ pub mod tests {
                     ),
                     min_value: Arc::new(Some([49, 50].to_vec())),
                     max_value: Arc::new(Some([52, 50].to_vec())),
-                    null_count: None,
+                    null_count: Some(0),
                 },
                 PartitionColumn {
                     name: Arc::from("varchar".to_string()),
@@ -353,6 +354,7 @@ pub mod tests {
                 row_count: 2,
                 min_value: None,
                 max_value: None,
+                null_count: Some(1),
             },
             AllTablePartitionsResult {
                 table_partition_id: *partition_id,
@@ -363,6 +365,7 @@ pub mod tests {
                 row_count: 2,
                 min_value: Some([49, 50].to_vec()),
                 max_value: Some([52, 50].to_vec()),
+                null_count: Some(0),
             },
             AllTablePartitionsResult {
                 table_partition_id: *partition_id,
@@ -372,6 +375,7 @@ pub mod tests {
                 row_count: 2,
                 min_value: None,
                 max_value: None,
+                null_count: None,
             },
         ];
         assert_eq!(all_partitions, expected_partitions);

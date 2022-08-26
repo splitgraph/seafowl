@@ -317,7 +317,7 @@ async fn test_table_partitioning_and_rechunking() {
     // Test partition pruning during scans works
     //
 
-    // Assert that only a single partition is goind to be used
+    // Assert that only a single partition is going to be used
     let plan = context
         .plan_query(
             "EXPLAIN SELECT some_value, some_int_value FROM test_table WHERE some_value > 45",

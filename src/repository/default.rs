@@ -92,7 +92,6 @@ impl Repository for $repo {
         &self,
         table_version_id: TableVersionId,
     ) -> Result<Vec<AllTablePartitionsResult>, Error> {
-        // TODO: fetch null count as well
         let partitions = sqlx::query_as(
             r#"SELECT
             physical_partition.id AS table_partition_id,
@@ -101,7 +100,8 @@ impl Repository for $repo {
             physical_partition_column.name AS column_name,
             physical_partition_column.type AS column_type,
             physical_partition_column.min_value,
-            physical_partition_column.max_value
+            physical_partition_column.max_value,
+            physical_partition_column.null_count
         FROM table_partition
         INNER JOIN physical_partition ON physical_partition.id = table_partition.physical_partition_id
         -- TODO left join?
@@ -249,15 +249,15 @@ impl Repository for $repo {
             })
             .collect();
 
-        // TODO: insert null_count too
         let mut builder: QueryBuilder<_> =
-        QueryBuilder::new("INSERT INTO physical_partition_column(physical_partition_id, name, type, min_value, max_value) ");
+        QueryBuilder::new("INSERT INTO physical_partition_column(physical_partition_id, name, type, min_value, max_value, null_count) ");
         builder.push_values(columns, |mut b, (rid, c)| {
             b.push_bind(rid)
                 .push_bind(c.name.as_ref())
                 .push_bind(c.r#type.as_ref())
                 .push_bind(c.min_value.as_ref())
-                .push_bind(c.max_value.as_ref());
+                .push_bind(c.max_value.as_ref())
+                .push_bind(c.null_count);
         });
 
         let query = builder.build();

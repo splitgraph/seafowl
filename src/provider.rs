@@ -99,7 +99,7 @@ pub struct PartitionColumn {
     pub r#type: Arc<str>,
     pub min_value: Arc<Option<Vec<u8>>>,
     pub max_value: Arc<Option<Vec<u8>>>,
-    pub null_count: Option<u64>,
+    pub null_count: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -251,7 +251,7 @@ impl SeafowlPruningStatistics {
                 max_values.get_mut(column.name.as_ref()).unwrap()[ind] =
                     Self::parse_bytes_value(&column.max_value, data_type)?;
                 null_counts.get_mut(column.name.as_ref()).unwrap()[ind] =
-                    column.null_count;
+                    column.null_count.map(|nc| nc as u64);
             }
         }
 
@@ -628,7 +628,7 @@ mod tests {
     ]
     #[tokio::test]
     async fn test_partition_pruning(
-        part_stats: Vec<(Option<i32>, Option<i32>, Option<u64>)>,
+        part_stats: Vec<(Option<i32>, Option<i32>, Option<i32>)>,
         filters: Vec<Expr>,
         expected: Vec<usize>,
     ) {
