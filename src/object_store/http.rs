@@ -132,7 +132,9 @@ impl ObjectStore for HttpObjectStore {
         let response = self
             .send(
                 self.request_builder(location)
-                    .header("Range", format!("bytes={}-{}", range.start, range.end)),
+                    // The Range header is inclusive, so a range 0..5 will result in a request 0..4,
+                    // which will load bytes 0, 1, 2, 3, 4.
+                    .header("Range", format!("bytes={}-{}", range.start, range.end - 1)),
             )
             .await?;
 
