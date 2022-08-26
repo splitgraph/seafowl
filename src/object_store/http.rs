@@ -154,7 +154,12 @@ impl ObjectStore for HttpObjectStore {
     }
 
     async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        let response = self.send(self.request_builder(location)).await?;
+        let response = self
+            .send(self.client.head(self.get_uri(location)).header(
+                "User-Agent",
+                format!("Seafowl/{}", env!("VERGEN_GIT_SEMVER")),
+            ))
+            .await?;
 
         let length = response
             .headers()
@@ -166,15 +171,15 @@ impl ObjectStore for HttpObjectStore {
             .map_err(|_| HttpObjectStoreError::NoContentLengthResponse)?;
 
         // Currently, we only support HTTP servers that support Range fetches
-        if response
+        let accept_ranges = response
             .headers()
             .get(header::ACCEPT_RANGES)
             .ok_or(HttpObjectStoreError::RangesUnsupported)?
             .to_str()
             .map_err(|_| HttpObjectStoreError::RangesUnsupported)?
-            .to_lowercase()
-            != "bytes"
-        {
+            .to_lowercase();
+
+        if accept_ranges != "bytes" {
             return Err(HttpObjectStoreError::RangesUnsupported.into());
         }
 
@@ -304,7 +309,8 @@ mod tests {
 
     fn make_cached_object_store() -> CachingObjectStore {
         let tmp_dir = TempDir::new().unwrap();
-        // NB won't delete tmp_dir any more
+        // NB this won't delete tmp_dir any more, but it's up to the cache's FS
+        // manager to do it.
         let path = tmp_dir.into_path();
 
         CachingObjectStore::new(
