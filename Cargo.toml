@@ -11,7 +11,7 @@ frontend-postgres = ["convergence", "convergence-arrow"]
 object-store-s3 = ["object_store/aws"]
 
 [dependencies]
-arrow = { version = "18.0.0", features = ["prettyprint"] }
+arrow = { version = "20.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 base64 = "0.13.0"
 
@@ -20,9 +20,9 @@ clap = { version = "3.2.15", features = [ "derive" ] }
 config = "0.13.1"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", optional = true }
-convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", package = "convergence-arrow", optional = true }
-datafusion = "10"
+convergence = { git = "https://github.com/returnString/convergence", rev = "d78220e5a851d54385050e29adae69935955dc4f", optional = true }
+convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "d78220e5a851d54385050e29adae69935955dc4f", package = "convergence-arrow", optional = true }
+datafusion = "11"
 futures = "0.3"
 
 # passing to DF's query planner
@@ -39,7 +39,7 @@ rand = "0.8"
 serde = "1.0.138"
 serde_json = "1.0.81"
 sha2 = ">=0.10.1"
-sqlparser = "0.18"
+sqlparser = "0.20"
 sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "sqlite" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"

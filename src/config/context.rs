@@ -71,7 +71,6 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
                 .with_region("")
                 .with_bucket_name(bucket)
                 .with_endpoint(endpoint.clone())
-                .with_token(None as Option<&str>)
                 .with_allow_http(true)
                 .build()
                 .expect("Error creating object store");
