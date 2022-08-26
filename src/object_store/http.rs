@@ -1,21 +1,25 @@
 /// ObjectStore implementation for HTTP/HTTPs for DataFusion's CREATE EXTERNAL TABLE
 use async_trait::async_trait;
-use bytes::{Buf, BufMut, Bytes};
+use bytes::Bytes;
 use chrono::Utc;
 use futures::stream::BoxStream;
-use futures::{stream, Stream, StreamExt};
-use log::warn;
+use futures::{stream, StreamExt};
+
 use object_store::path::Path;
 use object_store::{GetResult, ListResult, ObjectMeta, ObjectStore};
 
+use crate::object_store::cache::CachingObjectStore;
 use datafusion::prelude::SessionContext;
 use reqwest::{header, Client, RequestBuilder, Response, StatusCode};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use std::sync::Arc;
+use tempfile::TempDir;
 
 pub const ANYHOST: &str = "anyhost";
+pub const MIN_FETCH_SIZE: u64 = 2 * 1024 * 1024;
+pub const HTTP_CACHE_CAPACITY: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct HttpObjectStore {
@@ -239,16 +243,31 @@ impl ObjectStore for HttpObjectStore {
 
 /// Add HTTP/HTTPS support to a DataFusion SessionContext
 pub fn add_http_object_store(context: &SessionContext) {
+    let tmp_dir = TempDir::new().unwrap();
+    // NB won't delete tmp_dir any more
+    let path = tmp_dir.into_path();
+
+    let http_object_store = CachingObjectStore::new(
+        Arc::new(HttpObjectStore::new("http".to_string())),
+        &path,
+        MIN_FETCH_SIZE,
+        HTTP_CACHE_CAPACITY,
+    );
+    let https_object_store = CachingObjectStore::new_from_sibling(
+        &http_object_store,
+        Arc::new(HttpObjectStore::new("https".to_string())),
+    );
+
     context.runtime_env().register_object_store(
         "http",
         ANYHOST,
-        Arc::new(HttpObjectStore::new("http".to_string())),
+        Arc::new(http_object_store),
     );
 
     context.runtime_env().register_object_store(
         "https",
         ANYHOST,
-        Arc::new(HttpObjectStore::new("https".to_string())),
+        Arc::new(https_object_store),
     );
 }
 
@@ -275,14 +294,30 @@ pub fn try_prepare_http_url(location: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::object_store::cache::CachingObjectStore;
     use object_store::{path::Path, ObjectStore};
+    use std::sync::Arc;
+    use tempfile::TempDir;
 
-    use super::HttpObjectStore;
+    use super::{HttpObjectStore, HTTP_CACHE_CAPACITY, MIN_FETCH_SIZE};
     use crate::object_store::testutils::make_mock_parquet_server;
+
+    fn make_cached_object_store() -> CachingObjectStore {
+        let tmp_dir = TempDir::new().unwrap();
+        // NB won't delete tmp_dir any more
+        let path = tmp_dir.into_path();
+
+        CachingObjectStore::new(
+            Arc::new(HttpObjectStore::new("http".to_string())),
+            &path,
+            MIN_FETCH_SIZE,
+            HTTP_CACHE_CAPACITY,
+        )
+    }
 
     #[tokio::test]
     async fn test_head() {
-        let store = HttpObjectStore::new("http".to_string());
+        let store = make_cached_object_store();
         let (server, body) = make_mock_parquet_server(false).await;
         // The object store expects just a path, which it treats as the host (prepending the
         // scheme instead)
@@ -302,7 +337,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get() {
-        let store = HttpObjectStore::new("http".to_string());
+        let store = make_cached_object_store();
         let (server, body) = make_mock_parquet_server(false).await;
         let server_uri = server.uri();
         let server_uri = server_uri.strip_prefix("http://").unwrap();
@@ -321,7 +356,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_server_range() {
-        let store = HttpObjectStore::new("http".to_string());
+        let store = make_cached_object_store();
         let (server, body) = make_mock_parquet_server(true).await;
         let server_uri = server.uri();
         let server_uri = server_uri.strip_prefix("http://").unwrap();

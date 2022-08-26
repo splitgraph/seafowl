@@ -821,29 +821,11 @@ async fn test_create_external_table_http() {
     /*
     Test CREATE EXTERNAL TABLE works with an HTTP mock server.
 
-    This also works with https + actual S3 (tested manually), even though it sends a bunch of small Range requests,
-    so it's not suitable for anything but ingestion (need batch coalescing)
+    This also works with https + actual S3 (tested manually)
 
     SELECT * FROM datafusion.public.supply_chains LIMIT 1 results in:
 
     bytes_scanned{filename=seafowl-public.s3.eu-west-1.amazonaws.com/tutorial/trase-supply-chains.parquet}=232699
-
-    2022-08-23T19:00:58.240Z DEBUG hyper::proto::h1::io                            > flushed 171 bytes
-    2022-08-23T19:00:58.283Z DEBUG hyper::proto::h1::io                            > parsed 10 headers
-    2022-08-23T19:00:58.283Z DEBUG hyper::proto::h1::conn                          > incoming body is content-length (83 bytes)
-    2022-08-23T19:00:58.283Z DEBUG hyper::proto::h1::conn                          > incoming body completed
-    2022-08-23T19:00:58.284Z DEBUG hyper::client::pool                             > pooling idle connection for ("https", seafowl-public.s3.eu-west-1.amazonaws.com)
-    2022-08-23T19:00:58.285Z DEBUG reqwest::async_impl::client                     > response '206 Partial Content' for https://seafowl-public.s3.eu-west-1.amazonaws.com/tutorial/trase-supply-chains.parquet
-    2022-08-23T19:00:58.285Z DEBUG hyper::client::pool                             > reuse idle connection for ("https", seafowl-public.s3.eu-west-1.amazonaws.com)
-    2022-08-23T19:00:58.286Z DEBUG hyper::proto::h1::io                            > flushed 171 bytes
-    2022-08-23T19:00:58.329Z DEBUG hyper::proto::h1::io                            > parsed 10 headers
-    2022-08-23T19:00:58.329Z DEBUG hyper::proto::h1::conn                          > incoming body is content-length (98 bytes)
-    2022-08-23T19:00:58.329Z DEBUG hyper::proto::h1::conn                          > incoming body completed
-    2022-08-23T19:00:58.329Z DEBUG hyper::client::pool                             > pooling idle connection for ("https", seafowl-public.s3.eu-west-1.amazonaws.com)
-    2022-08-23T19:00:58.329Z DEBUG reqwest::async_impl::client                     > response '206 Partial Content' for https://seafowl-public.s3.eu-west-1.amazonaws.com/tutorial/trase-supply-chains.parquet
-    2022-08-23T19:00:58.508Z INFO  seafowl::frontend::http                         > 127.0.0.1:59574 "POST /q HTTP/1.1" 200 "-" "curl/7.68.0" 4.063829991s
-    2022-08-23T19:00:58.509Z DEBUG hyper::proto::h1::io                            > flushed 4541 bytes
-    2022-08-23T19:00:58.509Z DEBUG hyper::proto::h1::conn                          > read eof
     */
 
     let (mock_server, _) = http_testutils::make_mock_parquet_server(true).await;
