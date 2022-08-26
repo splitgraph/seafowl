@@ -95,7 +95,8 @@ pub async fn make_mock_parquet_server(supports_ranges: bool) -> (MockServer, Vec
         .and(path("/some/file.parquet"))
         .respond_with(
             ResponseTemplate::new(200)
-                .append_header("Content-Length", body.len().to_string().as_str()),
+                .append_header("Content-Length", body.len().to_string().as_str())
+                .append_header("Accept-Ranges", "bytes"),
         )
         .mount(&mock_server)
         .await;
