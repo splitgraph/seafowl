@@ -13,7 +13,7 @@ use object_store::{GetResult, ListResult, ObjectMeta, ObjectStore};
 use std::fmt::Display;
 use std::fmt::{Debug, Formatter};
 
-use std::fs::remove_dir;
+use std::fs::remove_dir_all;
 use std::io;
 use std::io::ErrorKind;
 use std::ops::Range;
@@ -67,7 +67,7 @@ impl CacheFileManager {
 
 impl Drop for CacheFileManager {
     fn drop(&mut self) {
-        let _ = remove_dir(self.base_path.clone()).map_err(|e| {
+        let _ = remove_dir_all(self.base_path.clone()).map_err(|e| {
             warn!(
                 "Failed to delete the HTTP cache directory {}: {}",
                 self.base_path.display(),
