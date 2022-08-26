@@ -4,7 +4,7 @@ use std::env;
 use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
-use datafusion::assert_batches_eq;
+use datafusion::{assert_batches_eq, assert_contains};
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
@@ -313,6 +313,48 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(partitions[1].row_count, 3);
     assert_eq!(partitions[1].columns.len(), 2);
 
+    //
+    // Test partition pruning during scans works
+    //
+
+    // Assert that only a single partition is going to be used
+    let plan = context
+        .plan_query(
+            "EXPLAIN SELECT some_value, some_int_value FROM test_table WHERE some_value > 45",
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let formatted = arrow::util::pretty::pretty_format_batches(results.as_slice())
+        .unwrap()
+        .to_string();
+
+    let actual_lines: Vec<&str> = formatted.trim().lines().collect();
+    assert_contains!(actual_lines[10], "partitions=[a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet]");
+
+    // Assert query results
+    let plan = context
+        .plan_query(
+            "SELECT some_value, some_int_value FROM test_table WHERE some_value > 45",
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+------------+----------------+",
+        "| some_value | some_int_value |",
+        "+------------+----------------+",
+        "| 46         | 5555           |",
+        "| 47         | 6666           |",
+        "+------------+----------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    //
+    // Re-chunk by creating a new table
+    //
     let plan = context
         .plan_query("CREATE TABLE table_rechunked AS SELECT * FROM test_table")
         .await

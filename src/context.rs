@@ -158,10 +158,18 @@ fn build_partition_columns(
     partition_stats: &Statistics,
     schema: SchemaRef,
 ) -> Vec<PartitionColumn> {
-    // TODO PhysicalPartitionColumn might not be the right data structure here (lacks ID etc)
+    // TODO PartitionColumn might not be the right data structure here (lacks ID etc)
     match &partition_stats.column_statistics {
+        // NB: Here we may end up with `null_count` being None, but DF pruning algorithm demands that
+        // the null count field be not nullable itself. Consequently for any such cases the
+        // pruning will fail, and we will default to using all partitions.
         Some(column_statistics) => zip(column_statistics, schema.fields())
             .map(|(stats, column)| {
+                // TODO: the to_string will discard the timezone for Timestamp* values, and will
+                // therefore hinder the ability to recreate them once needed for partition pruning.
+                // However, since DF stats rely on Parquet stats that problem won't come up until
+                // 1) Parquet starts collecting stats for Timestamp* types (`parquet::file::statistics::Statistics` enum)
+                // 2) DF pattern matches those types in `summarize_min_max`.
                 let min_value = stats
                     .min_value
                     .as_ref()
@@ -176,6 +184,7 @@ fn build_partition_columns(
                     r#type: Arc::from(column.data_type().to_json().to_string()),
                     min_value: Arc::new(min_value),
                     max_value: Arc::new(max_value),
+                    null_count: stats.null_count.map(|nc| nc as i32),
                 }
             })
             .collect(),
@@ -187,6 +196,7 @@ fn build_partition_columns(
                 r#type: Arc::from(column.data_type().to_json().to_string()),
                 min_value: Arc::new(None),
                 max_value: Arc::new(None),
+                null_count: None,
             })
             .collect(),
     }
@@ -782,8 +792,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                     table_name,
                     selection,
                 } => {
-                    // Same as Update but we just filter out the selection
-                    let table_schema: DFSchema = DFSchema::empty();
+                    // Get the actual table schema, since DF needs to validate unqualified columns
+                    // (i.e. ones referenced only by column name, lacking the relation name)
+                    let table_name = table_name.to_string();
+                    let seafowl_table = self.try_get_seafowl_table(&table_name)?;
+                    let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
 
                     let selection_expr = match selection {
                         None => None,
@@ -792,7 +805,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Delete(Delete {
-                            name: table_name.to_string(),
+                            name: table_name,
                             selection: selection_expr,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
@@ -1422,7 +1435,8 @@ mod tests {
                             name: Arc::from("timestamp".to_string()),
                             r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                             min_value: Arc::new(None),
-                            max_value: Arc::new(None)
+                            max_value: Arc::new(None),
+                            null_count: Some(0),
                         },
                         PartitionColumn {
                             name: Arc::from("integer".to_string()),
@@ -1432,12 +1446,14 @@ mod tests {
                             ),
                             min_value: to_min_max_value(12),
                             max_value: to_min_max_value(42),
+                            null_count: Some(0),
                         },
                         PartitionColumn {
                             name: Arc::from("varchar".to_string()),
                             r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                             min_value: Arc::new(None),
-                            max_value: Arc::new(None)
+                            max_value: Arc::new(None),
+                            null_count: Some(0),
                         }
                     ])
                 },
@@ -1449,7 +1465,8 @@ mod tests {
                             name: Arc::from("timestamp".to_string()),
                             r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                             min_value: Arc::new(None),
-                            max_value: Arc::new(None)
+                            max_value: Arc::new(None),
+                            null_count: Some(0),
                         },
                         PartitionColumn {
                             name: Arc::from("integer".to_string()),
@@ -1459,12 +1476,14 @@ mod tests {
                             ),
                             min_value: to_min_max_value(22),
                             max_value: to_min_max_value(32),
+                            null_count: Some(0),
                         },
                         PartitionColumn {
                             name: Arc::from("varchar".to_string()),
                             r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
                             min_value: Arc::new(None),
-                            max_value: Arc::new(None)
+                            max_value: Arc::new(None),
+                            null_count: Some(0),
                         }
                     ])
                 },
@@ -1586,6 +1605,7 @@ mod tests {
                         max_value: to_min_max_value(
                             output_partitions[i].iter().max().unwrap()
                         ),
+                        null_count: Some(0),
                     }])
                 },
             )
@@ -1711,6 +1731,7 @@ mod tests {
                                         r#type: Arc::from("{\"name\":\"date\",\"unit\":\"MILLISECOND\"}"),
                                         min_value: Arc::new(None),
                                         max_value: Arc::new(None),
+                                        null_count: Some(0),
                                     },
                                     PartitionColumn {
                                         name: Arc::from("value"),
@@ -1727,6 +1748,7 @@ mod tests {
                                                 50,
                                             ],
                                         )),
+                                        null_count: Some(0),
                                     },
                                 ],)
                             },]

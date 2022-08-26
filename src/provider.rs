@@ -1,7 +1,16 @@
+use arrow::array::{ArrayRef, UInt64Array};
+use arrow::compute::{cast_with_options, CastOptions};
+use arrow::datatypes::{DataType, SchemaRef};
+use std::ops::Deref;
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 
+use datafusion::common::Column;
+use datafusion::logical_expr::TableProviderFilterPushDown;
+use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_plan::DisplayFormatType;
+use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::datatypes::SchemaRef as ArrowSchemaRef,
     catalog::{catalog::CatalogProvider, schema::SchemaProvider},
@@ -23,6 +32,7 @@ use datafusion::{
 };
 
 use futures::future;
+use log::warn;
 
 use object_store::path::Path;
 
@@ -76,19 +86,20 @@ impl SchemaProvider for SeafowlCollection {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SeafowlPartition {
     pub object_storage_id: Arc<str>,
     pub row_count: i32,
     pub columns: Arc<Vec<PartitionColumn>>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartitionColumn {
     pub name: Arc<str>,
     pub r#type: Arc<str>,
     pub min_value: Arc<Option<Vec<u8>>>,
     pub max_value: Arc<Option<Vec<u8>>>,
+    pub null_count: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -128,10 +139,26 @@ impl TableProvider for SeafowlTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        let partitions = self
+        let mut partitions = self
             .catalog
             .load_table_partitions(self.table_version_id)
             .await?;
+
+        // Try to prune away redundant partitions
+        if !filters.is_empty() {
+            match SeafowlPruningStatistics::from_partitions(
+                partitions.clone(),
+                self.schema(),
+            ) {
+                Ok(pruning_stats) => partitions = pruning_stats.prune(filters).await,
+                Err(error) => {
+                    warn!(
+                        "Failed constructing pruning statistics for table {} (version: {}): {}",
+                        self.name, self.table_version_id, error
+                    )
+                }
+            };
+        }
 
         // This code is partially taken from ListingTable but adapted to use an arbitrary
         // list of Parquet URLs rather than all files in a given directory.
@@ -141,10 +168,9 @@ impl TableProvider for SeafowlTable {
         let store = ctx.runtime_env.object_store(object_store_url.clone())?;
 
         // Build a list of lists of PartitionedFile groups (one file = one partition for the scan)
-        // TODO: use filters and apply them to partitions here (grab the code from list_files_for_scan)
         let partitioned_file_lists: Vec<Vec<PartitionedFile>> =
-            future::try_join_all(partitions.iter().map(|r| async {
-                let path = Path::parse(&r.object_storage_id)?;
+            future::try_join_all(partitions.iter().map(|p| async {
+                let path = Path::parse(&p.object_storage_id)?;
                 let meta = store.head(&path).await?;
                 Ok(vec![PartitionedFile {
                     object_meta: meta,
@@ -171,6 +197,193 @@ impl TableProvider for SeafowlTable {
             partitions: Arc::new(partitions),
             inner: plan,
         }))
+    }
+
+    fn supports_filter_pushdown(
+        &self,
+        _filter: &Expr,
+    ) -> Result<TableProviderFilterPushDown> {
+        Ok(TableProviderFilterPushDown::Inexact)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeafowlPruningStatistics {
+    pub partition_count: usize,
+    pub schema: SchemaRef,
+    pub partitions: Arc<Vec<SeafowlPartition>>,
+    pub min_values: HashMap<String, Vec<ScalarValue>>,
+    pub max_values: HashMap<String, Vec<ScalarValue>>,
+    pub null_counts: HashMap<String, Vec<Option<u64>>>,
+}
+
+impl SeafowlPruningStatistics {
+    // Generate maps of min/max/null stats per column, parsing the serialized values stored in partitions
+    fn from_partitions(
+        partitions: Vec<SeafowlPartition>,
+        schema: SchemaRef,
+    ) -> Result<Self> {
+        let partition_count = partitions.len();
+        let mut min_values = HashMap::new();
+        let mut max_values = HashMap::new();
+        let mut null_counts = HashMap::new();
+
+        for field in schema.fields() {
+            let null_value = Self::parse_bytes_value(&Arc::new(None), field.data_type())?;
+
+            min_values.insert(
+                field.name().clone(),
+                vec![null_value.clone(); partition_count],
+            );
+            max_values.insert(field.name().clone(), vec![null_value; partition_count]);
+            null_counts.insert(field.name().clone(), vec![None; partition_count]);
+        }
+
+        for (ind, partition) in partitions.iter().enumerate() {
+            for column in partition.columns.as_slice() {
+                let data_type = schema
+                    .field_with_name(column.name.deref())
+                    .unwrap()
+                    .data_type();
+
+                min_values.get_mut(column.name.as_ref()).unwrap()[ind] =
+                    Self::parse_bytes_value(&column.min_value, data_type)?;
+                max_values.get_mut(column.name.as_ref()).unwrap()[ind] =
+                    Self::parse_bytes_value(&column.max_value, data_type)?;
+                null_counts.get_mut(column.name.as_ref()).unwrap()[ind] =
+                    column.null_count.map(|nc| nc as u64);
+            }
+        }
+
+        Ok(Self {
+            partition_count,
+            schema,
+            partitions: Arc::new(partitions),
+            min_values,
+            max_values,
+            null_counts,
+        })
+    }
+
+    /// Try to deserialize min/max statistics stored as raw bytes
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow::datatypes::DataType;
+    /// use datafusion::scalar::ScalarValue;
+    /// use seafowl::provider::SeafowlPruningStatistics;
+    ///
+    /// fn parse(value: &Arc<Option<Vec<u8>>>, dt: &DataType) -> ScalarValue {
+    ///     SeafowlPruningStatistics::parse_bytes_value(&value, &dt).unwrap()
+    /// }
+    ///
+    /// // Parse missing value into a corresponding None
+    /// let val = Arc::new(None);
+    /// assert_eq!(parse(&val, &DataType::Int16), ScalarValue::Int16(None));
+    /// assert_eq!(parse(&val, &DataType::Boolean), ScalarValue::Boolean(None));
+    ///
+    /// // Parse some actual value
+    /// let val = Arc::from(Some(42.to_string().as_bytes().to_vec()));
+    /// assert_eq!(parse(&val, &DataType::Int32), ScalarValue::Int32(Some(42)));
+    /// assert_eq!(parse(&val, &DataType::Float32), ScalarValue::Float32(Some(42.0)));
+    /// assert_eq!(parse(&val, &DataType::Utf8), ScalarValue::Utf8(Some("42".to_string())));
+    /// ```
+    pub fn parse_bytes_value(
+        bytes_value: &Arc<Option<Vec<u8>>>,
+        data_type: &DataType,
+    ) -> Result<ScalarValue> {
+        match bytes_value.as_ref() {
+            Some(bytes) => match String::from_utf8(bytes.clone()) {
+                Ok(string_val) => ScalarValue::try_from_string(string_val, data_type),
+                Err(error) => Err(DataFusionError::Internal(format!(
+                    "Failed to parse min/max value: {}",
+                    error
+                ))),
+            },
+            None => {
+                // Try to cast the None value to the corresponding ScalarValue matching `data_type`,
+                // e.g. `ScalarValue::Int16(None)`, `ScalarValue::Boolean(None)`, etc.
+                let value = ScalarValue::Null;
+                let cast_options = CastOptions { safe: false };
+                let cast_arr =
+                    cast_with_options(&value.to_array(), data_type, &cast_options)?;
+                Ok(ScalarValue::try_from_array(&cast_arr, 0)?)
+            }
+        }
+    }
+
+    // Prune away partitions that are refuted by the provided filter expressions
+    async fn prune(&self, filters: &[Expr]) -> Vec<SeafowlPartition> {
+        let mut partition_mask = vec![true; self.partition_count];
+
+        if !filters.is_empty() {
+            for expr in filters {
+                match PruningPredicate::try_new(expr.clone(), self.schema.clone()) {
+                    Ok(predicate) => match predicate.prune(self) {
+                        Ok(expr_mask) => {
+                            partition_mask = partition_mask
+                                .iter()
+                                .zip(expr_mask)
+                                .map(|(&a, b)| a && b)
+                                .collect()
+                        }
+                        Err(error) => {
+                            warn!(
+                                "Failed pruning the partitions for expr {:?}: {}",
+                                expr, error
+                            );
+                        }
+                    },
+                    Err(error) => {
+                        warn!(
+                            "Failed constructing a pruning predicate for expr {:?}: {}",
+                            expr, error
+                        );
+                    }
+                }
+            }
+        }
+
+        self.partitions
+            .iter()
+            .zip(partition_mask.iter())
+            .filter_map(|(p, &keep)| if keep { Some(p.clone()) } else { None })
+            .collect()
+    }
+
+    // Try to convert the vector of min/max scalar values for a column into a generic array reference
+    fn get_values_array(&self, values: Option<&Vec<ScalarValue>>) -> Option<ArrayRef> {
+        values.and_then(|stats| {
+            ScalarValue::iter_to_array(stats.clone().into_iter())
+                .map_err(|e| {
+                    warn!(
+                        "Failed to convert vector of min/max values {:?} to array: {}",
+                        values, e
+                    );
+                    e
+                })
+                .ok()
+        })
+    }
+}
+
+impl PruningStatistics for SeafowlPruningStatistics {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.get_values_array(self.min_values.get(column.name.as_str()))
+    }
+
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.get_values_array(self.max_values.get(column.name.as_str()))
+    }
+
+    fn num_containers(&self) -> usize {
+        self.partition_count
+    }
+
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        self.null_counts
+            .get(column.name.as_str())
+            .map(|stats| Arc::new(UInt64Array::from(stats.clone())) as ArrayRef)
     }
 }
 
@@ -216,6 +429,14 @@ impl ExecutionPlan for SeafowlBaseTableScanNode {
         self.inner.execute(partition, context)
     }
 
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        self.inner.fmt_as(t, f)
+    }
+
     fn statistics(&self) -> Statistics {
         Statistics::default()
     }
@@ -233,7 +454,9 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::StringArray;
+    use arrow::datatypes::{DataType, Field, Schema};
     use bytes::{BufMut, Bytes, BytesMut};
+    use datafusion::logical_expr::{col, lit, or, Expr};
     use datafusion::{
         arrow::{
             array::{ArrayRef, Int64Array},
@@ -247,11 +470,13 @@ mod tests {
     };
     use mockall::predicate;
     use object_store::{memory::InMemory, path::Path, ObjectStore};
+    use test_case::test_case;
 
+    use crate::provider::{PartitionColumn, SeafowlPruningStatistics};
     use crate::{
         catalog::MockPartitionCatalog,
         provider::{SeafowlPartition, SeafowlTable},
-        schema::Schema,
+        schema,
     };
 
     /// Helper function to make a SeafowlTable pointing to a small batch of data
@@ -306,7 +531,7 @@ mod tests {
 
         let table = SeafowlTable {
             name: Arc::from("table"),
-            schema: Arc::new(Schema {
+            schema: Arc::new(schema::Schema {
                 arrow_schema: batch.schema(),
             }),
             table_id: 1,
@@ -361,5 +586,93 @@ mod tests {
         ];
 
         assert_batches_eq!(expected, &results);
+    }
+
+    #[test_case(
+        vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(0)), (Some(30), Some(40), None)],
+        vec![col("some_int").gt_eq(lit(25))],
+        vec![1, 2];
+        "Partition with missing max")
+    ]
+    #[test_case(
+        vec![(Some(10), Some(20), None), (Some(20), Some(30), Some(0)), (Some(30), Some(40), Some(1))],
+        vec![col("some_int").gt(lit(15)), col("some_int").lt(lit(25))],
+        vec![0, 1];
+        "Multiple expressions")
+    ]
+    #[test_case(
+        vec![(Some(10), Some(20), None), (Some(20), Some(30), Some(0)), (Some(30), Some(40), Some(1))],
+        vec![or(col("some_int").eq(lit(15)), col("some_int").eq(lit(25))), col("some_int").gt(lit(20))],
+        vec![1];
+        "Disjunction + AND")
+    ]
+    #[test_case(
+        vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(0))],
+        vec![col("some_int").is_null()],
+        vec![];
+        "Null check zero nulls")
+    ]
+    #[test_case(
+        vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(1))],
+        vec![col("some_int").is_null()],
+        vec![1];
+        "Null check one null")
+    ]
+    // Pruning here fails with: `"Invalid argument error: Column 'some_int_null_count' is declared as non-nullable but contains null values"`
+    // so we default to using all partitions
+    #[test_case(
+        vec![(Some(10), Some(20), Some(0)), (Some(20), None, None)],
+        vec![col("some_int").is_null()],
+        vec![0, 1];
+        "Null check unknown nulls")
+    ]
+    #[tokio::test]
+    async fn test_partition_pruning(
+        part_stats: Vec<(Option<i32>, Option<i32>, Option<i32>)>,
+        filters: Vec<Expr>,
+        expected: Vec<usize>,
+    ) {
+        // Dummy schema for the tests
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "some_int",
+            DataType::Int32,
+            true,
+        )]));
+
+        // Create some fake partitions
+        let mut partitions = vec![];
+        for (ind, (min, max, null_count)) in part_stats.iter().enumerate() {
+            let min_value = Arc::from(min.map(|v| v.to_string().as_bytes().to_vec()));
+            let max_value = Arc::from(max.map(|v| v.to_string().as_bytes().to_vec()));
+
+            partitions.push(SeafowlPartition {
+                object_storage_id: Arc::from(format!("par{}.parquet", ind)),
+                row_count: 3,
+                columns: Arc::new(vec![PartitionColumn {
+                    name: Arc::from("some_int".to_string()),
+                    r#type: Arc::from(
+                        "{\"name\":\"int\",\"bitWidth\":32,\"isSigned\":true}"
+                            .to_string(),
+                    ),
+                    min_value,
+                    max_value,
+                    null_count: *null_count,
+                }]),
+            })
+        }
+
+        // Create the main partition pruning handler
+        let pruning_stats =
+            SeafowlPruningStatistics::from_partitions(partitions.clone(), schema)
+                .unwrap();
+
+        // Prune the partitions
+        let pruned = pruning_stats.prune(filters.as_slice()).await;
+
+        // Ensure pruning worked correctly
+        assert_eq!(pruned.len(), expected.len());
+        for (ind, &i) in expected.iter().enumerate() {
+            assert_eq!(pruned[ind], partitions[i])
+        }
     }
 }
