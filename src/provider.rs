@@ -228,14 +228,13 @@ impl SeafowlPruningStatistics {
         let mut null_counts = HashMap::new();
 
         for field in schema.fields() {
+            let null_value = Self::parse_bytes_value(&Arc::new(None), field.data_type())?;
+
             min_values.insert(
                 field.name().clone(),
-                vec![ScalarValue::Utf8(None); partition_count],
+                vec![null_value.clone(); partition_count],
             );
-            max_values.insert(
-                field.name().clone(),
-                vec![ScalarValue::Utf8(None); partition_count],
-            );
+            max_values.insert(field.name().clone(), vec![null_value; partition_count]);
             null_counts.insert(field.name().clone(), vec![None; partition_count]);
         }
 
