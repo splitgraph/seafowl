@@ -18,6 +18,8 @@ pub const ENV_PREFIX: &str = "SEAFOWL";
 // an underscore as part of a config var name, e.g. object_store)
 pub const ENV_SEPARATOR: &str = "__";
 
+pub const MEBIBYTES: u64 = 1024 * 1024;
+
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct SeafowlConfig {
     pub object_store: ObjectStore,
@@ -222,7 +224,7 @@ impl Default for HttpFrontend {
             bind_port: 8080,
             read_access: AccessSettings::Any,
             write_access: AccessSettings::Off,
-            upload_data_max_length: 256 * 1024 * 1024,
+            upload_data_max_length: 256,
         }
     }
 }
@@ -340,7 +342,7 @@ bind_host = "0.0.0.0"
 bind_port = 80
 read_access = "any"
 write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
-upload_data_max_length = 1024
+upload_data_max_length = 1
 "#;
 
     const TEST_CONFIG_ERROR: &str = r#"
@@ -394,7 +396,7 @@ upload_data_max_length = 1024
                         bind_port: 80,
                         read_access: AccessSettings::Any,
                         write_access: AccessSettings::Off,
-                        upload_data_max_length: 268435456
+                        upload_data_max_length: 256
                     })
                 },
                 misc: Misc {
@@ -419,7 +421,7 @@ upload_data_max_length = 1024
                         "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
                             .to_string()
                 },
-                upload_data_max_length: 1024
+                upload_data_max_length: 1
             }
         );
     }
@@ -479,7 +481,7 @@ upload_data_max_length = 1024
                             "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
                                 .to_string()
                         },
-                        upload_data_max_length: 268435456
+                        upload_data_max_length: 256
                     })
                 },
                 misc: Misc {

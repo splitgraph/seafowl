@@ -30,7 +30,7 @@ use warp::reply::Response;
 use warp::{hyper::StatusCode, Filter, Reply};
 
 use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
-use crate::config::schema::AccessSettings;
+use crate::config::schema::{AccessSettings, MEBIBYTES};
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
     context::SeafowlContext,
@@ -422,7 +422,9 @@ pub fn filters(
     let upload_route = warp::path!("upload" / String / String)
         .and(warp::post())
         .and(with_auth(access_policy))
-        .and(warp::multipart::form().max_length(config.upload_data_max_length))
+        .and(
+            warp::multipart::form().max_length(config.upload_data_max_length * MEBIBYTES),
+        )
         .and(warp::any().map(move || ctx.clone()))
         .then(upload)
         .map(into_response);
