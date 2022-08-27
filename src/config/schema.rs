@@ -1,6 +1,6 @@
 use std::{
     fmt::{self, Display},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use config::{Config, ConfigError, Environment, File, FileFormat, Map};
@@ -18,6 +18,16 @@ pub const ENV_PREFIX: &str = "SEAFOWL";
 // an underscore as part of a config var name, e.g. object_store)
 pub const ENV_SEPARATOR: &str = "__";
 
+// Minimum amount of memory, in MB, required to run the app (roughly)
+pub const MIN_MEMORY: u64 = 64;
+
+// Default fraction of the advertised memory limit that DataFusion will use
+// for its MemoryManager (e.g. to spill out data to disk on sort).
+// This is what DataFusion wants from us, but the fraction probably won't be
+// linear with the actual amount of memory DF's tracked data structures
+// would use.
+pub const MEMORY_FRACTION: f64 = 0.7;
+
 pub const MEBIBYTES: u64 = 1024 * 1024;
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -26,6 +36,8 @@ pub struct SeafowlConfig {
     pub catalog: Catalog,
     #[serde(default)]
     pub frontend: Frontend,
+    #[serde(default)]
+    pub runtime: Runtime,
     #[serde(default)]
     pub misc: Misc,
 }
@@ -243,21 +255,34 @@ impl Default for Misc {
     }
 }
 
+#[derive(Default, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(default)]
+pub struct Runtime {
+    pub max_memory: Option<u64>,
+    pub temp_dir: Option<PathBuf>,
+}
+
 pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigError> {
     let in_memory_catalog = matches!(config.catalog, Catalog::Sqlite(Sqlite { ref dsn }) if dsn.contains(":memory:"));
 
     let in_memory_object_store = matches!(config.object_store, ObjectStore::InMemory(_));
 
     if in_memory_catalog ^ in_memory_object_store {
-        Err(ConfigError::Message(
+        return Err(ConfigError::Message(
             "You are using an in-memory catalog with a non in-memory \
         object store or vice versa. This will cause consistency issues \
         if the process is restarted."
                 .to_string(),
+        ));
+    };
+
+    if let Some(max_memory) = config.runtime.max_memory && max_memory < MIN_MEMORY {
+        return Err(ConfigError::Message(
+            format!("runtime.max_memory is too low (minimum {} MB)", MIN_MEMORY)
         ))
-    } else {
-        Ok(config)
     }
+
+    Ok(config)
 }
 
 pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
@@ -293,10 +318,10 @@ pub fn load_config_from_string(
 mod tests {
     use super::{
         build_default_config, load_config_from_string, AccessSettings, Catalog, Frontend,
-        HttpFrontend, Local, ObjectStore, Postgres, SeafowlConfig, S3,
+        HttpFrontend, Local, ObjectStore, Postgres, Runtime, SeafowlConfig, S3,
     };
     use crate::config::schema::{Misc, Sqlite};
-    use std::collections::HashMap;
+    use std::{collections::HashMap, path::PathBuf};
 
     const TEST_CONFIG_S3: &str = r#"
 [object_store]
@@ -327,6 +352,10 @@ dsn = "postgresql://user:pass@localhost:5432/somedb"
 [frontend.http]
 bind_host = "0.0.0.0"
 bind_port = 80
+
+[runtime]
+max_memory = 512
+temp_dir = "/tmp/seafowl"
 "#;
 
     const TEST_CONFIG_ACCESS: &str = r#"
@@ -398,6 +427,10 @@ upload_data_max_length = 1
                         write_access: AccessSettings::Off,
                         upload_data_max_length: 256
                     })
+                },
+                runtime: Runtime {
+                    max_memory: Some(512),
+                    temp_dir: Some(PathBuf::from("/tmp/seafowl")),
                 },
                 misc: Misc {
                     max_partition_size: 1024 * 1024
@@ -483,6 +516,10 @@ upload_data_max_length = 1
                         },
                         upload_data_max_length: 256
                     })
+                },
+                                 runtime: Runtime {
+                    max_memory: Some(512),
+                    temp_dir: Some(PathBuf::from("/tmp/seafowl")),
                 },
                 misc: Misc {
                     max_partition_size: 1024 * 1024

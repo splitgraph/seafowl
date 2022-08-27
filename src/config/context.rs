@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::{
-    catalog,
     catalog::{
         DefaultCatalog, FunctionCatalog, PartitionCatalog, TableCatalog, DEFAULT_DB,
         DEFAULT_SCHEMA,
@@ -9,7 +8,11 @@ use crate::{
     context::{DefaultSeafowlContext, INTERNAL_OBJECT_STORE_SCHEME},
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::{
+    error::DataFusionError,
+    execution::runtime_env::{RuntimeConfig, RuntimeEnv},
+    prelude::{SessionConfig, SessionContext},
+};
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
 #[cfg(feature = "catalog-postgres")]
@@ -19,7 +22,7 @@ use crate::object_store::http::add_http_object_store;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::new_s3;
 
-use super::schema::{self, S3};
+use super::schema::{self, MEMORY_FRACTION, S3};
 
 async fn build_catalog(
     config: &schema::SeafowlConfig,
@@ -81,11 +84,25 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
 
 pub async fn build_context(
     cfg: &schema::SeafowlConfig,
-) -> Result<DefaultSeafowlContext, catalog::Error> {
+) -> Result<DefaultSeafowlContext, DataFusionError> {
+    let mut runtime_config = RuntimeConfig::new();
+    if let Some(max_memory) = cfg.runtime.max_memory {
+        runtime_config =
+            runtime_config.with_memory_limit(max_memory as usize, MEMORY_FRACTION);
+    }
+
+    if let Some(temp_dir) = &cfg.runtime.temp_dir {
+        runtime_config = runtime_config.with_temp_file_path(temp_dir);
+    }
+
     let session_config = SessionConfig::new()
         .with_information_schema(true)
         .with_default_catalog_and_schema(DEFAULT_DB, DEFAULT_SCHEMA);
-    let context = SessionContext::with_config(session_config);
+
+    let context = SessionContext::with_config_rt(
+        session_config,
+        Arc::new(RuntimeEnv::new(runtime_config)?),
+    );
 
     let object_store = build_object_store(cfg);
     context.runtime_env().register_object_store(
@@ -156,6 +173,10 @@ mod tests {
                     write_access: schema::AccessSettings::Any,
                     upload_data_max_length: 256 * 1024 * 1024,
                 }),
+            },
+            runtime: schema::Runtime {
+                max_memory: Some(512 * 1024 * 1024),
+                ..Default::default()
             },
             misc: schema::Misc {
                 max_partition_size: 1024 * 1024,
