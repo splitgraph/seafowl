@@ -276,11 +276,14 @@ pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigErr
         ));
     };
 
-    if let Some(max_memory) = config.runtime.max_memory && max_memory < MIN_MEMORY {
-        return Err(ConfigError::Message(
-            format!("runtime.max_memory is too low (minimum {} MB)", MIN_MEMORY)
-        ))
-    }
+    if let Some(max_memory) = config.runtime.max_memory {
+        if max_memory < MIN_MEMORY {
+            return Err(ConfigError::Message(format!(
+                "runtime.max_memory is too low (minimum {} MB)",
+                MIN_MEMORY
+            )));
+        }
+    };
 
     Ok(config)
 }
