@@ -86,6 +86,12 @@ use crate::{
 // with DataFusion's object store registry.
 pub const INTERNAL_OBJECT_STORE_SCHEME: &str = "seafowl";
 
+// Max Parquet row group size, in rows. This is what the ArrowWriter uses to determine how many
+// rows to buffer in memory before flushing them out to disk. The default for this is 1024^2, which
+// means that we're effectively buffering a whole partition in memory, causing issues on RAM-limited
+// environments.
+const MAX_ROW_GROUP_SIZE: usize = 65536;
+
 pub fn internal_object_store_url() -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME)).unwrap()
 }
@@ -217,7 +223,9 @@ fn temp_partition_file_writer(
         DataFusionError::Execution("Error with temporary Parquet file".to_string())
     })?;
 
-    let writer_properties = WriterProperties::builder().build();
+    let writer_properties = WriterProperties::builder()
+        .set_max_row_group_size(MAX_ROW_GROUP_SIZE)
+        .build();
     let writer =
         ArrowWriter::try_new(partition_file, arrow_schema, Some(writer_properties))?;
     Ok((partition_file_handle, writer))
