@@ -1,9 +1,10 @@
 use crate::config::schema;
 use crate::config::schema::Local;
+use futures::TryFutureExt;
 use log::debug;
 use object_store::ObjectStore;
 
-use std::fs::rename;
+use tokio::fs::{copy, remove_file, rename};
 
 use std::path::Path;
 use std::sync::Arc;
@@ -19,7 +20,7 @@ pub struct InternalObjectStore {
 impl InternalObjectStore {
     /// For local filesystem object stores, try "uploading" by just moving the file.
     /// Returns a None if the store isn't local.
-    pub fn fast_upload(
+    pub async fn fast_upload(
         &self,
         from: &Path,
         to: &object_store::path::Path,
@@ -38,11 +39,27 @@ impl InternalObjectStore {
             target_path.display()
         );
 
-        Some(
-            rename(from, target_path).map_err(|e| object_store::Error::Generic {
-                store: "local",
-                source: Box::new(e),
-            }),
-        )
+        let result = rename(&from, &target_path).await;
+
+        Some(if let Err(e) = result {
+            // Cross-device link (can't move files between filesystems)
+            // Copy and remove the old file
+            if e.raw_os_error() == Some(18) {
+                copy(from, target_path)
+                    .and_then(|_| remove_file(from))
+                    .map_err(|e| object_store::Error::Generic {
+                        store: "local",
+                        source: Box::new(e),
+                    })
+                    .await
+            } else {
+                Err(object_store::Error::Generic {
+                    store: "local",
+                    source: Box::new(e),
+                })
+            }
+        } else {
+            Ok(())
+        })
     }
 }

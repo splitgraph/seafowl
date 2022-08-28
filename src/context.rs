@@ -320,10 +320,13 @@ pub async fn plan_to_object_store(
                     hash_file(&partition_file_path).await? + ".parquet";
 
                 // For local FS stores, we can just move the file to the target location
-                if let Some(result) = store.fast_upload(
-                    &partition_file_path,
-                    &Path::from(object_storage_id.clone()),
-                ) {
+                if let Some(result) = store
+                    .fast_upload(
+                        &partition_file_path,
+                        &Path::from(object_storage_id.clone()),
+                    )
+                    .await
+                {
                     result?;
                 } else {
                     // TODO: the object_store crate doesn't support multi-part uploads / uploading a file
