@@ -5,6 +5,7 @@ use base64::decode;
 use bytes::Bytes;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::ResolvedTableReference;
+use object_store::local::LocalFileSystem;
 
 use std::fs::File;
 
@@ -33,7 +34,7 @@ use hashbrown::HashMap;
 use hex::encode;
 #[cfg(test)]
 use mockall::automock;
-use object_store::{memory::InMemory, path::Path, ObjectStore};
+use object_store::{path::Path, ObjectStore};
 use sha2::Digest;
 use sha2::Sha256;
 use sqlparser::ast::{
@@ -111,7 +112,7 @@ fn reference_to_name(reference: &ResolvedTableReference) -> String {
 
 /// Load the Statistics for a Parquet file in memory
 async fn get_parquet_file_statistics_bytes(
-    data: Bytes,
+    path: &std::path::Path,
     schema: SchemaRef,
 ) -> Result<Statistics> {
     // DataFusion's methods for this are all private (see fetch_statistics / summarize_min_max)
@@ -124,11 +125,18 @@ async fn get_parquet_file_statistics_bytes(
     // that serves as a write-through cache so that we can use it both when downloading and uploading
     // Parquet files.
 
-    // Create a dummy object store pointing to our temporary directory (we don't know if
-    // DiskManager will always put all files in the same dir)
-    let dummy_object_store: Arc<dyn ObjectStore> = Arc::from(InMemory::new());
-    let dummy_path = Path::from("data");
-    dummy_object_store.put(&dummy_path, data).await.unwrap();
+    let tmp_dir = path
+        .parent()
+        .expect("Temporary Parquet file in the FS root");
+    let file_name = path
+        .file_name()
+        .expect("Temporary Parquet file pointing to a directory")
+        .to_string_lossy();
+
+    // Create a dummy object store pointing to our temporary directory
+    let dummy_object_store: Arc<dyn ObjectStore> =
+        Arc::from(LocalFileSystem::new_with_prefix(tmp_dir)?);
+    let dummy_path = Path::from(file_name.to_string());
 
     let parquet = ParquetFormat::default();
     let meta = dummy_object_store
@@ -313,9 +321,11 @@ pub async fn plan_to_object_store(
                 let data = Bytes::from(buf);
 
                 // Index the Parquet file (get its min-max values)
-                let partition_stats =
-                    get_parquet_file_statistics_bytes(data.clone(), physical.schema())
-                        .await?;
+                let partition_stats = get_parquet_file_statistics_bytes(
+                    &partition_file_path,
+                    physical.schema(),
+                )
+                .await?;
 
                 let columns =
                     build_partition_columns(&partition_stats, physical.schema());
