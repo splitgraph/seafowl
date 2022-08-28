@@ -26,14 +26,14 @@ use crate::datafusion::utils::{
     build_schema, compound_identifier_to_column, normalize_ident,
 };
 use crate::object_store::http::try_prepare_http_url;
+use crate::object_store::wrapped::InternalObjectStore;
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use hex::encode;
 #[cfg(test)]
 use mockall::automock;
-use object_store::memory::InMemory;
-use object_store::{path::Path, ObjectStore};
+use object_store::{memory::InMemory, path::Path, ObjectStore};
 use sha2::Digest;
 use sha2::Sha256;
 use sqlparser::ast::{
@@ -68,7 +68,7 @@ use datafusion::{
 };
 use log::warn;
 use prost::Message;
-use tempfile::NamedTempFile;
+use tempfile::TempPath;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{TableId, TableVersionId};
@@ -198,6 +198,7 @@ pub struct DefaultSeafowlContext {
     pub table_catalog: Arc<dyn TableCatalog>,
     pub partition_catalog: Arc<dyn PartitionCatalog>,
     pub function_catalog: Arc<dyn FunctionCatalog>,
+    pub internal_object_store: Arc<InternalObjectStore>,
     pub database: String,
     pub database_id: DatabaseId,
     pub max_partition_size: i64,
@@ -241,7 +242,7 @@ fn temp_partition_file_writer(
 pub async fn plan_to_object_store(
     state: &SessionState,
     plan: &Arc<dyn ExecutionPlan>,
-    store: Arc<dyn ObjectStore>,
+    store: Arc<InternalObjectStore>,
     disk_manager: Arc<DiskManager>,
     max_partition_size: i64,
 ) -> Result<Vec<SeafowlPartition>> {
@@ -323,9 +324,19 @@ pub async fn plan_to_object_store(
                 hasher.update(&data);
                 let hash_str = encode(hasher.finalize());
                 let object_storage_id = hash_str + ".parquet";
-                store
-                    .put(&Path::from(object_storage_id.clone()), data)
-                    .await?;
+
+                // For local FS stores, we can just move the file to the target location
+                if let Some(result) = store.fast_upload(
+                    &partition_file_path,
+                    &Path::from(object_storage_id.clone()),
+                ) {
+                    result?;
+                } else {
+                    store
+                        .inner
+                        .put(&Path::from(object_storage_id.clone()), data)
+                        .await?;
+                }
 
                 let partition = SeafowlPartition {
                     object_storage_id: Arc::from(object_storage_id),
@@ -443,12 +454,8 @@ impl DefaultSeafowlContext {
             })
     }
 
-    fn get_internal_object_store(&self) -> Arc<dyn ObjectStore> {
-        let object_store_url = internal_object_store_url();
-        self.inner
-            .runtime_env()
-            .object_store(object_store_url)
-            .unwrap()
+    fn get_internal_object_store(&self) -> Arc<InternalObjectStore> {
+        self.internal_object_store.clone()
     }
 
     /// Resolve a table reference into a Seafowl table
@@ -1239,12 +1246,11 @@ pub mod test_utils {
 
     use crate::{
         catalog::{
-            DefaultCatalog, MockFunctionCatalog, MockPartitionCatalog, MockTableCatalog,
-            TableCatalog, DEFAULT_DB, DEFAULT_SCHEMA,
+            MockFunctionCatalog, MockPartitionCatalog, MockTableCatalog, TableCatalog,
+            DEFAULT_DB, DEFAULT_SCHEMA,
         },
         object_store::http::add_http_object_store,
         provider::{SeafowlCollection, SeafowlDatabase},
-        repository::sqlite::SqliteRepository,
     };
 
     use datafusion::{
@@ -1255,6 +1261,9 @@ pub mod test_utils {
         prelude::SessionConfig,
     };
 
+    use crate::config::context::build_context;
+    use crate::config::schema;
+    use crate::config::schema::{Catalog, SeafowlConfig, Sqlite};
     use std::collections::HashMap as StdHashMap;
 
     use super::*;
@@ -1280,27 +1289,16 @@ pub mod test_utils {
 
     /// Build a real (not mocked) in-memory context that uses SQLite
     pub async fn in_memory_context() -> DefaultSeafowlContext {
-        let session = make_session();
-
-        let repository = SqliteRepository::try_new("sqlite://:memory:".to_string())
-            .await
-            .unwrap();
-        let catalog = Arc::new(DefaultCatalog::new(Arc::new(repository)));
-        let default_db = catalog.create_database(DEFAULT_DB).await.unwrap();
-        catalog
-            .create_collection(default_db, DEFAULT_SCHEMA)
-            .await
-            .unwrap();
-
-        DefaultSeafowlContext {
-            inner: session,
-            table_catalog: catalog.clone(),
-            partition_catalog: catalog.clone(),
-            function_catalog: catalog,
-            database: DEFAULT_DB.to_string(),
-            database_id: default_db,
-            max_partition_size: 1024 * 1024,
-        }
+        let config = SeafowlConfig {
+            object_store: schema::ObjectStore::InMemory(schema::InMemory {}),
+            catalog: Catalog::Sqlite(Sqlite {
+                dsn: "sqlite://:memory:".to_string(),
+            }),
+            frontend: Default::default(),
+            runtime: Default::default(),
+            misc: Default::default(),
+        };
+        build_context(&config).await.unwrap()
     }
 
     pub async fn mock_context() -> DefaultSeafowlContext {
@@ -1384,11 +1382,14 @@ pub mod test_utils {
 
         setup_table_catalog(&mut table_catalog);
 
-        let object_store = Arc::new(InMemory::new());
+        let object_store = Arc::new(InternalObjectStore {
+            inner: Arc::new(InMemory::new()),
+            config: schema::ObjectStore::InMemory(schema::InMemory {}),
+        });
         session.runtime_env().register_object_store(
             INTERNAL_OBJECT_STORE_SCHEME,
             "",
-            object_store,
+            object_store.inner.clone(),
         );
 
         DefaultSeafowlContext {
@@ -1396,6 +1397,7 @@ pub mod test_utils {
             table_catalog: Arc::new(table_catalog),
             partition_catalog: partition_catalog_ptr,
             function_catalog: Arc::new(function_catalog),
+            internal_object_store: object_store,
             database: "testdb".to_string(),
             database_id: 0,
             max_partition_size: 2,
@@ -1407,6 +1409,8 @@ pub mod test_utils {
 mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field};
+    use tempfile::TempDir;
+
     use std::sync::Arc;
 
     use datafusion::execution::disk_manager::DiskManagerConfig;
@@ -1416,9 +1420,12 @@ mod tests {
 
     use crate::context::test_utils::mock_context_with_catalog_assertions;
 
+    use crate::config::schema;
     use datafusion::assert_batches_eq;
     use datafusion::from_slice::FromSlice;
     use datafusion::physical_plan::memory::MemoryExec;
+    use itertools::Itertools;
+    use object_store::local::LocalFileSystem;
 
     use super::*;
 
@@ -1436,8 +1443,31 @@ mod tests {
         Arc::from(scalar_value_to_bytes(&value))
     }
 
+    async fn assert_uploaded_objects(
+        object_store: Arc<InternalObjectStore>,
+        expected: Vec<Path>,
+    ) {
+        let actual = object_store
+            .inner
+            .list(None)
+            .await
+            .unwrap()
+            .map_ok(|meta| meta.location)
+            .try_collect::<Vec<Path>>()
+            .await
+            .map(|p| p.into_iter().sorted().collect_vec())
+            .unwrap();
+        assert_eq!(expected.into_iter().sorted().collect_vec(), actual);
+    }
+
+    #[test_case(
+    false; "In-memory object store (standard)"
+    )]
+    #[test_case(
+    true; "Local object store (test renames)"
+    )]
     #[tokio::test]
-    async fn test_plan_to_object_storage() {
+    async fn test_plan_to_object_storage(is_local: bool) {
         let sf_context = mock_context().await;
 
         // Make a SELECT VALUES(...) query
@@ -1454,12 +1484,37 @@ mod tests {
             .await
             .unwrap();
 
-        let object_store = Arc::new(InMemory::new());
+        let (object_store, _tmpdir) = if is_local {
+            // Return tmp_dir to the upper scope so that we don't delete the temporary directory
+            // until after the test is done
+            let tmp_dir = TempDir::new().unwrap();
+
+            (
+                Arc::new(InternalObjectStore {
+                    inner: Arc::new(
+                        LocalFileSystem::new_with_prefix(tmp_dir.path()).unwrap(),
+                    ),
+                    config: schema::ObjectStore::Local(schema::Local {
+                        data_dir: tmp_dir.path().to_string_lossy().to_string(),
+                    }),
+                }),
+                Some(tmp_dir),
+            )
+        } else {
+            (
+                Arc::new(InternalObjectStore {
+                    inner: Arc::new(InMemory::new()),
+                    config: schema::ObjectStore::InMemory(schema::InMemory {}),
+                }),
+                None,
+            )
+        };
+
         let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
         let partitions = plan_to_object_store(
             &sf_context.inner.state(),
             &execution_plan,
-            object_store,
+            object_store.clone(),
             disk_manager,
             2,
         )
@@ -1536,6 +1591,15 @@ mod tests {
                 },
             ]
         );
+
+        assert_uploaded_objects(
+            object_store,
+            vec![
+                Path::from(PARTITION_1_FILE_NAME.to_string()),
+                Path::from(PARTITION_2_FILE_NAME.to_string()),
+            ],
+        )
+        .await;
     }
 
     #[test_case(
@@ -1623,7 +1687,10 @@ mod tests {
             MemoryExec::try_new(df_partitions.as_slice(), schema, None).unwrap(),
         );
 
-        let object_store = Arc::new(InMemory::new());
+        let object_store = Arc::new(InternalObjectStore {
+            inner: Arc::new(InMemory::new()),
+            config: schema::ObjectStore::InMemory(schema::InMemory {}),
+        });
         let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
         let partitions = plan_to_object_store(
             &sf_context.inner.state(),
@@ -1816,18 +1883,11 @@ mod tests {
             .unwrap();
 
         let store = sf_context.get_internal_object_store();
-        let uploaded_objects = store
-            .list(None)
-            .await
-            .unwrap()
-            .map_ok(|meta| meta.location)
-            .try_collect::<Vec<Path>>()
-            .await
-            .unwrap();
-        assert_eq!(
-            uploaded_objects,
-            vec![Path::from(EXPECTED_INSERT_FILE_NAME)]
-        );
+        assert_uploaded_objects(
+            store,
+            vec![Path::from(EXPECTED_INSERT_FILE_NAME.to_string())],
+        )
+        .await;
     }
 
     #[tokio::test]
