@@ -214,21 +214,26 @@ fn make_dummy_exec() -> Arc<dyn ExecutionPlan> {
 fn temp_partition_file_writer(
     disk_manager: Arc<DiskManager>,
     arrow_schema: SchemaRef,
-) -> Result<(File, ArrowWriter<NamedTempFile>)> {
+) -> Result<(TempPath, ArrowWriter<File>)> {
     let partition_file = disk_manager.create_tmp_file()?;
-    // Maintain a second handle to the file (the first one is consumed by ArrowWriter)
-    // We'll close this handle (and hence drop the file) upon reading the partition contents, just
-    // prior to uploading them.
-    let partition_file_handle = partition_file.reopen().map_err(|_| {
-        DataFusionError::Execution("Error with temporary Parquet file".to_string())
-    })?;
+
+    // Hold on to the path of the file, in case we need to just move it instead of
+    // uploading the data to the object store. This can be a consistency/security issue, but the
+    // worst someone can do is swap out the file with something else if the original temporary
+    // file gets deleted and an attacker creates a temporary file with the same name. In that case,
+    // we can end up copying an arbitrary file to the object store, which requires access to the
+    // machine anyway (and at that point there's likely other things that the attacker can do, like
+    // change the write access control settings).
+    let path = partition_file.into_temp_path();
+
+    let file_writer = File::options().write(true).open(&path)?;
 
     let writer_properties = WriterProperties::builder()
         .set_max_row_group_size(MAX_ROW_GROUP_SIZE)
         .build();
     let writer =
-        ArrowWriter::try_new(partition_file, arrow_schema, Some(writer_properties))?;
-    Ok((partition_file_handle, writer))
+        ArrowWriter::try_new(file_writer, arrow_schema, Some(writer_properties))?;
+    Ok((path, writer))
 }
 
 /// Execute a plan and upload the results to object storage as Parquet files, indexing them.
@@ -241,9 +246,9 @@ pub async fn plan_to_object_store(
     max_partition_size: i64,
 ) -> Result<Vec<SeafowlPartition>> {
     let mut current_partition_size = 0;
-    let (mut current_partition_file_handle, mut writer) =
+    let (mut current_partition_file_path, mut writer) =
         temp_partition_file_writer(disk_manager.clone(), plan.schema())?;
-    let mut partition_file_handles = vec![current_partition_file_handle];
+    let mut partition_file_paths = vec![current_partition_file_path];
     let mut tasks = vec![];
 
     // Iterate over Datafusion partitions and rechuhk them into Seafowl partitions, since we want to
@@ -276,9 +281,9 @@ pub async fn plan_to_object_store(
                 current_partition_size = 0;
                 leftover_partition_capacity = max_partition_size as usize;
 
-                (current_partition_file_handle, writer) =
+                (current_partition_file_path, writer) =
                     temp_partition_file_writer(disk_manager.clone(), plan.schema())?;
-                partition_file_handles.push(current_partition_file_handle);
+                partition_file_paths.push(current_partition_file_path);
             }
 
             current_partition_size += batch.num_rows() as i64;
@@ -287,7 +292,7 @@ pub async fn plan_to_object_store(
     }
     writer.close().map_err(DataFusionError::from).map(|_| ())?;
 
-    for mut partition_file_handle in partition_file_handles {
+    for partition_file_path in partition_file_paths {
         let physical = plan.clone();
         let store = store.clone();
         let handle: tokio::task::JoinHandle<Result<SeafowlPartition>> =
@@ -301,9 +306,9 @@ pub async fn plan_to_object_store(
                 // sequentially.
 
                 let mut buf = Vec::new();
-                partition_file_handle
-                    .read_to_end(&mut buf)
-                    .expect("Error reading the temporary file");
+
+                let mut file = File::open(&partition_file_path)?;
+                file.read_to_end(&mut buf)?;
                 let data = Bytes::from(buf);
 
                 // Index the Parquet file (get its min-max values)
