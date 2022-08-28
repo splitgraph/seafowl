@@ -6,6 +6,7 @@ use bytes::Bytes;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::ResolvedTableReference;
 use object_store::local::LocalFileSystem;
+use tokio::io::AsyncReadExt;
 
 use std::fs::File;
 
@@ -28,19 +29,18 @@ use crate::datafusion::utils::{
 };
 use crate::object_store::http::try_prepare_http_url;
 use crate::object_store::wrapped::InternalObjectStore;
+use crate::utils::hash_file;
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
-use hex::encode;
+
 #[cfg(test)]
 use mockall::automock;
 use object_store::{path::Path, ObjectStore};
-use sha2::Digest;
-use sha2::Sha256;
+
 use sqlparser::ast::{
     AlterTableOperation, ObjectType, Statement, TableFactor, TableWithJoins,
 };
-use std::io::Read;
 
 use std::iter::zip;
 use std::sync::Arc;
@@ -306,20 +306,6 @@ pub async fn plan_to_object_store(
         let store = store.clone();
         let handle: tokio::task::JoinHandle<Result<SeafowlPartition>> =
             tokio::task::spawn(async move {
-                // TODO: the object_store crate doesn't support multi-part uploads / uploading a file
-                // from a local path. This means we have to read the file back into memory in full.
-                // https://github.com/influxdata/object_store_rs/issues/9
-                //
-                // Another implication is that we could just keep everything in memory (point ArrowWriter to a byte buffer,
-                // call get_parquet_file_statistics on that, upload the file) and run the output routine for each partition
-                // sequentially.
-
-                let mut buf = Vec::new();
-
-                let mut file = File::open(&partition_file_path)?;
-                file.read_to_end(&mut buf)?;
-                let data = Bytes::from(buf);
-
                 // Index the Parquet file (get its min-max values)
                 let partition_stats = get_parquet_file_statistics_bytes(
                     &partition_file_path,
@@ -330,10 +316,8 @@ pub async fn plan_to_object_store(
                 let columns =
                     build_partition_columns(&partition_stats, physical.schema());
 
-                let mut hasher = Sha256::new();
-                hasher.update(&data);
-                let hash_str = encode(hasher.finalize());
-                let object_storage_id = hash_str + ".parquet";
+                let object_storage_id =
+                    hash_file(&partition_file_path).await? + ".parquet";
 
                 // For local FS stores, we can just move the file to the target location
                 if let Some(result) = store.fast_upload(
@@ -342,6 +326,20 @@ pub async fn plan_to_object_store(
                 ) {
                     result?;
                 } else {
+                    // TODO: the object_store crate doesn't support multi-part uploads / uploading a file
+                    // from a local path. This means we have to read the file back into memory in full.
+                    // https://github.com/influxdata/object_store_rs/issues/9
+                    //
+                    // Another implication is that we could just keep everything in memory (point ArrowWriter to a byte buffer,
+                    // call get_parquet_file_statistics on that, upload the file) and run the output routine for each partition
+                    // sequentially.
+
+                    let mut buf = Vec::new();
+
+                    let mut file = tokio::fs::File::open(&partition_file_path).await?;
+                    file.read_to_end(&mut buf).await?;
+                    let data = Bytes::from(buf);
+
                     store
                         .inner
                         .put(&Path::from(object_storage_id.clone()), data)
