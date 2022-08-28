@@ -19,6 +19,7 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 use crate::repository::postgres::PostgresRepository;
 
 use crate::object_store::http::add_http_object_store;
+use crate::object_store::wrapped::InternalObjectStore;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::new_s3;
 
@@ -108,7 +109,7 @@ pub async fn build_context(
     context.runtime_env().register_object_store(
         INTERNAL_OBJECT_STORE_SCHEME,
         "",
-        object_store,
+        object_store.clone(),
     );
 
     // Register the HTTP object store for external tables
@@ -141,6 +142,10 @@ pub async fn build_context(
         table_catalog: tables,
         partition_catalog: partitions,
         function_catalog: functions,
+        internal_object_store: Arc::new(InternalObjectStore {
+            inner: object_store,
+            config: cfg.object_store.clone(),
+        }),
         database: DEFAULT_DB.to_string(),
         database_id: default_db,
         max_partition_size: cfg.misc.max_partition_size,
