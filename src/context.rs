@@ -19,6 +19,7 @@ use datafusion::execution::DiskManager;
 
 use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::{CreateExternalTable, DFField, DropTable, Expr, FileType};
+use datafusion_proto::protobuf;
 
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
 use crate::datafusion::utils::{
@@ -44,6 +45,7 @@ use std::iter::zip;
 use std::sync::Arc;
 
 pub use datafusion::error::{DataFusionError as Error, Result};
+use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::{
         datatypes::{Schema, SchemaRef},
@@ -64,6 +66,8 @@ use datafusion::{
     prelude::SessionContext,
     sql::{planner::SqlToRel, TableReference},
 };
+use log::warn;
+use prost::Message;
 use tempfile::NamedTempFile;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
@@ -131,6 +135,17 @@ async fn get_parquet_file_statistics_bytes(
     Ok(stats)
 }
 
+// Serialise min/max stats in the form of a given ScalarValue using Datafusion protobufs format
+pub fn scalar_value_to_bytes(value: &ScalarValue) -> Option<Vec<u8>> {
+    match <&ScalarValue as TryInto<protobuf::ScalarValue>>::try_into(value) {
+        Ok(proto) => Some(proto.encode_to_vec()),
+        Err(error) => {
+            warn!("Failed to serialise min/max value {:?}: {}", value, error);
+            None
+        }
+    }
+}
+
 /// Serialize data for the physical partition index from Parquet file statistics
 fn build_partition_columns(
     partition_stats: &Statistics,
@@ -143,19 +158,11 @@ fn build_partition_columns(
         // pruning will fail, and we will default to using all partitions.
         Some(column_statistics) => zip(column_statistics, schema.fields())
             .map(|(stats, column)| {
-                // TODO: the to_string will discard the timezone for Timestamp* values, and will
-                // therefore hinder the ability to recreate them once needed for partition pruning.
-                // However, since DF stats rely on Parquet stats that problem won't come up until
-                // 1) Parquet starts collecting stats for Timestamp* types (`parquet::file::statistics::Statistics` enum)
+                // Since DF stats rely on Parquet stats we won't have stats on  Timestamp* values until
+                // 1) Parquet starts collecting stats for them (`parquet::file::statistics::Statistics` enum)
                 // 2) DF pattern matches those types in `summarize_min_max`.
-                let min_value = stats
-                    .min_value
-                    .as_ref()
-                    .map(|m| m.to_string().as_bytes().into());
-                let max_value = stats
-                    .max_value
-                    .as_ref()
-                    .map(|m| m.to_string().as_bytes().into());
+                let min_value = stats.min_value.as_ref().and_then(scalar_value_to_bytes);
+                let max_value = stats.max_value.as_ref().and_then(scalar_value_to_bytes);
 
                 PartitionColumn {
                     name: Arc::from(column.name().to_string()),
@@ -1412,8 +1419,8 @@ mod tests {
     const EXPECTED_INSERT_FILE_NAME: &str =
         "1592625fb7bb063580d94fe2eaf514d55e6b44f1bebd6c7f6b2e79f55477218b.parquet";
 
-    fn to_min_max_value<T: ToString>(item: T) -> Arc<Option<Vec<u8>>> {
-        Arc::from(Some(item.to_string().as_bytes().to_vec()))
+    fn to_min_max_value(value: ScalarValue) -> Arc<Option<Vec<u8>>> {
+        Arc::from(scalar_value_to_bytes(&value))
     }
 
     #[tokio::test]
@@ -1471,8 +1478,8 @@ mod tests {
                                 "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
                                     .to_string()
                             ),
-                            min_value: to_min_max_value(12),
-                            max_value: to_min_max_value(42),
+                            min_value: to_min_max_value(ScalarValue::Int64(Some(12))),
+                            max_value: to_min_max_value(ScalarValue::Int64(Some(42))),
                             null_count: Some(0),
                         },
                         PartitionColumn {
@@ -1501,8 +1508,8 @@ mod tests {
                                 "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
                                     .to_string()
                             ),
-                            min_value: to_min_max_value(22),
-                            max_value: to_min_max_value(32),
+                            min_value: to_min_max_value(ScalarValue::Int64(Some(22))),
+                            max_value: to_min_max_value(ScalarValue::Int64(Some(32))),
                             null_count: Some(0),
                         },
                         PartitionColumn {
@@ -1626,12 +1633,12 @@ mod tests {
                         r#type: Arc::from(
                             r#"{"name":"int","bitWidth":32,"isSigned":true}"#
                         ),
-                        min_value: to_min_max_value(
-                            output_partitions[i].iter().min().unwrap()
-                        ),
-                        max_value: to_min_max_value(
-                            output_partitions[i].iter().max().unwrap()
-                        ),
+                        min_value: to_min_max_value(ScalarValue::Int32(
+                            output_partitions[i].iter().min().copied()
+                        )),
+                        max_value: to_min_max_value(ScalarValue::Int32(
+                            output_partitions[i].iter().max().copied()
+                        )),
                         null_count: Some(0),
                     }])
                 },
@@ -1763,18 +1770,8 @@ mod tests {
                                     PartitionColumn {
                                         name: Arc::from("value"),
                                         r#type: Arc::from("{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"),
-                                        min_value: Arc::new(Some(
-                                            vec![
-                                                52,
-                                                50,
-                                            ],
-                                        )),
-                                        max_value: Arc::new(Some(
-                                            vec![
-                                                52,
-                                                50,
-                                            ],
-                                        )),
+                                        min_value: Arc::new(scalar_value_to_bytes(&ScalarValue::Float64(Some(42.0)))),
+                                        max_value: Arc::new(scalar_value_to_bytes(&ScalarValue::Float64(Some(42.0)))),
                                         null_count: Some(0),
                                     },
                                 ],)
