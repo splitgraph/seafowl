@@ -10,7 +10,6 @@ use std::{
 use clap::Parser;
 
 use futures::{future::join_all, Future, FutureExt};
-use mimalloc::MiMalloc;
 
 use pretty_env_logger::env_logger;
 use seafowl::{
@@ -29,9 +28,6 @@ use tokio::sync::broadcast::{channel, Sender};
 
 #[cfg(feature = "frontend-postgres")]
 use seafowl::frontend::postgres::run_pg_server;
-
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
 
 extern crate pretty_env_logger;
 #[macro_use]

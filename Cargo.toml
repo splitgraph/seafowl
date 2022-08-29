@@ -32,7 +32,6 @@ hashbrown = { version = "0.12", features = ["raw"] }
 hex = ">=0.4.0"
 itertools = ">=0.10.0"
 log = "0.4"
-mimalloc = { version = "*", default-features = false }
 moka = { version = "0.9.3", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.3.0"
 pretty_env_logger = "0.4"
