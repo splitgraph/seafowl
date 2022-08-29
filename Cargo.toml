@@ -26,7 +26,6 @@ convergence-arrow = { git = "https://github.com/returnString/convergence", rev =
 datafusion = "10"
 datafusion-proto = "10"
 futures = "0.3"
-prost = "0.10"
 
 # passing to DF's query planner
 hashbrown = { version = "0.12", features = ["raw"] }
@@ -37,6 +36,7 @@ mimalloc = { version = "*", default-features = false }
 moka = { version = "0.9.3", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.3.0"
 pretty_env_logger = "0.4"
+prost = "0.10"
 
 # Needs to be in non-dev because repository::testutils can't be
 # imported by tests::end_to_end if it's cfg(test).
