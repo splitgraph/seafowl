@@ -23,7 +23,7 @@ use crate::object_store::wrapped::InternalObjectStore;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::new_s3;
 
-use super::schema::{self, MEMORY_FRACTION, S3};
+use super::schema::{self, MEBIBYTES, MEMORY_FRACTION, S3};
 
 async fn build_catalog(
     config: &schema::SeafowlConfig,
@@ -88,8 +88,8 @@ pub async fn build_context(
 ) -> Result<DefaultSeafowlContext, DataFusionError> {
     let mut runtime_config = RuntimeConfig::new();
     if let Some(max_memory) = cfg.runtime.max_memory {
-        runtime_config =
-            runtime_config.with_memory_limit(max_memory as usize, MEMORY_FRACTION);
+        runtime_config = runtime_config
+            .with_memory_limit((max_memory * MEBIBYTES) as usize, MEMORY_FRACTION);
     }
 
     if let Some(temp_dir) = &cfg.runtime.temp_dir {
