@@ -296,6 +296,7 @@ impl SeafowlPruningStatistics {
     /// use arrow::datatypes::DataType;
     /// use datafusion::scalar::ScalarValue;
     /// use seafowl::provider::SeafowlPruningStatistics;
+    /// use seafowl::context::scalar_value_to_bytes;
     ///
     /// fn parse(value: &Arc<Option<Vec<u8>>>, dt: &DataType) -> ScalarValue {
     ///     SeafowlPruningStatistics::parse_bytes_value(&value, &dt).unwrap()
@@ -307,9 +308,13 @@ impl SeafowlPruningStatistics {
     /// assert_eq!(parse(&val, &DataType::Boolean), ScalarValue::Boolean(None));
     ///
     /// // Parse some actual value
-    /// let val = Arc::from(Some(42.to_string().as_bytes().to_vec()));
+    /// let val = Arc::from(scalar_value_to_bytes(&ScalarValue::Int32(Some(42))));
     /// assert_eq!(parse(&val, &DataType::Int32), ScalarValue::Int32(Some(42)));
+    ///
+    /// let val = Arc::from(scalar_value_to_bytes(&ScalarValue::Float32(Some(42.0))));
     /// assert_eq!(parse(&val, &DataType::Float32), ScalarValue::Float32(Some(42.0)));
+    ///
+    /// let val = Arc::from(scalar_value_to_bytes(&ScalarValue::Utf8(Some("42".to_string()))));
     /// assert_eq!(parse(&val, &DataType::Utf8), ScalarValue::Utf8(Some("42".to_string())));
     /// ```
     pub fn parse_bytes_value(
