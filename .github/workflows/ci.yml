@@ -39,7 +39,7 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
       - name: Install cmake
-        run: apt-get install -y cmake
+        run: apt-get update && apt-get install -y cmake
 
       # Use https://github.com/marketplace/actions/rust-cache
 
