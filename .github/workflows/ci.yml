@@ -30,7 +30,7 @@ jobs:
       # Setup pre-commit
       # From https://github.com/mozilla/grcov/blob/master/.github/workflows/CICD.yml
       - name: Setup Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
       - name: Install pre-commit
         run: python -m pip install --no-cache-dir pre-commit
       - name: Configure pre-commit cache
