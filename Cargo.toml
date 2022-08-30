@@ -24,6 +24,7 @@ config = "0.13.1"
 convergence = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", optional = true }
 convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", package = "convergence-arrow", optional = true }
 datafusion = "10"
+datafusion-proto = "10"
 futures = "0.3"
 
 # passing to DF's query planner
@@ -35,6 +36,7 @@ mimalloc = { version = "*", default-features = false }
 moka = { version = "0.9.3", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.3.0"
 pretty_env_logger = "0.4"
+prost = "0.10"
 
 # Needs to be in non-dev because repository::testutils can't be
 # imported by tests::end_to_end if it's cfg(test).

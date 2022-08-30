@@ -32,9 +32,11 @@ use datafusion::{
         SendableRecordBatchStream, Statistics,
     },
 };
+use datafusion_proto::protobuf;
 
 use futures::future;
 use log::warn;
+use prost::Message;
 
 use object_store::path::Path;
 
@@ -294,6 +296,7 @@ impl SeafowlPruningStatistics {
     /// use arrow::datatypes::DataType;
     /// use datafusion::scalar::ScalarValue;
     /// use seafowl::provider::SeafowlPruningStatistics;
+    /// use seafowl::context::scalar_value_to_bytes;
     ///
     /// fn parse(value: &Arc<Option<Vec<u8>>>, dt: &DataType) -> ScalarValue {
     ///     SeafowlPruningStatistics::parse_bytes_value(&value, &dt).unwrap()
@@ -305,9 +308,13 @@ impl SeafowlPruningStatistics {
     /// assert_eq!(parse(&val, &DataType::Boolean), ScalarValue::Boolean(None));
     ///
     /// // Parse some actual value
-    /// let val = Arc::from(Some(42.to_string().as_bytes().to_vec()));
+    /// let val = Arc::from(scalar_value_to_bytes(&ScalarValue::Int32(Some(42))));
     /// assert_eq!(parse(&val, &DataType::Int32), ScalarValue::Int32(Some(42)));
+    ///
+    /// let val = Arc::from(scalar_value_to_bytes(&ScalarValue::Float32(Some(42.0))));
     /// assert_eq!(parse(&val, &DataType::Float32), ScalarValue::Float32(Some(42.0)));
+    ///
+    /// let val = Arc::from(scalar_value_to_bytes(&ScalarValue::Utf8(Some("42".to_string()))));
     /// assert_eq!(parse(&val, &DataType::Utf8), ScalarValue::Utf8(Some("42".to_string())));
     /// ```
     pub fn parse_bytes_value(
@@ -315,10 +322,20 @@ impl SeafowlPruningStatistics {
         data_type: &DataType,
     ) -> Result<ScalarValue> {
         match bytes_value.as_ref() {
-            Some(bytes) => match String::from_utf8(bytes.clone()) {
-                Ok(string_val) => ScalarValue::try_from_string(string_val, data_type),
+            Some(bytes) => match protobuf::ScalarValue::decode(bytes.as_slice()) {
+                Ok(proto) => {
+                    match <&protobuf::ScalarValue as TryInto<ScalarValue>>::try_into(
+                        &proto,
+                    ) {
+                        Ok(value) => Ok(value),
+                        Err(error) => Err(DataFusionError::Internal(format!(
+                            "Failed to deserialize min/max value: {}",
+                            error
+                        ))),
+                    }
+                }
                 Err(error) => Err(DataFusionError::Internal(format!(
-                    "Failed to parse min/max value: {}",
+                    "Failed to decode min/max value: {}",
                     error
                 ))),
             },
@@ -478,6 +495,7 @@ mod tests {
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::{BufMut, Bytes, BytesMut};
+    use datafusion::common::ScalarValue;
     use datafusion::logical_expr::{col, lit, or, Expr};
     use datafusion::{
         arrow::{
@@ -497,7 +515,7 @@ mod tests {
     use crate::provider::{PartitionColumn, SeafowlPruningStatistics};
     use crate::{
         catalog::MockPartitionCatalog,
-        context::INTERNAL_OBJECT_STORE_SCHEME,
+        context::{scalar_value_to_bytes, INTERNAL_OBJECT_STORE_SCHEME},
         provider::{SeafowlPartition, SeafowlTable},
         schema,
     };
@@ -665,8 +683,12 @@ mod tests {
         // Create some fake partitions
         let mut partitions = vec![];
         for (ind, (min, max, null_count)) in part_stats.iter().enumerate() {
-            let min_value = Arc::from(min.map(|v| v.to_string().as_bytes().to_vec()));
-            let max_value = Arc::from(max.map(|v| v.to_string().as_bytes().to_vec()));
+            let min_value = Arc::from(
+                min.and_then(|v| scalar_value_to_bytes(&ScalarValue::Int32(Some(v)))),
+            );
+            let max_value = Arc::from(
+                max.and_then(|v| scalar_value_to_bytes(&ScalarValue::Int32(Some(v)))),
+            );
 
             partitions.push(SeafowlPartition {
                 object_storage_id: Arc::from(format!("par{}.parquet", ind)),
