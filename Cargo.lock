@@ -807,7 +807,7 @@ dependencies = [
  "lazy_static",
  "log",
  "num_cpus",
- "object_store",
+ "object_store 0.3.0",
  "ordered-float 3.0.0",
  "parking_lot 0.12.1",
  "parquet",
@@ -830,7 +830,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "794ca54d3b144038c36b7a31d64c9545abb2edbdda6da055e481fb8a13e4e33b"
 dependencies = [
  "arrow",
- "object_store",
+ "object_store 0.3.0",
  "ordered-float 3.0.0",
  "parquet",
  "sqlparser",
@@ -2385,13 +2385,34 @@ dependencies = [
  "bytes",
  "chrono",
  "futures",
+ "itertools",
+ "percent-encoding",
+ "snafu",
+ "tokio",
+ "tracing",
+ "url",
+ "walkdir",
+]
+
+[[package]]
+name = "object_store"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf3845781c5ecf37b3e3610df73fff11487591eba423a987e1b21bb4d389c326"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
  "hyper",
  "hyper-rustls",
  "itertools",
+ "parking_lot 0.12.1",
  "percent-encoding",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_s3",
+ "rusoto_sts",
  "snafu",
  "tokio",
  "tracing",
@@ -3230,6 +3251,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusoto_sts"
+version = "0.48.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1643f49aa67cb7cb895ebac5a2ff3f991c6dbdc58ad98b28158cd5706aecd1d"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "rusoto_core",
+ "serde_urlencoded",
+ "xml-rs",
+]
+
+[[package]]
 name = "rust-ini"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3415,7 +3451,7 @@ dependencies = [
  "log",
  "mockall",
  "moka",
- "object_store",
+ "object_store 0.4.0",
  "pretty_env_logger",
  "prost",
  "rand 0.8.5",
