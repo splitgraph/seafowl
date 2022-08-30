@@ -26,8 +26,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast::Receiver;
 use warp::multipart::{FormData, Part};
-use warp::reply::Response;
-use warp::{hyper::StatusCode, Filter, Reply};
+use warp::reply::{with_header, Response};
+use warp::{hyper::header, hyper::StatusCode, Filter, Reply};
 
 use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::config::schema::{AccessSettings, MEBIBYTES};
@@ -41,13 +41,14 @@ use crate::{
 use super::http_utils::{handle_rejection, into_response, ApiError};
 
 const QUERY_HEADER: &str = "X-Seafowl-Query";
-const IF_NONE_MATCH: &str = "If-None-Match";
-const ETAG: &str = "ETag";
-const AUTHORIZATION: &str = "Authorization";
 const BEARER_PREFIX: &str = "Bearer ";
 // We have a very lax CORS on this, so we don't mind browsers
 // caching it for as long as possible.
 const CORS_MAXAGE: u32 = 86400;
+
+// Vary on Origin, as warp's CORS responds with Access-Control-Allow-Origin: [origin],
+// so we can't cache the response in the browser if the origin changes.
+const VARY: &str = "Content-Type, Origin, X-Seafowl-Query";
 
 #[derive(Default)]
 struct ETagBuilderVisitor {
@@ -166,7 +167,7 @@ fn header_to_user_context(
 pub fn with_auth(
     policy: AccessPolicy,
 ) -> impl Filter<Extract = (UserContext,), Error = Rejection> + Clone {
-    warp::header::optional::<String>(AUTHORIZATION).and_then(
+    warp::header::optional::<String>(header::AUTHORIZATION.as_str()).and_then(
         move |header: Option<String>| {
             future::ready(
                 header_to_user_context(header, &policy).map_err(warp::reject::custom),
@@ -237,7 +238,7 @@ pub async fn cached_read_query(
     let physical = context.create_physical_plan(&plan).await?;
     let buf = physical_plan_to_json(context, physical).await?;
 
-    Ok(warp::reply::with_header(buf, ETAG, etag).into_response())
+    Ok(warp::reply::with_header(buf, header::ETAG, etag).into_response())
 }
 
 /// POST /upload/[schema]/[table]
@@ -382,7 +383,11 @@ pub fn filters(
 
     let cors = warp::cors()
         .allow_any_origin()
-        .allow_headers(vec!["X-Seafowl-Query", "Authorization", "Content-Type"])
+        .allow_headers(vec![
+            "X-Seafowl-Query",
+            header::AUTHORIZATION.as_str(),
+            header::CONTENT_TYPE.as_str(),
+        ])
         .allow_methods(vec!["GET", "POST"])
         .max_age(CORS_MAXAGE);
 
@@ -399,7 +404,9 @@ pub fn filters(
                 .or(warp::body::json().map(|b: QueryBody| b.query))
                 .unify(),
         )
-        .and(warp::header::optional::<String>(IF_NONE_MATCH))
+        .and(warp::header::optional::<String>(
+            header::IF_NONE_MATCH.as_str(),
+        ))
         .and(warp::any().map(move || ctx.clone()))
         .then(cached_read_query)
         .map(into_response);
@@ -434,6 +441,7 @@ pub fn filters(
         .or(upload_route)
         .with(cors)
         .with(log)
+        .map(|r| with_header(r, header::VARY, VARY))
         .recover(handle_rejection)
 }
 
@@ -466,6 +474,7 @@ mod tests {
     use warp::{Filter, Rejection, Reply};
 
     use warp::http::Response;
+    use warp::hyper::header;
     use warp::{
         hyper::{header::IF_NONE_MATCH, StatusCode},
         test::request,
@@ -476,10 +485,8 @@ mod tests {
     use crate::config::schema::HttpFrontend;
     use crate::{
         context::{test_utils::in_memory_context, SeafowlContext},
-        frontend::http::{filters, ETAG, QUERY_HEADER},
+        frontend::http::{filters, QUERY_HEADER},
     };
-
-    use super::AUTHORIZATION;
 
     fn http_config_from_access_policy(access_policy: AccessPolicy) -> HttpFrontend {
         HttpFrontend {
@@ -621,7 +628,10 @@ mod tests {
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":1}\n");
-        assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V1_ETAG);
+        assert_eq!(
+            resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
+            V1_ETAG
+        );
     }
 
     #[tokio::test]
@@ -653,7 +663,10 @@ mod tests {
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":1}\n");
-        assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V1_ETAG);
+        assert_eq!(
+            resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
+            V1_ETAG
+        );
     }
 
     #[tokio::test]
@@ -669,7 +682,10 @@ mod tests {
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":1}\n");
-        assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V1_ETAG);
+        assert_eq!(
+            resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
+            V1_ETAG
+        );
     }
 
     #[tokio::test]
@@ -701,12 +717,15 @@ mod tests {
             .method("GET")
             .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
-            .header(ETAG, V1_ETAG)
+            .header(header::ETAG, V1_ETAG)
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":2}\n");
-        assert_eq!(resp.headers().get(ETAG).unwrap().to_str().unwrap(), V2_ETAG);
+        assert_eq!(
+            resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
+            V2_ETAG
+        );
     }
 
     async fn _query_uncached_endpoint<R, H>(
@@ -724,7 +743,7 @@ mod tests {
             .json(&HashMap::from([("query", query)]));
 
         if let Some(t) = token {
-            builder = builder.header(AUTHORIZATION, format!("Bearer {}", t));
+            builder = builder.header(header::AUTHORIZATION, format!("Bearer {}", t));
         }
 
         builder.reply(handler).await
@@ -1008,7 +1027,7 @@ mod tests {
             .method("POST")
             .path("/q")
             .json(&HashMap::from([("query", "SELECT 1")]))
-            .header(AUTHORIZATION, "InvalidAuthzHeader")
+            .header(header::AUTHORIZATION, "InvalidAuthzHeader")
             .reply(&handler)
             .await;
 
