@@ -8,13 +8,19 @@
 #
 # You can also build it manually:
 # cargo build --release
-# DOCKER_BUILDKIT=1 docker build . -t splitgraph/seafowl
+# DOCKER_BUILDKIT=1 docker build . -t splitgraph/seafowl:nightly
 
 FROM debian:bullseye-slim
 
 COPY target/release/seafowl /usr/local/bin/seafowl
 
-RUN mkdir -p /seafowl-data && \
+# Make sure to install ca-certificates so that we can use HTTPS
+# https://github.com/debuerreotype/docker-debian-artifacts/issues/15
+RUN \
+    apt-get update -qq && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    update-ca-certificates && \
+    mkdir -p /seafowl-data && \
     mkdir -p /etc/seafowl && \
     # Build the default config file
     cat > /etc/seafowl/seafowl.toml <<EOF
