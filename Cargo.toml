@@ -13,6 +13,8 @@ license = "Apache-2.0"
 include = [
     "src/**/*.rs",
     "Cargo.toml",
+    "build.rs",
+    "migrations",
 ]
 
 [features]
@@ -32,8 +34,8 @@ clap = { version = "3.2.15", features = [ "derive" ] }
 config = "0.13.1"
 
 # PG wire protocol support
-convergence = { version = "0.5.0", git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", optional = true }
-convergence-arrow = { version = "0.5.0", git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", package = "convergence-arrow", optional = true }
+convergence = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", optional = true }
+convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", package = "convergence-arrow", optional = true }
 datafusion = "10"
 datafusion-proto = "10"
 futures = "0.3"
