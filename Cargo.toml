@@ -35,7 +35,7 @@ log = "0.4"
 moka = { version = "0.9.3", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.3.0"
 pretty_env_logger = "0.4"
-prost = "0.10"
+prost = "0.11"
 
 # Needs to be in non-dev because repository::testutils can't be
 # imported by tests::end_to_end if it's cfg(test).
