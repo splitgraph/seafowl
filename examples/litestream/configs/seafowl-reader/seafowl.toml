@@ -1,0 +1,16 @@
+[object_store]
+type = "s3"
+access_key_id = "seafowl"
+secret_access_key = "seafowl"
+endpoint = "https://minio:9000"
+bucket = "seafowl"
+
+[catalog]
+type = "sqlite"
+dsn = "/data/seafowl/seafowl.sqlite"
+
+[frontend.http]
+bind_host = "0.0.0.0"
+bind_port = "80"
+read_access = "any"
+write_access = "off"

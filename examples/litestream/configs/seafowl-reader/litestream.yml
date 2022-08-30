@@ -1,0 +1,6 @@
+addr: ":9090"
+
+dbs:
+  - path: /data/seafowl
+    upstream:
+      url: http://seafowl-writer:9090
