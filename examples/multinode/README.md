@@ -5,6 +5,8 @@ This example is a Docker Compose file that shows you how to run multiple instanc
 - PostgreSQL as a catalog
 - MinIO as an object store
 
+![Architecture diagram](https://www.splitgraph.com/static-v2/seafowl/diagrams/deployment-multiple-rw.png)
+
 This example supports running multiple instances of Seafowl with the `--scale` Compose option and
 comes with NGINX as a load balancer.
 
@@ -16,12 +18,12 @@ multiple nodes.
 ## Running the example
 
 ```bash
-docker compose up --scale seafowl=3 -d seafowl
+docker compose up --scale seafowl=3 -d
 ```
 
 You can now access an NGINX instance that load balances between multiple Seafowl instances:
 
 ```bash
-curl -H "Content-Type: application/json" \
+curl -i -H "Content-Type: application/json" \
     "http://localhost:8080/q/" -d '{"query": "SELECT 1"}'
 ```
