@@ -1,10 +1,14 @@
 # syntax=docker/dockerfile:1
 
+# Dockerfile used to build a Seafowl Docker image
+#
 # Assumes Seafowl is already built (target/release/seafowl).
 # Build this with Buildkit in order to avoid sending the whole source root
 # to the Docker daemon.
 #
-# DOCKER_BUILDKIT=1 docker build . -t seafowl
+# You can also build it manually:
+# cargo build --release
+# DOCKER_BUILDKIT=1 docker build . -t splitgraph/seafowl
 
 FROM debian:bullseye-slim
 

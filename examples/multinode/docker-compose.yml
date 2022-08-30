@@ -16,24 +16,10 @@ services:
 
   # Seafowl instance (RW); run with docker compose up --scale seafowl=3 -d seafowl
   seafowl:
-    build:
-      dockerfile: Dockerfile
-      context: ./seafowl
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "curl",
-          "-f",
-          "-H",
-          "Content-Type: application/json",
-          "http://localhost:8080/q",
-          "-d",
-          '{"query": "SELECT 1"}',
-        ]
-      interval: 30s
-      timeout: 1s
-      retries: 3
+    # This relies on the Seafowl Nightly Docker image
+    # You can build your own by doing (from the root dir)
+    # DOCKER_BUILDKIT=1 docker build . -t splitgraph/seafowl:nightly
+    image: splitgraph/seafowl:nightly
     deploy:
       restart_policy:
         condition: on-failure
