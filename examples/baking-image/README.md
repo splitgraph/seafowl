@@ -3,7 +3,7 @@
 This example extends the Seafowl Docker image with a pre-baked dataset with a CSV file from
 <https://www.cl.cam.ac.uk/research/dtg/weather/>.
 
-![Architecture diagram](/static-v2/seafowl/diagrams/deployment-no-w-multiple-r.png)
+![Architecture diagram](https://www.splitgraph.com/static-v2/seafowl/diagrams/deployment-no-w-multiple-r.png)
 
 See the [Seafowl docs](https://www.splitgraph.com/docs/seafowl/guides/baking-dataset-docker-image)
 for more information.
