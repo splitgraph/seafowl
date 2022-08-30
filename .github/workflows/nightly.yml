@@ -68,6 +68,7 @@ jobs:
         if: matrix.build == 'linux'
         uses: docker/build-push-action@v3
         with:
+          context: .
           push: true
           tags: splitgraph/seafowl:nightly
 
