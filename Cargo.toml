@@ -4,6 +4,17 @@ build = "build.rs"
 version = "0.1.0-dev.1"
 edition = "2021"
 
+readme = "README.md"
+description = "Seafowl is an analytical database designed for modern data-driven Web applications."
+authors = ["Splitgraph, Inc. <support@splitgraph.com>"]
+keywords = ["database", "http", "web"]
+homepage = "https://seafowl.io"
+license = "Apache-2.0"
+include = [
+    "src/**/*.rs",
+    "Cargo.toml",
+]
+
 [features]
 catalog-postgres = ["sqlx/postgres"]
 default = ["catalog-postgres", "frontend-postgres", "object-store-s3"]
