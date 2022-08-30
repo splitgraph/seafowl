@@ -1,6 +1,8 @@
 name: Build nightly binaries and perform releases
 
 on:
+  # For pushes to main, build binaries and store them as artifacts (also upload Docker images)
+  # For pushes to main with tags, also make a GitHub release.
   push:
     branches:
       - main
@@ -99,6 +101,7 @@ jobs:
   github_release:
     name: Perform GitHub release
     needs: build_binary
+    runs-on: ubuntu-latest
     if: startsWith(github.event.ref, 'refs/tags/v')
     steps:
       - name: Get the release version from the tag
@@ -116,9 +119,9 @@ jobs:
 
       - name: Package artifacts
         run: |
-          tar -C artifacts/seafowl-nightly-x86_64-unknown-linux-gnu -czf seafowl-${{ env.RELEASE_VERSION }}-x86_64-unknown-linux-gnu.tar.gz
-          tar -C artifacts/seafowl-nightly-x86_64-apple-darwin -czf seafowl-${{ env.RELEASE_VERSION }}-x86_64-apple-darwin.tar.gz
-          cd artifacts/seafowl-nightly-x86_64-pc-windows-msvc && zip -r ../seafowl-${{ env.RELEASE_VERSION }}-x86_64-pc-windows-msvc.zip *
+          tar -C artifacts/seafowl-nightly-x86_64-unknown-linux-gnu -czf seafowl-${{ env.RELEASE_VERSION }}-x86_64-unknown-linux-gnu.tar.gz seafowl
+          tar -C artifacts/seafowl-nightly-x86_64-apple-darwin -czf seafowl-${{ env.RELEASE_VERSION }}-x86_64-apple-darwin.tar.gz seafowl
+          cd artifacts/seafowl-nightly-x86_64-pc-windows-msvc && zip -r ../../seafowl-${{ env.RELEASE_VERSION }}-x86_64-pc-windows-msvc.zip seafowl.exe
 
       - name: Upload release archive
         uses: softprops/action-gh-release@v1
