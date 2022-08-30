@@ -24,7 +24,7 @@ config = "0.13.1"
 convergence = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", optional = true }
 convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", package = "convergence-arrow", optional = true }
 datafusion = "10"
-datafusion-proto = "10"
+datafusion-proto = "11"
 futures = "0.3"
 
 # passing to DF's query planner
