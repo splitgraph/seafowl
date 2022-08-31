@@ -5,6 +5,7 @@ use base64::decode;
 use bytes::Bytes;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::ResolvedTableReference;
+use itertools::Itertools;
 use object_store::local::LocalFileSystem;
 use tokio::io::AsyncReadExt;
 
