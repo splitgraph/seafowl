@@ -371,6 +371,28 @@ pub async fn plan_to_object_store(
         .collect()
 }
 
+pub fn is_read_only(plan: &LogicalPlan) -> bool {
+    !matches!(
+        plan,
+        LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::CreateMemoryTable(_)
+            | LogicalPlan::CreateView(_)
+            | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Extension(_)
+    )
+}
+
+pub fn is_statement_read_only(statement: &DFStatement) -> bool {
+    if let DFStatement::Statement(s) = statement {
+        matches!(**s, Statement::Query(_) | Statement::Explain { .. })
+    } else {
+        false
+    }
+}
+
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait SeafowlContext: Send + Sync {

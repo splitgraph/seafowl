@@ -33,7 +33,7 @@ use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::config::schema::{AccessSettings, MEBIBYTES};
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
-    context::SeafowlContext,
+    context::{is_read_only, is_statement_read_only, SeafowlContext},
     data_types::TableVersionId,
     provider::SeafowlTable,
 };
@@ -91,20 +91,6 @@ fn plan_to_etag(plan: &LogicalPlan) -> String {
 #[derive(Debug, Deserialize)]
 struct QueryBody {
     query: String,
-}
-
-pub fn is_read_only(plan: &LogicalPlan) -> bool {
-    !matches!(
-        plan,
-        LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateMemoryTable(_)
-            | LogicalPlan::CreateView(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::Extension(_)
-    )
 }
 
 /// Execute a physical plan and output its results to a JSON Lines format
