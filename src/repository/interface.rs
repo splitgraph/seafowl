@@ -114,6 +114,13 @@ pub trait Repository: Send + Sync + Debug {
         table_version_id: TableVersionId,
     ) -> Result<(), Error>;
 
+    async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>, Error>;
+
+    async fn delete_partitions(
+        &self,
+        object_storage_ids: Vec<String>,
+    ) -> Result<u64, Error>;
+
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,

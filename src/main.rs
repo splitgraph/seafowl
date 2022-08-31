@@ -19,7 +19,7 @@ use seafowl::{
     },
     context::SeafowlContext,
     frontend::http::run_server,
-    utils::run_one_off_command,
+    utils::{cleanup_job, run_one_off_command},
 };
 use tokio::signal::ctrl_c;
 #[cfg(unix)]
@@ -48,6 +48,14 @@ struct Args {
         takes_value = false
     )]
     version: bool,
+
+    #[clap(
+        short = 'C',
+        long = "--cleanup",
+        help = "Run a periodic garbage collection on dangling objects",
+        takes_value = false
+    )]
+    cleanup: bool,
 
     #[clap(short, long, help = "Run a one-off command and exit")]
     one_off: Option<String>,
@@ -177,7 +185,7 @@ async fn main() {
     // Ref: https://tokio.rs/tokio/topics/shutdown#waiting-for-things-to-finish-shutting-down
     let (shutdown, _) = channel(1);
 
-    let mut tasks = prepare_frontends(context, &config, &shutdown);
+    let mut tasks = prepare_frontends(context.clone(), &config, &shutdown);
 
     if tasks.is_empty() {
         error!(
@@ -185,6 +193,11 @@ async fn main() {
 Run Seafowl with --one-off instead to run a one-off command from the CLI."
         );
         exit(-1);
+    }
+
+    // Add a GC task for purging obsolete objects from the catalog and the store
+    if args.cleanup {
+        tasks.push(Box::pin(cleanup_job(context.clone())));
     }
 
     // Add a task that will wait for a termination signal and tell frontends to stop
