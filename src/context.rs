@@ -1138,7 +1138,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                             // - Duplicate the table (new version)
                             // - replace partitions that are changed (but we don't know the table_partition i.e. which entry to
                             // repoint to our new partition)?
-                            Ok(make_dummy_exec())
+                            Err(DataFusionError::NotImplemented("UPDATE statements are currently unsupported,
+                            as a workaround, use CREATE TABLE AS. See https://github.com/splitgraph/seafowl/issues/18".to_string()))
                         }
                         SeafowlExtensionNode::Delete(_) => {
                             // - Duplicate the table (new version)
@@ -1149,7 +1150,8 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                             // really we want to be able to load all partitions + cols for a table and then
                             // write that thing back to the db (set table partitions)
-                            Ok(make_dummy_exec())
+                            Err(DataFusionError::NotImplemented("DELETE statements are currently unsupported,
+                            as a workaround, use CREATE TABLE AS. See https://github.com/splitgraph/seafowl/issues/19".to_string()))
                         }
                         SeafowlExtensionNode::CreateFunction(CreateFunction {
                             name,
