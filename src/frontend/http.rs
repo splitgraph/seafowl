@@ -1082,7 +1082,7 @@ mod tests {
             "somepw",
         )
         .await;
-        assert_eq!(resp.body(), "b{\"key\":\"hey\"}\n");
+        assert_eq!(resp.body(), "{\"key\":\"hey\"}\n");
     }
 
     #[tokio::test]
@@ -1103,7 +1103,7 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "b{\"key\":\"hey\"}\n");
+        assert_eq!(resp.body(), "{\"key\":\"hey\"}\n");
     }
 
     #[tokio::test]
