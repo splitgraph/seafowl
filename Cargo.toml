@@ -75,5 +75,5 @@ test-case = "*"
 wiremock = "0.5"
 
 [build-dependencies]
-anyhow = "1.0.60"  # for build.rs
+anyhow = "1.0.63"  # for build.rs
 vergen = "7"
