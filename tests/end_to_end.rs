@@ -920,7 +920,7 @@ async fn test_create_external_table_http() {
 }
 
 #[tokio::test]
-async fn test_garbage_collection() {
+async fn test_vacuum_command() {
     let context = Arc::new(make_context_with_pg().await);
 
     async fn assert_orphan_partitions(
@@ -949,7 +949,35 @@ async fn test_garbage_collection() {
             .unwrap()
     };
 
+    // Creates table version 1 and 2
     create_table_and_insert(&context, "test_table").await;
+
+    // Make table version 3
+    let plan = context
+        .plan_query(
+            "INSERT INTO test_table (some_int_value, some_value) VALUES
+            (4444, 45),
+            (5555, 46),
+            (6666, 47)",
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // Run vacuum on table to remove previous versions
+    context
+        .collect(context.plan_query("VACUUM TABLE test_table").await.unwrap())
+        .await
+        .unwrap();
+
+    let partitions = context
+        .partition_catalog
+        .load_table_partitions(2 as TableVersionId)
+        .await
+        .unwrap();
+
+    // Ensure we no partitions for the previous version
+    assert_eq!(partitions.len(), 0);
 
     // Drop table to leave orphan partitions around
     context
@@ -957,18 +985,27 @@ async fn test_garbage_collection() {
         .await
         .unwrap();
 
-    // Ensure we have orphan partitions
+    // Check we have orphan partitions
     assert_orphan_partitions(
         context.clone(),
-        vec!["6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet"],
+        vec![
+            "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet",
+            "a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet",
+        ],
     )
     .await;
     let object_metas = get_object_metas().await;
-    assert_eq!(object_metas.len(), 1);
+    assert_eq!(object_metas.len(), 2);
     assert_eq!(
         object_metas[0].location,
         Path::from(
             "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet"
+        )
+    );
+    assert_eq!(
+        object_metas[1].location,
+        Path::from(
+            "a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet"
         )
     );
 

@@ -68,7 +68,7 @@ use datafusion::{
     prelude::SessionContext,
     sql::{planner::SqlToRel, TableReference},
 };
-use log::warn;
+use log::{info, warn};
 use prost::Message;
 use tempfile::TempPath;
 
@@ -881,11 +881,34 @@ impl SeafowlContext for DefaultSeafowlContext {
                             })),
                         }))
                     },
-                Statement::Truncate { partitions, ..} => {
+                Statement::Truncate { table_name, partitions} => {
                     match partitions {
                         Some(_) => gc_partitions(self).await,
-                        // TODO: add table vacuum
-                        None => gc_partitions(self).await,
+                        None => {
+                            let table_name = table_name.to_string();
+                            let table_id = if !table_name.is_empty() {
+                                match self.try_get_seafowl_table(&table_name) {
+                                    Ok(seafowl_table) => Some(seafowl_table.table_id),
+                                    Err(_) => return Err(Error::Internal(format!(
+                                        "Table with name {} not found: ", table_name
+                                    )))
+                                }
+                            } else {
+                                None
+                            };
+
+                            match self.table_catalog
+                                .delete_old_table_versions(table_id)
+                                .await {
+                                Ok(row_count) => {
+                                    info!("Deleted {} old table versions, cleaning up partitions", row_count);
+                                    gc_partitions(self).await
+                                }
+                                Err(error) => return Err(Error::Internal(format!(
+                                    "Failed to delete old table versions: {:?}", error
+                                )))
+                            }
+                        }
                     };
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::NoOp(NoOp {

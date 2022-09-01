@@ -181,6 +181,11 @@ pub trait TableCatalog: Sync + Send {
         schema: &Schema,
     ) -> Result<(TableId, TableVersionId)>;
 
+    async fn delete_old_table_versions(
+        &self,
+        table_id: Option<TableId>,
+    ) -> Result<u64, Error>;
+
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
@@ -403,6 +408,16 @@ impl TableCatalog for DefaultCatalog {
                 }
                 RepositoryError::SqlxError(e) => Error::SqlxError(e),
             })
+    }
+
+    async fn delete_old_table_versions(
+        &self,
+        table_id: Option<TableId>,
+    ) -> Result<u64, Error> {
+        self.repository
+            .delete_old_table_versions(table_id)
+            .await
+            .map_err(Self::to_sqlx_error)
     }
 
     async fn get_collection_id_by_name(

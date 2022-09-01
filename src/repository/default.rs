@@ -217,6 +217,23 @@ impl Repository for $repo {
         Ok((new_table_id, new_version_id))
     }
 
+    async fn delete_old_table_versions(
+        &self,
+        table_id: Option<TableId>,
+    ) -> Result<u64, Error> {
+        let query = if let Some(table_id) = table_id {
+            sqlx::query("DELETE FROM table_version WHERE id NOT IN (SELECT max(id) FROM table_version WHERE table_id = $1)").bind(table_id)
+        } else {
+            sqlx::query("DELETE FROM table_version WHERE id NOT IN (SELECT max(id) FROM table_version GROUP BY table_id)")
+        };
+
+        let delete_result = query.execute(&self.executor)
+            .await
+            .map_err($repo::interpret_error)?;
+
+        Ok(delete_result.rows_affected())
+    }
+
     async fn create_partitions(
         &self,
         partitions: Vec<SeafowlPartition>,

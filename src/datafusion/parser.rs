@@ -195,24 +195,28 @@ impl<'a> DFParser<'a> {
     }
 
     pub fn parse_vacuum(&mut self) -> Result<Statement, ParserError> {
-        // Since `VACUUM` is not a supported keyword by sqlparser, we abuse a semantically related
-        // TRUNCATE to smuggle the info on whether we want GC of tables or partitions.
+        // Since `VACUUM` is not a supported keyword by sqlparser, we abuse the semantically related
+        // TRUNCATE to smuggle the info on whether we want GC of tables or only partitions.
+        let mut table_name = ObjectName(vec![]);
+        let mut partitions = None;
+
         if self.parser.parse_keyword(Keyword::PARTITIONS) {
-            Ok(Statement::Statement(Box::new(SQLStatement::Truncate {
-                table_name: ObjectName(vec![]),
-                partitions: Some(vec![]),
-            })))
+            partitions = Some(vec![]);
         } else if self.parser.parse_keyword(Keyword::TABLES) {
-            Ok(Statement::Statement(Box::new(SQLStatement::Truncate {
-                table_name: ObjectName(vec![]),
-                partitions: None,
-            })))
+            // The default case is fine here
+        } else if self.parser.parse_keyword(Keyword::TABLE) {
+            table_name = self.parser.parse_object_name()?;
         } else {
-            self.expected(
-                "PARTITIONS or TABLES are supported VACUUM targets",
+            return self.expected(
+                "PARTITIONS, TABLES or TABLE are supported VACUUM targets",
                 self.parser.peek_token(),
-            )
+            );
         }
+
+        Ok(Statement::Statement(Box::new(SQLStatement::Truncate {
+            table_name,
+            partitions,
+        })))
     }
 
     /// Parse a SQL CREATE statement

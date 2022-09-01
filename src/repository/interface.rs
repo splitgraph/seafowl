@@ -103,6 +103,11 @@ pub trait Repository: Send + Sync + Debug {
         schema: &Schema,
     ) -> Result<(TableId, TableVersionId), Error>;
 
+    async fn delete_old_table_versions(
+        &self,
+        table_id: Option<TableId>,
+    ) -> Result<u64, Error>;
+
     async fn create_partitions(
         &self,
         partition: Vec<SeafowlPartition>,
