@@ -11,7 +11,6 @@ use hex::encode;
 use log::{debug, info, warn};
 use object_store::path::Path;
 use sha2::{Digest, Sha256};
-use tokio::time::{interval, Duration};
 use tokio::{fs::File, io::AsyncWrite};
 
 use crate::context::{DefaultSeafowlContext, SeafowlContext};
@@ -43,55 +42,53 @@ pub async fn run_one_off_command<W>(
     }
 }
 
-pub async fn cleanup_job(context: Arc<DefaultSeafowlContext>) {
-    let mut interval = interval(Duration::from_secs(3600));
+pub async fn gc_partitions(context: Arc<DefaultSeafowlContext>) {
+    match context
+        .partition_catalog
+        .get_orphan_partition_store_ids()
+        .await
+    {
+        Ok(mut object_storage_ids) if !object_storage_ids.is_empty() => {
+            info!("Found {} orphan partition(s)", object_storage_ids.len());
 
-    loop {
-        match context
-            .partition_catalog
-            .get_orphan_partition_store_ids()
-            .await
-        {
-            Ok(mut object_storage_ids) if !object_storage_ids.is_empty() => {
-                info!("Found {} orphan partition(s)", object_storage_ids.len());
-
-                let mut retain_map = vec![true; object_storage_ids.len()];
-                for (ind, object_storage_id) in object_storage_ids.iter().enumerate() {
-                    context
-                        .internal_object_store
-                        .inner
-                        .delete(&Path::from(object_storage_id.clone()))
-                        .await
-                        .map_err(|e| {
-                            warn!("Failed to delete orphan partition {} from object store: {:?}", object_storage_id, e);
-                            retain_map[ind] = false;
-                        })
-                        .ok();
-                }
-
-                // Scope down only to partitions which we managed to delete in the object store
-                let mut keep = retain_map.iter();
-                object_storage_ids.retain(|_| *keep.next().unwrap());
-
+            let mut retain_map = vec![true; object_storage_ids.len()];
+            for (ind, object_storage_id) in object_storage_ids.iter().enumerate() {
                 context
-                    .partition_catalog
-                    .delete_partitions(object_storage_ids)
+                    .internal_object_store
+                    .inner
+                    .delete(&Path::from(object_storage_id.clone()))
                     .await
-                    .map_or_else(
-                        |e| {
-                            warn!(
-                                "Failed to delete orphan partitions from catalog: {:?}",
-                                e
-                            )
-                        },
-                        |row_count| info!("Deleted {} orphan partition(s)", row_count),
-                    );
+                    .map_err(|e| if format!("{:?}", e).contains("NotFound") {
+                        // This is the way we match both object_store::Error::NotFound and the
+                        // corresponding local FS error (which doesn't get coerced into the above one):
+                        // Generic { store: "LocalFileSystem", source: UnableToDeleteFile { source: Os { code: 2, kind: NotFound, message: "No such file or directory" }, path: "/path/to/.parquet" } }
+                        // We're not able to do pattern matching here since UnableToDeleteFile
+                        // is pub(crate), and we can't use a guard to check on only the content of the
+                        // corresponding source and not source from other pattern alternatives:
+                        // https://stackoverflow.com/a/42355656
+                        info!("Object {} not found in store; deleting from catalog", object_storage_id);
+                    } else {
+                        warn!("Failed to delete orphan partition {} from object store: {:?}", object_storage_id, e);
+                        retain_map[ind] = false;
+                    })
+                    .ok();
             }
-            Err(e) => warn!("Failed to fetch orphan partitions: {:?}", e),
-            _ => debug!("No orphan partitions to cleanup found"),
-        }
 
-        interval.tick().await;
+            // Scope down only to partitions which we managed to delete in the object store
+            let mut keep = retain_map.iter();
+            object_storage_ids.retain(|_| *keep.next().unwrap());
+
+            context
+                .partition_catalog
+                .delete_partitions(object_storage_ids)
+                .await
+                .map_or_else(
+                    |e| warn!("Failed to delete orphan partitions from catalog: {:?}", e),
+                    |row_count| info!("Deleted {} orphan partition(s)", row_count),
+                );
+        }
+        Err(e) => warn!("Failed to fetch orphan partitions: {:?}", e),
+        _ => debug!("No orphan partitions to cleanup found"),
     }
 }
 

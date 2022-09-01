@@ -289,7 +289,7 @@ impl Repository for $repo {
     ) -> Result<Vec<String>, Error> {
         let object_storage_ids = sqlx::query(
             "SELECT object_storage_id FROM physical_partition \
-            WHERE id NOT IN table_partition.physical_partition_id"
+            WHERE id NOT IN (SELECT physical_partition_id FROM table_partition)"
         )
             .fetch(&self.executor)
             .map_ok(|row| row.get("object_storage_id"))
@@ -305,11 +305,13 @@ impl Repository for $repo {
     ) -> Result<u64, Error> {
         // We have to manually construct the query since SQLite doesn't have the proper Encode trait
         let mut builder: QueryBuilder<_> = QueryBuilder::new(
-            "DELETE FROM physical_partition WHERE object_storage_id IN ({})",
+            "DELETE FROM physical_partition WHERE object_storage_id IN (",
         );
-        builder.push_values(object_storage_ids, |mut b, id| {
-            b.push_bind(id);
-        });
+        let mut separated = builder.separated(", ");
+        for id in object_storage_ids.iter() {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(")");
 
         let query = builder.build();
         let delete_result = query.execute(&self.executor).await.map_err($repo::interpret_error)?;

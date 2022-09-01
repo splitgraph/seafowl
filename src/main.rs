@@ -19,12 +19,13 @@ use seafowl::{
     },
     context::SeafowlContext,
     frontend::http::run_server,
-    utils::{cleanup_job, run_one_off_command},
+    utils::{gc_partitions, run_one_off_command},
 };
 use tokio::signal::ctrl_c;
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::broadcast::{channel, Sender};
+use tokio::time::{interval, Duration};
 
 #[cfg(feature = "frontend-postgres")]
 use seafowl::frontend::postgres::run_pg_server;
@@ -48,14 +49,6 @@ struct Args {
         takes_value = false
     )]
     version: bool,
-
-    #[clap(
-        short = 'C',
-        long = "--cleanup",
-        help = "Run a periodic garbage collection on dangling objects",
-        takes_value = false
-    )]
-    cleanup: bool,
 
     #[clap(short, long, help = "Run a one-off command and exit")]
     one_off: Option<String>,
@@ -196,8 +189,24 @@ Run Seafowl with --one-off instead to run a one-off command from the CLI."
     }
 
     // Add a GC task for purging obsolete objects from the catalog and the store
-    if args.cleanup {
-        tasks.push(Box::pin(cleanup_job(context.clone())));
+    if let Some(gc_interval) = config.misc.gc_interval {
+        let mut shutdown_r = shutdown.subscribe();
+        let mut interval =
+            interval(Duration::from_secs((gc_interval.get() * 3600) as u64));
+        tasks.push(
+            async move {
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => gc_partitions(context.clone()).await,
+                        _ = shutdown_r.recv() => {
+                            info!("GC task received shutdown signal, exiting");
+                            break;
+                        }
+                    }
+                }
+            }
+            .boxed(),
+        );
     }
 
     // Add a task that will wait for a termination signal and tell frontends to stop

@@ -209,7 +209,7 @@ pub struct DefaultSeafowlContext {
     pub internal_object_store: Arc<InternalObjectStore>,
     pub database: String,
     pub database_id: DatabaseId,
-    pub max_partition_size: i64,
+    pub max_partition_size: u32,
 }
 
 /// Create an ExecutionPlan that doesn't produce any results.
@@ -252,7 +252,7 @@ pub async fn plan_to_object_store(
     plan: &Arc<dyn ExecutionPlan>,
     store: Arc<InternalObjectStore>,
     disk_manager: Arc<DiskManager>,
-    max_partition_size: i64,
+    max_partition_size: u32,
 ) -> Result<Vec<SeafowlPartition>> {
     let mut current_partition_size = 0;
     let (mut current_partition_file_path, mut writer) =
@@ -295,7 +295,7 @@ pub async fn plan_to_object_store(
                 partition_file_paths.push(current_partition_file_path);
             }
 
-            current_partition_size += batch.num_rows() as i64;
+            current_partition_size += batch.num_rows() as u32;
             writer.write(&batch).map_err(DataFusionError::from)?;
         }
     }
@@ -1664,7 +1664,7 @@ mod tests {
     ]
     #[tokio::test]
     async fn test_plan_to_object_storage_partition_chunking(
-        max_partition_size: i64,
+        max_partition_size: u32,
         input_partitions: Vec<Vec<Vec<i32>>>,
         output_partitions: Vec<Vec<i32>>,
         storage_ids: Vec<&str>,
