@@ -197,7 +197,7 @@ Run Seafowl with --one-off instead to run a one-off command from the CLI."
             async move {
                 loop {
                     tokio::select! {
-                        _ = interval.tick() => gc_partitions(context.clone()).await,
+                        _ = interval.tick() => gc_partitions(&context).await,
                         _ = shutdown_r.recv() => {
                             info!("GC task received shutdown signal, exiting");
                             break;

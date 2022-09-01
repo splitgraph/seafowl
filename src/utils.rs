@@ -40,7 +40,7 @@ pub async fn run_one_off_command<W>(
     }
 }
 
-pub async fn gc_partitions(context: Arc<DefaultSeafowlContext>) {
+pub async fn gc_partitions(context: &DefaultSeafowlContext) {
     match context
         .partition_catalog
         .get_orphan_partition_store_ids()

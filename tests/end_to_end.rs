@@ -12,7 +12,6 @@ use seafowl::context::DefaultSeafowlContext;
 use seafowl::context::SeafowlContext;
 use seafowl::data_types::TableVersionId;
 use seafowl::repository::postgres::testutils::get_random_schema;
-use seafowl::utils::gc_partitions;
 
 // Hack because integration tests do not set cfg(test)
 // https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
@@ -973,7 +972,11 @@ async fn test_garbage_collection() {
         )
     );
 
-    gc_partitions(context.clone()).await;
+    // Run vacuum on partitions
+    context
+        .collect(context.plan_query("VACUUM PARTITIONS").await.unwrap())
+        .await
+        .unwrap();
 
     // Ensure no orphan partitions are left
     assert_orphan_partitions(context.clone(), vec![]).await;

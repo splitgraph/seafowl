@@ -30,13 +30,17 @@ use datafusion::{
     logical_plan::FileType,
     sql::parser::{CreateExternalTable, DescribeTable},
 };
+use sqlparser::ast::ObjectName;
+use sqlparser::tokenizer::Word;
 use sqlparser::{
-    ast::{ColumnDef, ColumnOptionDef, TableConstraint},
+    ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
 };
 use std::collections::VecDeque;
+use std::string::ToString;
+use strum_macros::Display;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -65,6 +69,12 @@ fn parse_file_type(s: &str) -> Result<FileType, ParserError> {
 /// SQL Parser
 pub struct DFParser<'a> {
     parser: Parser<'a>,
+}
+
+#[derive(Debug, Clone, Display)]
+#[strum(serialize_all = "UPPERCASE")]
+enum KeywordExtensions {
+    Vacuum,
 }
 
 impl<'a> DFParser<'a> {
@@ -130,18 +140,33 @@ impl<'a> DFParser<'a> {
     pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
         match self.parser.peek_token() {
             Token::Word(w) => {
-                match w.keyword {
-                    Keyword::CREATE => {
+                match w {
+                    Word {
+                        keyword: Keyword::CREATE,
+                        ..
+                    } => {
                         // move one token forward
                         self.parser.next_token();
                         // use custom parsing
                         self.parse_create()
                     }
-                    Keyword::DESCRIBE => {
+                    Word {
+                        keyword: Keyword::DESCRIBE,
+                        ..
+                    } => {
                         // move one token forward
                         self.parser.next_token();
                         // use custom parsing
                         self.parse_describe()
+                    }
+                    Word { value, .. }
+                        if value.to_uppercase()
+                            == KeywordExtensions::Vacuum.to_string() =>
+                    {
+                        // move one token forward
+                        self.parser.next_token();
+                        // use custom parsing
+                        self.parse_vacuum()
                     }
                     _ => {
                         // use the native parser
@@ -167,6 +192,27 @@ impl<'a> DFParser<'a> {
             table_name: table_name.to_string(),
         };
         Ok(Statement::DescribeTable(des))
+    }
+
+    pub fn parse_vacuum(&mut self) -> Result<Statement, ParserError> {
+        // Since `VACUUM` is not a supported keyword by sqlparser, we abuse a semantically related
+        // TRUNCATE to smuggle the info on whether we want GC of tables or partitions.
+        if self.parser.parse_keyword(Keyword::PARTITIONS) {
+            Ok(Statement::Statement(Box::new(SQLStatement::Truncate {
+                table_name: ObjectName(vec![]),
+                partitions: Some(vec![]),
+            })))
+        } else if self.parser.parse_keyword(Keyword::TABLES) {
+            Ok(Statement::Statement(Box::new(SQLStatement::Truncate {
+                table_name: ObjectName(vec![]),
+                partitions: None,
+            })))
+        } else {
+            self.expected(
+                "PARTITIONS or TABLES are supported VACUUM targets",
+                self.parser.peek_token(),
+            )
+        }
     }
 
     /// Parse a SQL CREATE statement

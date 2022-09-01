@@ -253,7 +253,7 @@ impl Default for Misc {
     fn default() -> Self {
         Self {
             max_partition_size: 1024 * 1024,
-            gc_interval: 1,
+            gc_interval: 0,
         }
     }
 }
@@ -440,7 +440,7 @@ upload_data_max_length = 1
                 },
                 misc: Misc {
                     max_partition_size: 1024 * 1024,
-                    gc_interval: 1,
+                    gc_interval: 0,
                 },
             }
         )
@@ -530,7 +530,7 @@ upload_data_max_length = 1
                 },
                 misc: Misc {
                     max_partition_size: 1024 * 1024,
-                    gc_interval: 1,
+                    gc_interval: 0,
                 },
             }
         )

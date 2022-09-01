@@ -30,7 +30,7 @@ use crate::datafusion::utils::{
 };
 use crate::object_store::http::try_prepare_http_url;
 use crate::object_store::wrapped::InternalObjectStore;
-use crate::utils::hash_file;
+use crate::utils::{gc_partitions, hash_file};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
@@ -74,7 +74,7 @@ use tempfile::TempPath;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{TableId, TableVersionId};
-use crate::nodes::{CreateFunction, DropSchema, RenameTable, SeafowlExtensionNode};
+use crate::nodes::{CreateFunction, DropSchema, NoOp, RenameTable, SeafowlExtensionNode};
 use crate::provider::{PartitionColumn, SeafowlPartition, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
@@ -880,7 +880,19 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 output_schema: Arc::new(DFSchema::empty())
                             })),
                         }))
-                    }
+                    },
+                Statement::Truncate { partitions, ..} => {
+                    match partitions {
+                        Some(_) => gc_partitions(self).await,
+                        // TODO: add table vacuum
+                        None => gc_partitions(self).await,
+                    };
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(SeafowlExtensionNode::NoOp(NoOp {
+                            output_schema: Arc::new(DFSchema::empty())
+                        })),
+                    }))
+                }
                 _ => Err(Error::NotImplemented(format!(
                     "Unsupported SQL statement: {:?}", s
                 ))),
@@ -1218,6 +1230,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                             Ok(make_dummy_exec())
                         }
+                        SeafowlExtensionNode::NoOp(NoOp { .. }) => Ok(make_dummy_exec()),
                     },
                     None => self.inner.create_physical_plan(plan).await,
                 }

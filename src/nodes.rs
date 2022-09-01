@@ -85,6 +85,12 @@ pub struct DropSchema {
 }
 
 #[derive(Debug, Clone)]
+pub struct NoOp {
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
+}
+
+#[derive(Debug, Clone)]
 pub enum SeafowlExtensionNode {
     CreateTable(CreateTable),
     Insert(Insert),
@@ -93,6 +99,7 @@ pub enum SeafowlExtensionNode {
     CreateFunction(CreateFunction),
     RenameTable(RenameTable),
     DropSchema(DropSchema),
+    NoOp(NoOp),
 }
 
 impl SeafowlExtensionNode {
@@ -136,6 +143,7 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::DropSchema(DropSchema { output_schema, .. }) => {
                 output_schema
             }
+            SeafowlExtensionNode::NoOp(NoOp { output_schema }) => output_schema,
         }
     }
 
@@ -170,6 +178,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             }
             SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
                 write!(f, "DropSchema: {}", name)
+            }
+            SeafowlExtensionNode::NoOp(NoOp { .. }) => {
+                write!(f, "NoOp")
             }
         }
     }
