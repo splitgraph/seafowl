@@ -33,7 +33,7 @@ use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::config::schema::{AccessSettings, MEBIBYTES};
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
-    context::SeafowlContext,
+    context::{is_read_only, is_statement_read_only, SeafowlContext},
     data_types::TableVersionId,
     provider::SeafowlTable,
 };
@@ -93,20 +93,6 @@ struct QueryBody {
     query: String,
 }
 
-pub fn is_read_only(plan: &LogicalPlan) -> bool {
-    !matches!(
-        plan,
-        LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateMemoryTable(_)
-            | LogicalPlan::CreateView(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::Extension(_)
-    )
-}
-
 /// Execute a physical plan and output its results to a JSON Lines format
 async fn physical_plan_to_json(
     context: Arc<dyn SeafowlContext>,
@@ -128,9 +114,20 @@ pub async fn uncached_read_write_query(
     query: String,
     context: Arc<dyn SeafowlContext>,
 ) -> Result<Vec<u8>, ApiError> {
-    let logical = context.create_logical_plan(&query).await?;
+    let statements = context.parse_query(&query).await?;
 
-    if !user_context.can_perform_action(if is_read_only(&logical) {
+    // We assume that there's at least one statement throughout the rest of this function
+    if statements.is_empty() {
+        return Err(ApiError::EmptyMultiStatement);
+    };
+
+    let reads = statements
+        .iter()
+        .filter(|s| is_statement_read_only(s))
+        .count();
+
+    // Check for authorization
+    if !user_context.can_perform_action(if reads == statements.len() {
         Action::Read
     } else {
         Action::Write
@@ -138,9 +135,34 @@ pub async fn uncached_read_write_query(
         return Err(ApiError::WriteForbidden);
     };
 
-    let physical = context.create_physical_plan(&logical).await?;
+    // If we have a read statement, make sure it's the last and only one (that's the only one
+    // we'll return actual results for)
+    if (reads > 1)
+        || (reads == 1
+            && !is_statement_read_only(
+                statements
+                    .last()
+                    .expect("at least one statement in the list"),
+            ))
+    {
+        return Err(ApiError::InvalidMultiStatement);
+    }
 
-    let buf = physical_plan_to_json(context, physical).await?;
+    // Execute all statements up until the last one.
+    let mut plan_to_output = None;
+
+    for statement in statements {
+        let logical = context
+            .create_logical_plan_from_statement(statement)
+            .await?;
+        plan_to_output = Some(context.create_physical_plan(&logical).await?);
+    }
+
+    let buf = physical_plan_to_json(
+        context,
+        plan_to_output.expect("at least one statement in the list"),
+    )
+    .await?;
     Ok(buf)
 }
 
@@ -1033,6 +1055,95 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(resp.body(), "INVALID_AUTHORIZATION_HEADER");
+    }
+
+    #[tokio::test]
+    async fn test_multi_statement_no_reads() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_password("somepw"),
+            ),
+        );
+
+        let resp = query_uncached_endpoint_token(
+            &handler,
+            "DROP TABLE test_table;CREATE TABLE test_table(key VARCHAR);
+            INSERT INTO test_table VALUES('hey')",
+            "somepw",
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = query_uncached_endpoint_token(
+            &handler,
+            "SELECT * FROM test_table;",
+            "somepw",
+        )
+        .await;
+        assert_eq!(resp.body(), "{\"key\":\"hey\"}\n");
+    }
+
+    #[tokio::test]
+    async fn test_multi_statement_read_at_end() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_password("somepw"),
+            ),
+        );
+
+        let resp = query_uncached_endpoint_token(
+            &handler,
+            "DROP TABLE test_table;CREATE TABLE test_table(key VARCHAR);
+            INSERT INTO test_table VALUES('hey');SELECT * FROM test_table;",
+            "somepw",
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.body(), "{\"key\":\"hey\"}\n");
+    }
+
+    #[tokio::test]
+    async fn test_multi_statement_read_not_at_end_error() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_password("somepw"),
+            ),
+        );
+
+        let resp =
+            query_uncached_endpoint_token(&handler, "SELECT * FROM test_table;DROP TABLE test_table;CREATE TABLE test_table(key VARCHAR);
+            INSERT INTO test_table VALUES('hey')", "somepw")
+                .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(String::from_utf8(resp.body().to_vec())
+            .unwrap()
+            .contains("must be at the end of a multi-statement query"));
+    }
+
+    #[tokio::test]
+    async fn test_multi_statement_multiple_reads_error() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(
+            context,
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_password("somepw"),
+            ),
+        );
+
+        let resp =
+            query_uncached_endpoint_token(&handler, "DROP TABLE test_table;CREATE TABLE test_table(key VARCHAR);
+            INSERT INTO test_table VALUES('hey');SELECT * FROM test_table;SELECT * FROM test_table;", "somepw")
+                .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(String::from_utf8(resp.body().to_vec())
+            .unwrap()
+            .contains("Only one read statement is allowed"));
     }
 
     #[tokio::test]

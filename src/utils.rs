@@ -23,14 +23,12 @@ pub async fn run_one_off_command<W>(
 ) where
     W: Write,
 {
-    // TODO when https://github.com/splitgraph/seafowl/issues/48 is implemented: run this
-    // without splitting on the semicolon (which can also be a legitimate part of a query)
-    for s in command.split(';') {
-        if s.trim() == "" {
-            continue;
-        }
+    for statement in context.parse_query(command).await.unwrap() {
         async {
-            let physical = context.plan_query(s).await?;
+            let logical = context
+                .create_logical_plan_from_statement(statement)
+                .await?;
+            let physical = context.create_physical_plan(&logical).await?;
             let batches = context.collect(physical).await?;
 
             let mut writer = LineDelimitedWriter::new(&mut output);

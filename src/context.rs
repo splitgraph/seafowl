@@ -5,6 +5,7 @@ use base64::decode;
 use bytes::Bytes;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::ResolvedTableReference;
+use itertools::Itertools;
 use object_store::local::LocalFileSystem;
 use tokio::io::AsyncReadExt;
 
@@ -371,11 +372,42 @@ pub async fn plan_to_object_store(
         .collect()
 }
 
+pub fn is_read_only(plan: &LogicalPlan) -> bool {
+    !matches!(
+        plan,
+        LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::CreateMemoryTable(_)
+            | LogicalPlan::CreateView(_)
+            | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Extension(_)
+    )
+}
+
+pub fn is_statement_read_only(statement: &DFStatement) -> bool {
+    if let DFStatement::Statement(s) = statement {
+        matches!(**s, Statement::Query(_) | Statement::Explain { .. })
+    } else {
+        false
+    }
+}
+
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait SeafowlContext: Send + Sync {
-    /// Create a logical plan for a query
+    /// Parse SQL into one or more statements
+    async fn parse_query(&self, sql: &str) -> Result<Vec<DFStatement>>;
+
+    /// Create a logical plan for a query (single-statement SQL)
     async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan>;
+
+    /// Create a logical plan for a query from a parsed statement
+    async fn create_logical_plan_from_statement(
+        &self,
+        statement: DFStatement,
+    ) -> Result<LogicalPlan>;
 
     /// Create a physical plan for a query.
     /// This runs `create_logical_plan` and then `create_physical_plan`.
@@ -616,22 +648,20 @@ impl DefaultSeafowlContext {
 
 #[async_trait]
 impl SeafowlContext for DefaultSeafowlContext {
-    async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
+    async fn parse_query(&self, sql: &str) -> Result<Vec<DFStatement>> {
+        Ok(DFParser::parse_sql(sql)?.into_iter().collect_vec())
+    }
+
+    async fn create_logical_plan_from_statement(
+        &self,
+        statement: DFStatement,
+    ) -> Result<LogicalPlan> {
         // Reload the schema before planning a query
         self.reload_schema().await?;
-
-        let mut statements = DFParser::parse_sql(sql)?;
-
-        if statements.len() != 1 {
-            return Err(Error::NotImplemented(
-                "The context currently only supports a single SQL statement".to_string(),
-            ));
-        }
-
         let state = self.inner.state.read().clone();
         let query_planner = SqlToRel::new(&state);
 
-        match statements.pop_front().unwrap() {
+        match statement {
             DFStatement::Statement(s) => match *s {
                 // Delegate SELECT / EXPLAIN to the basic DataFusion logical planner
                 // (though note EXPLAIN [our custom query] will mean we have to implement EXPLAIN ourselves)
@@ -852,8 +882,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         }))
                     }
                 _ => Err(Error::NotImplemented(format!(
-                    "Unsupported SQL statement: {:?}",
-                    sql
+                    "Unsupported SQL statement: {:?}", s
                 ))),
             },
             DFStatement::DescribeTable(s) => query_planner.describe_table_to_plan(s),
@@ -861,6 +890,19 @@ impl SeafowlContext for DefaultSeafowlContext {
                 query_planner.external_table_to_plan(c)
             }
         }
+    }
+
+    async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
+        let mut statements = self.parse_query(sql).await?;
+
+        if statements.len() != 1 {
+            return Err(Error::NotImplemented(
+                "The context currently only supports a single SQL statement".to_string(),
+            ));
+        }
+
+        self.create_logical_plan_from_statement(statements.pop().unwrap())
+            .await
     }
 
     async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1096,7 +1138,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                             // - Duplicate the table (new version)
                             // - replace partitions that are changed (but we don't know the table_partition i.e. which entry to
                             // repoint to our new partition)?
-                            Ok(make_dummy_exec())
+                            Err(DataFusionError::NotImplemented("UPDATE statements are currently unsupported,
+                            as a workaround, use CREATE TABLE AS. See https://github.com/splitgraph/seafowl/issues/18".to_string()))
                         }
                         SeafowlExtensionNode::Delete(_) => {
                             // - Duplicate the table (new version)
@@ -1107,7 +1150,8 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                             // really we want to be able to load all partitions + cols for a table and then
                             // write that thing back to the db (set table partitions)
-                            Ok(make_dummy_exec())
+                            Err(DataFusionError::NotImplemented("DELETE statements are currently unsupported,
+                            as a workaround, use CREATE TABLE AS. See https://github.com/splitgraph/seafowl/issues/19".to_string()))
                         }
                         SeafowlExtensionNode::CreateFunction(CreateFunction {
                             name,
