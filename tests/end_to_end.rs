@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
 use datafusion::{assert_batches_eq, assert_contains};
+use futures::TryStreamExt;
+use object_store::path::Path;
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
@@ -10,6 +12,7 @@ use seafowl::context::DefaultSeafowlContext;
 use seafowl::context::SeafowlContext;
 use seafowl::data_types::TableVersionId;
 use seafowl::repository::postgres::testutils::get_random_schema;
+use seafowl::utils::gc_partitions;
 
 // Hack because integration tests do not set cfg(test)
 // https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
@@ -915,4 +918,65 @@ async fn test_create_external_table_http() {
     assert!(err
         .to_string()
         .contains("No suitable object store found for seafowl://file"));
+}
+
+#[tokio::test]
+async fn test_garbage_collection() {
+    let context = Arc::new(make_context_with_pg().await);
+
+    async fn assert_orphan_partitions(
+        context: Arc<DefaultSeafowlContext>,
+        parts: Vec<&str>,
+    ) {
+        assert_eq!(
+            context
+                .partition_catalog
+                .get_orphan_partition_store_ids()
+                .await
+                .unwrap(),
+            parts
+        );
+    }
+
+    let get_object_metas = || async {
+        context
+            .internal_object_store
+            .inner
+            .list(None)
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+    };
+
+    create_table_and_insert(&context, "test_table").await;
+
+    // Drop table to leave orphan partitions around
+    context
+        .collect(context.plan_query("DROP TABLE test_table").await.unwrap())
+        .await
+        .unwrap();
+
+    // Ensure we have orphan partitions
+    assert_orphan_partitions(
+        context.clone(),
+        vec!["6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet"],
+    )
+    .await;
+    let object_metas = get_object_metas().await;
+    assert_eq!(object_metas.len(), 1);
+    assert_eq!(
+        object_metas[0].location,
+        Path::from(
+            "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet"
+        )
+    );
+
+    gc_partitions(context.clone()).await;
+
+    // Ensure no orphan partitions are left
+    assert_orphan_partitions(context.clone(), vec![]).await;
+    let object_metas = get_object_metas().await;
+    assert_eq!(object_metas.len(), 0);
 }

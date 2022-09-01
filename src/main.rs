@@ -189,10 +189,10 @@ Run Seafowl with --one-off instead to run a one-off command from the CLI."
     }
 
     // Add a GC task for purging obsolete objects from the catalog and the store
-    if let Some(gc_interval) = config.misc.gc_interval {
+    if config.misc.gc_interval > 0 {
         let mut shutdown_r = shutdown.subscribe();
         let mut interval =
-            interval(Duration::from_secs((gc_interval.get() * 3600) as u64));
+            interval(Duration::from_secs((config.misc.gc_interval * 3600) as u64));
         tasks.push(
             async move {
                 loop {

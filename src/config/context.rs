@@ -155,7 +155,6 @@ pub async fn build_context(
 #[cfg(test)]
 mod tests {
     use crate::context::SeafowlContext;
-    use std::num::NonZeroU16;
 
     use super::*;
 
@@ -186,7 +185,7 @@ mod tests {
             },
             misc: schema::Misc {
                 max_partition_size: 1024 * 1024,
-                gc_interval: NonZeroU16::new(1),
+                gc_interval: 1,
             },
         };
 

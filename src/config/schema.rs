@@ -1,4 +1,3 @@
-use std::num::NonZeroU16;
 use std::{
     fmt::{self, Display},
     path::{Path, PathBuf},
@@ -247,14 +246,14 @@ impl Default for HttpFrontend {
 pub struct Misc {
     pub max_partition_size: u32,
     // Perhaps make this accept a cron job format and use tokio-cron-scheduler?
-    pub gc_interval: Option<NonZeroU16>,
+    pub gc_interval: u16,
 }
 
 impl Default for Misc {
     fn default() -> Self {
         Self {
             max_partition_size: 1024 * 1024,
-            gc_interval: NonZeroU16::new(1),
+            gc_interval: 1,
         }
     }
 }
@@ -328,7 +327,6 @@ mod tests {
         HttpFrontend, Local, ObjectStore, Postgres, Runtime, SeafowlConfig, S3,
     };
     use crate::config::schema::{Misc, Sqlite};
-    use std::num::NonZeroU16;
     use std::{collections::HashMap, path::PathBuf};
 
     const TEST_CONFIG_S3: &str = r#"
@@ -442,7 +440,7 @@ upload_data_max_length = 1
                 },
                 misc: Misc {
                     max_partition_size: 1024 * 1024,
-                    gc_interval: NonZeroU16::new(1),
+                    gc_interval: 1,
                 },
             }
         )
@@ -532,7 +530,7 @@ upload_data_max_length = 1
                 },
                 misc: Misc {
                     max_partition_size: 1024 * 1024,
-                    gc_interval: NonZeroU16::new(1),
+                    gc_interval: 1,
                 },
             }
         )
