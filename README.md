@@ -7,7 +7,9 @@
 [![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/splitgraph/seafowl?include_prereleases&sort=semver)](https://github.com/splitgraph/seafowl/releases)
 
 **[Home page](https://seafowl.io) |
-[Documentation](https://www.splitgraph.com/docs/seafowl/getting-started/introduction) |
+[Docs](https://www.splitgraph.com/docs/seafowl/getting-started/introduction) |
+[Benchmarks](https://observablehq.com/@seafowl/benchmarks) |
+[Demo](https://observablehq.com/@seafowl/interactive-visualization-demo) |
 [Nightly builds](https://nightly.link/splitgraph/seafowl/workflows/nightly/main) |
 [Download](https://github.com/splitgraph/seafowl/releases)**
 
