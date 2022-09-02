@@ -77,3 +77,7 @@ wiremock = "0.5"
 [build-dependencies]
 anyhow = "1.0.63"  # for build.rs
 vergen = "7"
+
+[profile.release]
+lto = true
+codegen-units = 1
