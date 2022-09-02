@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arrow::record_batch::RecordBatch;
 use datafusion::{assert_batches_eq, assert_contains};
 use futures::TryStreamExt;
+use itertools::Itertools;
 use object_store::path::Path;
 
 use seafowl::config::context::build_context;
@@ -949,65 +950,108 @@ async fn test_vacuum_command() {
             .unwrap()
     };
 
-    // Creates table version 1 and 2
-    create_table_and_insert(&context, "test_table").await;
+    async fn get_partition_count(
+        context: Arc<DefaultSeafowlContext>,
+        table_version_id: i32,
+    ) -> usize {
+        context
+            .partition_catalog
+            .load_table_partitions(table_version_id as TableVersionId)
+            .await
+            .unwrap()
+            .len()
+    }
 
-    // Make table version 3
+    //
+    // Create two tables with multiple versions
+    //
+
+    // Creates table_1 with table_versions 1 (empty) and 2
+    create_table_and_insert(&context, "table_1").await;
+
+    // Make table_1 with table_version 3
     let plan = context
-        .plan_query(
-            "INSERT INTO test_table (some_int_value, some_value) VALUES
-            (4444, 45),
-            (5555, 46),
-            (6666, 47)",
-        )
+        .plan_query("INSERT INTO table_1 (some_value) VALUES (42)")
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    // Run vacuum on table to remove previous versions
+    // Creates table_2 with table_versions 4 (empty) and 5
+    create_table_and_insert(&context, "table_2").await;
+
+    // Make table_2 with table_version 6
+    let plan = context
+        .plan_query("INSERT INTO table_2 (some_value) VALUES (42), (43), (44)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // Run vacuum on table_1 to remove previous versions
     context
-        .collect(context.plan_query("VACUUM TABLE test_table").await.unwrap())
+        .collect(context.plan_query("VACUUM TABLE table_1").await.unwrap())
         .await
         .unwrap();
 
-    let partitions = context
-        .partition_catalog
-        .load_table_partitions(2 as TableVersionId)
+    // TODO: make more explicit the check for deleted table versions
+    for &table_version_id in &[1, 2, 4] {
+        assert_eq!(
+            get_partition_count(context.clone(), table_version_id).await,
+            0
+        );
+    }
+    for &table_version_id in &[3, 5, 6] {
+        assert!(get_partition_count(context.clone(), table_version_id).await > 0);
+    }
+
+    // Run vacuum on all tables; table_2 will now also lose all but the latest version
+    context
+        .collect(context.plan_query("VACUUM TABLES").await.unwrap())
         .await
         .unwrap();
 
-    // Ensure we have no partitions for the previous version
-    assert_eq!(partitions.len(), 0);
+    // Check table versions cleared up from partition counts
+    for &table_version_id in &[1, 2, 4, 5] {
+        assert_eq!(
+            get_partition_count(context.clone(), table_version_id).await,
+            0
+        );
+    }
+    for &table_version_id in &[3, 6] {
+        assert!(get_partition_count(context.clone(), table_version_id).await > 0);
+    }
 
-    // Drop table to leave orphan partitions around
+    // Drop tables to leave orphan partitions around
     context
-        .collect(context.plan_query("DROP TABLE test_table").await.unwrap())
+        .collect(context.plan_query("DROP TABLE table_1").await.unwrap())
+        .await
+        .unwrap();
+    context
+        .collect(context.plan_query("DROP TABLE table_2").await.unwrap())
         .await
         .unwrap();
 
     // Check we have orphan partitions
-    assert_orphan_partitions(
-        context.clone(),
-        vec![
-            "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet",
-            "a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet",
-        ],
-    )
-    .await;
+    // NB: we have duplicates here which is expected, see: https://github.com/splitgraph/seafowl/issues/5
+    let orphans = vec![
+        "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet",
+        "fa8e20a0e0c323ed17ff096549135defc1e376098b9adc73a8eba22a8aeb8dfc.parquet",
+        "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet",
+        "322e5c9918f05e87d49dd150947f79a62eecb4d756405619e920a0413b2628d3.parquet",
+    ];
+
+    assert_orphan_partitions(context.clone(), orphans.clone()).await;
     let object_metas = get_object_metas().await;
-    assert_eq!(object_metas.len(), 2);
-    assert_eq!(
-        object_metas[0].location,
-        Path::from(
-            "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet"
-        )
-    );
-    assert_eq!(
-        object_metas[1].location,
-        Path::from(
-            "a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet"
-        )
-    );
+    assert_eq!(object_metas.len(), 3);
+    for (ind, &orphan) in orphans
+        .into_iter()
+        .unique()
+        .sorted()
+        .collect::<Vec<&str>>()
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(object_metas[ind].location, Path::from(orphan));
+    }
 
     // Run vacuum on partitions
     context

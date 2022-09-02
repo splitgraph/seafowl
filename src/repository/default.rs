@@ -222,9 +222,15 @@ impl Repository for $repo {
         table_id: Option<TableId>,
     ) -> Result<u64, Error> {
         let query = if let Some(table_id) = table_id {
-            sqlx::query("DELETE FROM table_version WHERE id NOT IN (SELECT max(id) FROM table_version WHERE table_id = $1)").bind(table_id)
+            sqlx::query(
+                "DELETE FROM table_version WHERE table_id = $1 AND id NOT IN \
+                (SELECT DISTINCT first_value(id) OVER (PARTITION BY table_id ORDER BY creation_time DESC, id DESC) FROM table_version)"
+            ).bind(table_id)
         } else {
-            sqlx::query("DELETE FROM table_version WHERE id NOT IN (SELECT max(id) FROM table_version GROUP BY table_id)")
+            sqlx::query(
+                "DELETE FROM table_version WHERE id NOT IN \
+                (SELECT DISTINCT first_value(id) OVER (PARTITION BY table_id ORDER BY creation_time DESC, id DESC) FROM table_version)"
+            )
         };
 
         let delete_result = query.execute(&self.executor)
