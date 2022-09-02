@@ -1,7 +1,7 @@
 [package]
 name = "seafowl"
 build = "build.rs"
-version = "0.1.0-dev.1"
+version = "0.1.0-dev.2"
 edition = "2021"
 
 readme = "README.md"
@@ -79,5 +79,5 @@ anyhow = "1.0.63"  # for build.rs
 vergen = "7"
 
 [profile.release]
-lto = true
 codegen-units = 1
+lto = true
