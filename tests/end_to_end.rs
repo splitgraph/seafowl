@@ -976,7 +976,7 @@ async fn test_vacuum_command() {
         .await
         .unwrap();
 
-    // Ensure we no partitions for the previous version
+    // Ensure we have no partitions for the previous version
     assert_eq!(partitions.len(), 0);
 
     // Drop table to leave orphan partitions around

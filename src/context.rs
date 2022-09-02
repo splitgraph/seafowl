@@ -74,7 +74,9 @@ use tempfile::TempPath;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{TableId, TableVersionId};
-use crate::nodes::{CreateFunction, DropSchema, NoOp, RenameTable, SeafowlExtensionNode};
+use crate::nodes::{
+    CreateFunction, DropSchema, RenameTable, SeafowlExtensionNode, Vacuum,
+};
 use crate::provider::{PartitionColumn, SeafowlPartition, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
@@ -882,36 +884,22 @@ impl SeafowlContext for DefaultSeafowlContext {
                         }))
                     },
                 Statement::Truncate { table_name, partitions} => {
-                    match partitions {
-                        Some(_) => gc_partitions(self).await,
-                        None => {
-                            let table_name = table_name.to_string();
-                            let table_id = if !table_name.is_empty() {
-                                match self.try_get_seafowl_table(&table_name) {
-                                    Ok(seafowl_table) => Some(seafowl_table.table_id),
-                                    Err(_) => return Err(Error::Internal(format!(
-                                        "Table with name {} not found: ", table_name
-                                    )))
-                                }
-                            } else {
-                                None
-                            };
-
-                            match self.table_catalog
-                                .delete_old_table_versions(table_id)
-                                .await {
-                                Ok(row_count) => {
-                                    info!("Deleted {} old table versions, cleaning up partitions", row_count);
-                                    gc_partitions(self).await
-                                }
-                                Err(error) => return Err(Error::Internal(format!(
-                                    "Failed to delete old table versions: {:?}", error
-                                )))
-                            }
+                    let table_name = table_name.to_string();
+                    let table_id = if partitions.is_none() && !table_name.is_empty() {
+                        match self.try_get_seafowl_table(&table_name) {
+                            Ok(seafowl_table) => Some(seafowl_table.table_id),
+                            Err(_) => return Err(Error::Internal(format!(
+                                "Table with name {} not found", table_name
+                            )))
                         }
+                    } else {
+                        None
                     };
+
                     Ok(LogicalPlan::Extension(Extension {
-                        node: Arc::new(SeafowlExtensionNode::NoOp(NoOp {
+                        node: Arc::new(SeafowlExtensionNode::Vacuum(Vacuum {
+                            partitions: partitions.is_some(),
+                            table_id,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
@@ -1253,7 +1241,34 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                             Ok(make_dummy_exec())
                         }
-                        SeafowlExtensionNode::NoOp(NoOp { .. }) => Ok(make_dummy_exec()),
+                        SeafowlExtensionNode::Vacuum(Vacuum {
+                            partitions,
+                            table_id,
+                            ..
+                        }) => {
+                            if *partitions {
+                                gc_partitions(self).await
+                            } else {
+                                match self
+                                    .table_catalog
+                                    .delete_old_table_versions(*table_id)
+                                    .await
+                                {
+                                    Ok(row_count) => {
+                                        info!("Deleted {} old table versions, cleaning up partitions", row_count);
+                                        gc_partitions(self).await
+                                    }
+                                    Err(error) => {
+                                        return Err(Error::Internal(format!(
+                                            "Failed to delete old table versions: {:?}",
+                                            error
+                                        )))
+                                    }
+                                }
+                            }
+
+                            Ok(make_dummy_exec())
+                        }
                     },
                     None => self.inner.create_physical_plan(plan).await,
                 }
