@@ -19,12 +19,13 @@ use seafowl::{
     },
     context::SeafowlContext,
     frontend::http::run_server,
-    utils::run_one_off_command,
+    utils::{gc_partitions, run_one_off_command},
 };
 use tokio::signal::ctrl_c;
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::broadcast::{channel, Sender};
+use tokio::time::{interval, Duration};
 
 #[cfg(feature = "frontend-postgres")]
 use seafowl::frontend::postgres::run_pg_server;
@@ -177,7 +178,7 @@ async fn main() {
     // Ref: https://tokio.rs/tokio/topics/shutdown#waiting-for-things-to-finish-shutting-down
     let (shutdown, _) = channel(1);
 
-    let mut tasks = prepare_frontends(context, &config, &shutdown);
+    let mut tasks = prepare_frontends(context.clone(), &config, &shutdown);
 
     if tasks.is_empty() {
         error!(
@@ -185,6 +186,27 @@ async fn main() {
 Run Seafowl with --one-off instead to run a one-off command from the CLI."
         );
         exit(-1);
+    }
+
+    // Add a GC task for purging obsolete objects from the catalog and the store
+    if config.misc.gc_interval > 0 {
+        let mut shutdown_r = shutdown.subscribe();
+        let mut interval =
+            interval(Duration::from_secs((config.misc.gc_interval * 3600) as u64));
+        tasks.push(
+            async move {
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => gc_partitions(&context).await,
+                        _ = shutdown_r.recv() => {
+                            info!("GC task received shutdown signal, exiting");
+                            break;
+                        }
+                    }
+                }
+            }
+            .boxed(),
+        );
     }
 
     // Add a task that will wait for a termination signal and tell frontends to stop

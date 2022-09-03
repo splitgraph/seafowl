@@ -185,6 +185,7 @@ mod tests {
             },
             misc: schema::Misc {
                 max_partition_size: 1024 * 1024,
+                gc_interval: 0,
             },
         };
 

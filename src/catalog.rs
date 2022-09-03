@@ -181,6 +181,11 @@ pub trait TableCatalog: Sync + Send {
         schema: &Schema,
     ) -> Result<(TableId, TableVersionId)>;
 
+    async fn delete_old_table_versions(
+        &self,
+        table_id: Option<TableId>,
+    ) -> Result<u64, Error>;
+
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
@@ -220,6 +225,13 @@ pub trait PartitionCatalog: Sync + Send {
         partition_ids: Vec<PhysicalPartitionId>,
         table_version_id: TableVersionId,
     ) -> Result<()>;
+
+    async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>>;
+
+    async fn delete_partitions(
+        &self,
+        object_storage_ids: Vec<String>,
+    ) -> Result<u64, Error>;
 }
 
 #[cfg_attr(test, automock)]
@@ -396,6 +408,16 @@ impl TableCatalog for DefaultCatalog {
                 }
                 RepositoryError::SqlxError(e) => Error::SqlxError(e),
             })
+    }
+
+    async fn delete_old_table_versions(
+        &self,
+        table_id: Option<TableId>,
+    ) -> Result<u64, Error> {
+        self.repository
+            .delete_old_table_versions(table_id)
+            .await
+            .map_err(Self::to_sqlx_error)
     }
 
     async fn get_collection_id_by_name(
@@ -601,6 +623,23 @@ impl PartitionCatalog for DefaultCatalog {
                 }
                 _ => Self::to_sqlx_error(e),
             })
+    }
+
+    async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>, Error> {
+        self.repository
+            .get_orphan_partition_store_ids()
+            .await
+            .map_err(Self::to_sqlx_error)
+    }
+
+    async fn delete_partitions(
+        &self,
+        object_storage_ids: Vec<String>,
+    ) -> Result<u64, Error> {
+        self.repository
+            .delete_partitions(object_storage_ids)
+            .await
+            .map_err(Self::to_sqlx_error)
     }
 }
 

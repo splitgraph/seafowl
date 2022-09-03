@@ -4,6 +4,7 @@ use datafusion::logical_plan::{
     Column, DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode,
 };
 
+use crate::data_types::TableId;
 use crate::{provider::SeafowlTable, wasm_udf::data_types::CreateFunctionDetails};
 
 #[derive(Debug, Clone)]
@@ -85,6 +86,17 @@ pub struct DropSchema {
 }
 
 #[derive(Debug, Clone)]
+pub struct Vacuum {
+    /// Denotes whether to vacuum the partitions
+    pub partitions: bool,
+    /// If the vacuum target are not the partitions, denotes whether it applies to all tables, or a
+    /// specific one
+    pub table_id: Option<TableId>,
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
+}
+
+#[derive(Debug, Clone)]
 pub enum SeafowlExtensionNode {
     CreateTable(CreateTable),
     Insert(Insert),
@@ -93,6 +105,7 @@ pub enum SeafowlExtensionNode {
     CreateFunction(CreateFunction),
     RenameTable(RenameTable),
     DropSchema(DropSchema),
+    Vacuum(Vacuum),
 }
 
 impl SeafowlExtensionNode {
@@ -136,6 +149,7 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::DropSchema(DropSchema { output_schema, .. }) => {
                 output_schema
             }
+            SeafowlExtensionNode::Vacuum(Vacuum { output_schema, .. }) => output_schema,
         }
     }
 
@@ -170,6 +184,13 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             }
             SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
                 write!(f, "DropSchema: {}", name)
+            }
+            SeafowlExtensionNode::Vacuum(Vacuum { partitions, .. }) => {
+                write!(
+                    f,
+                    "Vacuum: {}",
+                    if *partitions { "partitions" } else { "tables" }
+                )
             }
         }
     }

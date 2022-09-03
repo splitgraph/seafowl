@@ -30,7 +30,7 @@ use crate::datafusion::utils::{
 };
 use crate::object_store::http::try_prepare_http_url;
 use crate::object_store::wrapped::InternalObjectStore;
-use crate::utils::hash_file;
+use crate::utils::{gc_partitions, hash_file};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
@@ -68,13 +68,15 @@ use datafusion::{
     prelude::SessionContext,
     sql::{planner::SqlToRel, TableReference},
 };
-use log::warn;
+use log::{info, warn};
 use prost::Message;
 use tempfile::TempPath;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{TableId, TableVersionId};
-use crate::nodes::{CreateFunction, DropSchema, RenameTable, SeafowlExtensionNode};
+use crate::nodes::{
+    CreateFunction, DropSchema, RenameTable, SeafowlExtensionNode, Vacuum,
+};
 use crate::provider::{PartitionColumn, SeafowlPartition, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
@@ -210,7 +212,7 @@ pub struct DefaultSeafowlContext {
     pub internal_object_store: Arc<InternalObjectStore>,
     pub database: String,
     pub database_id: DatabaseId,
-    pub max_partition_size: i64,
+    pub max_partition_size: u32,
 }
 
 /// Create an ExecutionPlan that doesn't produce any results.
@@ -253,7 +255,7 @@ pub async fn plan_to_object_store(
     plan: &Arc<dyn ExecutionPlan>,
     store: Arc<InternalObjectStore>,
     disk_manager: Arc<DiskManager>,
-    max_partition_size: i64,
+    max_partition_size: u32,
 ) -> Result<Vec<SeafowlPartition>> {
     let mut current_partition_size = 0;
     let (mut current_partition_file_path, mut writer) =
@@ -296,7 +298,7 @@ pub async fn plan_to_object_store(
                 partition_file_paths.push(current_partition_file_path);
             }
 
-            current_partition_size += batch.num_rows() as i64;
+            current_partition_size += batch.num_rows() as u32;
             writer.write(&batch).map_err(DataFusionError::from)?;
         }
     }
@@ -880,7 +882,28 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 output_schema: Arc::new(DFSchema::empty())
                             })),
                         }))
-                    }
+                    },
+                Statement::Truncate { table_name, partitions} => {
+                    let table_name = table_name.to_string();
+                    let table_id = if partitions.is_none() && !table_name.is_empty() {
+                        match self.try_get_seafowl_table(&table_name) {
+                            Ok(seafowl_table) => Some(seafowl_table.table_id),
+                            Err(_) => return Err(Error::Internal(format!(
+                                "Table with name {} not found", table_name
+                            )))
+                        }
+                    } else {
+                        None
+                    };
+
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(SeafowlExtensionNode::Vacuum(Vacuum {
+                            partitions: partitions.is_some(),
+                            table_id,
+                            output_schema: Arc::new(DFSchema::empty())
+                        })),
+                    }))
+                }
                 _ => Err(Error::NotImplemented(format!(
                     "Unsupported SQL statement: {:?}", s
                 ))),
@@ -1215,6 +1238,34 @@ impl SeafowlContext for DefaultSeafowlContext {
                             {
                                 self.table_catalog.drop_collection(collection_id).await?
                             };
+
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::Vacuum(Vacuum {
+                            partitions,
+                            table_id,
+                            ..
+                        }) => {
+                            if *partitions {
+                                gc_partitions(self).await
+                            } else {
+                                match self
+                                    .table_catalog
+                                    .delete_old_table_versions(*table_id)
+                                    .await
+                                {
+                                    Ok(row_count) => {
+                                        info!("Deleted {} old table versions, cleaning up partitions", row_count);
+                                        gc_partitions(self).await
+                                    }
+                                    Err(error) => {
+                                        return Err(Error::Internal(format!(
+                                            "Failed to delete old table versions: {:?}",
+                                            error
+                                        )))
+                                    }
+                                }
+                            }
 
                             Ok(make_dummy_exec())
                         }
@@ -1708,7 +1759,7 @@ mod tests {
     ]
     #[tokio::test]
     async fn test_plan_to_object_storage_partition_chunking(
-        max_partition_size: i64,
+        max_partition_size: u32,
         input_partitions: Vec<Vec<Vec<i32>>>,
         output_partitions: Vec<Vec<i32>>,
         storage_ids: Vec<&str>,

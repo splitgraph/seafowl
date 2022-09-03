@@ -103,6 +103,11 @@ pub trait Repository: Send + Sync + Debug {
         schema: &Schema,
     ) -> Result<(TableId, TableVersionId), Error>;
 
+    async fn delete_old_table_versions(
+        &self,
+        table_id: Option<TableId>,
+    ) -> Result<u64, Error>;
+
     async fn create_partitions(
         &self,
         partition: Vec<SeafowlPartition>,
@@ -113,6 +118,13 @@ pub trait Repository: Send + Sync + Debug {
         partition_ids: Vec<PhysicalPartitionId>,
         table_version_id: TableVersionId,
     ) -> Result<(), Error>;
+
+    async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>, Error>;
+
+    async fn delete_partitions(
+        &self,
+        object_storage_ids: Vec<String>,
+    ) -> Result<u64, Error>;
 
     async fn create_new_table_version(
         &self,

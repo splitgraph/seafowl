@@ -217,6 +217,29 @@ impl Repository for $repo {
         Ok((new_table_id, new_version_id))
     }
 
+    async fn delete_old_table_versions(
+        &self,
+        table_id: Option<TableId>,
+    ) -> Result<u64, Error> {
+        let query = if let Some(table_id) = table_id {
+            sqlx::query(
+                "DELETE FROM table_version WHERE table_id = $1 AND id NOT IN \
+                (SELECT DISTINCT first_value(id) OVER (PARTITION BY table_id ORDER BY creation_time DESC, id DESC) FROM table_version)"
+            ).bind(table_id)
+        } else {
+            sqlx::query(
+                "DELETE FROM table_version WHERE id NOT IN \
+                (SELECT DISTINCT first_value(id) OVER (PARTITION BY table_id ORDER BY creation_time DESC, id DESC) FROM table_version)"
+            )
+        };
+
+        let delete_result = query.execute(&self.executor)
+            .await
+            .map_err($repo::interpret_error)?;
+
+        Ok(delete_result.rows_affected())
+    }
+
     async fn create_partitions(
         &self,
         partitions: Vec<SeafowlPartition>,
@@ -282,6 +305,41 @@ impl Repository for $repo {
         query.execute(&self.executor).await.map_err($repo::interpret_error)?;
 
         Ok(())
+    }
+
+    async fn get_orphan_partition_store_ids(
+        &self,
+    ) -> Result<Vec<String>, Error> {
+        let object_storage_ids = sqlx::query(
+            "SELECT object_storage_id FROM physical_partition \
+            WHERE id NOT IN (SELECT physical_partition_id FROM table_partition)"
+        )
+            .fetch(&self.executor)
+            .map_ok(|row| row.get("object_storage_id"))
+            .try_collect()
+            .await.map_err($repo::interpret_error)?;
+
+        Ok(object_storage_ids)
+    }
+
+    async fn delete_partitions(
+        &self,
+        object_storage_ids: Vec<String>,
+    ) -> Result<u64, Error> {
+        // We have to manually construct the query since SQLite doesn't have the proper Encode trait
+        let mut builder: QueryBuilder<_> = QueryBuilder::new(
+            "DELETE FROM physical_partition WHERE object_storage_id IN (",
+        );
+        let mut separated = builder.separated(", ");
+        for id in object_storage_ids.iter() {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(")");
+
+        let query = builder.build();
+        let delete_result = query.execute(&self.executor).await.map_err($repo::interpret_error)?;
+
+        Ok(delete_result.rows_affected())
     }
 
     async fn create_new_table_version(

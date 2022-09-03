@@ -244,13 +244,16 @@ impl Default for HttpFrontend {
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(default)]
 pub struct Misc {
-    pub max_partition_size: i64,
+    pub max_partition_size: u32,
+    // Perhaps make this accept a cron job format and use tokio-cron-scheduler?
+    pub gc_interval: u16,
 }
 
 impl Default for Misc {
     fn default() -> Self {
         Self {
             max_partition_size: 1024 * 1024,
+            gc_interval: 0,
         }
     }
 }
@@ -436,7 +439,8 @@ upload_data_max_length = 1
                     temp_dir: Some(PathBuf::from("/tmp/seafowl")),
                 },
                 misc: Misc {
-                    max_partition_size: 1024 * 1024
+                    max_partition_size: 1024 * 1024,
+                    gc_interval: 0,
                 },
             }
         )
@@ -525,7 +529,8 @@ upload_data_max_length = 1
                     temp_dir: Some(PathBuf::from("/tmp/seafowl")),
                 },
                 misc: Misc {
-                    max_partition_size: 1024 * 1024
+                    max_partition_size: 1024 * 1024,
+                    gc_interval: 0,
                 },
             }
         )
