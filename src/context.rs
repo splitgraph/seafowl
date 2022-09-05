@@ -842,6 +842,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Statement::Delete {
                     table_name,
                     selection,
+                    ..
                 } => {
                     // Get the actual table schema, since DF needs to validate unqualified columns
                     // (i.e. ones referenced only by column name, lacking the relation name)
@@ -1538,12 +1539,12 @@ mod tests {
     use super::test_utils::mock_context;
 
     const PARTITION_1_FILE_NAME: &str =
-        "bdd6eef7340866d1ad99ed34ce0fa43c0d06bbed4dbcb027e9a51de48638b3ed.parquet";
+        "9efa4e04720167e0a6af3bda0d422fc39f5c6429fb2bcca7b6f3e9745cabd13d.parquet";
     const PARTITION_2_FILE_NAME: &str =
-        "2d6cabc587f8a3d8b16a56294e84f9b39fc5fc30a00d98c205ad6be670d205a3.parquet";
+        "c8339f5ce296755412c9cd23a10500ebd0a8938a6a9c809fd2de4775eba1249f.parquet";
 
     const EXPECTED_INSERT_FILE_NAME: &str =
-        "1592625fb7bb063580d94fe2eaf514d55e6b44f1bebd6c7f6b2e79f55477218b.parquet";
+        "6867ffc70bc027d889df7b6bbf27965eab4ad6892b4fec3862661e0d6347bcff.parquet";
 
     fn to_min_max_value(value: ScalarValue) -> Arc<Option<Vec<u8>>> {
         Arc::from(scalar_value_to_bytes(&value))
@@ -1649,7 +1650,7 @@ mod tests {
                         PartitionColumn {
                             name: Arc::from("integer".to_string()),
                             r#type: Arc::from(
-                                "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
+                                "{\"bitWidth\":64,\"isSigned\":true,\"name\":\"int\"}"
                                     .to_string()
                             ),
                             min_value: to_min_max_value(ScalarValue::Int64(Some(12))),
@@ -1679,7 +1680,7 @@ mod tests {
                         PartitionColumn {
                             name: Arc::from("integer".to_string()),
                             r#type: Arc::from(
-                                "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
+                                "{\"bitWidth\":64,\"isSigned\":true,\"name\":\"int\"}"
                                     .to_string()
                             ),
                             min_value: to_min_max_value(ScalarValue::Int64(Some(22))),
@@ -1713,9 +1714,9 @@ mod tests {
         vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
         vec![vec![0, 1, 2, 3, 4], vec![5, 6, 7, 8, 9], vec![10, 11]],
         vec![
-            "012fc5d6c2d7379103280ebc39d5d6bf8b9aae45a75f0b722576b442c24d6784.parquet",
-            "8ee4296b8bfcd1a2a013685a73bf755387ce0275b0d49159ee67ca72c8237bc1.parquet",
-            "e6628dd3c33c390d34e208c01a30365d9565edef101b6f272c2dff661dc67763.parquet",
+            "4a006cc68b17c558cb2a454ef90500b93ad98c28a2e1b3fdc9a5397a25799dfb.parquet",
+            "686055ffe7623fbb8eb97069298cfad561aa9fbf14cff15eaa805d10e212c36f.parquet",
+            "b4e51d4988ad632174949f7c09f3633613890c8551d2e71ff3b8bb6f6c62110f.parquet",
         ];
         "record batches smaller than partitions")
     ]
@@ -1724,10 +1725,10 @@ mod tests {
         vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
         vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]],
         vec![
-            "207f477f85081b79122ba19edbc4612a8ca747470795be1ef9d71518f79d543f.parquet",
-            "45f630745bc7238fc30c0e17af635cf7f177d51fb2a1a05781fe809d36fad00d.parquet",
-            "ea7504e00f9bf75273ae1f6c7760e600c358fbbe19599f41ad808f9f1d520749.parquet",
-            "b4d90e2de27c2ed2db4908bcdbb52e0cd0e205966131d9f064c43a7cd98c8f14.parquet",
+            "5600d168b4ebfc8ac6e1ab28af8561e3556d96d562f3a078d08598b4f8af8b57.parquet",
+            "c5fda995f4c66bad9cbe3e74e5da0a7ab6a4428311a48f1a9815fa7b46a8db77.parquet",
+            "e5bda1c858bc066fa910e96987ddfd27ede6828cdff84d2cf1a04d83427e852e.parquet",
+            "7fe9b59f655aa00bf796a33c4001409b5069b588290b914d0afcf57da2cf05f1.parquet",
         ];
         "record batches same size as partitions")
     ]
@@ -1736,12 +1737,12 @@ mod tests {
         vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
         vec![vec![0, 1], vec![2, 3], vec![4, 5], vec![6, 7], vec![8, 9], vec![10, 11]],
         vec![
-            "785bae45499128d4898cb7307e636606ada772f69c2e9ae842e79422beb9e95f.parquet",
-            "991242bb627896dfa6820f8e486fcead3059205b8c262951c248210047b981eb.parquet",
-            "5c7aded940a2b69bf68e824040dfe1e9c6ffcffe5f7d2cc61208fa96f86337ec.parquet",
-            "9bf3793f1a262a5f662ceb50a669fcad19d587bdd016f04cd33a475b90b191d9.parquet",
-            "72587d81f4f3a1b2b69377d5a6d302fea796319d6fa1ca777cc3148b63ffb819.parquet",
-            "e6628dd3c33c390d34e208c01a30365d9565edef101b6f272c2dff661dc67763.parquet",
+            "f5650226b5ef25dc2f9fd1e558126fdec5b7fdefbe1f216dd3308ed38ec6fd7f.parquet",
+            "16c91d52bbd00063d76b917d71053eb8de19adbfadf659b52bb8abaab55ec6ee.parquet",
+            "63ec7889458a38a3f558687b4db2793511f64696a7440bf43a27cee98518baab.parquet",
+            "0619a04142967187c93b44058574f3e76147248cf8fd01e15098ce44a7abbdf9.parquet",
+            "35f8efb06448b8076d5addad3d7c4e702892d1361d84137b3b625d6b5cf407a2.parquet",
+            "b4e51d4988ad632174949f7c09f3633613890c8551d2e71ff3b8bb6f6c62110f.parquet",
         ];
         "record batches larger than partitions")
     ]
@@ -1750,10 +1751,10 @@ mod tests {
         vec![vec![vec![0, 1], vec![2, 3, 4]], vec![vec![5]], vec![vec![6, 7, 8, 9], vec![10, 11]]],
         vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]],
         vec![
-            "207f477f85081b79122ba19edbc4612a8ca747470795be1ef9d71518f79d543f.parquet",
-            "45f630745bc7238fc30c0e17af635cf7f177d51fb2a1a05781fe809d36fad00d.parquet",
-            "ea7504e00f9bf75273ae1f6c7760e600c358fbbe19599f41ad808f9f1d520749.parquet",
-            "b4d90e2de27c2ed2db4908bcdbb52e0cd0e205966131d9f064c43a7cd98c8f14.parquet",
+            "5600d168b4ebfc8ac6e1ab28af8561e3556d96d562f3a078d08598b4f8af8b57.parquet",
+            "c5fda995f4c66bad9cbe3e74e5da0a7ab6a4428311a48f1a9815fa7b46a8db77.parquet",
+            "e5bda1c858bc066fa910e96987ddfd27ede6828cdff84d2cf1a04d83427e852e.parquet",
+            "7fe9b59f655aa00bf796a33c4001409b5069b588290b914d0afcf57da2cf05f1.parquet",
         ];
         "record batches irregular size")
     ]
@@ -1817,7 +1818,7 @@ mod tests {
                     columns: Arc::new(vec![PartitionColumn {
                         name: Arc::from("some_number"),
                         r#type: Arc::from(
-                            r#"{"name":"int","bitWidth":32,"isSigned":true}"#
+                            r#"{"bitWidth":32,"isSigned":true,"name":"int"}"#
                         ),
                         min_value: to_min_max_value(ScalarValue::Int32(
                             output_partitions[i].iter().min().copied()
@@ -1940,9 +1941,7 @@ mod tests {
                     .withf(|partitions| {
                         // TODO: the ergonomics of these mocks are pretty bad, standard with(predicate::eq(...)) doesn't
                         // show the actual value so we have to resort to this.
-                        dbg!(partitions);
-                        *partitions
-                            == vec![SeafowlPartition {
+                        assert_eq!(*partitions, vec![SeafowlPartition {
                                 object_storage_id: Arc::from(EXPECTED_INSERT_FILE_NAME),
                                 row_count: 1,
                                 columns: Arc::new(vec![
@@ -1961,7 +1960,8 @@ mod tests {
                                         null_count: Some(0),
                                     },
                                 ],)
-                            },]
+                            },]);
+                        true
                     })
                     .return_once(|_| Ok(vec![2]));
 

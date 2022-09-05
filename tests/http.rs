@@ -119,8 +119,7 @@ async fn test_http_server_reader_writer() {
     assert_eq!(response_text(resp).await, "{\"Int64(1)\":1}\n");
 
     // POST CREATE TABLE as a read-only user
-    let resp =
-        post_query(&client, &uri, "CREATE TABLE test_table (col INTEGER)", None).await;
+    let resp = post_query(&client, &uri, "CREATE TABLE test_table (col INT)", None).await;
     dbg!(&resp);
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert_eq!(response_text(resp).await, "WRITE_FORBIDDEN");
@@ -129,7 +128,7 @@ async fn test_http_server_reader_writer() {
     let resp = post_query(
         &client,
         &uri,
-        "CREATE TABLE test_table (col INTEGER)",
+        "CREATE TABLE test_table (col INT)",
         Some("wrongpw"),
     )
     .await;
@@ -141,7 +140,7 @@ async fn test_http_server_reader_writer() {
     let resp = post_query(
         &client,
         &uri,
-        "CREATE TABLE test_table (col INTEGER)",
+        "CREATE TABLE test_table (col INT)",
         Some("write_password"),
     )
     .await;
@@ -345,7 +344,7 @@ async fn test_upload_to_existing_table() {
     context
         .collect(
             context
-                .plan_query("CREATE TABLE test_table(col_1 INTEGER)")
+                .plan_query("CREATE TABLE test_table(col_1 INT)")
                 .await
                 .unwrap(),
         )

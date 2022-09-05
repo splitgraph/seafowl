@@ -24,7 +24,7 @@ frontend-postgres = ["convergence", "convergence-arrow"]
 object-store-s3 = ["object_store/aws"]
 
 [dependencies]
-arrow = { version = "18.0.0", features = ["prettyprint"] }
+arrow = { version = "20.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 base64 = "0.13.0"
 
@@ -34,10 +34,10 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", optional = true }
-convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "500ea8e1f03f63f20effb9b93cf414c1c6711515", package = "convergence-arrow", optional = true }
-datafusion = "10"
-datafusion-proto = "10"
+convergence = { git = "https://github.com/returnString/convergence", rev = "3a0e31079ab80d0e6f1ccd695fc02a9266727e6d", optional = true }
+convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "3a0e31079ab80d0e6f1ccd695fc02a9266727e6d", package = "convergence-arrow", optional = true }
+datafusion = "11"
+datafusion-proto = "11"
 futures = "0.3"
 
 # passing to DF's query planner
@@ -46,9 +46,9 @@ hex = ">=0.4.0"
 itertools = ">=0.10.0"
 log = "0.4"
 moka = { version = "0.9.3", default_features = false, features = ["future", "atomic64", "quanta"] }
-object_store = "0.3.0"
+object_store = "0.4.0"
 pretty_env_logger = "0.4"
-prost = "0.10"
+prost = "0.11"
 
 # Needs to be in non-dev because repository::testutils can't be
 # imported by tests::end_to_end if it's cfg(test).
@@ -57,7 +57,7 @@ reqwest = { version = "0.11.11", features = [ "stream" ] }
 serde = "1.0.138"
 serde_json = "1.0.81"
 sha2 = ">=0.10.1"
-sqlparser = "0.18"
+sqlparser = "0.20"
 sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "sqlite" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"

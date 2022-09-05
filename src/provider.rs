@@ -200,6 +200,7 @@ impl TableProvider for SeafowlTable {
                     object_meta: meta,
                     partition_values: vec![],
                     range: None,
+                    extensions: None,
                 }]) as Result<_>
             }))
             .await?;
@@ -659,12 +660,10 @@ mod tests {
         vec![1];
         "Null check one null")
     ]
-    // Pruning here fails with: `"Invalid argument error: Column 'some_int_null_count' is declared as non-nullable but contains null values"`
-    // so we default to using all partitions
     #[test_case(
         vec![(Some(10), Some(20), Some(0)), (Some(20), None, None)],
         vec![col("some_int").is_null()],
-        vec![0, 1];
+        vec![1];
         "Null check unknown nulls")
     ]
     #[tokio::test]
