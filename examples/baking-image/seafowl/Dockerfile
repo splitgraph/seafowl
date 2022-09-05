@@ -12,15 +12,15 @@ RUN \
   seafowl --one-off \
   "CREATE EXTERNAL TABLE cambridge_weather (\
   timestamp TIMESTAMP,\
-  temp_c_10 INTEGER NULL,\
-  humidity_perc INTEGER NULL,\
-  dew_point_c_10 INTEGER NULL,\
-  pressure_mbar INTEGER NULL,\
-  mean_wind_speed_knots_10 INTEGER NULL,\
-  average_wind_bearing_degrees INTEGER NULL,\
-  sunshine_hours_100 INTEGER,\
-  rainfall_mm_1000 INTEGER,\
-  max_wind_speed_knots_10 INTEGER NULL)\
+  temp_c_10 INT NULL,\
+  humidity_perc INT NULL,\
+  dew_point_c_10 INT NULL,\
+  pressure_mbar INT NULL,\
+  mean_wind_speed_knots_10 INT NULL,\
+  average_wind_bearing_degrees INT NULL,\
+  sunshine_hours_100 INT,\
+  rainfall_mm_1000 INT,\
+  max_wind_speed_knots_10 INT NULL)\
   STORED AS CSV\
   LOCATION './weather-raw.csv';\
   CREATE TABLE cambridge_weather AS SELECT * FROM staging.cambridge_weather" && \

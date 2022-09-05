@@ -40,8 +40,11 @@ jobs:
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
+      # TODO: bake this into the CI image
       - name: Install cmake
         run: apt-get update && apt-get install -y cmake
+      - name: Install protoc
+        run: apt install -y protobuf-compiler
 
       # Use https://github.com/marketplace/actions/rust-cache
 
