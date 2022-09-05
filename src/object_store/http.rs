@@ -122,7 +122,9 @@ impl ObjectStore for HttpObjectStore {
         &self,
         _location: &Path,
     ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        todo!()
+        Err(object_store::Error::NotSupported {
+            source: Box::new(HttpObjectStoreError::WritesUnsupported),
+        })
     }
 
     async fn abort_multipart(
@@ -130,7 +132,9 @@ impl ObjectStore for HttpObjectStore {
         _location: &Path,
         _multipart_id: &MultipartId,
     ) -> object_store::Result<()> {
-        todo!()
+        Err(object_store::Error::NotSupported {
+            source: Box::new(HttpObjectStoreError::WritesUnsupported),
+        })
     }
 
     async fn get(&self, location: &Path) -> object_store::Result<GetResult> {

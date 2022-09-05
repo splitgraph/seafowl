@@ -255,17 +255,17 @@ impl ObjectStore for CachingObjectStore {
 
     async fn put_multipart(
         &self,
-        _location: &object_store::path::Path,
+        location: &object_store::path::Path,
     ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        todo!()
+        self.inner.put_multipart(location).await
     }
 
     async fn abort_multipart(
         &self,
-        _location: &object_store::path::Path,
-        _multipart_id: &MultipartId,
+        location: &object_store::path::Path,
+        multipart_id: &MultipartId,
     ) -> object_store::Result<()> {
-        todo!()
+        self.inner.abort_multipart(location, multipart_id).await
     }
 
     async fn get(
