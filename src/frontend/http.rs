@@ -504,7 +504,7 @@ mod tests {
 
     use crate::auth::AccessPolicy;
 
-    use crate::config::schema::HttpFrontend;
+    use crate::config::schema::{str_to_hex_hash, HttpFrontend};
     use crate::{
         context::{test_utils::in_memory_context, SeafowlContext},
         frontend::http::{filters, QUERY_HEADER},
@@ -527,7 +527,7 @@ mod tests {
         context
             .collect(
                 context
-                    .plan_query("CREATE TABLE test_table(col_1 INTEGER)")
+                    .plan_query("CREATE TABLE test_table(col_1 INT)")
                     .await
                     .unwrap(),
             )
@@ -566,11 +566,9 @@ mod tests {
 
     const SELECT_QUERY: &str = "SELECT COUNT(*) AS c FROM test_table";
     const INSERT_QUERY: &str = "INSERT INTO test_table VALUES (2)";
-    const CREATE_QUERY: &str = "CREATE TABLE other_test_table(col_1 INTEGER)";
+    const CREATE_QUERY: &str = "CREATE TABLE other_test_table(col_1 INT)";
     const SELECT_QUERY_HASH: &str =
         "7fbbf7dddfd330d03e5e08cc5885ad8ca823e1b56e7cbadd156daa0e21c288f6";
-    const CREATE_QUERY_HASH: &str =
-        "be185830b7db691f3ffd33c81a83bb4ed48e2411fc3fc500ee20b8ec7effb8a6";
     const V1_ETAG: &str =
         "038966de9f6b9a901b20b4c6ca8b2a46009feebe031babc842d43690c0bc222b";
     const V2_ETAG: &str =
@@ -629,7 +627,7 @@ mod tests {
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{}", CREATE_QUERY_HASH).as_str())
+            .path(format!("/q/{}", str_to_hex_hash(CREATE_QUERY)).as_str())
             .header(QUERY_HEADER, CREATE_QUERY)
             .reply(&handler)
             .await;
@@ -1157,7 +1155,7 @@ mod tests {
         let query = r#"
 SELECT
   1::SMALLINT AS smallint_val,
-  1000000::INTEGER AS integer_val,
+  1000000::INT AS integer_val,
   10000000000::BIGINT AS bigint_val,
   'c'::CHAR AS char_val,
   'varchar'::VARCHAR AS varchar_val,
@@ -1184,7 +1182,7 @@ SELECT
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.body(),
-            r#"{"smallint_val":1,"integer_val":1000000,"bigint_val":10000000000,"char_val":"c","varchar_val":"varchar","text_val":"text","float_val":12.345,"real_val":12.345,"double_val":12.345678910111213,"bool_val":true,"date_val":"2022-01-01","timestamp_val":"2022-01-01 12:03:11.123456","int_array_val":[1,2,3,4,5],"text_array_val":["one","two"]}
+            r#"{"bigint_val":10000000000,"bool_val":true,"char_val":"c","date_val":"2022-01-01","double_val":12.345678910111213,"float_val":12.345,"int_array_val":[1,2,3,4,5],"integer_val":1000000,"real_val":12.345,"smallint_val":1,"text_array_val":["one","two"],"text_val":"text","timestamp_val":"2022-01-01 11:03:11.123456","varchar_val":"varchar"}
 "#
         );
     }

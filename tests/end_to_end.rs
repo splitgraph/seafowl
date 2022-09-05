@@ -128,12 +128,13 @@ async fn test_information_schema() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type | definition |",
-        "+---------------+--------------------+------------+------------+------------+",
-        "| default       | information_schema | columns    | VIEW       |            |",
-        "| default       | information_schema | tables     | VIEW       |            |",
-        "+---------------+--------------------+------------+------------+------------+",
+        "+---------------+--------------------+------------+------------+",
+        "| table_catalog | table_schema       | table_name | table_type |",
+        "+---------------+--------------------+------------+------------+",
+        "| default       | information_schema | columns    | VIEW       |",
+        "| default       | information_schema | tables     | VIEW       |",
+        "| default       | information_schema | views      | VIEW       |",
+        "+---------------+--------------------+------------+------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -165,7 +166,7 @@ async fn test_create_table() {
         "+--------------+------------+------------------+-----------------------------+",
         "| public       | test_table | some_bool_value  | Boolean                     |",
         "| public       | test_table | some_int_value   | Int64                       |",
-        "| public       | test_table | some_other_value | Decimal(38, 10)             |",
+        "| public       | test_table | some_other_value | Decimal128(38, 10)          |",
         "| public       | test_table | some_time        | Timestamp(Nanosecond, None) |",
         "| public       | test_table | some_value       | Float32                     |",
         "+--------------+------------+------------------+-----------------------------+",
@@ -301,7 +302,7 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(
         partitions[0].object_storage_id,
         Arc::from(
-            "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet"
+            "663424af6d3ddcb896723559187079619770bb1f941a1845f1e72ab3447cfe43.parquet"
                 .to_string()
         )
     );
@@ -310,7 +311,7 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(
         partitions[1].object_storage_id,
         Arc::from(
-            "a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet"
+            "400cdfbbf5e49c614ad6bc9cb716af7b31bb0b695355f8977b1767960dfac82d.parquet"
                 .to_string()
         )
     );
@@ -335,7 +336,7 @@ async fn test_table_partitioning_and_rechunking() {
         .to_string();
 
     let actual_lines: Vec<&str> = formatted.trim().lines().collect();
-    assert_contains!(actual_lines[10], "partitions=[a03b99f5a111782cc00bb80adbab53dbba67b745ea21b0cbd0f80258093f12a3.parquet]");
+    assert_contains!(actual_lines[10], "partitions=[400cdfbbf5e49c614ad6bc9cb716af7b31bb0b695355f8977b1767960dfac82d.parquet]");
 
     // Assert query results
     let plan = context
@@ -376,7 +377,7 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(
         partitions[0].object_storage_id,
         Arc::from(
-            "80091935282490b5a715080555c1e8c58bb8ce69e07cf7533ec83aa29167cee3.parquet"
+            "41102d2df3624e5f60ca585320cd21768993683820124b327f935a9fdd30759d.parquet"
                 .to_string()
         )
     );
@@ -462,12 +463,12 @@ async fn test_create_table_move_and_drop() {
         "+--------------+--------------+------------------+-----------------------------+",
         "| public       | test_table_1 | some_bool_value  | Boolean                     |",
         "| public       | test_table_1 | some_int_value   | Int64                       |",
-        "| public       | test_table_1 | some_other_value | Decimal(38, 10)             |",
+        "| public       | test_table_1 | some_other_value | Decimal128(38, 10)          |",
         "| public       | test_table_1 | some_time        | Timestamp(Nanosecond, None) |",
         "| public       | test_table_1 | some_value       | Float32                     |",
         "| public       | test_table_2 | some_bool_value  | Boolean                     |",
         "| public       | test_table_2 | some_int_value   | Int64                       |",
-        "| public       | test_table_2 | some_other_value | Decimal(38, 10)             |",
+        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)          |",
         "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
         "| public       | test_table_2 | some_value       | Float32                     |",
         "+--------------+--------------+------------------+-----------------------------+",
@@ -502,6 +503,7 @@ async fn test_create_table_move_and_drop() {
         "+--------------------+--------------+",
         "| information_schema | columns      |",
         "| information_schema | tables       |",
+        "| information_schema | views        |",
         "| public             | test_table_2 |",
         "| public             | test_table_3 |",
         "+--------------------+--------------+",
@@ -545,6 +547,7 @@ async fn test_create_table_move_and_drop() {
         "+--------------------+--------------+",
         "| information_schema | columns      |",
         "| information_schema | tables       |",
+        "| information_schema | views        |",
         "| new_schema         | test_table_3 |",
         "| public             | test_table_2 |",
         "+--------------------+--------------+",
@@ -566,7 +569,7 @@ async fn test_create_table_move_and_drop() {
         "+--------------+--------------+------------------+-----------------------------+",
         "| public       | test_table_2 | some_bool_value  | Boolean                     |",
         "| public       | test_table_2 | some_int_value   | Int64                       |",
-        "| public       | test_table_2 | some_other_value | Decimal(38, 10)             |",
+        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)          |",
         "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
         "| public       | test_table_2 | some_value       | Float32                     |",
         "+--------------+--------------+------------------+-----------------------------+",
@@ -623,6 +626,7 @@ async fn test_create_table_drop_schema() {
         "+--------------------+--------------+",
         "| information_schema | columns      |",
         "| information_schema | tables       |",
+        "| information_schema | views        |",
         "| new_schema         | test_table_2 |",
         "| public             | test_table_1 |",
         "+--------------------+--------------+",
@@ -643,6 +647,7 @@ async fn test_create_table_drop_schema() {
         "+--------------------+--------------+",
         "| information_schema | columns      |",
         "| information_schema | tables       |",
+        "| information_schema | views        |",
         "| new_schema         | test_table_2 |",
         "+--------------------+--------------+",
     ];
@@ -662,6 +667,7 @@ async fn test_create_table_drop_schema() {
         "+--------------------+------------+",
         "| information_schema | columns    |",
         "| information_schema | tables     |",
+        "| information_schema | views      |",
         "+--------------------+------------+",
     ];
     assert_batches_eq!(expected, &results);
@@ -675,7 +681,7 @@ async fn test_create_table_drop_schema() {
     context
         .collect(
             context
-                .plan_query("CREATE TABLE test_table_1 (key INTEGER)")
+                .plan_query("CREATE TABLE test_table_1 (key INT)")
                 .await
                 .unwrap(),
         )
@@ -690,6 +696,7 @@ async fn test_create_table_drop_schema() {
         "+--------------------+--------------+",
         "| information_schema | columns      |",
         "| information_schema | tables       |",
+        "| information_schema | views        |",
         "| public             | test_table_1 |",
         "+--------------------+--------------+",
     ];
@@ -703,14 +710,14 @@ async fn test_create_table_schema_already_exists() {
     context
         .collect(
             context
-                .plan_query("CREATE TABLE some_table(key INTEGER)")
+                .plan_query("CREATE TABLE some_table(key INT)")
                 .await
                 .unwrap(),
         )
         .await
         .unwrap();
     let err = context
-        .plan_query("CREATE TABLE some_table(key INTEGER)")
+        .plan_query("CREATE TABLE some_table(key INT)")
         .await
         .unwrap_err();
     assert_eq!(
@@ -734,7 +741,7 @@ async fn test_create_table_in_staging_schema() {
     context
         .collect(
             context
-                .plan_query("CREATE TABLE some_table(key INTEGER)")
+                .plan_query("CREATE TABLE some_table(key INT)")
                 .await
                 .unwrap(),
         )
@@ -744,7 +751,7 @@ async fn test_create_table_in_staging_schema() {
     let expected_err = "Error during planning: The staging schema can only be referenced via CREATE EXTERNAL TABLE";
 
     let err = context
-        .plan_query("CREATE TABLE staging.some_table(key INTEGER)")
+        .plan_query("CREATE TABLE staging.some_table(key INT)")
         .await
         .unwrap_err();
 
@@ -873,6 +880,7 @@ async fn test_create_external_table_http() {
         "+--------------------+------------+",
         "| information_schema | columns    |",
         "| information_schema | tables     |",
+        "| information_schema | views      |",
         "| staging            | file       |",
         "+--------------------+------------+",
     ];
@@ -1033,10 +1041,10 @@ async fn test_vacuum_command() {
     // Check we have orphan partitions
     // NB: we have duplicates here which is expected, see: https://github.com/splitgraph/seafowl/issues/5
     let orphans = vec![
-        "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet",
-        "fa8e20a0e0c323ed17ff096549135defc1e376098b9adc73a8eba22a8aeb8dfc.parquet",
-        "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet",
-        "322e5c9918f05e87d49dd150947f79a62eecb4d756405619e920a0413b2628d3.parquet",
+        "663424af6d3ddcb896723559187079619770bb1f941a1845f1e72ab3447cfe43.parquet",
+        "65d79d86789bf67e013323bc7847b4dbb73308d3114168b4b82992d324dacbf7.parquet",
+        "663424af6d3ddcb896723559187079619770bb1f941a1845f1e72ab3447cfe43.parquet",
+        "116cef148ead70a0507f20d999d56d046b3e0f7cce00a3dc96d786e3dd1bbb21.parquet",
     ];
 
     assert_orphan_partitions(context.clone(), orphans.clone()).await;

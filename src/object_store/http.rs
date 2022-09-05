@@ -6,7 +6,7 @@ use futures::stream::BoxStream;
 use futures::{stream, StreamExt};
 
 use object_store::path::Path;
-use object_store::{GetResult, ListResult, ObjectMeta, ObjectStore};
+use object_store::{GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore};
 
 use crate::object_store::cache::CachingObjectStore;
 use datafusion::prelude::SessionContext;
@@ -16,6 +16,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::io::AsyncWrite;
 
 pub const ANYHOST: &str = "anyhost";
 pub const MIN_FETCH_SIZE: u64 = 2 * 1024 * 1024;
@@ -115,6 +116,21 @@ impl ObjectStore for HttpObjectStore {
         Err(object_store::Error::NotSupported {
             source: Box::new(HttpObjectStoreError::WritesUnsupported),
         })
+    }
+
+    async fn put_multipart(
+        &self,
+        _location: &Path,
+    ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+        todo!()
+    }
+
+    async fn abort_multipart(
+        &self,
+        _location: &Path,
+        _multipart_id: &MultipartId,
+    ) -> object_store::Result<()> {
+        todo!()
     }
 
     async fn get(&self, location: &Path) -> object_store::Result<GetResult> {

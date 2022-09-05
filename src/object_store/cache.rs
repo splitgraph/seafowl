@@ -8,7 +8,7 @@ use futures::stream::BoxStream;
 use log::{debug, error, warn};
 use moka::future::{Cache, CacheBuilder};
 use moka::notification::RemovalCause;
-use object_store::{GetResult, ListResult, ObjectMeta, ObjectStore};
+use object_store::{GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore};
 
 use std::fmt::Display;
 use std::fmt::{Debug, Formatter};
@@ -20,6 +20,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use std::sync::Arc;
+use tokio::io::AsyncWrite;
 use tokio::{fs, sync::RwLock};
 
 #[derive(Debug)]
@@ -250,6 +251,21 @@ impl ObjectStore for CachingObjectStore {
         bytes: Bytes,
     ) -> object_store::Result<()> {
         self.inner.put(location, bytes).await
+    }
+
+    async fn put_multipart(
+        &self,
+        _location: &object_store::path::Path,
+    ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+        todo!()
+    }
+
+    async fn abort_multipart(
+        &self,
+        _location: &object_store::path::Path,
+        _multipart_id: &MultipartId,
+    ) -> object_store::Result<()> {
+        todo!()
     }
 
     async fn get(

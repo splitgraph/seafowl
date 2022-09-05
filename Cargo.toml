@@ -34,8 +34,8 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", rev = "56dda6f6982ff60da44ff275560df31a547d205e", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", rev = "56dda6f6982ff60da44ff275560df31a547d205e", package = "convergence-arrow", optional = true }
+convergence = { git = "https://github.com/returnString/convergence", rev = "3a0e31079ab80d0e6f1ccd695fc02a9266727e6d", optional = true }
+convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "3a0e31079ab80d0e6f1ccd695fc02a9266727e6d", package = "convergence-arrow", optional = true }
 datafusion = "11"
 datafusion-proto = "11"
 futures = "0.3"
@@ -48,7 +48,7 @@ log = "0.4"
 moka = { version = "0.9.3", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.4.0"
 pretty_env_logger = "0.4"
-prost = "0.10"
+prost = "0.11"
 
 # Needs to be in non-dev because repository::testutils can't be
 # imported by tests::end_to_end if it's cfg(test).
