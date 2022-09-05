@@ -77,7 +77,10 @@ jobs:
           cache-on-failure: "true"
 
       - name: Build the release binary
-        run: cargo build --release
+        shell: bash
+        run: |
+          export PATH=$PATH:$HOME/d/protoc/bin
+          cargo build --release
 
       - name: Strip release binary (linux and macos)
         if: matrix.build == 'linux' || matrix.build == 'macos'
