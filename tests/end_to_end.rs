@@ -1,10 +1,11 @@
-mod http;
-
 use std::env;
 use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
 use datafusion::{assert_batches_eq, assert_contains};
+use futures::TryStreamExt;
+use itertools::Itertools;
+use object_store::path::Path;
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
@@ -12,6 +13,11 @@ use seafowl::context::DefaultSeafowlContext;
 use seafowl::context::SeafowlContext;
 use seafowl::data_types::TableVersionId;
 use seafowl::repository::postgres::testutils::get_random_schema;
+
+// Hack because integration tests do not set cfg(test)
+// https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
+#[path = "../src/object_store/testutils.rs"]
+mod http_testutils;
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
@@ -125,8 +131,6 @@ async fn test_information_schema() {
         "+---------------+--------------------+------------+------------+------------+",
         "| table_catalog | table_schema       | table_name | table_type | definition |",
         "+---------------+--------------------+------------+------------+------------+",
-        "| datafusion    | information_schema | columns    | VIEW       |            |",
-        "| datafusion    | information_schema | tables     | VIEW       |            |",
         "| default       | information_schema | columns    | VIEW       |            |",
         "| default       | information_schema | tables     | VIEW       |            |",
         "+---------------+--------------------+------------+------------+------------+",
@@ -725,6 +729,40 @@ async fn test_create_table_schema_already_exists() {
 }
 
 #[tokio::test]
+async fn test_create_table_in_staging_schema() {
+    let context = make_context_with_pg().await;
+    context
+        .collect(
+            context
+                .plan_query("CREATE TABLE some_table(key INTEGER)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let expected_err = "Error during planning: The staging schema can only be referenced via CREATE EXTERNAL TABLE";
+
+    let err = context
+        .plan_query("CREATE TABLE staging.some_table(key INTEGER)")
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.to_string(), expected_err,);
+
+    let err = context.plan_query("DROP SCHEMA staging").await.unwrap_err();
+
+    assert_eq!(err.to_string(), expected_err,);
+
+    let err = context
+        .plan_query("ALTER TABLE some_table RENAME TO staging.some_table")
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.to_string(), expected_err,);
+}
+
+#[tokio::test]
 async fn test_create_and_run_function() {
     let context = make_context_with_pg().await;
 
@@ -775,4 +813,254 @@ async fn test_create_and_run_function() {
         err.to_string(),
         "Error during planning: Function \"sintau\" already exists"
     );
+}
+
+#[tokio::test]
+async fn test_create_external_table_http() {
+    /*
+    Test CREATE EXTERNAL TABLE works with an HTTP mock server.
+
+    This also works with https + actual S3 (tested manually)
+
+    SELECT * FROM datafusion.public.supply_chains LIMIT 1 results in:
+
+    bytes_scanned{filename=seafowl-public.s3.eu-west-1.amazonaws.com/tutorial/trase-supply-chains.parquet}=232699
+    */
+
+    let (mock_server, _) = http_testutils::make_mock_parquet_server(true).await;
+    let url = format!("{}/some/file.parquet", &mock_server.uri());
+
+    let context = make_context_with_pg().await;
+
+    // Try creating a table in a non-staging schema
+    let err = context
+        .plan_query(
+            format!(
+                "CREATE EXTERNAL TABLE public.file
+        STORED AS PARQUET
+        LOCATION '{}'",
+                url
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Can only create external tables in the staging schema"));
+
+    // Create a table normally
+    let plan = context
+        .plan_query(
+            format!(
+                "CREATE EXTERNAL TABLE file
+        STORED AS PARQUET
+        LOCATION '{}'",
+                url
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // Test we see the table in the information_schema
+    let results = list_tables_query(&context).await;
+
+    let expected = vec![
+        "+--------------------+------------+",
+        "| table_schema       | table_name |",
+        "+--------------------+------------+",
+        "| information_schema | columns    |",
+        "| information_schema | tables     |",
+        "| staging            | file       |",
+        "+--------------------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Test standard query
+    let plan = context
+        .plan_query("SELECT * FROM staging.file")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+    let expected = vec![
+        "+-------+",
+        "| col_1 |",
+        "+-------+",
+        "| 1     |",
+        "| 2     |",
+        "| 3     |",
+        "+-------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // Test we can't hit the Seafowl object store directly via CREATE EXTERNAL TABLE
+    let err = context
+        .plan_query(
+            "CREATE EXTERNAL TABLE internal STORED AS PARQUET LOCATION 'seafowl://file'",
+        )
+        .await
+        .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Invalid URL scheme for location \"seafowl://file\""));
+
+    // (also test that the DF object store registry doesn't normalize the case so that people can't
+    // bypass this)
+    let err = context
+        .plan_query(
+            "CREATE EXTERNAL TABLE internal STORED AS PARQUET LOCATION 'SeAfOwL://file'",
+        )
+        .await
+        .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("No suitable object store found for seafowl://file"));
+}
+
+#[tokio::test]
+async fn test_vacuum_command() {
+    let context = Arc::new(make_context_with_pg().await);
+
+    async fn assert_orphan_partitions(
+        context: Arc<DefaultSeafowlContext>,
+        parts: Vec<&str>,
+    ) {
+        assert_eq!(
+            context
+                .partition_catalog
+                .get_orphan_partition_store_ids()
+                .await
+                .unwrap(),
+            parts
+        );
+    }
+
+    let get_object_metas = || async {
+        context
+            .internal_object_store
+            .inner
+            .list(None)
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+    };
+
+    async fn get_partition_count(
+        context: Arc<DefaultSeafowlContext>,
+        table_version_id: i32,
+    ) -> usize {
+        context
+            .partition_catalog
+            .load_table_partitions(table_version_id as TableVersionId)
+            .await
+            .unwrap()
+            .len()
+    }
+
+    //
+    // Create two tables with multiple versions
+    //
+
+    // Creates table_1 with table_versions 1 (empty) and 2
+    create_table_and_insert(&context, "table_1").await;
+
+    // Make table_1 with table_version 3
+    let plan = context
+        .plan_query("INSERT INTO table_1 (some_value) VALUES (42)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // Creates table_2 with table_versions 4 (empty) and 5
+    create_table_and_insert(&context, "table_2").await;
+
+    // Make table_2 with table_version 6
+    let plan = context
+        .plan_query("INSERT INTO table_2 (some_value) VALUES (42), (43), (44)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // Run vacuum on table_1 to remove previous versions
+    context
+        .collect(context.plan_query("VACUUM TABLE table_1").await.unwrap())
+        .await
+        .unwrap();
+
+    // TODO: make more explicit the check for deleted table versions
+    for &table_version_id in &[1, 2, 4] {
+        assert_eq!(
+            get_partition_count(context.clone(), table_version_id).await,
+            0
+        );
+    }
+    for &table_version_id in &[3, 5, 6] {
+        assert!(get_partition_count(context.clone(), table_version_id).await > 0);
+    }
+
+    // Run vacuum on all tables; table_2 will now also lose all but the latest version
+    context
+        .collect(context.plan_query("VACUUM TABLES").await.unwrap())
+        .await
+        .unwrap();
+
+    // Check table versions cleared up from partition counts
+    for &table_version_id in &[1, 2, 4, 5] {
+        assert_eq!(
+            get_partition_count(context.clone(), table_version_id).await,
+            0
+        );
+    }
+    for &table_version_id in &[3, 6] {
+        assert!(get_partition_count(context.clone(), table_version_id).await > 0);
+    }
+
+    // Drop tables to leave orphan partitions around
+    context
+        .collect(context.plan_query("DROP TABLE table_1").await.unwrap())
+        .await
+        .unwrap();
+    context
+        .collect(context.plan_query("DROP TABLE table_2").await.unwrap())
+        .await
+        .unwrap();
+
+    // Check we have orphan partitions
+    // NB: we have duplicates here which is expected, see: https://github.com/splitgraph/seafowl/issues/5
+    let orphans = vec![
+        "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet",
+        "fa8e20a0e0c323ed17ff096549135defc1e376098b9adc73a8eba22a8aeb8dfc.parquet",
+        "6f3bed033bef03a66a34beead3ba5cd89eb382b9ba45bb6edfd3541e9ea65242.parquet",
+        "322e5c9918f05e87d49dd150947f79a62eecb4d756405619e920a0413b2628d3.parquet",
+    ];
+
+    assert_orphan_partitions(context.clone(), orphans.clone()).await;
+    let object_metas = get_object_metas().await;
+    assert_eq!(object_metas.len(), 3);
+    for (ind, &orphan) in orphans
+        .into_iter()
+        .unique()
+        .sorted()
+        .collect::<Vec<&str>>()
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(object_metas[ind].location, Path::from(orphan));
+    }
+
+    // Run vacuum on partitions
+    context
+        .collect(context.plan_query("VACUUM PARTITIONS").await.unwrap())
+        .await
+        .unwrap();
+
+    // Ensure no orphan partitions are left
+    assert_orphan_partitions(context.clone(), vec![]).await;
+    let object_metas = get_object_metas().await;
+    assert_eq!(object_metas.len(), 0);
 }

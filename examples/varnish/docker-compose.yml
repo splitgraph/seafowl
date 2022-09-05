@@ -1,0 +1,25 @@
+version: "3"
+services:
+  seafowl:
+    # Build a Docker image with some pre-baked data to that there is something to test
+    build:
+      dockerfile: Dockerfile
+      context: ./seafowl
+    deploy:
+      restart_policy:
+        condition: on-failure
+    environment:
+      # Make Seafowl writeable by anybody
+      - SEAFOWL__FRONTEND__HTTP__WRITE_ACCESS=any
+
+  varnish:
+    image: varnish:stable
+    ports:
+      - "8080:80"
+    volumes:
+      - "./config:/etc/varnish"
+    tmpfs:
+      - /var/lib/varnish:exec
+    environment:
+      - VARNISH_SIZE=2G
+    command: "-p default_keep=300"

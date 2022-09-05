@@ -1,8 +1,21 @@
 [package]
 name = "seafowl"
 build = "build.rs"
-version = "0.1.0"
+version = "0.1.0-dev.3"
 edition = "2021"
+
+readme = "README.md"
+description = "Seafowl is an analytical database designed for modern data-driven Web applications."
+authors = ["Splitgraph, Inc. <support@splitgraph.com>"]
+keywords = ["database", "http", "web"]
+homepage = "https://seafowl.io"
+license = "Apache-2.0"
+include = [
+    "src/**/*.rs",
+    "Cargo.toml",
+    "build.rs",
+    "migrations",
+]
 
 [features]
 catalog-postgres = ["sqlx/postgres"]
@@ -16,13 +29,15 @@ async-trait = "0.1.41"
 base64 = "0.13.0"
 
 bytes = "1.1.0"
-clap = { version = "3.2.15", features = [ "derive" ] }
+chrono = { version = "0.4", default_features = false }
+clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/returnString/convergence", rev = "d78220e5a851d54385050e29adae69935955dc4f", optional = true }
-convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "d78220e5a851d54385050e29adae69935955dc4f", package = "convergence-arrow", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", rev = "56dda6f6982ff60da44ff275560df31a547d205e", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", rev = "56dda6f6982ff60da44ff275560df31a547d205e", package = "convergence-arrow", optional = true }
 datafusion = "11"
+datafusion-proto = "11"
 futures = "0.3"
 
 # passing to DF's query planner
@@ -30,12 +45,15 @@ hashbrown = { version = "0.12", features = ["raw"] }
 hex = ">=0.4.0"
 itertools = ">=0.10.0"
 log = "0.4"
-object_store = ">=0.4.0"
+moka = { version = "0.9.3", default_features = false, features = ["future", "atomic64", "quanta"] }
+object_store = "0.4.0"
 pretty_env_logger = "0.4"
+prost = "0.10"
 
 # Needs to be in non-dev because repository::testutils can't be
 # imported by tests::end_to_end if it's cfg(test).
 rand = "0.8"
+reqwest = { version = "0.11.11", features = [ "stream" ] }
 serde = "1.0.138"
 serde_json = "1.0.81"
 sha2 = ">=0.10.1"
@@ -49,12 +67,17 @@ url = "2.2"
 warp = "0.3"
 
 # For WASM user-defined functions
-wasmtime = "0.38.1"
+wasmtime = "0.40.0"
 
 [dev-dependencies]
 mockall = "0.11.1"
 test-case = "*"
+wiremock = "0.5"
 
 [build-dependencies]
-anyhow = "1.0.60"  # for build.rs
+anyhow = "1.0.63"  # for build.rs
 vergen = "7"
+
+[profile.release]
+codegen-units = 1
+lto = true

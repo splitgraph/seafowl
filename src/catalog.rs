@@ -2,6 +2,7 @@ use std::str::FromStr;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
+use datafusion::catalog::schema::MemorySchemaProvider;
 use datafusion::error::DataFusionError;
 use itertools::Itertools;
 #[cfg(test)]
@@ -28,6 +29,10 @@ use crate::{
     schema::Schema,
 };
 
+pub const DEFAULT_DB: &str = "default";
+pub const DEFAULT_SCHEMA: &str = "public";
+pub const STAGING_SCHEMA: &str = "staging";
+
 #[derive(Debug)]
 pub enum Error {
     DatabaseDoesNotExist { id: DatabaseId },
@@ -43,6 +48,8 @@ pub enum Error {
     CollectionAlreadyExists { name: String },
     FunctionAlreadyExists { name: String },
     FunctionDeserializationError { reason: String },
+    // Creating a table in / dropping the staging schema
+    UsedStagingSchema,
     SqlxError(sqlx::Error),
 }
 
@@ -131,6 +138,10 @@ impl From<Error> for DataFusionError {
             Error::FunctionAlreadyExists { name } => {
                 DataFusionError::Plan(format!("Function {:?} already exists", name))
             }
+            Error::UsedStagingSchema => DataFusionError::Plan(
+                "The staging schema can only be referenced via CREATE EXTERNAL TABLE"
+                    .to_string(),
+            ),
 
             // Miscellaneous sqlx error. We want to log it but it's not worth showing to the user.
             Error::SqlxError(e) => DataFusionError::Internal(format!(
@@ -143,7 +154,7 @@ impl From<Error> for DataFusionError {
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait TableCatalog: Sync + Send + Debug {
+pub trait TableCatalog: Sync + Send {
     async fn load_database(&self, id: DatabaseId) -> Result<SeafowlDatabase>;
     async fn get_database_id_by_name(
         &self,
@@ -170,6 +181,11 @@ pub trait TableCatalog: Sync + Send + Debug {
         schema: &Schema,
     ) -> Result<(TableId, TableVersionId)>;
 
+    async fn delete_old_table_versions(
+        &self,
+        table_id: Option<TableId>,
+    ) -> Result<u64, Error>;
+
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
@@ -191,7 +207,7 @@ pub trait TableCatalog: Sync + Send + Debug {
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait PartitionCatalog: Sync + Send + Debug {
+pub trait PartitionCatalog: Sync + Send {
     // TODO: figure out content addressability (currently we'll create new partition meta records
     // even if the same partition already exists)
     async fn create_partitions(
@@ -209,11 +225,18 @@ pub trait PartitionCatalog: Sync + Send + Debug {
         partition_ids: Vec<PhysicalPartitionId>,
         table_version_id: TableVersionId,
     ) -> Result<()>;
+
+    async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>>;
+
+    async fn delete_partitions(
+        &self,
+        object_storage_ids: Vec<String>,
+    ) -> Result<u64, Error>;
 }
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait FunctionCatalog: Sync + Send + Debug {
+pub trait FunctionCatalog: Sync + Send {
     async fn create_function(
         &self,
         database_id: DatabaseId,
@@ -227,12 +250,23 @@ pub trait FunctionCatalog: Sync + Send + Debug {
     ) -> Result<Vec<SeafowlFunction>>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DefaultCatalog {
-    pub repository: Arc<dyn Repository>,
+    repository: Arc<dyn Repository>,
+
+    // DataFusion's in-memory schema provider for staging external tables
+    staging_schema: Arc<MemorySchemaProvider>,
 }
 
 impl DefaultCatalog {
+    pub fn new(repository: Arc<dyn Repository>) -> Self {
+        let staging_schema = Arc::new(MemorySchemaProvider::new());
+        Self {
+            repository,
+            staging_schema,
+        }
+    }
+
     fn to_sqlx_error(error: RepositoryError) -> Error {
         Error::SqlxError(match error {
             RepositoryError::UniqueConstraintViolation(e) => e,
@@ -348,8 +382,9 @@ impl TableCatalog for DefaultCatalog {
 
         Ok(SeafowlDatabase {
             // TODO load the database name too
-            name: Arc::from("default"),
+            name: Arc::from(DEFAULT_DB),
             collections,
+            staging_schema: self.staging_schema.clone(),
         })
     }
 
@@ -375,11 +410,25 @@ impl TableCatalog for DefaultCatalog {
             })
     }
 
+    async fn delete_old_table_versions(
+        &self,
+        table_id: Option<TableId>,
+    ) -> Result<u64, Error> {
+        self.repository
+            .delete_old_table_versions(table_id)
+            .await
+            .map_err(Self::to_sqlx_error)
+    }
+
     async fn get_collection_id_by_name(
         &self,
         database_name: &str,
         collection_name: &str,
     ) -> Result<Option<CollectionId>> {
+        if database_name == DEFAULT_DB && collection_name == STAGING_SCHEMA {
+            return Err(Error::UsedStagingSchema);
+        }
+
         match self
             .repository
             .get_collection_id_by_name(database_name, collection_name)
@@ -421,6 +470,10 @@ impl TableCatalog for DefaultCatalog {
         database_id: DatabaseId,
         collection_name: &str,
     ) -> Result<CollectionId> {
+        if collection_name == STAGING_SCHEMA {
+            return Err(Error::UsedStagingSchema);
+        }
+
         self.repository
             .create_collection(database_id, collection_name)
             .await
@@ -570,6 +623,23 @@ impl PartitionCatalog for DefaultCatalog {
                 }
                 _ => Self::to_sqlx_error(e),
             })
+    }
+
+    async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>, Error> {
+        self.repository
+            .get_orphan_partition_store_ids()
+            .await
+            .map_err(Self::to_sqlx_error)
+    }
+
+    async fn delete_partitions(
+        &self,
+        object_storage_ids: Vec<String>,
+    ) -> Result<u64, Error> {
+        self.repository
+            .delete_partitions(object_storage_ids)
+            .await
+            .map_err(Self::to_sqlx_error)
     }
 }
 

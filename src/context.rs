@@ -2,8 +2,13 @@
 
 use async_trait::async_trait;
 use base64::decode;
+use bytes::Bytes;
 use datafusion::datasource::TableProvider;
-use datafusion::sql::planner::convert_simple_data_type;
+use datafusion::sql::ResolvedTableReference;
+use itertools::Itertools;
+use object_store::local::LocalFileSystem;
+use tokio::io::AsyncReadExt;
+
 use std::fs::File;
 
 use datafusion::datasource::file_format::avro::{AvroFormat, DEFAULT_AVRO_EXTENSION};
@@ -17,30 +22,35 @@ use datafusion::execution::DiskManager;
 
 use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::{CreateExternalTable, DFField, DropTable, Expr, FileType};
+use datafusion_proto::protobuf;
 
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
+use crate::datafusion::utils::{
+    build_schema, compound_identifier_to_column, normalize_ident,
+};
+use crate::object_store::http::try_prepare_http_url;
+use crate::object_store::wrapped::InternalObjectStore;
+use crate::utils::{gc_partitions, hash_file};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
-use hex::encode;
+
 #[cfg(test)]
 use mockall::automock;
 use object_store::{path::Path, ObjectStore};
-use sha2::Digest;
-use sha2::Sha256;
+
 use sqlparser::ast::{
-    AlterTableOperation, ColumnDef as SQLColumnDef, ColumnOption, Ident, ObjectType,
-    Statement, TableFactor, TableWithJoins,
+    AlterTableOperation, ObjectType, Statement, TableFactor, TableWithJoins,
 };
-use std::io::{BufReader, Read, Seek, SeekFrom};
 
 use std::iter::zip;
 use std::sync::Arc;
 
 pub use datafusion::error::{DataFusionError as Error, Result};
+use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::{
-        datatypes::{Field, Schema, SchemaRef},
+        datatypes::{Schema, SchemaRef},
         record_batch::RecordBatch,
     },
     datasource::file_format::{parquet::ParquetFormat, FileFormat},
@@ -58,12 +68,15 @@ use datafusion::{
     prelude::SessionContext,
     sql::{planner::SqlToRel, TableReference},
 };
-use tempfile::NamedTempFile;
-use tokio::io::AsyncWriteExt;
+use log::{info, warn};
+use prost::Message;
+use tempfile::TempPath;
 
-use crate::catalog::PartitionCatalog;
+use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{TableId, TableVersionId};
-use crate::nodes::{CreateFunction, DropSchema, RenameTable, SeafowlExtensionNode};
+use crate::nodes::{
+    CreateFunction, DropSchema, RenameTable, SeafowlExtensionNode, Vacuum,
+};
 use crate::provider::{PartitionColumn, SeafowlPartition, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
@@ -73,50 +86,80 @@ use crate::{
     schema::Schema as SeafowlSchema,
 };
 
-// Copied from datafusion::sql::utils (private)
+// Scheme used for URLs referencing the object store that we use to register
+// with DataFusion's object store registry.
+pub const INTERNAL_OBJECT_STORE_SCHEME: &str = "seafowl";
 
-// Normalize an identifier to a lowercase string unless the identifier is quoted.
-fn normalize_ident(id: &Ident) -> String {
-    match id.quote_style {
-        Some(_) => id.value.clone(),
-        None => id.value.to_ascii_lowercase(),
-    }
+// Max Parquet row group size, in rows. This is what the ArrowWriter uses to determine how many
+// rows to buffer in memory before flushing them out to disk. The default for this is 1024^2, which
+// means that we're effectively buffering a whole partition in memory, causing issues on RAM-limited
+// environments.
+const MAX_ROW_GROUP_SIZE: usize = 65536;
+
+pub fn internal_object_store_url() -> ObjectStoreUrl {
+    ObjectStoreUrl::parse(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME)).unwrap()
 }
 
-// Copied from SqlRel (private there)
-fn build_schema(columns: Vec<SQLColumnDef>) -> Result<Schema> {
-    let mut fields = Vec::with_capacity(columns.len());
-
-    for column in columns {
-        let data_type = convert_simple_data_type(&column.data_type)?;
-        let allow_null = column
-            .options
-            .iter()
-            .any(|x| x.option == ColumnOption::Null);
-        fields.push(Field::new(
-            &normalize_ident(&column.name),
-            data_type,
-            allow_null,
-        ));
-    }
-
-    Ok(Schema::new(fields))
+fn quote_ident(val: &str) -> String {
+    val.replace('"', "\"\"")
 }
 
-/// End copied functions
+fn reference_to_name(reference: &ResolvedTableReference) -> String {
+    format!(
+        "{}.{}.{}",
+        quote_ident(reference.catalog),
+        quote_ident(reference.schema),
+        quote_ident(reference.table)
+    )
+}
 
-fn compound_identifier_to_column(ids: &[Ident]) -> Result<Column> {
-    // OK, this one is partially taken from the planner for SQLExpr::CompoundIdentifier
-    let mut var_names: Vec<_> = ids.iter().map(normalize_ident).collect();
-    match (var_names.pop(), var_names.pop()) {
-        (Some(name), Some(relation)) if var_names.is_empty() => Ok(Column {
-            relation: Some(relation),
-            name,
-        }),
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported compound identifier '{:?}'",
-            var_names,
-        ))),
+/// Load the Statistics for a Parquet file in memory
+async fn get_parquet_file_statistics_bytes(
+    path: &std::path::Path,
+    schema: SchemaRef,
+) -> Result<Statistics> {
+    // DataFusion's methods for this are all private (see fetch_statistics / summarize_min_max)
+    // and require the ObjectStore abstraction since they are normally used in the context
+    // of a TableProvider sending a Range request to object storage to get min/max values
+    // for a Parquet file. We are currently interested in getting statistics for a temporary
+    // file we just wrote out, before uploading it to object storage.
+
+    // A more fancy way to get this working would be making an ObjectStore
+    // that serves as a write-through cache so that we can use it both when downloading and uploading
+    // Parquet files.
+
+    let tmp_dir = path
+        .parent()
+        .expect("Temporary Parquet file in the FS root");
+    let file_name = path
+        .file_name()
+        .expect("Temporary Parquet file pointing to a directory")
+        .to_string_lossy();
+
+    // Create a dummy object store pointing to our temporary directory
+    let dummy_object_store: Arc<dyn ObjectStore> =
+        Arc::from(LocalFileSystem::new_with_prefix(tmp_dir)?);
+    let dummy_path = Path::from(file_name.to_string());
+
+    let parquet = ParquetFormat::default();
+    let meta = dummy_object_store
+        .head(&dummy_path)
+        .await
+        .expect("Temporary object not found");
+    let stats = parquet
+        .infer_stats(&dummy_object_store, schema, &meta)
+        .await?;
+    Ok(stats)
+}
+
+// Serialise min/max stats in the form of a given ScalarValue using Datafusion protobufs format
+pub fn scalar_value_to_bytes(value: &ScalarValue) -> Option<Vec<u8>> {
+    match <&ScalarValue as TryInto<protobuf::ScalarValue>>::try_into(value) {
+        Ok(proto) => Some(proto.encode_to_vec()),
+        Err(error) => {
+            warn!("Failed to serialise min/max value {:?}: {}", value, error);
+            None
+        }
     }
 }
 
@@ -132,19 +175,11 @@ fn build_partition_columns(
         // pruning will fail, and we will default to using all partitions.
         Some(column_statistics) => zip(column_statistics, schema.fields())
             .map(|(stats, column)| {
-                // TODO: the to_string will discard the timezone for Timestamp* values, and will
-                // therefore hinder the ability to recreate them once needed for partition pruning.
-                // However, since DF stats rely on Parquet stats that problem won't come up until
-                // 1) Parquet starts collecting stats for Timestamp* types (`parquet::file::statistics::Statistics` enum)
+                // Since DF stats rely on Parquet stats we won't have stats on  Timestamp* values until
+                // 1) Parquet starts collecting stats for them (`parquet::file::statistics::Statistics` enum)
                 // 2) DF pattern matches those types in `summarize_min_max`.
-                let min_value = stats
-                    .min_value
-                    .as_ref()
-                    .map(|m| m.to_string().as_bytes().into());
-                let max_value = stats
-                    .max_value
-                    .as_ref()
-                    .map(|m| m.to_string().as_bytes().into());
+                let min_value = stats.min_value.as_ref().and_then(scalar_value_to_bytes);
+                let max_value = stats.max_value.as_ref().and_then(scalar_value_to_bytes);
 
                 PartitionColumn {
                     name: Arc::from(column.name().to_string()),
@@ -174,9 +209,10 @@ pub struct DefaultSeafowlContext {
     pub table_catalog: Arc<dyn TableCatalog>,
     pub partition_catalog: Arc<dyn PartitionCatalog>,
     pub function_catalog: Arc<dyn FunctionCatalog>,
+    pub internal_object_store: Arc<InternalObjectStore>,
     pub database: String,
     pub database_id: DatabaseId,
-    pub max_partition_size: i64,
+    pub max_partition_size: u32,
 }
 
 /// Create an ExecutionPlan that doesn't produce any results.
@@ -190,19 +226,26 @@ fn make_dummy_exec() -> Arc<dyn ExecutionPlan> {
 fn temp_partition_file_writer(
     disk_manager: Arc<DiskManager>,
     arrow_schema: SchemaRef,
-) -> Result<(File, ArrowWriter<NamedTempFile>)> {
+) -> Result<(TempPath, ArrowWriter<File>)> {
     let partition_file = disk_manager.create_tmp_file()?;
-    // Maintain a second handle to the file (the first one is consumed by ArrowWriter)
-    // We'll close this handle (and hence drop the file) upon reading the partition contents, just
-    // prior to uploading them.
-    let partition_file_handle = partition_file.reopen().map_err(|_| {
-        DataFusionError::Execution("Error with temporary Parquet file".to_string())
-    })?;
 
-    let writer_properties = WriterProperties::builder().build();
+    // Hold on to the path of the file, in case we need to just move it instead of
+    // uploading the data to the object store. This can be a consistency/security issue, but the
+    // worst someone can do is swap out the file with something else if the original temporary
+    // file gets deleted and an attacker creates a temporary file with the same name. In that case,
+    // we can end up copying an arbitrary file to the object store, which requires access to the
+    // machine anyway (and at that point there's likely other things that the attacker can do, like
+    // change the write access control settings).
+    let path = partition_file.into_temp_path();
+
+    let file_writer = File::options().write(true).open(&path)?;
+
+    let writer_properties = WriterProperties::builder()
+        .set_max_row_group_size(MAX_ROW_GROUP_SIZE)
+        .build();
     let writer =
-        ArrowWriter::try_new(partition_file, arrow_schema, Some(writer_properties))?;
-    Ok((partition_file_handle, writer))
+        ArrowWriter::try_new(file_writer, arrow_schema, Some(writer_properties))?;
+    Ok((path, writer))
 }
 
 /// Execute a plan and upload the results to object storage as Parquet files, indexing them.
@@ -210,14 +253,14 @@ fn temp_partition_file_writer(
 pub async fn plan_to_object_store(
     state: &SessionState,
     plan: &Arc<dyn ExecutionPlan>,
-    store: Arc<dyn ObjectStore>,
+    store: Arc<InternalObjectStore>,
     disk_manager: Arc<DiskManager>,
-    max_partition_size: i64,
+    max_partition_size: u32,
 ) -> Result<Vec<SeafowlPartition>> {
     let mut current_partition_size = 0;
-    let (mut current_partition_file_handle, mut writer) =
+    let (mut current_partition_file_path, mut writer) =
         temp_partition_file_writer(disk_manager.clone(), plan.schema())?;
-    let mut partition_file_handles = vec![current_partition_file_handle];
+    let mut partition_file_paths = vec![current_partition_file_path];
     let mut tasks = vec![];
 
     // Iterate over Datafusion partitions and rechuhk them into Seafowl partitions, since we want to
@@ -250,70 +293,65 @@ pub async fn plan_to_object_store(
                 current_partition_size = 0;
                 leftover_partition_capacity = max_partition_size as usize;
 
-                (current_partition_file_handle, writer) =
+                (current_partition_file_path, writer) =
                     temp_partition_file_writer(disk_manager.clone(), plan.schema())?;
-                partition_file_handles.push(current_partition_file_handle);
+                partition_file_paths.push(current_partition_file_path);
             }
 
-            current_partition_size += batch.num_rows() as i64;
+            current_partition_size += batch.num_rows() as u32;
             writer.write(&batch).map_err(DataFusionError::from)?;
         }
     }
     writer.close().map_err(DataFusionError::from).map(|_| ())?;
 
-    for mut partition_file_handle in partition_file_handles {
+    for partition_file_path in partition_file_paths {
         let physical = plan.clone();
         let store = store.clone();
         let handle: tokio::task::JoinHandle<Result<SeafowlPartition>> =
             tokio::task::spawn(async move {
-                // In order to avoid loading the file in memory all at once, we need to stream over
-                // the file twice; first to generate a content-addressable object store filename...
-                // TODO: what is the optimal size of chunk and the BufReader's internal buffer?
-                // By default BufReader will store DEFAULT_BUF_SIZE = 8 * 1024 bytes, so it would
-                // make sense that our chunk is les than that. Do we even want BufReader?
-                let mut reader = BufReader::new(partition_file_handle);
-                let mut chunk: [u8; 4 * 1024] = [0; 4 * 1024];
-                let mut hasher = Sha256::new();
-                loop {
-                    let bytes_read = reader.read(chunk.as_mut_slice())?;
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    hasher.update(&chunk);
-                }
+                // Index the Parquet file (get its min-max values)
+                let partition_stats = get_parquet_file_statistics_bytes(
+                    &partition_file_path,
+                    physical.schema(),
+                )
+                .await?;
 
-                let hash_str = encode(hasher.finalize());
-                let object_storage_id = hash_str + ".parquet";
-
-                // ... and then actually stream the file to the object store
-                let (_, mut writer) = store
-                    .put_multipart(&Path::from(object_storage_id.clone()))
-                    .await
-                    .expect("TODO: handle multipart client error");
-                reader.seek(SeekFrom::Start(0))?;
-                loop {
-                    let bytes_read = reader.read(chunk.as_mut_slice())?;
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    // TODO: call abort_multipart to clean up leftover junk if something goes wrong
-                    writer.write_all(chunk.as_slice()).await?;
-                }
-                writer.shutdown().await?;
-
-                // Next, fetch the object statistics (get its min-max values)
-                let parquet = ParquetFormat::default();
-                let meta = store
-                    .head(&Path::from(object_storage_id.clone()))
-                    .await
-                    .expect("Temporary object not found");
-                let partition_stats = parquet
-                    .infer_stats(&store, physical.schema(), &meta)
-                    .await?;
                 let columns =
                     build_partition_columns(&partition_stats, physical.schema());
 
-                // Finally, create the corresponding partition metadata object
+                let object_storage_id =
+                    hash_file(&partition_file_path).await? + ".parquet";
+
+                // For local FS stores, we can just move the file to the target location
+                if let Some(result) = store
+                    .fast_upload(
+                        &partition_file_path,
+                        &Path::from(object_storage_id.clone()),
+                    )
+                    .await
+                {
+                    result?;
+                } else {
+                    // TODO: the object_store crate doesn't support multi-part uploads / uploading a file
+                    // from a local path. This means we have to read the file back into memory in full.
+                    // https://github.com/influxdata/object_store_rs/issues/9
+                    //
+                    // Another implication is that we could just keep everything in memory (point ArrowWriter to a byte buffer,
+                    // call get_parquet_file_statistics on that, upload the file) and run the output routine for each partition
+                    // sequentially.
+
+                    let mut buf = Vec::new();
+
+                    let mut file = tokio::fs::File::open(&partition_file_path).await?;
+                    file.read_to_end(&mut buf).await?;
+                    let data = Bytes::from(buf);
+
+                    store
+                        .inner
+                        .put(&Path::from(object_storage_id.clone()), data)
+                        .await?;
+                }
+
                 let partition = SeafowlPartition {
                     object_storage_id: Arc::from(object_storage_id),
                     row_count: partition_stats
@@ -336,11 +374,42 @@ pub async fn plan_to_object_store(
         .collect()
 }
 
+pub fn is_read_only(plan: &LogicalPlan) -> bool {
+    !matches!(
+        plan,
+        LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::CreateMemoryTable(_)
+            | LogicalPlan::CreateView(_)
+            | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Extension(_)
+    )
+}
+
+pub fn is_statement_read_only(statement: &DFStatement) -> bool {
+    if let DFStatement::Statement(s) = statement {
+        matches!(**s, Statement::Query(_) | Statement::Explain { .. })
+    } else {
+        false
+    }
+}
+
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait SeafowlContext: Send + Sync {
-    /// Create a logical plan for a query
+    /// Parse SQL into one or more statements
+    async fn parse_query(&self, sql: &str) -> Result<Vec<DFStatement>>;
+
+    /// Create a logical plan for a query (single-statement SQL)
     async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan>;
+
+    /// Create a logical plan for a query from a parsed statement
+    async fn create_logical_plan_from_statement(
+        &self,
+        statement: DFStatement,
+    ) -> Result<LogicalPlan>;
 
     /// Create a physical plan for a query.
     /// This runs `create_logical_plan` and then `create_physical_plan`.
@@ -348,7 +417,7 @@ pub trait SeafowlContext: Send + Sync {
     /// the query.
     async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// Create a phyiscal plan from a logical plan.
+    /// Create a physical plan from a logical plan.
     /// Note that for some statements like INSERT, this will also execute
     /// the query.
     async fn create_physical_plan(
@@ -407,7 +476,7 @@ impl DefaultSeafowlContext {
         let table_name = table_name.into();
         let table_ref = TableReference::from(table_name.as_str());
 
-        let resolved_ref = table_ref.resolve(&self.database, "public");
+        let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
 
         self.inner
             .catalog(resolved_ref.catalog)
@@ -428,6 +497,10 @@ impl DefaultSeafowlContext {
                     resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
                 ))
             })
+    }
+
+    fn get_internal_object_store(&self) -> Arc<InternalObjectStore> {
+        self.internal_object_store.clone()
     }
 
     /// Resolve a table reference into a Seafowl table
@@ -454,7 +527,7 @@ impl DefaultSeafowlContext {
         schema: &Arc<DFSchema>,
     ) -> Result<(TableId, TableVersionId)> {
         let table_ref = TableReference::from(name);
-        let resolved_ref = table_ref.resolve(&self.database, "public");
+        let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
         let schema_name = resolved_ref.schema;
         let table_name = resolved_ref.table;
 
@@ -531,12 +604,7 @@ impl DefaultSeafowlContext {
         from_table_version: Option<TableVersionId>,
     ) -> Result<bool> {
         let disk_manager = self.inner.runtime_env().disk_manager.clone();
-
-        let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
-        let store = self
-            .inner
-            .runtime_env()
-            .object_store(object_store_url.clone())?;
+        let store = self.get_internal_object_store();
 
         let partitions = plan_to_object_store(
             &self.inner.state(),
@@ -582,22 +650,20 @@ impl DefaultSeafowlContext {
 
 #[async_trait]
 impl SeafowlContext for DefaultSeafowlContext {
-    async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
+    async fn parse_query(&self, sql: &str) -> Result<Vec<DFStatement>> {
+        Ok(DFParser::parse_sql(sql)?.into_iter().collect_vec())
+    }
+
+    async fn create_logical_plan_from_statement(
+        &self,
+        statement: DFStatement,
+    ) -> Result<LogicalPlan> {
         // Reload the schema before planning a query
         self.reload_schema().await?;
-
-        let mut statements = DFParser::parse_sql(sql)?;
-
-        if statements.len() != 1 {
-            return Err(Error::NotImplemented(
-                "The context currently only supports a single SQL statement".to_string(),
-            ));
-        }
-
         let state = self.inner.state.read().clone();
         let query_planner = SqlToRel::new(&state);
 
-        match statements.pop_front().unwrap() {
+        match statement {
             DFStatement::Statement(s) => match *s {
                 // Delegate SELECT / EXPLAIN to the basic DataFusion logical planner
                 // (though note EXPLAIN [our custom query] will mean we have to implement EXPLAIN ourselves)
@@ -776,6 +842,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Statement::Delete {
                     table_name,
                     selection,
+                    _using,
                 } => {
                     // Get the actual table schema, since DF needs to validate unqualified columns
                     // (i.e. ones referenced only by column name, lacking the relation name)
@@ -816,18 +883,50 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 output_schema: Arc::new(DFSchema::empty())
                             })),
                         }))
-                    }
+                    },
+                Statement::Truncate { table_name, partitions} => {
+                    let table_name = table_name.to_string();
+                    let table_id = if partitions.is_none() && !table_name.is_empty() {
+                        match self.try_get_seafowl_table(&table_name) {
+                            Ok(seafowl_table) => Some(seafowl_table.table_id),
+                            Err(_) => return Err(Error::Internal(format!(
+                                "Table with name {} not found", table_name
+                            )))
+                        }
+                    } else {
+                        None
+                    };
+
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(SeafowlExtensionNode::Vacuum(Vacuum {
+                            partitions: partitions.is_some(),
+                            table_id,
+                            output_schema: Arc::new(DFSchema::empty())
+                        })),
+                    }))
+                }
                 _ => Err(Error::NotImplemented(format!(
-                    "Unsupported SQL statement: {:?}",
-                    sql
+                    "Unsupported SQL statement: {:?}", s
                 ))),
             },
             DFStatement::DescribeTable(s) => query_planner.describe_table_to_plan(s),
-            // Stub out the standard DataFusion CREATE EXTERNAL TABLE statements since we don't support them
             DFStatement::CreateExternalTable(c) => {
                 query_planner.external_table_to_plan(c)
             }
         }
+    }
+
+    async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
+        let mut statements = self.parse_query(sql).await?;
+
+        if statements.len() != 1 {
+            return Err(Error::NotImplemented(
+                "The context currently only supports a single SQL statement".to_string(),
+            ));
+        }
+
+        self.create_logical_plan_from_statement(statements.pop().unwrap())
+            .await
     }
 
     async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
@@ -842,6 +941,10 @@ impl SeafowlContext for DefaultSeafowlContext {
         // Similarly to DataFrame::sql, run certain logical plans outside of the actual execution flow
         // and produce a dummy physical plan instead
         match plan {
+            // CREATE EXTERNAL TABLE copied from DataFusion's source code
+            // It uses ListingTable which queries data at a given location using the ObjectStore
+            // abstraction (URL: scheme://some-path.to.file.parquet) and it's easier to reuse this
+            // mechanism in our case too.
             LogicalPlan::CreateExternalTable(CreateExternalTable {
                 ref schema,
                 ref name,
@@ -852,6 +955,40 @@ impl SeafowlContext for DefaultSeafowlContext {
                 ref table_partition_cols,
                 ref if_not_exists,
             }) => {
+                // Check that the TableReference doesn't have a database/schema in it.
+                // We create all external tables in the staging schema (backed by DataFusion's
+                // in-memory schema provider) instead.
+                let reference: TableReference = name.as_str().into();
+                let resolved_reference =
+                    reference.resolve(&self.database, STAGING_SCHEMA);
+
+                if resolved_reference.catalog != self.database
+                    || resolved_reference.schema != STAGING_SCHEMA
+                {
+                    return Err(DataFusionError::Plan(format!(
+                        "Can only create external tables in the staging schema.
+                        Omit the schema/database altogether or use {}.{}.{}",
+                        &self.database, STAGING_SCHEMA, resolved_reference.table
+                    )));
+                }
+
+                // Replace the table name with the fully qualified one that has our staging schema
+                let name = &reference_to_name(&resolved_reference);
+
+                let location =
+                    try_prepare_http_url(location).unwrap_or_else(|| location.into());
+
+                // Disallow the seafowl:// scheme (which is registered with DataFusion as our internal
+                // object store but shouldn't be accessible via CREATE EXTERNAL TABLE)
+                if location
+                    .starts_with(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME).as_str())
+                {
+                    return Err(DataFusionError::Plan(format!(
+                        "Invalid URL scheme for location {:?}",
+                        location
+                    )));
+                }
+
                 let (file_format, file_extension) = match file_type {
                     FileType::CSV => (
                         Arc::new(
@@ -1025,7 +1162,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                             // - Duplicate the table (new version)
                             // - replace partitions that are changed (but we don't know the table_partition i.e. which entry to
                             // repoint to our new partition)?
-                            Ok(make_dummy_exec())
+                            Err(DataFusionError::NotImplemented("UPDATE statements are currently unsupported,
+                            as a workaround, use CREATE TABLE AS. See https://github.com/splitgraph/seafowl/issues/18".to_string()))
                         }
                         SeafowlExtensionNode::Delete(_) => {
                             // - Duplicate the table (new version)
@@ -1036,7 +1174,8 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                             // really we want to be able to load all partitions + cols for a table and then
                             // write that thing back to the db (set table partitions)
-                            Ok(make_dummy_exec())
+                            Err(DataFusionError::NotImplemented("DELETE statements are currently unsupported,
+                            as a workaround, use CREATE TABLE AS. See https://github.com/splitgraph/seafowl/issues/19".to_string()))
                         }
                         SeafowlExtensionNode::CreateFunction(CreateFunction {
                             name,
@@ -1100,6 +1239,34 @@ impl SeafowlContext for DefaultSeafowlContext {
                             {
                                 self.table_catalog.drop_collection(collection_id).await?
                             };
+
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::Vacuum(Vacuum {
+                            partitions,
+                            table_id,
+                            ..
+                        }) => {
+                            if *partitions {
+                                gc_partitions(self).await
+                            } else {
+                                match self
+                                    .table_catalog
+                                    .delete_old_table_versions(*table_id)
+                                    .await
+                                {
+                                    Ok(row_count) => {
+                                        info!("Deleted {} old table versions, cleaning up partitions", row_count);
+                                        gc_partitions(self).await
+                                    }
+                                    Err(error) => {
+                                        return Err(Error::Internal(format!(
+                                            "Failed to delete old table versions: {:?}",
+                                            error
+                                        )))
+                                    }
+                                }
+                            }
 
                             Ok(make_dummy_exec())
                         }
@@ -1186,20 +1353,24 @@ pub mod test_utils {
 
     use crate::{
         catalog::{
-            DefaultCatalog, MockFunctionCatalog, MockPartitionCatalog, MockTableCatalog,
-            TableCatalog,
+            MockFunctionCatalog, MockPartitionCatalog, MockTableCatalog, TableCatalog,
+            DEFAULT_DB, DEFAULT_SCHEMA,
         },
+        object_store::http::add_http_object_store,
         provider::{SeafowlCollection, SeafowlDatabase},
-        repository::sqlite::SqliteRepository,
     };
 
     use datafusion::{
         arrow::datatypes::{
             DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
         },
+        catalog::schema::MemorySchemaProvider,
         prelude::SessionConfig,
     };
 
+    use crate::config::context::build_context;
+    use crate::config::schema;
+    use crate::config::schema::{Catalog, SeafowlConfig, Sqlite};
     use std::collections::HashMap as StdHashMap;
 
     use super::*;
@@ -1207,41 +1378,34 @@ pub mod test_utils {
     pub fn make_session() -> SessionContext {
         let session_config = SessionConfig::new()
             .with_information_schema(true)
-            .with_default_catalog_and_schema("default", "public");
+            .with_default_catalog_and_schema(DEFAULT_DB, DEFAULT_SCHEMA);
 
         let context = SessionContext::with_config(session_config);
         let object_store = Arc::new(InMemory::new());
-        context
-            .runtime_env()
-            .register_object_store("seafowl", "", object_store);
+        context.runtime_env().register_object_store(
+            INTERNAL_OBJECT_STORE_SCHEME,
+            "",
+            object_store,
+        );
+
+        // Register the HTTP object store for external tables
+        add_http_object_store(&context);
+
         context
     }
 
     /// Build a real (not mocked) in-memory context that uses SQLite
     pub async fn in_memory_context() -> DefaultSeafowlContext {
-        let session = make_session();
-
-        let repository = SqliteRepository::try_new("sqlite://:memory:".to_string())
-            .await
-            .unwrap();
-        let catalog = Arc::new(DefaultCatalog {
-            repository: Arc::new(repository),
-        });
-        let default_db = catalog.create_database("default").await.unwrap();
-        catalog
-            .create_collection(default_db, "public")
-            .await
-            .unwrap();
-
-        DefaultSeafowlContext {
-            inner: session,
-            table_catalog: catalog.clone(),
-            partition_catalog: catalog.clone(),
-            function_catalog: catalog,
-            database: "default".to_string(),
-            database_id: default_db,
-            max_partition_size: 1024 * 1024,
-        }
+        let config = SeafowlConfig {
+            object_store: schema::ObjectStore::InMemory(schema::InMemory {}),
+            catalog: Catalog::Sqlite(Sqlite {
+                dsn: "sqlite://:memory:".to_string(),
+            }),
+            frontend: Default::default(),
+            runtime: Default::default(),
+            misc: Default::default(),
+        };
+        build_context(&config).await.unwrap()
     }
 
     pub async fn mock_context() -> DefaultSeafowlContext {
@@ -1306,6 +1470,7 @@ pub mod test_utils {
                 Ok(SeafowlDatabase {
                     name: Arc::from("testdb"),
                     collections: collections.clone(),
+                    staging_schema: Arc::new(MemorySchemaProvider::new()),
                 })
             });
 
@@ -1324,16 +1489,22 @@ pub mod test_utils {
 
         setup_table_catalog(&mut table_catalog);
 
-        let object_store = Arc::new(InMemory::new());
-        session
-            .runtime_env()
-            .register_object_store("seafowl", "", object_store);
+        let object_store = Arc::new(InternalObjectStore {
+            inner: Arc::new(InMemory::new()),
+            config: schema::ObjectStore::InMemory(schema::InMemory {}),
+        });
+        session.runtime_env().register_object_store(
+            INTERNAL_OBJECT_STORE_SCHEME,
+            "",
+            object_store.inner.clone(),
+        );
 
         DefaultSeafowlContext {
             inner: session,
             table_catalog: Arc::new(table_catalog),
             partition_catalog: partition_catalog_ptr,
             function_catalog: Arc::new(function_catalog),
+            internal_object_store: object_store,
             database: "testdb".to_string(),
             database_id: 0,
             max_partition_size: 2,
@@ -1344,7 +1515,9 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use arrow::array::Int32Array;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
+    use tempfile::TempDir;
+
     use std::sync::Arc;
 
     use datafusion::execution::disk_manager::DiskManagerConfig;
@@ -1354,9 +1527,12 @@ mod tests {
 
     use crate::context::test_utils::mock_context_with_catalog_assertions;
 
+    use crate::config::schema;
     use datafusion::assert_batches_eq;
     use datafusion::from_slice::FromSlice;
     use datafusion::physical_plan::memory::MemoryExec;
+    use itertools::Itertools;
+    use object_store::local::LocalFileSystem;
 
     use super::*;
 
@@ -1370,12 +1546,35 @@ mod tests {
     const EXPECTED_INSERT_FILE_NAME: &str =
         "1592625fb7bb063580d94fe2eaf514d55e6b44f1bebd6c7f6b2e79f55477218b.parquet";
 
-    fn to_min_max_value<T: ToString>(item: T) -> Arc<Option<Vec<u8>>> {
-        Arc::from(Some(item.to_string().as_bytes().to_vec()))
+    fn to_min_max_value(value: ScalarValue) -> Arc<Option<Vec<u8>>> {
+        Arc::from(scalar_value_to_bytes(&value))
     }
 
+    async fn assert_uploaded_objects(
+        object_store: Arc<InternalObjectStore>,
+        expected: Vec<Path>,
+    ) {
+        let actual = object_store
+            .inner
+            .list(None)
+            .await
+            .unwrap()
+            .map_ok(|meta| meta.location)
+            .try_collect::<Vec<Path>>()
+            .await
+            .map(|p| p.into_iter().sorted().collect_vec())
+            .unwrap();
+        assert_eq!(expected.into_iter().sorted().collect_vec(), actual);
+    }
+
+    #[test_case(
+    false; "In-memory object store (standard)"
+    )]
+    #[test_case(
+    true; "Local object store (test renames)"
+    )]
     #[tokio::test]
-    async fn test_plan_to_object_storage() {
+    async fn test_plan_to_object_storage(is_local: bool) {
         let sf_context = mock_context().await;
 
         // Make a SELECT VALUES(...) query
@@ -1392,12 +1591,37 @@ mod tests {
             .await
             .unwrap();
 
-        let object_store = Arc::new(InMemory::new());
+        let (object_store, _tmpdir) = if is_local {
+            // Return tmp_dir to the upper scope so that we don't delete the temporary directory
+            // until after the test is done
+            let tmp_dir = TempDir::new().unwrap();
+
+            (
+                Arc::new(InternalObjectStore {
+                    inner: Arc::new(
+                        LocalFileSystem::new_with_prefix(tmp_dir.path()).unwrap(),
+                    ),
+                    config: schema::ObjectStore::Local(schema::Local {
+                        data_dir: tmp_dir.path().to_string_lossy().to_string(),
+                    }),
+                }),
+                Some(tmp_dir),
+            )
+        } else {
+            (
+                Arc::new(InternalObjectStore {
+                    inner: Arc::new(InMemory::new()),
+                    config: schema::ObjectStore::InMemory(schema::InMemory {}),
+                }),
+                None,
+            )
+        };
+
         let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
         let partitions = plan_to_object_store(
             &sf_context.inner.state(),
             &execution_plan,
-            object_store,
+            object_store.clone(),
             disk_manager,
             2,
         )
@@ -1429,8 +1653,8 @@ mod tests {
                                 "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
                                     .to_string()
                             ),
-                            min_value: to_min_max_value(12),
-                            max_value: to_min_max_value(42),
+                            min_value: to_min_max_value(ScalarValue::Int64(Some(12))),
+                            max_value: to_min_max_value(ScalarValue::Int64(Some(42))),
                             null_count: Some(0),
                         },
                         PartitionColumn {
@@ -1459,8 +1683,8 @@ mod tests {
                                 "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
                                     .to_string()
                             ),
-                            min_value: to_min_max_value(22),
-                            max_value: to_min_max_value(32),
+                            min_value: to_min_max_value(ScalarValue::Int64(Some(22))),
+                            max_value: to_min_max_value(ScalarValue::Int64(Some(32))),
                             null_count: Some(0),
                         },
                         PartitionColumn {
@@ -1474,6 +1698,15 @@ mod tests {
                 },
             ]
         );
+
+        assert_uploaded_objects(
+            object_store,
+            vec![
+                Path::from(PARTITION_1_FILE_NAME.to_string()),
+                Path::from(PARTITION_2_FILE_NAME.to_string()),
+            ],
+        )
+        .await;
     }
 
     #[test_case(
@@ -1527,7 +1760,7 @@ mod tests {
     ]
     #[tokio::test]
     async fn test_plan_to_object_storage_partition_chunking(
-        max_partition_size: i64,
+        max_partition_size: u32,
         input_partitions: Vec<Vec<Vec<i32>>>,
         output_partitions: Vec<Vec<i32>>,
         storage_ids: Vec<&str>,
@@ -1561,7 +1794,10 @@ mod tests {
             MemoryExec::try_new(df_partitions.as_slice(), schema, None).unwrap(),
         );
 
-        let object_store = Arc::new(InMemory::new());
+        let object_store = Arc::new(InternalObjectStore {
+            inner: Arc::new(InMemory::new()),
+            config: schema::ObjectStore::InMemory(schema::InMemory {}),
+        });
         let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
         let partitions = plan_to_object_store(
             &sf_context.inner.state(),
@@ -1584,12 +1820,12 @@ mod tests {
                         r#type: Arc::from(
                             r#"{"name":"int","bitWidth":32,"isSigned":true}"#
                         ),
-                        min_value: to_min_max_value(
-                            output_partitions[i].iter().min().unwrap()
-                        ),
-                        max_value: to_min_max_value(
-                            output_partitions[i].iter().max().unwrap()
-                        ),
+                        min_value: to_min_max_value(ScalarValue::Int32(
+                            output_partitions[i].iter().min().copied()
+                        )),
+                        max_value: to_min_max_value(ScalarValue::Int32(
+                            output_partitions[i].iter().max().copied()
+                        )),
                         null_count: Some(0),
                     }])
                 },
@@ -1721,18 +1957,8 @@ mod tests {
                                     PartitionColumn {
                                         name: Arc::from("value"),
                                         r#type: Arc::from("{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"),
-                                        min_value: Arc::new(Some(
-                                            vec![
-                                                52,
-                                                50,
-                                            ],
-                                        )),
-                                        max_value: Arc::new(Some(
-                                            vec![
-                                                52,
-                                                50,
-                                            ],
-                                        )),
+                                        min_value: Arc::new(scalar_value_to_bytes(&ScalarValue::Float64(Some(42.0)))),
+                                        max_value: Arc::new(scalar_value_to_bytes(&ScalarValue::Float64(Some(42.0)))),
                                         null_count: Some(0),
                                     },
                                 ],)
@@ -1763,24 +1989,12 @@ mod tests {
             .await
             .unwrap();
 
-        let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
-        let store = sf_context
-            .inner
-            .runtime_env()
-            .object_store(object_store_url.clone())
-            .unwrap();
-        let uploaded_objects = store
-            .list(None)
-            .await
-            .unwrap()
-            .map_ok(|meta| meta.location)
-            .try_collect::<Vec<Path>>()
-            .await
-            .unwrap();
-        assert_eq!(
-            uploaded_objects,
-            vec![Path::from(EXPECTED_INSERT_FILE_NAME)]
-        );
+        let store = sf_context.get_internal_object_store();
+        assert_uploaded_objects(
+            store,
+            vec![Path::from(EXPECTED_INSERT_FILE_NAME.to_string())],
+        )
+        .await;
     }
 
     #[tokio::test]

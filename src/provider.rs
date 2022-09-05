@@ -13,12 +13,14 @@ use datafusion::physical_plan::DisplayFormatType;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::datatypes::SchemaRef as ArrowSchemaRef,
-    catalog::{catalog::CatalogProvider, schema::SchemaProvider},
+    catalog::{
+        catalog::CatalogProvider,
+        schema::{MemorySchemaProvider, SchemaProvider},
+    },
     common::{DataFusionError, Result},
     datasource::{
         file_format::{parquet::ParquetFormat, FileFormat},
         listing::PartitionedFile,
-        object_store::ObjectStoreUrl,
         TableProvider,
     },
     execution::context::{SessionState, TaskContext},
@@ -30,23 +32,26 @@ use datafusion::{
         SendableRecordBatchStream, Statistics,
     },
 };
+use datafusion_proto::protobuf;
 
 use futures::future;
 use log::warn;
+use prost::Message;
 
 use object_store::path::Path;
 
-use crate::data_types::FunctionId;
-use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     catalog::PartitionCatalog,
     data_types::{TableId, TableVersionId},
     schema::Schema,
 };
+use crate::{catalog::STAGING_SCHEMA, wasm_udf::data_types::CreateFunctionDetails};
+use crate::{context::internal_object_store_url, data_types::FunctionId};
 
 pub struct SeafowlDatabase {
     pub name: Arc<str>,
     pub collections: HashMap<Arc<str>, Arc<SeafowlCollection>>,
+    pub staging_schema: Arc<MemorySchemaProvider>,
 }
 
 impl CatalogProvider for SeafowlDatabase {
@@ -55,11 +60,19 @@ impl CatalogProvider for SeafowlDatabase {
     }
 
     fn schema_names(&self) -> Vec<String> {
-        self.collections.keys().map(|s| s.to_string()).collect()
+        self.collections
+            .keys()
+            .map(|s| s.to_string())
+            .chain([STAGING_SCHEMA.to_string()])
+            .collect()
     }
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        self.collections.get(name).map(|c| Arc::clone(c) as _)
+        if name == STAGING_SCHEMA {
+            Some(self.staging_schema.clone())
+        } else {
+            self.collections.get(name).map(|c| Arc::clone(c) as _)
+        }
     }
 }
 
@@ -102,7 +115,7 @@ pub struct PartitionColumn {
     pub null_count: Option<i32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SeafowlTable {
     pub name: Arc<str>,
     pub schema: Arc<Schema>,
@@ -116,6 +129,17 @@ pub struct SeafowlTable {
     // load the partitions somewhere in the SchemaProvider because none of the functions
     // there are async.
     pub catalog: Arc<dyn PartitionCatalog>,
+}
+
+impl std::fmt::Debug for SeafowlTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SeafowlTable")
+            .field("name", &self.name)
+            .field("schema", &self.schema)
+            .field("table_id", &self.table_id)
+            .field("table_version_id", &self.table_version_id)
+            .finish()
+    }
 }
 
 #[async_trait]
@@ -163,8 +187,8 @@ impl TableProvider for SeafowlTable {
         // This code is partially taken from ListingTable but adapted to use an arbitrary
         // list of Parquet URLs rather than all files in a given directory.
 
-        // Get our object store (with a hardcoded schema)
-        let object_store_url = ObjectStoreUrl::parse("seafowl://").unwrap();
+        // Get our object store (with a hardcoded scheme)
+        let object_store_url = internal_object_store_url();
         let store = ctx.runtime_env.object_store(object_store_url.clone())?;
 
         // Build a list of lists of PartitionedFile groups (one file = one partition for the scan)
@@ -272,6 +296,7 @@ impl SeafowlPruningStatistics {
     /// use arrow::datatypes::DataType;
     /// use datafusion::scalar::ScalarValue;
     /// use seafowl::provider::SeafowlPruningStatistics;
+    /// use seafowl::context::scalar_value_to_bytes;
     ///
     /// fn parse(value: &Arc<Option<Vec<u8>>>, dt: &DataType) -> ScalarValue {
     ///     SeafowlPruningStatistics::parse_bytes_value(&value, &dt).unwrap()
@@ -283,9 +308,13 @@ impl SeafowlPruningStatistics {
     /// assert_eq!(parse(&val, &DataType::Boolean), ScalarValue::Boolean(None));
     ///
     /// // Parse some actual value
-    /// let val = Arc::from(Some(42.to_string().as_bytes().to_vec()));
+    /// let val = Arc::from(scalar_value_to_bytes(&ScalarValue::Int32(Some(42))));
     /// assert_eq!(parse(&val, &DataType::Int32), ScalarValue::Int32(Some(42)));
+    ///
+    /// let val = Arc::from(scalar_value_to_bytes(&ScalarValue::Float32(Some(42.0))));
     /// assert_eq!(parse(&val, &DataType::Float32), ScalarValue::Float32(Some(42.0)));
+    ///
+    /// let val = Arc::from(scalar_value_to_bytes(&ScalarValue::Utf8(Some("42".to_string()))));
     /// assert_eq!(parse(&val, &DataType::Utf8), ScalarValue::Utf8(Some("42".to_string())));
     /// ```
     pub fn parse_bytes_value(
@@ -293,10 +322,20 @@ impl SeafowlPruningStatistics {
         data_type: &DataType,
     ) -> Result<ScalarValue> {
         match bytes_value.as_ref() {
-            Some(bytes) => match String::from_utf8(bytes.clone()) {
-                Ok(string_val) => ScalarValue::try_from_string(string_val, data_type),
+            Some(bytes) => match protobuf::ScalarValue::decode(bytes.as_slice()) {
+                Ok(proto) => {
+                    match <&protobuf::ScalarValue as TryInto<ScalarValue>>::try_into(
+                        &proto,
+                    ) {
+                        Ok(value) => Ok(value),
+                        Err(error) => Err(DataFusionError::Internal(format!(
+                            "Failed to deserialize min/max value: {}",
+                            error
+                        ))),
+                    }
+                }
                 Err(error) => Err(DataFusionError::Internal(format!(
-                    "Failed to parse min/max value: {}",
+                    "Failed to decode min/max value: {}",
                     error
                 ))),
             },
@@ -456,6 +495,7 @@ mod tests {
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::{BufMut, Bytes, BytesMut};
+    use datafusion::common::ScalarValue;
     use datafusion::logical_expr::{col, lit, or, Expr};
     use datafusion::{
         arrow::{
@@ -475,6 +515,7 @@ mod tests {
     use crate::provider::{PartitionColumn, SeafowlPruningStatistics};
     use crate::{
         catalog::MockPartitionCatalog,
+        context::{scalar_value_to_bytes, INTERNAL_OBJECT_STORE_SCHEME},
         provider::{SeafowlPartition, SeafowlTable},
         schema,
     };
@@ -511,7 +552,7 @@ mod tests {
         let session_config = SessionConfig::new().with_information_schema(true);
         let context = SessionContext::with_config(session_config);
         context.runtime_env().register_object_store(
-            "seafowl",
+            INTERNAL_OBJECT_STORE_SCHEME,
             "",
             Arc::new(object_store),
         );
@@ -642,8 +683,12 @@ mod tests {
         // Create some fake partitions
         let mut partitions = vec![];
         for (ind, (min, max, null_count)) in part_stats.iter().enumerate() {
-            let min_value = Arc::from(min.map(|v| v.to_string().as_bytes().to_vec()));
-            let max_value = Arc::from(max.map(|v| v.to_string().as_bytes().to_vec()));
+            let min_value = Arc::from(
+                min.and_then(|v| scalar_value_to_bytes(&ScalarValue::Int32(Some(v)))),
+            );
+            let max_value = Arc::from(
+                max.and_then(|v| scalar_value_to_bytes(&ScalarValue::Int32(Some(v)))),
+            );
 
             partitions.push(SeafowlPartition {
                 object_storage_id: Arc::from(format!("par{}.parquet", ind)),

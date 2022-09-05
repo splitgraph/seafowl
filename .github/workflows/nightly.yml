@@ -1,9 +1,13 @@
-name: Build nightly binaries
+name: Build nightly binaries and perform releases
 
 on:
+  # For pushes to main, build binaries and store them as artifacts (also upload Docker images)
+  # For pushes to main with tags, also make a GitHub release.
   push:
     branches:
       - main
+    tags:
+      - "v*"
 
 jobs:
   build_binary:
@@ -26,7 +30,7 @@ jobs:
 
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - run: rustup toolchain install stable --profile minimal
 
       - uses: Swatinem/rust-cache@v2
@@ -57,7 +61,73 @@ jobs:
             echo "SOURCE=target/release/seafowl" >> $GITHUB_ENV
           fi
 
-      - uses: actions/upload-artifact@v3
+      - name: Login to DockerHub (Linux only)
+        if: matrix.build == 'linux'
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Determine Docker tags
+        id: meta
+        # https://github.com/docker/metadata-action
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            splitgraph/seafowl
+          # Latest push to main: add nightly/latest tags
+          # Tag pushes: add full version (e.g. 0.1.1) and major.minor (e.g. 0.1)
+          tags: |
+            type=raw,value=nightly,enable={{is_default_branch}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push Docker image (Linux only)
+        if: matrix.build == 'linux'
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Upload binaries as artifacts
+        uses: actions/upload-artifact@v3
         with:
           name: ${{ env.ARTIFACT }}
           path: ${{ env.SOURCE }}
+
+  github_release:
+    name: Perform GitHub release
+    needs: build_binary
+    runs-on: ubuntu-latest
+    if: startsWith(github.event.ref, 'refs/tags/v')
+    steps:
+      - name: Get the release version from the tag
+        shell: bash
+        if: env.RELEASE_VERSION == ''
+        run: |
+          # See: https://github.community/t5/GitHub-Actions/How-to-get-just-the-tag-name/m-p/32167/highlight/true#M1027
+          echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          echo "version is: ${{ env.RELEASE_VERSION }}"
+
+      - name: Get artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Package artifacts
+        run: |
+          chmod +x artifacts/seafowl-nightly-x86_64-unknown-linux-gnu/seafowl artifacts/seafowl-nightly-x86_64-apple-darwin/seafowl
+          tar -C artifacts/seafowl-nightly-x86_64-unknown-linux-gnu -czf seafowl-${{ env.RELEASE_VERSION }}-x86_64-unknown-linux-gnu.tar.gz seafowl
+          tar -C artifacts/seafowl-nightly-x86_64-apple-darwin -czf seafowl-${{ env.RELEASE_VERSION }}-x86_64-apple-darwin.tar.gz seafowl
+          cd artifacts/seafowl-nightly-x86_64-pc-windows-msvc && zip -r ../../seafowl-${{ env.RELEASE_VERSION }}-x86_64-pc-windows-msvc.zip seafowl.exe
+
+      - name: Upload release archive
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            seafowl-${{ env.RELEASE_VERSION }}-x86_64-unknown-linux-gnu.tar.gz
+            seafowl-${{ env.RELEASE_VERSION }}-x86_64-apple-darwin.tar.gz
+            seafowl-${{ env.RELEASE_VERSION }}-x86_64-pc-windows-msvc.zip

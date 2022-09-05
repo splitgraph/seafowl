@@ -1,6 +1,6 @@
 use std::{
     fmt::{self, Display},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use config::{Config, ConfigError, Environment, File, FileFormat, Map};
@@ -18,12 +18,26 @@ pub const ENV_PREFIX: &str = "SEAFOWL";
 // an underscore as part of a config var name, e.g. object_store)
 pub const ENV_SEPARATOR: &str = "__";
 
+// Minimum amount of memory, in MB, required to run the app (roughly)
+pub const MIN_MEMORY: u64 = 64;
+
+// Default fraction of the advertised memory limit that DataFusion will use
+// for its MemoryManager (e.g. to spill out data to disk on sort).
+// This is what DataFusion wants from us, but the fraction probably won't be
+// linear with the actual amount of memory DF's tracked data structures
+// would use.
+pub const MEMORY_FRACTION: f64 = 0.7;
+
+pub const MEBIBYTES: u64 = 1024 * 1024;
+
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct SeafowlConfig {
     pub object_store: ObjectStore,
     pub catalog: Catalog,
     #[serde(default)]
     pub frontend: Frontend,
+    #[serde(default)]
+    pub runtime: Runtime,
     #[serde(default)]
     pub misc: Misc,
 }
@@ -212,6 +226,7 @@ pub struct HttpFrontend {
     pub bind_port: u16,
     pub read_access: AccessSettings,
     pub write_access: AccessSettings,
+    pub upload_data_max_length: u64,
 }
 
 impl Default for HttpFrontend {
@@ -221,6 +236,7 @@ impl Default for HttpFrontend {
             bind_port: 8080,
             read_access: AccessSettings::Any,
             write_access: AccessSettings::Off,
+            upload_data_max_length: 256,
         }
     }
 }
@@ -228,15 +244,25 @@ impl Default for HttpFrontend {
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(default)]
 pub struct Misc {
-    pub max_partition_size: i64,
+    pub max_partition_size: u32,
+    // Perhaps make this accept a cron job format and use tokio-cron-scheduler?
+    pub gc_interval: u16,
 }
 
 impl Default for Misc {
     fn default() -> Self {
         Self {
-            max_partition_size: 1048576,
+            max_partition_size: 1024 * 1024,
+            gc_interval: 0,
         }
     }
+}
+
+#[derive(Default, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(default)]
+pub struct Runtime {
+    pub max_memory: Option<u64>,
+    pub temp_dir: Option<PathBuf>,
 }
 
 pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigError> {
@@ -245,15 +271,24 @@ pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigErr
     let in_memory_object_store = matches!(config.object_store, ObjectStore::InMemory(_));
 
     if in_memory_catalog ^ in_memory_object_store {
-        Err(ConfigError::Message(
+        return Err(ConfigError::Message(
             "You are using an in-memory catalog with a non in-memory \
         object store or vice versa. This will cause consistency issues \
         if the process is restarted."
                 .to_string(),
-        ))
-    } else {
-        Ok(config)
-    }
+        ));
+    };
+
+    if let Some(max_memory) = config.runtime.max_memory {
+        if max_memory < MIN_MEMORY {
+            return Err(ConfigError::Message(format!(
+                "runtime.max_memory is too low (minimum {} MB)",
+                MIN_MEMORY
+            )));
+        }
+    };
+
+    Ok(config)
 }
 
 pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
@@ -289,10 +324,10 @@ pub fn load_config_from_string(
 mod tests {
     use super::{
         build_default_config, load_config_from_string, AccessSettings, Catalog, Frontend,
-        HttpFrontend, Local, ObjectStore, Postgres, SeafowlConfig, S3,
+        HttpFrontend, Local, ObjectStore, Postgres, Runtime, SeafowlConfig, S3,
     };
     use crate::config::schema::{Misc, Sqlite};
-    use std::collections::HashMap;
+    use std::{collections::HashMap, path::PathBuf};
 
     const TEST_CONFIG_S3: &str = r#"
 [object_store]
@@ -323,6 +358,10 @@ dsn = "postgresql://user:pass@localhost:5432/somedb"
 [frontend.http]
 bind_host = "0.0.0.0"
 bind_port = 80
+
+[runtime]
+max_memory = 512
+temp_dir = "/tmp/seafowl"
 "#;
 
     const TEST_CONFIG_ACCESS: &str = r#"
@@ -338,6 +377,7 @@ bind_host = "0.0.0.0"
 bind_port = 80
 read_access = "any"
 write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
+upload_data_max_length = 1
 "#;
 
     const TEST_CONFIG_ERROR: &str = r#"
@@ -391,10 +431,16 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
                         bind_port: 80,
                         read_access: AccessSettings::Any,
                         write_access: AccessSettings::Off,
+                        upload_data_max_length: 256
                     })
                 },
+                runtime: Runtime {
+                    max_memory: Some(512),
+                    temp_dir: Some(PathBuf::from("/tmp/seafowl")),
+                },
                 misc: Misc {
-                    max_partition_size: 1048576
+                    max_partition_size: 1024 * 1024,
+                    gc_interval: 0,
                 },
             }
         )
@@ -415,6 +461,7 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
                         "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
                             .to_string()
                 },
+                upload_data_max_length: 1
             }
         );
     }
@@ -474,10 +521,16 @@ write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c
                             "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
                                 .to_string()
                         },
+                        upload_data_max_length: 256
                     })
                 },
+                                 runtime: Runtime {
+                    max_memory: Some(512),
+                    temp_dir: Some(PathBuf::from("/tmp/seafowl")),
+                },
                 misc: Misc {
-                    max_partition_size: 1048576
+                    max_partition_size: 1024 * 1024,
+                    gc_interval: 0,
                 },
             }
         )

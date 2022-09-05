@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use crate::{
-    catalog,
-    catalog::{DefaultCatalog, FunctionCatalog, PartitionCatalog, TableCatalog},
-    context::DefaultSeafowlContext,
+    catalog::{
+        DefaultCatalog, FunctionCatalog, PartitionCatalog, TableCatalog, DEFAULT_DB,
+        DEFAULT_SCHEMA,
+    },
+    context::{DefaultSeafowlContext, INTERNAL_OBJECT_STORE_SCHEME},
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
 use datafusion::{
-    catalog::{
-        catalog::{CatalogProvider, MemoryCatalogProvider},
-        schema::MemorySchemaProvider,
-    },
+    error::DataFusionError,
+    execution::runtime_env::{RuntimeConfig, RuntimeEnv},
     prelude::{SessionConfig, SessionContext},
 };
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
@@ -18,10 +18,12 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
 
+use crate::object_store::http::add_http_object_store;
+use crate::object_store::wrapped::InternalObjectStore;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
 
-use super::schema::{self, S3};
+use super::schema::{self, MEBIBYTES, MEMORY_FRACTION, S3};
 
 async fn build_catalog(
     config: &schema::SeafowlConfig,
@@ -45,7 +47,7 @@ async fn build_catalog(
         ),
     };
 
-    let catalog = Arc::new(DefaultCatalog { repository });
+    let catalog = Arc::new(DefaultCatalog::new(repository));
 
     (catalog.clone(), catalog.clone(), catalog)
 }
@@ -81,40 +83,51 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
 
 pub async fn build_context(
     cfg: &schema::SeafowlConfig,
-) -> Result<DefaultSeafowlContext, catalog::Error> {
+) -> Result<DefaultSeafowlContext, DataFusionError> {
+    let mut runtime_config = RuntimeConfig::new();
+    if let Some(max_memory) = cfg.runtime.max_memory {
+        runtime_config = runtime_config
+            .with_memory_limit((max_memory * MEBIBYTES) as usize, MEMORY_FRACTION);
+    }
+
+    if let Some(temp_dir) = &cfg.runtime.temp_dir {
+        runtime_config = runtime_config.with_temp_file_path(temp_dir);
+    }
+
     let session_config = SessionConfig::new()
         .with_information_schema(true)
-        .with_default_catalog_and_schema("default", "public");
-    let context = SessionContext::with_config(session_config);
+        .with_default_catalog_and_schema(DEFAULT_DB, DEFAULT_SCHEMA);
+
+    let context = SessionContext::with_config_rt(
+        session_config,
+        Arc::new(RuntimeEnv::new(runtime_config)?),
+    );
 
     let object_store = build_object_store(cfg);
-    context
-        .runtime_env()
-        .register_object_store("seafowl", "", object_store);
+    context.runtime_env().register_object_store(
+        INTERNAL_OBJECT_STORE_SCHEME,
+        "",
+        object_store.clone(),
+    );
+
+    // Register the HTTP object store for external tables
+    add_http_object_store(&context);
 
     let (tables, partitions, functions) = build_catalog(cfg).await;
 
     // Create default DB/collection
-    let default_db = match tables.get_database_id_by_name("default").await? {
+    let default_db = match tables.get_database_id_by_name(DEFAULT_DB).await? {
         Some(id) => id,
-        None => tables.create_database("default").await.unwrap(),
+        None => tables.create_database(DEFAULT_DB).await.unwrap(),
     };
 
     match tables
-        .get_collection_id_by_name("default", "public")
+        .get_collection_id_by_name(DEFAULT_DB, DEFAULT_SCHEMA)
         .await?
     {
         Some(id) => id,
-        None => tables.create_collection(default_db, "public").await?,
+        None => tables.create_collection(default_db, DEFAULT_SCHEMA).await?,
     };
-
-    // Register the datafusion catalog (in-memory)
-    let default_catalog = MemoryCatalogProvider::new();
-
-    default_catalog
-        .register_schema("public", Arc::new(MemorySchemaProvider::new()))
-        .expect("memory catalog provider can register schema");
-    context.register_catalog("datafusion", Arc::new(default_catalog));
 
     // Convergence doesn't support connecting to different DB names. We are supposed
     // to do one context per query (as we need to load the schema before executing every
@@ -127,7 +140,11 @@ pub async fn build_context(
         table_catalog: tables,
         partition_catalog: partitions,
         function_catalog: functions,
-        database: "default".to_string(),
+        internal_object_store: Arc::new(InternalObjectStore {
+            inner: object_store,
+            config: cfg.object_store.clone(),
+        }),
+        database: DEFAULT_DB.to_string(),
         database_id: default_db,
         max_partition_size: cfg.misc.max_partition_size,
     })
@@ -157,10 +174,16 @@ mod tests {
                     bind_port: 80,
                     read_access: schema::AccessSettings::Any,
                     write_access: schema::AccessSettings::Any,
+                    upload_data_max_length: 256 * 1024 * 1024,
                 }),
             },
+            runtime: schema::Runtime {
+                max_memory: Some(512 * 1024 * 1024),
+                ..Default::default()
+            },
             misc: schema::Misc {
-                max_partition_size: 1048576,
+                max_partition_size: 1024 * 1024,
+                gc_interval: 0,
             },
         };
 

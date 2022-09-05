@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <svg
-   sodipodi:docname="pelican.svg"
+   sodipodi:docname="logotype.svg"
    inkscape:version="1.2.1 (9c6d41e410, 2022-07-14)"
    id="svg8"
    version="1.1"
@@ -22,17 +22,17 @@
      inkscape:snap-bbox-edge-midpoints="true"
      inkscape:snap-bbox="true"
      inkscape:window-maximized="1"
-     inkscape:window-y="-7"
-     inkscape:window-x="-7"
-     inkscape:window-height="1141"
-     inkscape:window-width="1920"
+     inkscape:window-y="942"
+     inkscape:window-x="-8"
+     inkscape:window-height="1387"
+     inkscape:window-width="2560"
      units="cm"
      showgrid="false"
      inkscape:document-rotation="0"
      inkscape:current-layer="layer1"
      inkscape:document-units="mm"
      inkscape:cy="185"
-     inkscape:cx="389.75"
+     inkscape:cx="389.5"
      inkscape:zoom="2"
      inkscape:pageshadow="2"
      inkscape:pageopacity="0.0"
@@ -113,13 +113,6 @@
          d="m 123.20111,35.059517 v -9.8552 h -2.2606 v -1.8034 l 2.2606,-1.0922 v -1.1684 q 0,-1.8796 1.016,-2.8702 1.0414,-0.9906 3.3274,-0.9906 h 3.2512 v 2.7178 h -4.3688 v 2.3622 h 3.683 v 2.8448 h -3.1496 v 9.8552 z"
          style="font-size:25.4px"
          id="path283" />
-      <ellipse
-         style="fill:#bdcdd4;fill-opacity:1;stroke-width:0;stroke-dasharray:none"
-         id="path4749"
-         cx="137.82312"
-         cy="28.697462"
-         rx="4.4565754"
-         ry="4.3589191" />
       <path
          d="m 137.95855,35.465917 q -2.413,0 -3.9878,-0.9144 -1.5748,-0.9398 -2.3114,-2.4638 -0.7366,-1.524 -0.7366,-3.4036 0,-1.8542 0.7366,-3.3782 0.7366,-1.524 2.3114,-2.4384 1.5748,-0.9144 3.9878,-0.9144 2.413,0 3.9878,0.9398 1.6002,0.9144 2.3114,2.4384 0.7366,1.524 0.7366,3.3528 0,1.8542 -0.7366,3.4036 -0.7112,1.524 -2.3114,2.4638 -1.5748,0.9144 -3.9878,0.9144 z m -3.2512,-6.7564 q 0,2.0828 0.762,2.9464 0.762,0.8636 2.4892,0.8636 1.7526,0 2.5146,-0.8636 0.762,-0.8636 0.762,-2.9464 0,-2.0828 -0.762,-2.9464 -0.762,-0.8636 -2.5146,-0.8636 -1.7272,0 -2.4892,0.8636 -0.762,0.8636 -0.762,2.9464 z"
          style="font-size:25.4px"
@@ -134,12 +127,5 @@
          style="font-size:25.4px"
          id="path289" />
     </g>
-    <circle
-       style="fill:#000000;fill-opacity:1;stroke:#000000;stroke-width:1.02401;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;paint-order:normal"
-       id="path1443-3"
-       cx="137.95856"
-       cy="28.709517"
-       r="0.79829013"
-       class="UnoptimicedTransforms" />
   </g>
 </svg>

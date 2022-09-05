@@ -6,6 +6,7 @@ pub mod data_types;
 pub mod datafusion;
 pub mod frontend;
 pub mod nodes;
+pub mod object_store;
 pub mod provider;
 pub mod repository;
 pub mod schema;
