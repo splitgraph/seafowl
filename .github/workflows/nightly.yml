@@ -29,6 +29,9 @@ jobs:
             target: x86_64-pc-windows-msvc
 
     steps:
+      - name: Install prerequisites
+        run: apt update && apt install -y protobuf-compiler cmake
+
       - name: Checkout the repository
         uses: actions/checkout@v3
       - run: rustup toolchain install stable --profile minimal
