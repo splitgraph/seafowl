@@ -96,6 +96,13 @@ pub const INTERNAL_OBJECT_STORE_SCHEME: &str = "seafowl";
 // environments.
 const MAX_ROW_GROUP_SIZE: usize = 65536;
 
+// We use these when uploading partition files to object store:
+// - the buffer refers to the maximum size that we keep in memory at any time; there's a tradeoff at
+// play here since the smaller this is the more syscalls for reading we'll need (thus slowing us down),
+// - the chunk size denotes the size of the actual multipart request payload
+const PARTITION_OBJECT_BUFFER_SIZE: usize = 1024 * 1024;
+const PARTITION_OBJECT_CHUNK_SIZE: usize = 8 * 1024;
+
 pub fn internal_object_store_url() -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME)).unwrap()
 }
@@ -332,33 +339,43 @@ pub async fn plan_to_object_store(
                 {
                     result?;
                 } else {
-                    // TODO: think about the default buffer and chunk sizes; make them configurable?
                     let file = AsyncFile::open(partition_file_path).await?;
-                    let mut reader = BufReader::with_capacity(1024 * 1024, file);
-                    let mut chunk: [u8; 8 * 1024] = [0; 8 * 1024];
+                    let mut reader =
+                        BufReader::with_capacity(PARTITION_OBJECT_BUFFER_SIZE, file);
+                    let mut chunk: [u8; PARTITION_OBJECT_CHUNK_SIZE] =
+                        [0; PARTITION_OBJECT_CHUNK_SIZE];
 
                     let location = Path::from(object_storage_id.clone());
                     let (multipart_id, mut writer) =
                         store.inner.put_multipart(&location).await?;
 
-                    while let Ok(size) = reader.read(&mut chunk[..]).await {
-                        if size == 0 {
-                            // TODO: as per the docs this doesn't guarantee that we've reached EOF
-                            break;
+                    let error: std::io::Error;
+                    loop {
+                        match reader.read(&mut chunk[..]).await {
+                            Ok(size) => {
+                                if size == 0 {
+                                    // TODO: as per the docs this doesn't guarantee that we've reached EOF
+                                    break;
+                                }
+
+                                match writer.write_all(&chunk[..size]).await {
+                                    Ok(_) => continue,
+                                    Err(err) => error = err,
+                                }
+                            }
+                            Err(err) => error = err,
                         }
 
-                        if let Err(err) = writer.write_all(&chunk[..size]).await {
-                            warn!(
-                                "Aborting multipart partition upload due to error: {:?}",
-                                err
-                            );
-                            store
-                                .inner
-                                .abort_multipart(&location, &multipart_id)
-                                .await
-                                .ok();
-                            break;
-                        }
+                        warn!(
+                            "Aborting multipart partition upload due to an error: {:?}",
+                            error
+                        );
+                        store
+                            .inner
+                            .abort_multipart(&location, &multipart_id)
+                            .await
+                            .ok();
+                        return Err(DataFusionError::IoError(error));
                     }
 
                     writer.shutdown().await?;
