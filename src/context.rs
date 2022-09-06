@@ -2,12 +2,12 @@
 
 use async_trait::async_trait;
 use base64::decode;
-use bytes::Bytes;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::ResolvedTableReference;
 use itertools::Itertools;
 use object_store::local::LocalFileSystem;
-use tokio::io::AsyncReadExt;
+use tokio::fs::File as AsyncFile;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use std::fs::File;
 
@@ -332,24 +332,36 @@ pub async fn plan_to_object_store(
                 {
                     result?;
                 } else {
-                    // TODO: the object_store crate doesn't support multi-part uploads / uploading a file
-                    // from a local path. This means we have to read the file back into memory in full.
-                    // https://github.com/influxdata/object_store_rs/issues/9
-                    //
-                    // Another implication is that we could just keep everything in memory (point ArrowWriter to a byte buffer,
-                    // call get_parquet_file_statistics on that, upload the file) and run the output routine for each partition
-                    // sequentially.
+                    // TODO: think about the default buffer and chunk sizes; make them configurable?
+                    let file = AsyncFile::open(partition_file_path).await?;
+                    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+                    let mut chunk: [u8; 8 * 1024] = [0; 8 * 1024];
 
-                    let mut buf = Vec::new();
+                    let location = Path::from(object_storage_id.clone());
+                    let (multipart_id, mut writer) =
+                        store.inner.put_multipart(&location).await?;
 
-                    let mut file = tokio::fs::File::open(&partition_file_path).await?;
-                    file.read_to_end(&mut buf).await?;
-                    let data = Bytes::from(buf);
+                    while let Ok(size) = reader.read(&mut chunk[..]).await {
+                        if size == 0 {
+                            // TODO: as per the docs this doesn't guarantee that we've reached EOF
+                            break;
+                        }
 
-                    store
-                        .inner
-                        .put(&Path::from(object_storage_id.clone()), data)
-                        .await?;
+                        if let Err(err) = writer.write_all(&chunk[..size]).await {
+                            warn!(
+                                "Aborting multipart partition upload due to error: {:?}",
+                                err
+                            );
+                            store
+                                .inner
+                                .abort_multipart(&location, &multipart_id)
+                                .await
+                                .ok();
+                            break;
+                        }
+                    }
+
+                    writer.shutdown().await?;
                 }
 
                 let partition = SeafowlPartition {
