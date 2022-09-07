@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use base64::decode;
+use bytes::{BufMut, BytesMut};
 use datafusion::datasource::TableProvider;
 use datafusion::sql::ResolvedTableReference;
 use itertools::Itertools;
@@ -100,8 +101,8 @@ const MAX_ROW_GROUP_SIZE: usize = 65536;
 // - the buffer refers to the maximum size that we keep in memory at any time; there's a tradeoff at
 // play here since the smaller this is the more syscalls for reading we'll need (thus slowing us down),
 // - the chunk size denotes the size of the actual multipart request payload
-const PARTITION_OBJECT_BUFFER_SIZE: usize = 1024 * 1024;
-const PARTITION_OBJECT_CHUNK_SIZE: usize = 8 * 1024;
+const PARTITION_OBJECT_BUFFER_SIZE: usize = 128 * 1024 * 1024;
+const PARTITION_OBJECT_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
 pub fn internal_object_store_url() -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME)).unwrap()
@@ -311,6 +312,8 @@ pub async fn plan_to_object_store(
     }
     writer.close().map_err(DataFusionError::from).map(|_| ())?;
 
+    warn!("Starting upload of partition objects");
+
     for partition_file_path in partition_file_paths {
         let physical = plan.clone();
         let store = store.clone();
@@ -342,8 +345,7 @@ pub async fn plan_to_object_store(
                     let file = AsyncFile::open(partition_file_path).await?;
                     let mut reader =
                         BufReader::with_capacity(PARTITION_OBJECT_BUFFER_SIZE, file);
-                    let mut chunk: [u8; PARTITION_OBJECT_CHUNK_SIZE] =
-                        [0; PARTITION_OBJECT_CHUNK_SIZE];
+                    let mut chunk = BytesMut::new().limit(PARTITION_OBJECT_CHUNK_SIZE);
 
                     let location = Path::from(object_storage_id.clone());
                     let (multipart_id, mut writer) =
@@ -351,15 +353,26 @@ pub async fn plan_to_object_store(
 
                     let error: std::io::Error;
                     loop {
-                        match reader.read(&mut chunk[..]).await {
+                        match reader.read_buf(&mut chunk).await {
                             Ok(size) => {
-                                if size == 0 {
-                                    // TODO: as per the docs this doesn't guarantee that we've reached EOF
+                                if size == 0 && chunk.get_ref().is_empty() {
+                                    // We've reached EOF and there are no pending writes to flush
+                                    // TODO: as per the docs this doesn't actually guarantee that we've reached EOF
                                     break;
+                                } else if size != 0 && chunk.has_remaining_mut() {
+                                    // Keep filling the chunk buffer until it's full
+                                    continue;
                                 }
 
-                                match writer.write_all(&chunk[..size]).await {
-                                    Ok(_) => continue,
+                                let chunk_size = chunk.get_ref().len();
+                                match writer
+                                    .write_all(&chunk.get_mut()[..chunk_size])
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        chunk.get_mut().clear();
+                                        continue;
+                                    }
                                     Err(err) => error = err,
                                 }
                             }
