@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use base64::decode;
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::ResolvedTableReference;
 use itertools::Itertools;
@@ -97,12 +97,11 @@ pub const INTERNAL_OBJECT_STORE_SCHEME: &str = "seafowl";
 // environments.
 const MAX_ROW_GROUP_SIZE: usize = 65536;
 
-// We use these when uploading partition files to object store:
-// - the buffer refers to the maximum size that we keep in memory at any time; there's a tradeoff at
-// play here since the smaller this is the more syscalls for reading we'll need (thus slowing us down),
-// - the chunk size denotes the size of the actual multipart request payload
-const PARTITION_OBJECT_BUFFER_SIZE: usize = 128 * 1024 * 1024;
-const PARTITION_OBJECT_CHUNK_SIZE: usize = 8 * 1024 * 1024;
+// Just a simple read buffer to reduce the number of syscalls when filling in the part buffer.
+const PARTITION_FILE_BUFFER_SIZE: usize = 128 * 1024;
+// This denotes the threshold size for an individual multipart request payload prior to upload.
+// It dictates the memory usage, as we'll need to to keep each part in memory until sent.
+const PARTITION_FILE_MIN_PART_SIZE: usize = 5 * 1024 * 1024;
 
 pub fn internal_object_store_url() -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME)).unwrap()
@@ -344,8 +343,9 @@ pub async fn plan_to_object_store(
                 } else {
                     let file = AsyncFile::open(partition_file_path).await?;
                     let mut reader =
-                        BufReader::with_capacity(PARTITION_OBJECT_BUFFER_SIZE, file);
-                    let mut chunk = BytesMut::new().limit(PARTITION_OBJECT_CHUNK_SIZE);
+                        BufReader::with_capacity(PARTITION_FILE_BUFFER_SIZE, file);
+                    let mut part_buffer =
+                        BytesMut::with_capacity(PARTITION_FILE_MIN_PART_SIZE);
 
                     let location = Path::from(object_storage_id.clone());
                     let (multipart_id, mut writer) =
@@ -353,24 +353,24 @@ pub async fn plan_to_object_store(
 
                     let error: std::io::Error;
                     loop {
-                        match reader.read_buf(&mut chunk).await {
+                        match reader.read_buf(&mut part_buffer).await {
                             Ok(size) => {
-                                if size == 0 && chunk.get_ref().is_empty() {
+                                if size == 0 && part_buffer.is_empty() {
                                     // We've reached EOF and there are no pending writes to flush
-                                    // TODO: as per the docs this doesn't actually guarantee that we've reached EOF
+                                    // TODO: as per the docs size = 0 doesn't actually guarantee that we've reached EOF
                                     break;
-                                } else if size != 0 && chunk.has_remaining_mut() {
-                                    // Keep filling the chunk buffer until it's full
+                                } else if size != 0
+                                    && part_buffer.len() < PARTITION_FILE_MIN_PART_SIZE
+                                {
+                                    // Keep filling the chunk buffer until it surpasses the minimum required size
                                     continue;
                                 }
 
-                                let chunk_size = chunk.get_ref().len();
-                                match writer
-                                    .write_all(&chunk.get_mut()[..chunk_size])
-                                    .await
-                                {
+                                let part_size = part_buffer.len();
+                                warn!("Uploading part with {} bytes", part_size);
+                                match writer.write_all(&part_buffer[..part_size]).await {
                                     Ok(_) => {
-                                        chunk.get_mut().clear();
+                                        part_buffer.clear();
                                         continue;
                                     }
                                     Err(err) => error = err,
