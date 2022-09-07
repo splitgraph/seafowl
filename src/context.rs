@@ -69,7 +69,7 @@ use datafusion::{
     prelude::SessionContext,
     sql::{planner::SqlToRel, TableReference},
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use prost::Message;
 use tempfile::TempPath;
 
@@ -311,7 +311,7 @@ pub async fn plan_to_object_store(
     }
     writer.close().map_err(DataFusionError::from).map(|_| ())?;
 
-    warn!("Starting upload of partition objects");
+    info!("Starting upload of partition objects");
 
     for partition_file_path in partition_file_paths {
         let physical = plan.clone();
@@ -358,6 +358,8 @@ pub async fn plan_to_object_store(
                                 if size == 0 && part_buffer.is_empty() {
                                     // We've reached EOF and there are no pending writes to flush
                                     // TODO: as per the docs size = 0 doesn't actually guarantee that we've reached EOF
+                                    // Potential workaround is to use `stream_position` + `stream_len` to determine
+                                    // whether we've reached the end (`stream_len` is nightly-only experimental API atm)
                                     break;
                                 } else if size != 0
                                     && part_buffer.len() < PARTITION_FILE_MIN_PART_SIZE
@@ -367,7 +369,7 @@ pub async fn plan_to_object_store(
                                 }
 
                                 let part_size = part_buffer.len();
-                                warn!("Uploading part with {} bytes", part_size);
+                                debug!("Uploading part with {} bytes", part_size);
                                 match writer.write_all(&part_buffer[..part_size]).await {
                                     Ok(_) => {
                                         part_buffer.clear();
