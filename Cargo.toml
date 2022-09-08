@@ -62,12 +62,15 @@ sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "sqlite" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
 tempfile = "3"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal"] }
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
 url = "2.2"
 warp = "0.3"
 
 # For WASM user-defined functions
 wasmtime = "0.40.0"
+
+[patch.crates-io]
+object_store = { git = "https://github.com/splitgraph/arrow-rs", rev = "a2d345725b56234466b91f0f64ac2be0772e1014" }
 
 [dev-dependencies]
 mockall = "0.11.1"
