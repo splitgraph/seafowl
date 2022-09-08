@@ -72,6 +72,7 @@ use datafusion::{
 use log::{debug, info, warn};
 use prost::Message;
 use tempfile::TempPath;
+use tokio::sync::Semaphore;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{TableId, TableVersionId};
@@ -102,6 +103,11 @@ const PARTITION_FILE_BUFFER_SIZE: usize = 128 * 1024;
 // This denotes the threshold size for an individual multipart request payload prior to upload.
 // It dictates the memory usage, as we'll need to to keep each part in memory until sent.
 const PARTITION_FILE_MIN_PART_SIZE: usize = 5 * 1024 * 1024;
+// Controls how many multipart upload tasks we let run in parallel; this is in part dictated by the
+// fact that object store concurrently uploads parts for each of our tasks. That concurrency in
+// turn is hard coded to 8 (https://github.com/apache/arrow-rs/blob/master/object_store/src/aws/mod.rs#L145)
+// meaning that with 2 partition upload tasks x 8 part upload tasks x 5MB we have 80MB of memory usage
+const PARTITION_FILE_UPLOAD_MAX_CONCURRENCY: usize = 2;
 
 pub fn internal_object_store_url() -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME)).unwrap()
@@ -313,11 +319,17 @@ pub async fn plan_to_object_store(
 
     info!("Starting upload of partition objects");
 
+    let sem = Arc::new(Semaphore::new(PARTITION_FILE_UPLOAD_MAX_CONCURRENCY));
     for partition_file_path in partition_file_paths {
+        let permit = Arc::clone(&sem).acquire_owned().await.ok();
+
         let physical = plan.clone();
         let store = store.clone();
         let handle: tokio::task::JoinHandle<Result<SeafowlPartition>> =
             tokio::task::spawn(async move {
+                // Move the ownership of the semaphore permit into the task
+                let _permit = permit;
+
                 // Index the Parquet file (get its min-max values)
                 let partition_stats = get_parquet_file_statistics_bytes(
                     &partition_file_path,
@@ -364,7 +376,7 @@ pub async fn plan_to_object_store(
                                 } else if size != 0
                                     && part_buffer.len() < PARTITION_FILE_MIN_PART_SIZE
                                 {
-                                    // Keep filling the chunk buffer until it surpasses the minimum required size
+                                    // Keep filling the part buffer until it surpasses the minimum required size
                                     continue;
                                 }
 
