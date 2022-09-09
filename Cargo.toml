@@ -70,7 +70,7 @@ warp = "0.3"
 wasmtime = "0.40.0"
 
 [patch.crates-io]
-object_store = { git = "https://github.com/apache/arrow-rs", rev = "566ef3d66a441f4c4fb2ad6654c7039d1f58690d", package = "object_store" }
+object_store = { git = "https://github.com/splitgraph/arrow-rs", rev = "b5dbae394bebd2ff1f8016211772858927cedeb6", package = "object_store" }
 
 [dev-dependencies]
 mockall = "0.11.1"
