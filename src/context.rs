@@ -366,20 +366,20 @@ pub async fn plan_to_object_store(
                     let error: std::io::Error;
                     loop {
                         match reader.read_buf(&mut part_buffer).await {
-                            Ok(size) => {
-                                if size == 0 && part_buffer.is_empty() {
-                                    // We've reached EOF and there are no pending writes to flush
-                                    // TODO: as per the docs size = 0 doesn't actually guarantee that we've reached EOF
-                                    // Potential workaround is to use `stream_position` + `stream_len` to determine
-                                    // whether we've reached the end (`stream_len` is nightly-only experimental API atm)
-                                    break;
-                                } else if size != 0
-                                    && part_buffer.len() < PARTITION_FILE_MIN_PART_SIZE
-                                {
-                                    // Keep filling the part buffer until it surpasses the minimum required size
-                                    continue;
-                                }
-
+                            // First check whether we've reached EOF and there are no pending writes to flush
+                            // TODO: as per the docs size = 0 doesn't actually guarantee that we've reached EOF
+                            // Potential workaround is to use `stream_position` + `stream_len` to determine
+                            // whether we've reached the end (`stream_len` is nightly-only experimental API atm)
+                            Ok(0) if part_buffer.is_empty() => break,
+                            Ok(size)
+                                if size != 0
+                                    && part_buffer.len()
+                                        < PARTITION_FILE_MIN_PART_SIZE =>
+                            {
+                                // Keep filling the part buffer until it surpasses the minimum required size
+                                continue;
+                            }
+                            Ok(_) => {
                                 let part_size = part_buffer.len();
                                 debug!("Uploading part with {} bytes", part_size);
                                 match writer.write_all(&part_buffer[..part_size]).await {
