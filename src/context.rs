@@ -2,12 +2,13 @@
 
 use async_trait::async_trait;
 use base64::decode;
-use bytes::Bytes;
+use bytes::BytesMut;
 use datafusion::datasource::TableProvider;
 use datafusion::sql::ResolvedTableReference;
 use itertools::Itertools;
 use object_store::local::LocalFileSystem;
-use tokio::io::AsyncReadExt;
+use tokio::fs::File as AsyncFile;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use std::fs::File;
 
@@ -68,9 +69,10 @@ use datafusion::{
     prelude::SessionContext,
     sql::{planner::SqlToRel, TableReference},
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use prost::Message;
 use tempfile::TempPath;
+use tokio::sync::Semaphore;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{TableId, TableVersionId};
@@ -95,6 +97,17 @@ pub const INTERNAL_OBJECT_STORE_SCHEME: &str = "seafowl";
 // means that we're effectively buffering a whole partition in memory, causing issues on RAM-limited
 // environments.
 const MAX_ROW_GROUP_SIZE: usize = 65536;
+
+// Just a simple read buffer to reduce the number of syscalls when filling in the part buffer.
+const PARTITION_FILE_BUFFER_SIZE: usize = 128 * 1024;
+// This denotes the threshold size for an individual multipart request payload prior to upload.
+// It dictates the memory usage, as we'll need to to keep each part in memory until sent.
+const PARTITION_FILE_MIN_PART_SIZE: usize = 5 * 1024 * 1024;
+// Controls how many multipart upload tasks we let run in parallel; this is in part dictated by the
+// fact that object store concurrently uploads parts for each of our tasks. That concurrency in
+// turn is hard coded to 8 (https://github.com/apache/arrow-rs/blob/master/object_store/src/aws/mod.rs#L145)
+// meaning that with 2 partition upload tasks x 8 part upload tasks x 5MB we have 80MB of memory usage
+const PARTITION_FILE_UPLOAD_MAX_CONCURRENCY: usize = 2;
 
 pub fn internal_object_store_url() -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME)).unwrap()
@@ -304,11 +317,19 @@ pub async fn plan_to_object_store(
     }
     writer.close().map_err(DataFusionError::from).map(|_| ())?;
 
+    info!("Starting upload of partition objects");
+
+    let sem = Arc::new(Semaphore::new(PARTITION_FILE_UPLOAD_MAX_CONCURRENCY));
     for partition_file_path in partition_file_paths {
+        let permit = Arc::clone(&sem).acquire_owned().await.ok();
+
         let physical = plan.clone();
         let store = store.clone();
         let handle: tokio::task::JoinHandle<Result<SeafowlPartition>> =
             tokio::task::spawn(async move {
+                // Move the ownership of the semaphore permit into the task
+                let _permit = permit;
+
                 // Index the Parquet file (get its min-max values)
                 let partition_stats = get_parquet_file_statistics_bytes(
                     &partition_file_path,
@@ -332,24 +353,69 @@ pub async fn plan_to_object_store(
                 {
                     result?;
                 } else {
-                    // TODO: the object_store crate doesn't support multi-part uploads / uploading a file
-                    // from a local path. This means we have to read the file back into memory in full.
-                    // https://github.com/influxdata/object_store_rs/issues/9
-                    //
-                    // Another implication is that we could just keep everything in memory (point ArrowWriter to a byte buffer,
-                    // call get_parquet_file_statistics on that, upload the file) and run the output routine for each partition
-                    // sequentially.
+                    let file = AsyncFile::open(partition_file_path).await?;
+                    let mut reader =
+                        BufReader::with_capacity(PARTITION_FILE_BUFFER_SIZE, file);
+                    let mut part_buffer =
+                        BytesMut::with_capacity(PARTITION_FILE_MIN_PART_SIZE);
 
-                    let mut buf = Vec::new();
+                    let location = Path::from(object_storage_id.clone());
+                    let (multipart_id, mut writer) =
+                        store.inner.put_multipart(&location).await?;
 
-                    let mut file = tokio::fs::File::open(&partition_file_path).await?;
-                    file.read_to_end(&mut buf).await?;
-                    let data = Bytes::from(buf);
+                    let error: std::io::Error;
+                    let mut eof_counter = 0;
+                    loop {
+                        match reader.read_buf(&mut part_buffer).await {
+                            Ok(0) if part_buffer.is_empty() => {
+                                // We've reached EOF and there are no pending writes to flush.
+                                // As per the docs size = 0 doesn't seem to guarantee that we've reached EOF, so we use
+                                // a heuristic: if we encounter Ok(0) 3 times in a row it's safe to assume it's EOF.
+                                // Another potential workaround is to use `stream_position` + `stream_len` to determine
+                                // whether we've reached the end (`stream_len` is nightly-only experimental API atm)
+                                eof_counter += 1;
+                                if eof_counter >= 3 {
+                                    break;
+                                } else {
+                                    continue;
+                                }
+                            }
+                            Ok(size)
+                                if size != 0
+                                    && part_buffer.len()
+                                        < PARTITION_FILE_MIN_PART_SIZE =>
+                            {
+                                // Keep filling the part buffer until it surpasses the minimum required size
+                                eof_counter = 0;
+                                continue;
+                            }
+                            Ok(_) => {
+                                let part_size = part_buffer.len();
+                                debug!("Uploading part with {} bytes", part_size);
+                                match writer.write_all(&part_buffer[..part_size]).await {
+                                    Ok(_) => {
+                                        part_buffer.clear();
+                                        continue;
+                                    }
+                                    Err(err) => error = err,
+                                }
+                            }
+                            Err(err) => error = err,
+                        }
 
-                    store
-                        .inner
-                        .put(&Path::from(object_storage_id.clone()), data)
-                        .await?;
+                        warn!(
+                            "Aborting multipart partition upload due to an error: {:?}",
+                            error
+                        );
+                        store
+                            .inner
+                            .abort_multipart(&location, &multipart_id)
+                            .await
+                            .ok();
+                        return Err(DataFusionError::IoError(error));
+                    }
+
+                    writer.shutdown().await?;
                 }
 
                 let partition = SeafowlPartition {

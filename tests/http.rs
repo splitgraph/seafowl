@@ -382,7 +382,7 @@ async fn test_upload_to_existing_table() {
     }
 
     let mut child = Command::new("curl")
-        .args(&[
+        .args([
             "-H",
             "Authorization: Bearer write_password",
             "-F",
@@ -436,7 +436,7 @@ async fn test_upload_to_existing_table() {
     }
 
     let output = Command::new("curl")
-        .args(&[
+        .args([
             "-H",
             "Authorization: Bearer write_password",
             "-F",
@@ -462,7 +462,7 @@ async fn test_upload_not_writer_authz() {
     tokio::task::spawn(server);
 
     let output = Command::new("curl")
-        .args(&[
+        .args([
             "-H",
             "Authorization: Bearer wrong_password",
             "-F",
