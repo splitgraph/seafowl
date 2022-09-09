@@ -29,6 +29,39 @@ jobs:
             target: x86_64-pc-windows-msvc
 
     steps:
+      - name: Install prerequisites
+        # Taken from https://github.com/apache/arrow-datafusion/blob/master/.github/workflows/rust.yml
+        shell: bash
+        run: |
+          if [ "${{ matrix.build }}" = "win-msvc" ]; then
+            mkdir -p $HOME/d/protoc
+            cd $HOME/d/protoc
+            export PROTO_ZIP="protoc-21.4-win64.zip"
+            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
+            unzip $PROTO_ZIP
+            echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
+            export PATH=$PATH:$HOME/d/protoc/bin
+            protoc.exe --version
+          elif [ "${{ matrix.build }}" = "linux" ]; then
+            mkdir -p $HOME/d/protoc
+            cd $HOME/d/protoc
+            export PROTO_ZIP="protoc-21.4-linux-x86_64.zip"
+            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
+            unzip $PROTO_ZIP
+            echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
+            export PATH=$PATH:$HOME/d/protoc/bin
+            protoc --version
+          else
+            mkdir -p $HOME/d/protoc
+            cd $HOME/d/protoc
+            export PROTO_ZIP="protoc-21.4-osx-x86_64.zip"
+            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
+            unzip $PROTO_ZIP
+            echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
+            export PATH=$PATH:$HOME/d/protoc/bin
+            protoc --version
+          fi
+
       - name: Checkout the repository
         uses: actions/checkout@v3
       - run: rustup toolchain install stable --profile minimal
@@ -44,7 +77,10 @@ jobs:
           cache-on-failure: "true"
 
       - name: Build the release binary
-        run: cargo build --release
+        shell: bash
+        run: |
+          export PATH=$PATH:$HOME/d/protoc/bin
+          cargo build --release
 
       - name: Strip release binary (linux and macos)
         if: matrix.build == 'linux' || matrix.build == 'macos'
