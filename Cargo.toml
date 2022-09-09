@@ -63,7 +63,7 @@ strum = ">=0.24"
 strum_macros = ">=0.24"
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
-url = "2.2"
+url = "2.3"
 warp = "0.3"
 
 # For WASM user-defined functions
