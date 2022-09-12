@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "seafowl"
-version = "0.1.0-dev.4"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow",
