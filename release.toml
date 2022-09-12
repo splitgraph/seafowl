@@ -1,0 +1,12 @@
+consolidate-commits = false
+consolidate-pushes = true
+allow-branch = ["main"]
+pre-release-hook = ["./pre-release-hook.sh"]
+
+pre-release-replacements = [
+  {file="CHANGELOG.md", search="(U|u)nreleased", replace="{{version}}"},
+  {file="CHANGELOG.md", search="\\.\\.\\.HEAD", replace="...{{tag_name}}", exactly=1},
+  {file="CHANGELOG.md", search="ReleaseDate", replace="{{date}}"},
+  {file="CHANGELOG.md", search="<!-- next-header -->", replace="<!-- next-header -->\n\n## [Unreleased] - ReleaseDate", exactly=1},
+  {file="CHANGELOG.md", search="<!-- next-url -->", replace="<!-- next-url -->\n[unreleased]: https://github.com/splitgraph/seafowl/compare/{{tag_name}}...HEAD", exactly=1},
+]
