@@ -21,8 +21,6 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
 
-use datafusion::logical_plan::plan::Projection;
-use datafusion::logical_plan::{CreateExternalTable, DFField, DropTable, Expr, FileType};
 use datafusion_proto::protobuf;
 
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
@@ -47,6 +45,7 @@ use sqlparser::ast::{
 use std::iter::zip;
 use std::sync::Arc;
 
+use datafusion::common::{Column, DFField, DFSchema, ToDFSchema};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::scalar::ScalarValue;
 use datafusion::{
@@ -57,10 +56,6 @@ use datafusion::{
     datasource::file_format::{parquet::ParquetFormat, FileFormat},
     error::DataFusionError,
     execution::context::TaskContext,
-    logical_plan::{
-        plan::Extension, Column, CreateCatalog, CreateCatalogSchema, CreateMemoryTable,
-        DFSchema, LogicalPlan, ToDFSchema,
-    },
     parquet::{arrow::ArrowWriter, file::properties::WriterProperties},
     physical_plan::{
         coalesce_partitions::CoalescePartitionsExec, empty::EmptyExec,
@@ -69,6 +64,11 @@ use datafusion::{
     prelude::SessionContext,
     sql::{planner::SqlToRel, TableReference},
 };
+use datafusion_expr::logical_plan::{
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+    DropTable, Extension, LogicalPlan, Projection,
+};
+use datafusion_expr::Expr;
 use log::{debug, info, warn};
 use prost::Message;
 use tempfile::TempPath;
@@ -712,6 +712,71 @@ impl DefaultSeafowlContext {
 
         Ok(true)
     }
+
+    // Copied from DataFUsion's source code (private functions)
+    async fn create_listing_table(
+        &self,
+        cmd: &CreateExternalTable,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let (file_format, file_extension) = match cmd.file_type.as_str() {
+            "CSV" => (
+                Arc::new(
+                    CsvFormat::default()
+                        .with_has_header(cmd.has_header)
+                        .with_delimiter(cmd.delimiter as u8),
+                ) as Arc<dyn FileFormat>,
+                DEFAULT_CSV_EXTENSION,
+            ),
+            "PARQUET" => (
+                Arc::new(ParquetFormat::default()) as Arc<dyn FileFormat>,
+                DEFAULT_PARQUET_EXTENSION,
+            ),
+            "AVRO" => (
+                Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>,
+                DEFAULT_AVRO_EXTENSION,
+            ),
+            "JSON" => (
+                Arc::new(JsonFormat::default()) as Arc<dyn FileFormat>,
+                DEFAULT_JSON_EXTENSION,
+            ),
+            _ => Err(DataFusionError::Execution(
+                "Only known FileTypes can be ListingTables!".to_string(),
+            ))?,
+        };
+        let table = self.inner.table(cmd.name.as_str());
+        match (cmd.if_not_exists, table) {
+            (true, Ok(_)) => Ok(make_dummy_exec()),
+            (_, Err(_)) => {
+                // TODO make schema in CreateExternalTable optional instead of empty
+                let provided_schema = if cmd.schema.fields().is_empty() {
+                    None
+                } else {
+                    Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
+                };
+                let options = ListingOptions {
+                    format: file_format,
+                    collect_stat: false,
+                    file_extension: file_extension.to_owned(),
+                    target_partitions: self.inner.copied_config().target_partitions,
+                    table_partition_cols: cmd.table_partition_cols.clone(),
+                };
+                self.inner
+                    .register_listing_table(
+                        cmd.name.as_str(),
+                        cmd.location.clone(),
+                        options,
+                        provided_schema,
+                        cmd.definition.clone(),
+                    )
+                    .await?;
+                Ok(make_dummy_exec())
+            }
+            (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                "Table '{:?}' already exists",
+                cmd.name
+            ))),
+        }
+    }
 }
 
 #[async_trait]
@@ -1011,16 +1076,14 @@ impl SeafowlContext for DefaultSeafowlContext {
             // It uses ListingTable which queries data at a given location using the ObjectStore
             // abstraction (URL: scheme://some-path.to.file.parquet) and it's easier to reuse this
             // mechanism in our case too.
-            LogicalPlan::CreateExternalTable(CreateExternalTable {
-                ref schema,
-                ref name,
-                ref location,
-                ref file_type,
-                ref has_header,
-                ref delimiter,
-                ref table_partition_cols,
-                ref if_not_exists,
-            }) => {
+            LogicalPlan::CreateExternalTable(
+                cmd @ CreateExternalTable {
+                    ref name,
+                    ref location,
+                    ref file_type,
+                    ..
+                },
+            ) => {
                 // Check that the TableReference doesn't have a database/schema in it.
                 // We create all external tables in the staging schema (backed by DataFusion's
                 // in-memory schema provider) instead.
@@ -1039,7 +1102,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                 }
 
                 // Replace the table name with the fully qualified one that has our staging schema
-                let name = &reference_to_name(&resolved_reference);
+                let mut cmd = cmd.clone();
+                cmd.name = reference_to_name(&resolved_reference);
 
                 let location =
                     try_prepare_http_url(location).unwrap_or_else(|| location.into());
@@ -1055,62 +1119,19 @@ impl SeafowlContext for DefaultSeafowlContext {
                     )));
                 }
 
-                let (file_format, file_extension) = match file_type {
-                    FileType::CSV => (
-                        Arc::new(
-                            CsvFormat::default()
-                                .with_has_header(*has_header)
-                                .with_delimiter(*delimiter as u8),
-                        ) as Arc<dyn FileFormat>,
-                        DEFAULT_CSV_EXTENSION,
-                    ),
-                    FileType::Parquet => (
-                        Arc::new(ParquetFormat::default()) as Arc<dyn FileFormat>,
-                        DEFAULT_PARQUET_EXTENSION,
-                    ),
-                    FileType::Avro => (
-                        Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>,
-                        DEFAULT_AVRO_EXTENSION,
-                    ),
-                    FileType::NdJson => (
-                        Arc::new(JsonFormat::default()) as Arc<dyn FileFormat>,
-                        DEFAULT_JSON_EXTENSION,
-                    ),
-                };
-                let table = self.inner.table(name.as_str());
-                match (if_not_exists, table) {
-                    (true, Ok(_)) => Ok(make_dummy_exec()),
-                    (_, Err(_)) => {
-                        // TODO make schema in CreateExternalTable optional instead of empty
-                        let provided_schema = if schema.fields().is_empty() {
-                            None
-                        } else {
-                            Some(Arc::new(schema.as_ref().to_owned().into()))
-                        };
-                        let options = ListingOptions {
-                            format: file_format,
-                            collect_stat: false,
-                            file_extension: file_extension.to_owned(),
-                            target_partitions: self
-                                .inner
-                                .copied_config()
-                                .target_partitions,
-                            table_partition_cols: table_partition_cols.clone(),
-                        };
-                        self.inner
-                            .register_listing_table(
-                                name,
-                                location,
-                                options,
-                                provided_schema,
-                            )
-                            .await?;
-                        Ok(make_dummy_exec())
+                // Proceed as per standard DataFusion code
+                match file_type.as_str() {
+                    "PARQUET" | "CSV" | "JSON" | "AVRO" => {
+                        self.create_listing_table(&cmd).await
                     }
-                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{:?}' already exists",
-                        name
-                    ))),
+                    // Disallow custom formats (only useful if we're registering a table
+                    // factory provider here)
+                    _ => {
+                        return Err(DataFusionError::Plan(format!(
+                            "Invalid external table file format {:?}",
+                            file_type
+                        )))
+                    }
                 }
             }
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
