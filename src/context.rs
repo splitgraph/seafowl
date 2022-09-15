@@ -1799,50 +1799,25 @@ mod tests {
     #[test_case(
         5,
         vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
-        vec![vec![0, 1, 2, 3, 4], vec![5, 6, 7, 8, 9], vec![10, 11]],
-        vec![
-            "4a006cc68b17c558cb2a454ef90500b93ad98c28a2e1b3fdc9a5397a25799dfb.parquet",
-            "686055ffe7623fbb8eb97069298cfad561aa9fbf14cff15eaa805d10e212c36f.parquet",
-            "b4e51d4988ad632174949f7c09f3633613890c8551d2e71ff3b8bb6f6c62110f.parquet",
-        ];
+        vec![vec![0, 1, 2, 3, 4], vec![5, 6, 7, 8, 9], vec![10, 11]];
         "record batches smaller than partitions")
     ]
     #[test_case(
         3,
         vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
-        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]],
-        vec![
-            "5600d168b4ebfc8ac6e1ab28af8561e3556d96d562f3a078d08598b4f8af8b57.parquet",
-            "c5fda995f4c66bad9cbe3e74e5da0a7ab6a4428311a48f1a9815fa7b46a8db77.parquet",
-            "e5bda1c858bc066fa910e96987ddfd27ede6828cdff84d2cf1a04d83427e852e.parquet",
-            "7fe9b59f655aa00bf796a33c4001409b5069b588290b914d0afcf57da2cf05f1.parquet",
-        ];
+        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]];
         "record batches same size as partitions")
     ]
     #[test_case(
         2,
         vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
-        vec![vec![0, 1], vec![2, 3], vec![4, 5], vec![6, 7], vec![8, 9], vec![10, 11]],
-        vec![
-            "f5650226b5ef25dc2f9fd1e558126fdec5b7fdefbe1f216dd3308ed38ec6fd7f.parquet",
-            "16c91d52bbd00063d76b917d71053eb8de19adbfadf659b52bb8abaab55ec6ee.parquet",
-            "63ec7889458a38a3f558687b4db2793511f64696a7440bf43a27cee98518baab.parquet",
-            "0619a04142967187c93b44058574f3e76147248cf8fd01e15098ce44a7abbdf9.parquet",
-            "35f8efb06448b8076d5addad3d7c4e702892d1361d84137b3b625d6b5cf407a2.parquet",
-            "b4e51d4988ad632174949f7c09f3633613890c8551d2e71ff3b8bb6f6c62110f.parquet",
-        ];
+        vec![vec![0, 1], vec![2, 3], vec![4, 5], vec![6, 7], vec![8, 9], vec![10, 11]];
         "record batches larger than partitions")
     ]
     #[test_case(
         3,
         vec![vec![vec![0, 1], vec![2, 3, 4]], vec![vec![5]], vec![vec![6, 7, 8, 9], vec![10, 11]]],
-        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]],
-        vec![
-            "5600d168b4ebfc8ac6e1ab28af8561e3556d96d562f3a078d08598b4f8af8b57.parquet",
-            "c5fda995f4c66bad9cbe3e74e5da0a7ab6a4428311a48f1a9815fa7b46a8db77.parquet",
-            "e5bda1c858bc066fa910e96987ddfd27ede6828cdff84d2cf1a04d83427e852e.parquet",
-            "7fe9b59f655aa00bf796a33c4001409b5069b588290b914d0afcf57da2cf05f1.parquet",
-        ];
+        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]];
         "record batches irregular size")
     ]
     #[tokio::test]
@@ -1850,7 +1825,6 @@ mod tests {
         max_partition_size: u32,
         input_partitions: Vec<Vec<Vec<i32>>>,
         output_partitions: Vec<Vec<i32>>,
-        storage_ids: Vec<&str>,
     ) {
         let sf_context = mock_context().await;
 
@@ -1897,26 +1871,22 @@ mod tests {
         .unwrap();
 
         for i in 0..output_partitions.len() {
+            assert_eq!(partitions[i].row_count, output_partitions[i].len() as i32);
+
             assert_eq!(
-                partitions[i],
-                SeafowlPartition {
-                    object_storage_id: Arc::from(storage_ids[i].to_string()),
-                    row_count: output_partitions[i].len() as i32,
-                    columns: Arc::new(vec![PartitionColumn {
-                        name: Arc::from("some_number"),
-                        r#type: Arc::from(
-                            r#"{"bitWidth":32,"isSigned":true,"name":"int"}"#
-                        ),
-                        min_value: to_min_max_value(ScalarValue::Int32(
-                            output_partitions[i].iter().min().copied()
-                        )),
-                        max_value: to_min_max_value(ScalarValue::Int32(
-                            output_partitions[i].iter().max().copied()
-                        )),
-                        null_count: Some(0),
-                    }])
-                },
-            )
+                partitions[i].columns,
+                Arc::new(vec![PartitionColumn {
+                    name: Arc::from("some_number"),
+                    r#type: Arc::from(r#"{"bitWidth":32,"isSigned":true,"name":"int"}"#),
+                    min_value: to_min_max_value(ScalarValue::Int32(
+                        output_partitions[i].iter().min().copied()
+                    )),
+                    max_value: to_min_max_value(ScalarValue::Int32(
+                        output_partitions[i].iter().max().copied()
+                    )),
+                    null_count: Some(0),
+                }])
+            );
         }
     }
 
