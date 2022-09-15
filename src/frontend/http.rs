@@ -9,15 +9,13 @@ use std::{convert::Infallible, net::SocketAddr, sync::Arc};
 use warp::Rejection;
 
 use arrow::json::LineDelimitedWriter;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use bytes::{BufMut, Bytes};
-use datafusion::parquet::arrow::{ArrowReader, ParquetFileArrowReader};
 
+use datafusion::datasource::DefaultTableSource;
+use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::{
-    datasource::DefaultTableSource,
-    logical_plan::{LogicalPlan, PlanVisitor, TableScan},
-};
+use datafusion_expr::logical_plan::{LogicalPlan, PlanVisitor, TableScan};
 use futures::{future, TryStreamExt};
 use hex::encode;
 use log::{debug, info};
@@ -386,15 +384,14 @@ fn load_parquet_bytes(
     // We have to return a boxed error here, since this could return either a
     // ParquetError or an ArrowError
     // (could also return an ApiError::UploadFileLoadError with a string?)
-    let mut parquet_reader = ParquetFileArrowReader::try_new(Bytes::from(source))?;
+    let parquet_reader = ParquetRecordBatchReader::try_new(Bytes::from(source), 1024)?;
 
-    let schema = parquet_reader.get_schema()?;
+    let schema = parquet_reader.schema();
 
-    let partition: Vec<RecordBatch> = parquet_reader
-        .get_record_reader(1024)?
-        .collect::<Result<Vec<RecordBatch>, ArrowError>>()?;
+    let partition: Vec<RecordBatch> =
+        parquet_reader.collect::<Result<Vec<RecordBatch>, ArrowError>>()?;
 
-    Ok((schema, partition))
+    Ok((schema.as_ref().clone(), partition))
 }
 
 pub fn filters(

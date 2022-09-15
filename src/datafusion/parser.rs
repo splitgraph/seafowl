@@ -26,10 +26,7 @@
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
 pub use datafusion::sql::parser::Statement;
-use datafusion::{
-    logical_plan::FileType,
-    sql::parser::{CreateExternalTable, DescribeTable},
-};
+use datafusion::sql::parser::{CreateExternalTable, DescribeTable};
 use sqlparser::ast::ObjectName;
 use sqlparser::tokenizer::Word;
 use sqlparser::{
@@ -49,17 +46,8 @@ macro_rules! parser_err {
     };
 }
 
-fn parse_file_type(s: &str) -> Result<FileType, ParserError> {
-    match s.to_uppercase().as_str() {
-        "PARQUET" => Ok(FileType::Parquet),
-        "NDJSON" => Ok(FileType::NdJson),
-        "CSV" => Ok(FileType::CSV),
-        "AVRO" => Ok(FileType::Avro),
-        other => Err(ParserError::ParserError(format!(
-            "expect one of PARQUET, AVRO, NDJSON, or CSV, found: {}",
-            other
-        ))),
-    }
+fn parse_file_type(s: &str) -> Result<String, ParserError> {
+    Ok(s.to_uppercase())
 }
 
 // XXX SEAFOWL: removed the struct definitions here because we want to use
@@ -382,7 +370,7 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parses the set of valid formats
-    fn parse_file_format(&mut self) -> Result<FileType, ParserError> {
+    fn parse_file_format(&mut self) -> Result<String, ParserError> {
         match self.parser.next_token() {
             Token::Word(w) => parse_file_type(&w.value),
             unexpected => self.expected("one of PARQUET, NDJSON, or CSV", unexpected),
