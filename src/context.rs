@@ -801,6 +801,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Statement::Explain { .. }
                 | Statement::Query { .. }
                 | Statement::ShowVariable { .. }
+                | Statement::ShowTables { .. }
                 | Statement::ShowColumns { .. }
                 | Statement::CreateView { .. }
                 | Statement::CreateSchema { .. }
@@ -1118,6 +1119,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                         location
                     )));
                 }
+
+                // try_prepare_http_url changes the url in case of the HTTP object store
+                // (to route _all_ HTTP URLs to our object store, not just specific hosts),
+                // so inject it into the CreateExternalTable command as well.
+                cmd.location = location;
 
                 // Proceed as per standard DataFusion code
                 match file_type.as_str() {

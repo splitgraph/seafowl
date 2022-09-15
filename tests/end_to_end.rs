@@ -19,6 +19,14 @@ use seafowl::repository::postgres::testutils::get_random_schema;
 #[path = "../src/object_store/testutils.rs"]
 mod http_testutils;
 
+// Object store IDs for frequently-used test data
+const FILENAME_1: &str =
+    "26e39f1717046023c2a53f69ac4d3fa2f8f790489ddf93a267766407817ad4f0.parquet";
+const FILENAME_2: &str =
+    "b7ffd2743b5fd11ea026065c9aaefcd827771f9cbf4631989786969b3457ded7.parquet";
+const FILENAME_RECHUNKED: &str =
+    "370e90c844091607f5711565c638bc8b9acbc19b50f242121a88b93ec1892e6d.parquet";
+
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
 async fn make_context_with_pg() -> DefaultSeafowlContext {
@@ -301,19 +309,13 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(partitions.len(), 2);
     assert_eq!(
         partitions[0].object_storage_id,
-        Arc::from(
-            "663424af6d3ddcb896723559187079619770bb1f941a1845f1e72ab3447cfe43.parquet"
-                .to_string()
-        )
+        Arc::from(FILENAME_1.to_string())
     );
     assert_eq!(partitions[0].row_count, 3);
     assert_eq!(partitions[0].columns.len(), 3);
     assert_eq!(
         partitions[1].object_storage_id,
-        Arc::from(
-            "400cdfbbf5e49c614ad6bc9cb716af7b31bb0b695355f8977b1767960dfac82d.parquet"
-                .to_string()
-        )
+        Arc::from(FILENAME_2.to_string())
     );
     assert_eq!(partitions[1].row_count, 3);
     assert_eq!(partitions[1].columns.len(), 2);
@@ -336,7 +338,7 @@ async fn test_table_partitioning_and_rechunking() {
         .to_string();
 
     let actual_lines: Vec<&str> = formatted.trim().lines().collect();
-    assert_contains!(actual_lines[10], "partitions=[400cdfbbf5e49c614ad6bc9cb716af7b31bb0b695355f8977b1767960dfac82d.parquet]");
+    assert_contains!(actual_lines[10], format!("partitions=[{:}]", FILENAME_2));
 
     // Assert query results
     let plan = context
@@ -376,10 +378,7 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(partitions.len(), 1);
     assert_eq!(
         partitions[0].object_storage_id,
-        Arc::from(
-            "41102d2df3624e5f60ca585320cd21768993683820124b327f935a9fdd30759d.parquet"
-                .to_string()
-        )
+        Arc::from(FILENAME_RECHUNKED.to_string())
     );
     assert_eq!(partitions[0].row_count, 6);
     assert_eq!(partitions[0].columns.len(), 5);
@@ -1041,10 +1040,10 @@ async fn test_vacuum_command() {
     // Check we have orphan partitions
     // NB: we have duplicates here which is expected, see: https://github.com/splitgraph/seafowl/issues/5
     let orphans = vec![
-        "663424af6d3ddcb896723559187079619770bb1f941a1845f1e72ab3447cfe43.parquet",
-        "65d79d86789bf67e013323bc7847b4dbb73308d3114168b4b82992d324dacbf7.parquet",
-        "663424af6d3ddcb896723559187079619770bb1f941a1845f1e72ab3447cfe43.parquet",
-        "116cef148ead70a0507f20d999d56d046b3e0f7cce00a3dc96d786e3dd1bbb21.parquet",
+        FILENAME_1,
+        "a02146c8f6164a0f59526381549a3a8c752a4aa7de5f073e44904bf95833961e.parquet",
+        FILENAME_1,
+        "824f53285c216022db3ae5e07f032cec9f77d9598b0321cec7c03a23f6d36e87.parquet",
     ];
 
     assert_orphan_partitions(context.clone(), orphans.clone()).await;
