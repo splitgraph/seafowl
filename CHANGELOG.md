@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Upgrade to DataFusion 12 (https://github.com/splitgraph/seafowl/pull/113)
+
 ## [0.1.0] - 2022-09-12
 
 ### Fixes
