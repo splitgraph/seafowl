@@ -36,9 +36,9 @@ config = "0.13.1"
 # PG wire protocol support
 convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-12-upgrade", optional = true }
 convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-12-upgrade", package = "convergence-arrow", optional = true }
-datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "12.0.0-rc1" }
-datafusion-expr = { git = "https://github.com/apache/arrow-datafusion", rev = "12.0.0-rc1", package = "datafusion-expr" }
-datafusion-proto = { git = "https://github.com/apache/arrow-datafusion", rev = "12.0.0-rc1", package = "datafusion-proto" }
+datafusion = "12"
+datafusion-expr = "12"
+datafusion-proto = "12"
 futures = "0.3"
 
 # passing to DF's query planner
@@ -71,7 +71,8 @@ warp = "0.3"
 wasmtime = "0.40.0"
 
 [patch.crates-io]
-object_store = { git = "https://github.com/splitgraph/arrow-rs", branch = "bugfix/multipart-uploads-minio", package = "object_store" }
+# Pick up https://github.com/apache/arrow-rs/pull/2731
+object_store = { git = "https://github.com/apache/arrow-rs", rev = "5f441eedff2b7621c46aded8b1caf3b665b8e8a9", package = "object_store" }
 
 [dev-dependencies]
 mockall = "0.11.1"
