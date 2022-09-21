@@ -23,10 +23,12 @@ pub(crate) fn build_schema(columns: Vec<SQLColumnDef>) -> Result<Schema> {
 
     for column in columns {
         let data_type = convert_simple_data_type(&column.data_type)?;
-        let allow_null = column
+
+        // Modified from DataFusion to default to nullable
+        let allow_null = !column
             .options
             .iter()
-            .any(|x| x.option == ColumnOption::Null);
+            .any(|x| x.option == ColumnOption::NotNull);
         fields.push(Field::new(
             &normalize_ident(&column.name),
             data_type,
