@@ -1,0 +1,9 @@
+DROP TABLE function;
+DROP TABLE table_partition;
+DROP TABLE physical_partition_column;
+DROP TABLE physical_partition;
+DROP TABLE table_column;
+DROP TABLE table_version;
+DROP TABLE table;
+DROP TABLE collection;
+DROP TABLE database;
