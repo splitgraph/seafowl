@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.2.0] - 2022-09-21
+
 **Breaking**: Previous versions of Seafowl won't be able to read data written by this version.
 
 - Fix storage of nullable / list columns (<https://github.com/splitgraph/seafowl/pull/119>)
@@ -22,6 +24,7 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.1.1...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/splitgraph/seafowl/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/splitgraph/seafowl/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/splitgraph/seafowl/compare/v0.1.0-dev.4...v0.1.0
