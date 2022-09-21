@@ -1884,7 +1884,7 @@ mod tests {
                 Arc::new(vec![PartitionColumn {
                     name: Arc::from("some_number"),
                     r#type: Arc::from(
-                        r#"{"children":[],"name":"some_number","nullable":true,"type":{"bitWidth":32,"isSigned":true,"name":"int"}"#
+                        r#"{"children":[],"name":"some_number","nullable":true,"type":{"bitWidth":32,"isSigned":true,"name":"int"}}"#
                     ),
                     min_value: to_min_max_value(ScalarValue::Int32(
                         output_partitions[i].iter().min().copied()
