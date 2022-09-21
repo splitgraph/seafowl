@@ -196,7 +196,7 @@ fn build_partition_columns(
 
                 PartitionColumn {
                     name: Arc::from(column.name().to_string()),
-                    r#type: Arc::from(column.data_type().to_json().to_string()),
+                    r#type: Arc::from(column.to_json().to_string()),
                     min_value: Arc::new(min_value),
                     max_value: Arc::new(max_value),
                     null_count: stats.null_count.map(|nc| nc as i32),
@@ -208,7 +208,7 @@ fn build_partition_columns(
             .iter()
             .map(|column| PartitionColumn {
                 name: Arc::from(column.name().to_string()),
-                r#type: Arc::from(column.data_type().to_json().to_string()),
+                r#type: Arc::from(column.to_json().to_string()),
                 min_value: Arc::new(None),
                 max_value: Arc::new(None),
                 null_count: None,
@@ -1735,7 +1735,7 @@ mod tests {
                     columns: Arc::new(vec![
                         PartitionColumn {
                             name: Arc::from("timestamp".to_string()),
-                            r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                            r#type: Arc::from("{\"children\":[],\"name\":\"timestamp\",\"nullable\":true,\"type\":{\"name\":\"utf8\"}}".to_string()),
                             min_value: Arc::new(None),
                             max_value: Arc::new(None),
                             null_count: Some(0),
@@ -1743,7 +1743,7 @@ mod tests {
                         PartitionColumn {
                             name: Arc::from("integer".to_string()),
                             r#type: Arc::from(
-                                "{\"bitWidth\":64,\"isSigned\":true,\"name\":\"int\"}"
+                                "{\"children\":[],\"name\":\"integer\",\"nullable\":true,\"type\":{\"bitWidth\":64,\"isSigned\":true,\"name\":\"int\"}}"
                                     .to_string()
                             ),
                             min_value: to_min_max_value(ScalarValue::Int64(Some(12))),
@@ -1752,7 +1752,7 @@ mod tests {
                         },
                         PartitionColumn {
                             name: Arc::from("varchar".to_string()),
-                            r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                            r#type: Arc::from("{\"children\":[],\"name\":\"varchar\",\"nullable\":true,\"type\":{\"name\":\"utf8\"}}".to_string()),
                             min_value: Arc::new(None),
                             max_value: Arc::new(None),
                             null_count: Some(0),
@@ -1765,7 +1765,7 @@ mod tests {
                     columns: Arc::new(vec![
                         PartitionColumn {
                             name: Arc::from("timestamp".to_string()),
-                            r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                            r#type: Arc::from("{\"children\":[],\"name\":\"timestamp\",\"nullable\":true,\"type\":{\"name\":\"utf8\"}}".to_string()),
                             min_value: Arc::new(None),
                             max_value: Arc::new(None),
                             null_count: Some(0),
@@ -1773,7 +1773,7 @@ mod tests {
                         PartitionColumn {
                             name: Arc::from("integer".to_string()),
                             r#type: Arc::from(
-                                "{\"bitWidth\":64,\"isSigned\":true,\"name\":\"int\"}"
+                                "{\"children\":[],\"name\":\"integer\",\"nullable\":true,\"type\":{\"bitWidth\":64,\"isSigned\":true,\"name\":\"int\"}}"
                                     .to_string()
                             ),
                             min_value: to_min_max_value(ScalarValue::Int64(Some(22))),
@@ -1782,7 +1782,7 @@ mod tests {
                         },
                         PartitionColumn {
                             name: Arc::from("varchar".to_string()),
-                            r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
+                            r#type: Arc::from("{\"children\":[],\"name\":\"varchar\",\"nullable\":true,\"type\":{\"name\":\"utf8\"}}".to_string()),
                             min_value: Arc::new(None),
                             max_value: Arc::new(None),
                             null_count: Some(0),
@@ -1883,7 +1883,9 @@ mod tests {
                 partitions[i].columns,
                 Arc::new(vec![PartitionColumn {
                     name: Arc::from("some_number"),
-                    r#type: Arc::from(r#"{"bitWidth":32,"isSigned":true,"name":"int"}"#),
+                    r#type: Arc::from(
+                        r#"{"children":[],"name":"some_number","nullable":true,"type":{"bitWidth":32,"isSigned":true,"name":"int"}"#
+                    ),
                     min_value: to_min_max_value(ScalarValue::Int32(
                         output_partitions[i].iter().min().copied()
                     )),
@@ -2010,14 +2012,14 @@ mod tests {
                                 columns: Arc::new(vec![
                                     PartitionColumn {
                                         name: Arc::from("date"),
-                                        r#type: Arc::from("{\"name\":\"date\",\"unit\":\"MILLISECOND\"}"),
+                                        r#type: Arc::from("{\"children\":[],\"name\":\"date\",\"nullable\":true,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}}"),
                                         min_value: Arc::new(None),
                                         max_value: Arc::new(None),
                                         null_count: Some(0),
                                     },
                                     PartitionColumn {
                                         name: Arc::from("value"),
-                                        r#type: Arc::from("{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"),
+                                        r#type: Arc::from("{\"children\":[],\"name\":\"value\",\"nullable\":true,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}}"),
                                         min_value: Arc::new(scalar_value_to_bytes(&ScalarValue::Float64(Some(42.0)))),
                                         max_value: Arc::new(scalar_value_to_bytes(&ScalarValue::Float64(Some(42.0)))),
                                         null_count: Some(0),
