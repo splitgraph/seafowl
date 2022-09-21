@@ -270,7 +270,7 @@ pub mod tests {
                 table_id: 1,
                 table_version_id: version,
                 column_name: "date".to_string(),
-                column_type: "{\"name\":\"date\",\"unit\":\"MILLISECOND\"}".to_string(),
+                column_type: "{\"children\":[],\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}}".to_string(),
             },
             AllDatabaseColumnsResult {
                 collection_name,
@@ -278,7 +278,7 @@ pub mod tests {
                 table_id: 1,
                 table_version_id: version,
                 column_name: "value".to_string(),
-                column_type: "{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}"
+                column_type: "{\"children\":[],\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}}"
                     .to_string(),
             },
         ]
