@@ -7,6 +7,7 @@
 **Breaking**: Previous versions of Seafowl won't be able to read data written by this version.
 
 - Fix storage of nullable / list columns (<https://github.com/splitgraph/seafowl/pull/119>)
+- Default columns in `CREATE TABLE` to nullable (<https://github.com/splitgraph/seafowl/pull/119>)
 
 ## [0.1.1] - 2022-09-16
 
