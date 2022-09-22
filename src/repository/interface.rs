@@ -177,6 +177,7 @@ pub mod tests {
 
     fn get_test_partition() -> SeafowlPartition {
         SeafowlPartition {
+            partition_id: Some(1),
             object_storage_id: Arc::from(EXPECTED_FILE_NAME.to_string()),
             row_count: 2,
             columns: Arc::new(vec![

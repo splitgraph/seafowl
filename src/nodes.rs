@@ -50,8 +50,8 @@ pub struct Update {
 
 #[derive(Debug, Clone)]
 pub struct Delete {
-    /// The table name (TODO: should this be a table ref?)
-    pub name: String,
+    /// The table to delete from
+    pub table: Arc<SeafowlTable>,
     /// WHERE clause
     pub selection: Option<Expr>,
     /// Dummy result schema for the plan (empty)
@@ -171,8 +171,8 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::Update(Update { name, .. }) => {
                 write!(f, "Update: {}", name)
             }
-            SeafowlExtensionNode::Delete(Delete { name, .. }) => {
-                write!(f, "Delete: {}", name)
+            SeafowlExtensionNode::Delete(Delete { table, .. }) => {
+                write!(f, "Delete: {}", table.name)
             }
             SeafowlExtensionNode::CreateFunction(CreateFunction { name, .. }) => {
                 write!(f, "CreateFunction: {}", name)

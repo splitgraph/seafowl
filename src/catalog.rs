@@ -282,6 +282,9 @@ impl DefaultCatalog {
         let mut iter = partition_columns.peekable();
 
         SeafowlPartition {
+            partition_id: Some(
+                iter.peek().unwrap().table_partition_id as PhysicalPartitionId,
+            ),
             object_storage_id: Arc::from(iter.peek().unwrap().object_storage_id.clone()),
             row_count: iter.peek().unwrap().row_count,
             columns: Arc::new(

@@ -7,6 +7,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::sql::ResolvedTableReference;
 use itertools::Itertools;
 use object_store::local::LocalFileSystem;
+use std::collections::HashSet;
 use tokio::fs::File as AsyncFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
@@ -75,16 +76,18 @@ use tempfile::TempPath;
 use tokio::sync::Semaphore;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
-use crate::data_types::{TableId, TableVersionId};
-use crate::nodes::{
-    CreateFunction, DropSchema, RenameTable, SeafowlExtensionNode, Vacuum,
+use crate::data_types::{PhysicalPartitionId, TableId, TableVersionId};
+use crate::provider::{
+    PartitionColumn, SeafowlPartition, SeafowlPruningStatistics, SeafowlTable,
 };
-use crate::provider::{PartitionColumn, SeafowlPartition, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
     catalog::{FunctionCatalog, TableCatalog},
     data_types::DatabaseId,
-    nodes::{Assignment, CreateTable, Delete, Insert, Update},
+    nodes::{
+        Assignment, CreateFunction, CreateTable, Delete, DropSchema, Insert, RenameTable,
+        SeafowlExtensionNode, Update, Vacuum,
+    },
     schema::Schema as SeafowlSchema,
 };
 
@@ -419,6 +422,7 @@ pub async fn plan_to_object_store(
                 }
 
                 let partition = SeafowlPartition {
+                    partition_id: None,
                     object_storage_id: Arc::from(object_storage_id),
                     row_count: partition_stats
                         .num_rows
@@ -668,18 +672,8 @@ impl DefaultSeafowlContext {
         physical_plan: &Arc<dyn ExecutionPlan>,
         name: Option<String>,
         from_table_version: Option<TableVersionId>,
-    ) -> Result<bool> {
-        let disk_manager = self.inner.runtime_env().disk_manager.clone();
-        let store = self.get_internal_object_store();
-
-        let partitions = plan_to_object_store(
-            &self.inner.state(),
-            physical_plan,
-            store,
-            disk_manager,
-            self.max_partition_size,
-        )
-        .await?;
+    ) -> Result<TableVersionId> {
+        let partition_ids = self.execute_plan_to_partitions(physical_plan).await?;
 
         // Create/Update table metadata
         let new_table_version_id;
@@ -705,12 +699,42 @@ impl DefaultSeafowlContext {
         }
 
         // Attach the partitions to the table
-        let partition_ids = self.partition_catalog.create_partitions(partitions).await?;
         self.partition_catalog
-            .append_partitions_to_table(partition_ids, new_table_version_id)
+            .append_partitions_to_table(partition_ids.clone(), new_table_version_id)
             .await?;
 
-        Ok(true)
+        Ok(new_table_version_id)
+    }
+
+    // Generate new physical Parquet partition files from the provided plan, upload to object store
+    // and persist partition metadata.
+    async fn execute_plan_to_partitions(
+        &self,
+        physical_plan: &Arc<dyn ExecutionPlan>,
+    ) -> Result<Vec<PhysicalPartitionId>> {
+        let disk_manager = self.inner.runtime_env().disk_manager.clone();
+        let store = self.get_internal_object_store();
+
+        // Generate new physical partition objects
+        let partitions = plan_to_object_store(
+            &self.inner.state(),
+            physical_plan,
+            store,
+            disk_manager,
+            self.max_partition_size,
+        )
+        .await?;
+
+        // Record partition metadata to the catalog
+        self.partition_catalog
+            .create_partitions(partitions)
+            .await
+            .map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "Failed persisting partition metadata {:?}",
+                    e
+                ))
+            })
     }
 
     // Copied from DataFUsion's source code (private functions)
@@ -989,7 +1013,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Delete(Delete {
-                            name: table_name,
+                            table: Arc::new(seafowl_table),
                             selection: selection_expr,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
@@ -1258,17 +1282,114 @@ impl SeafowlContext for DefaultSeafowlContext {
                             Err(DataFusionError::NotImplemented("UPDATE statements are currently unsupported,
                             as a workaround, use CREATE TABLE AS. See https://github.com/splitgraph/seafowl/issues/18".to_string()))
                         }
-                        SeafowlExtensionNode::Delete(_) => {
-                            // - Duplicate the table (new version)
-                            // - Similar to UPDATE, but just a filter
+                        SeafowlExtensionNode::Delete(Delete {
+                            table, selection, ..
+                        }) => {
+                            match selection {
+                                // If no qualifier is specified we're basically truncating the table;
+                                // Make a new (empty) table version and finish.
+                                None => {
+                                    self.execute_plan_to_table(
+                                        &make_dummy_exec(),
+                                        None,
+                                        Some(table.table_version_id),
+                                    )
+                                    .await?;
+                                }
+                                // A WHERE clause has been used; employ it to prune the filtration
+                                // down to only a subset of partitions, re-use the rest as is
+                                Some(filter) => {
+                                    // Load all pre-existing partitions
+                                    let partitions = self
+                                        .partition_catalog
+                                        .load_table_partitions(table.table_version_id)
+                                        .await?;
 
-                            // upload new files
-                            // replace partitions (sometimes we delete them)
+                                    match SeafowlPruningStatistics::from_partitions(
+                                        partitions.clone(),
+                                        table.schema(),
+                                    ) {
+                                        Ok(pruning_stats) => {
+                                            let new_table_version_id = self
+                                                .table_catalog
+                                                .create_new_table_version(
+                                                    table.table_version_id,
+                                                )
+                                                .await?;
 
-                            // really we want to be able to load all partitions + cols for a table and then
-                            // write that thing back to the db (set table partitions)
-                            Err(DataFusionError::NotImplemented("DELETE statements are currently unsupported,
-                            as a workaround, use CREATE TABLE AS. See https://github.com/splitgraph/seafowl/issues/19".to_string()))
+                                            // Determine the set of all partitions that will need to be filtered
+                                            let partitions_to_filter = HashSet::<
+                                                PhysicalPartitionId,
+                                            >::from_iter(
+                                                pruning_stats
+                                                    .prune(&[filter.clone()])
+                                                    .await
+                                                    .iter()
+                                                    .map(|p| p.partition_id.unwrap()),
+                                            );
+                                            // Group adjacent partitions eligible for filtering + re-chunking
+                                            // to minimise the number of sparse partitions
+                                            let mut filter_batch = Vec::with_capacity(
+                                                partitions_to_filter.len(),
+                                            );
+                                            let mut final_partition_ids =
+                                                Vec::with_capacity(partitions.len());
+
+                                            for partition in partitions {
+                                                if partitions_to_filter.contains(
+                                                    &partition.partition_id.unwrap(),
+                                                ) {
+                                                    filter_batch.push(partition);
+                                                    continue;
+                                                }
+
+                                                if !filter_batch.is_empty() {
+                                                    // execute scan + filter, add resulting partitions to final_partitions
+                                                    let plan = table
+                                                        .partition_scan_plan(
+                                                            &None,
+                                                            filter_batch.clone(),
+                                                            &[filter.clone()],
+                                                            None,
+                                                            self.internal_object_store
+                                                                .inner
+                                                                .clone(),
+                                                        )
+                                                        .await?;
+
+                                                    final_partition_ids.extend(
+                                                        self.execute_plan_to_partitions(
+                                                            &plan,
+                                                        )
+                                                        .await?,
+                                                    );
+                                                    filter_batch.clear();
+                                                }
+
+                                                final_partition_ids.push(
+                                                    partition.partition_id.unwrap(),
+                                                );
+                                            }
+
+                                            self.partition_catalog
+                                                .append_partitions_to_table(
+                                                    final_partition_ids,
+                                                    new_table_version_id,
+                                                )
+                                                .await?;
+                                        }
+                                        Err(error) => {
+                                            warn!(
+                                                "Failed constructing pruning statistics for table {} (version: {}) during DELETE planning: {}",
+                                                table.name, table.table_version_id, error
+                                            )
+                                            // TODO: perform a full table scan + filter
+                                        }
+                                    };
+                                }
+                            }
+
+                            Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::CreateFunction(CreateFunction {
                             name,
@@ -1433,7 +1554,9 @@ impl SeafowlContext for DefaultSeafowlContext {
         };
 
         self.execute_plan_to_table(&plan, full_table_name, from_table_version)
-            .await
+            .await?;
+
+        Ok(true)
     }
 }
 
@@ -1526,6 +1649,7 @@ pub mod test_utils {
             .with(predicate::eq(1))
             .returning(|_| {
                 Ok(vec![SeafowlPartition {
+                    partition_id: Some(1),
                     object_storage_id: Arc::from("some-file.parquet"),
                     row_count: 3,
                     columns: Arc::new(vec![]),
@@ -1730,6 +1854,7 @@ mod tests {
             partitions,
             vec![
                 SeafowlPartition {
+                    partition_id: None,
                     object_storage_id: Arc::from(PARTITION_1_FILE_NAME.to_string()),
                     row_count: 2,
                     columns: Arc::new(vec![
@@ -1760,6 +1885,7 @@ mod tests {
                     ])
                 },
                 SeafowlPartition {
+                    partition_id: None,
                     object_storage_id: Arc::from(PARTITION_2_FILE_NAME.to_string()),
                     row_count: 2,
                     columns: Arc::new(vec![
@@ -2007,7 +2133,8 @@ mod tests {
                         // TODO: the ergonomics of these mocks are pretty bad, standard with(predicate::eq(...)) doesn't
                         // show the actual value so we have to resort to this.
                         assert_eq!(*partitions, vec![SeafowlPartition {
-                                object_storage_id: Arc::from(EXPECTED_INSERT_FILE_NAME),
+                            partition_id: None,
+                            object_storage_id: Arc::from(EXPECTED_INSERT_FILE_NAME),
                                 row_count: 1,
                                 columns: Arc::new(vec![
                                     PartitionColumn {
