@@ -189,6 +189,7 @@ pub trait TableCatalog: Sync + Send {
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
+        inherit_partitions: bool,
     ) -> Result<TableVersionId>;
 
     async fn move_table(
@@ -493,9 +494,10 @@ impl TableCatalog for DefaultCatalog {
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
+        inherit_partitions: bool,
     ) -> Result<TableVersionId> {
         self.repository
-            .create_new_table_version(from_version)
+            .create_new_table_version(from_version, inherit_partitions)
             .await
             .map_err(|e| match e {
                 RepositoryError::FKConstraintViolation(_) => {

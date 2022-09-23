@@ -48,6 +48,9 @@ use std::sync::Arc;
 
 use datafusion::common::{Column, DFField, DFSchema, ToDFSchema};
 pub use datafusion::error::{DataFusionError as Error, Result};
+use datafusion::physical_expr::create_physical_expr;
+use datafusion::physical_expr::execution_props::ExecutionProps;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::{
@@ -574,7 +577,7 @@ impl DefaultSeafowlContext {
     }
 
     /// Resolve a table reference into a Seafowl table
-    fn try_get_seafowl_table(
+    pub fn try_get_seafowl_table(
         &self,
         table_name: impl Into<String> + std::fmt::Debug,
     ) -> Result<SeafowlTable> {
@@ -688,7 +691,7 @@ impl DefaultSeafowlContext {
                 // Duplicate the table version into a new one
                 new_table_version_id = self
                     .table_catalog
-                    .create_new_table_version(from_table_version)
+                    .create_new_table_version(from_table_version, true)
                     .await?;
             }
             _ => {
@@ -1285,107 +1288,127 @@ impl SeafowlContext for DefaultSeafowlContext {
                         SeafowlExtensionNode::Delete(Delete {
                             table, selection, ..
                         }) => {
-                            match selection {
-                                // If no qualifier is specified we're basically truncating the table;
-                                // Make a new (empty) table version and finish.
-                                None => {
-                                    self.execute_plan_to_table(
-                                        &make_dummy_exec(),
-                                        None,
-                                        Some(table.table_version_id),
-                                    )
-                                    .await?;
-                                }
+                            // If no qualifier is specified we're basically truncating the table;
+                            // Make a new (empty) table version and finish.
+                            let new_table_version_id = self
+                                .table_catalog
+                                .create_new_table_version(table.table_version_id, false)
+                                .await?;
+
+                            if let Some(expr) = selection {
                                 // A WHERE clause has been used; employ it to prune the filtration
                                 // down to only a subset of partitions, re-use the rest as is
-                                Some(filter) => {
-                                    // Load all pre-existing partitions
-                                    let partitions = self
-                                        .partition_catalog
-                                        .load_table_partitions(table.table_version_id)
-                                        .await?;
 
-                                    match SeafowlPruningStatistics::from_partitions(
-                                        partitions.clone(),
-                                        table.schema(),
-                                    ) {
-                                        Ok(pruning_stats) => {
-                                            let new_table_version_id = self
-                                                .table_catalog
-                                                .create_new_table_version(
-                                                    table.table_version_id,
-                                                )
-                                                .await?;
+                                // Load all pre-existing partitions
+                                let partitions = self
+                                    .partition_catalog
+                                    .load_table_partitions(table.table_version_id)
+                                    .await?;
 
-                                            // Determine the set of all partitions that will need to be filtered
-                                            let partitions_to_filter = HashSet::<
-                                                PhysicalPartitionId,
-                                            >::from_iter(
+                                // To simulate the effect of a WHERE clause from a DELETE, we
+                                // need to use the inverse clause in a SELECT when filtering
+                                let filter = create_physical_expr(
+                                    &expr.clone().not(),
+                                    &table.schema.arrow_schema.clone().to_dfschema()?,
+                                    table.schema().as_ref(),
+                                    &ExecutionProps::new(),
+                                )?;
+
+                                match SeafowlPruningStatistics::from_partitions(
+                                    partitions.clone(),
+                                    table.schema(),
+                                ) {
+                                    Ok(pruning_stats) => {
+                                        // Determine the set of all partitions that will need to be filtered
+                                        let partitions_to_filter =
+                                            HashSet::<PhysicalPartitionId>::from_iter(
                                                 pruning_stats
-                                                    .prune(&[filter.clone()])
+                                                    .prune(&[expr.clone()])
                                                     .await
                                                     .iter()
                                                     .map(|p| p.partition_id.unwrap()),
                                             );
-                                            // Group adjacent partitions eligible for filtering + re-chunking
-                                            // to minimise the number of sparse partitions
-                                            let mut filter_batch = Vec::with_capacity(
-                                                partitions_to_filter.len(),
-                                            );
-                                            let mut final_partition_ids =
-                                                Vec::with_capacity(partitions.len());
+                                        // Group adjacent partitions eligible for filtering + re-chunking
+                                        // to minimise the number of sparse partitions
+                                        let mut filter_batch = Vec::with_capacity(
+                                            partitions_to_filter.len(),
+                                        );
+                                        let mut final_partition_ids =
+                                            Vec::with_capacity(partitions.len());
 
-                                            for partition in partitions {
-                                                if partitions_to_filter.contains(
-                                                    &partition.partition_id.unwrap(),
-                                                ) {
-                                                    filter_batch.push(partition);
+                                        let mut skip_last = false;
+                                        for (ind, partition) in
+                                            partitions.iter().enumerate()
+                                        {
+                                            if partitions_to_filter.contains(
+                                                &partition.partition_id.unwrap(),
+                                            ) {
+                                                filter_batch.push(partition.clone());
+                                                if ind < partitions.len() - 1 {
+                                                    // Keep trying to batch adjacent partitions for filtering
+                                                    // up to the end
                                                     continue;
                                                 }
+                                                skip_last = true;
+                                            }
 
-                                                if !filter_batch.is_empty() {
-                                                    // execute scan + filter, add resulting partitions to final_partitions
-                                                    let plan = table
-                                                        .partition_scan_plan(
-                                                            &None,
-                                                            filter_batch.clone(),
-                                                            &[filter.clone()],
-                                                            None,
-                                                            self.internal_object_store
-                                                                .inner
-                                                                .clone(),
-                                                        )
-                                                        .await?;
+                                            if !filter_batch.is_empty() {
+                                                // Combine scan + filter plans, execute and store
+                                                // resulting partition ids
+                                                let base_scan = table
+                                                    .partition_scan_plan(
+                                                        &None,
+                                                        filter_batch.clone(),
+                                                        &[],
+                                                        None,
+                                                        self.internal_object_store
+                                                            .inner
+                                                            .clone(),
+                                                    )
+                                                    .await?;
 
-                                                    final_partition_ids.extend(
-                                                        self.execute_plan_to_partitions(
-                                                            &plan,
-                                                        )
-                                                        .await?,
-                                                    );
-                                                    filter_batch.clear();
-                                                }
+                                                // Wrap the base scan plan with the filter plan
+                                                let plan: Arc<dyn ExecutionPlan> =
+                                                    Arc::new(FilterExec::try_new(
+                                                        filter.clone(),
+                                                        base_scan,
+                                                    )?);
 
+                                                final_partition_ids.extend(
+                                                    self.execute_plan_to_partitions(
+                                                        &plan,
+                                                    )
+                                                    .await?,
+                                                );
+                                                filter_batch.clear();
+                                            }
+
+                                            if !skip_last {
                                                 final_partition_ids.push(
                                                     partition.partition_id.unwrap(),
                                                 );
                                             }
-
-                                            self.partition_catalog
-                                                .append_partitions_to_table(
-                                                    final_partition_ids,
-                                                    new_table_version_id,
-                                                )
-                                                .await?;
                                         }
-                                        Err(error) => {
-                                            warn!(
+
+                                        self.partition_catalog
+                                            .append_partitions_to_table(
+                                                final_partition_ids,
+                                                new_table_version_id,
+                                            )
+                                            .await?;
+                                    }
+                                    Err(error) => {
+                                        warn!(
                                                 "Failed constructing pruning statistics for table {} (version: {}) during DELETE planning: {}",
                                                 table.name, table.table_version_id, error
-                                            )
-                                            // TODO: perform a full table scan + filter
-                                        }
-                                    };
+                                            );
+
+                                        // TODO: Fallback to scan + filter across all partitions?
+                                        return Err(DataFusionError::Execution(
+                                            "Failed executing DELETE statement"
+                                                .to_string(),
+                                        ));
+                                    }
                                 }
                             }
 
@@ -2167,8 +2190,8 @@ mod tests {
             |tables| {
                 tables
                     .expect_create_new_table_version()
-                    .with(predicate::eq(0))
-                    .return_once(|_| Ok(1));
+                    .with(predicate::eq(0), predicate::eq(true))
+                    .return_once(|_, _| Ok(1));
             },
         )
         .await;

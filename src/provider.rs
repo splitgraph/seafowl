@@ -181,6 +181,8 @@ impl SeafowlTable {
         };
 
         let format = ParquetFormat::default();
+        // TODO: filters here probably does nothing, since we handle pruning explicitly ourselves via
+        // `partitions` param
         format.create_physical_plan(config, filters).await
     }
 }

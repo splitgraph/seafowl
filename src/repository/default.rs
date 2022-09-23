@@ -345,6 +345,7 @@ impl Repository for $repo {
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
+        inherit_partitions: bool,
     ) -> Result<TableVersionId, Error> {
         let new_version = sqlx::query(
             "INSERT INTO table_version (table_id)
@@ -365,14 +366,16 @@ impl Repository for $repo {
         .execute(&self.executor)
         .await.map_err($repo::interpret_error)?;
 
-        sqlx::query(
-            "INSERT INTO table_partition (table_version_id, physical_partition_id)
-            SELECT $2, physical_partition_id FROM table_partition WHERE table_version_id = $1;",
-        )
-        .bind(from_version)
-        .bind(new_version)
-        .execute(&self.executor)
-        .await.map_err($repo::interpret_error)?;
+        if inherit_partitions {
+            sqlx::query(
+                "INSERT INTO table_partition (table_version_id, physical_partition_id)
+                SELECT $2, physical_partition_id FROM table_partition WHERE table_version_id = $1;",
+            )
+            .bind(from_version)
+            .bind(new_version)
+            .execute(&self.executor)
+            .await.map_err($repo::interpret_error)?;
+        }
 
         Ok(new_version)
     }

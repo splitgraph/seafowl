@@ -129,6 +129,7 @@ pub trait Repository: Send + Sync + Debug {
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
+        inherit_partitions: bool,
     ) -> Result<TableVersionId, Error>;
 
     async fn move_table(
@@ -305,7 +306,7 @@ pub mod tests {
 
         // Duplicate the table
         let new_version_id = repository
-            .create_new_table_version(table_version_id)
+            .create_new_table_version(table_version_id, true)
             .await
             .unwrap();
 
@@ -395,7 +396,7 @@ pub mod tests {
 
         // Duplicate the table, check it has the same partitions
         let new_version_id = repository
-            .create_new_table_version(table_version_id)
+            .create_new_table_version(table_version_id, true)
             .await
             .unwrap();
 
