@@ -40,14 +40,13 @@ datafusion = "12"
 datafusion-expr = "12"
 datafusion-proto = "12"
 futures = "0.3"
-
-# passing to DF's query planner
 hashbrown = { version = "0.12", features = ["raw"] }
 hex = ">=0.4.0"
 itertools = ">=0.10.0"
 log = "0.4"
 moka = { version = "0.9.3", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.5.0"
+percent-encoding = "2.2.0"
 pretty_env_logger = "0.4"
 prost = "0.11"
 

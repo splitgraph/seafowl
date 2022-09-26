@@ -19,6 +19,7 @@ use datafusion_expr::logical_plan::{LogicalPlan, PlanVisitor, TableScan};
 use futures::{future, TryStreamExt};
 use hex::encode;
 use log::{debug, info};
+use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -212,18 +213,20 @@ pub fn cached_read_query_authz(
 /// GET /q/[query hash]
 pub async fn cached_read_query(
     query_hash: String,
-    query: String,
+    raw_query: String,
     if_none_match: Option<String>,
     context: Arc<dyn SeafowlContext>,
 ) -> Result<Response, ApiError> {
     // Ignore dots at the end
     let query_hash = query_hash.split('.').next().unwrap();
 
-    let hash_str = str_to_hex_hash(&query);
+    let decoded_query = percent_decode_str(&raw_query).decode_utf8()?;
+
+    let hash_str = str_to_hex_hash(&decoded_query);
 
     debug!(
         "Received query: {}, URL hash {}, actual hash {}",
-        query, query_hash, hash_str
+        decoded_query, query_hash, hash_str
     );
 
     // Verify the query hash matches the query
@@ -232,7 +235,7 @@ pub async fn cached_read_query(
     };
 
     // Plan the query
-    let plan = context.create_logical_plan(&query).await?;
+    let plan = context.create_logical_plan(&decoded_query).await?;
     debug!("Query plan: {:?}", plan);
 
     // Write queries should come in as POST requests
@@ -562,6 +565,10 @@ mod tests {
     }
 
     const SELECT_QUERY: &str = "SELECT COUNT(*) AS c FROM test_table";
+    const PERCENT_ENCODED_SELECT_QUERY: &str =
+        "SELECT%20COUNT(*)%20AS%20c%20FROM%20test_table";
+    const BAD_PERCENT_ENCODED_SELECT_QUERY: &str =
+        "%99SELECT%0A%20%20COUNT(*)%20AS%20c%0AFROM%20test_table";
     const INSERT_QUERY: &str = "INSERT INTO test_table VALUES (2)";
     const CREATE_QUERY: &str = "CREATE TABLE other_test_table(col_1 INT)";
     const SELECT_QUERY_HASH: &str =
@@ -721,6 +728,40 @@ mod tests {
             .await;
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(resp.body(), "NOT_MODIFIED");
+    }
+
+    #[tokio::test]
+    async fn test_get_encoded_query_special_chars() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
+
+        let resp = request()
+            .method("GET")
+            .path(format!("/q/{}.bin", SELECT_QUERY_HASH).as_str())
+            .header(QUERY_HEADER, PERCENT_ENCODED_SELECT_QUERY)
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.body(), "{\"c\":1}\n");
+        assert_eq!(
+            resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
+            V1_ETAG
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_bad_encoding() {
+        let context = in_memory_context_with_single_table().await;
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
+
+        let resp = request()
+            .method("GET")
+            .path(format!("/q/{}.bin", SELECT_QUERY_HASH).as_str())
+            .header(QUERY_HEADER, BAD_PERCENT_ENCODED_SELECT_QUERY)
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.body(), "QUERY_DECODE_ERROR");
     }
 
     #[tokio::test]

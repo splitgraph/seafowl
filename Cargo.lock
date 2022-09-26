@@ -3278,6 +3278,7 @@ dependencies = [
  "mockall",
  "moka",
  "object_store",
+ "percent-encoding",
  "pretty_env_logger",
  "prost",
  "rand 0.8.5",
