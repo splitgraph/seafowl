@@ -8,7 +8,9 @@ use async_trait::async_trait;
 
 use datafusion::common::Column;
 use datafusion::logical_expr::TableProviderFilterPushDown;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::DisplayFormatType;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
@@ -184,6 +186,20 @@ impl SeafowlTable {
         // TODO: filters here probably does nothing, since we handle pruning explicitly ourselves via
         // `partitions` param
         format.create_physical_plan(config, filters).await
+    }
+
+    // Wrap a base scan over the supplied partitions with a filter plan
+    pub async fn partition_filter_plan(
+        &self,
+        partitions: Vec<SeafowlPartition>,
+        filter: Arc<dyn PhysicalExpr>,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let base_scan = self
+            .partition_scan_plan(&None, partitions, &[], None, object_store)
+            .await?;
+
+        Ok(Arc::new(FilterExec::try_new(filter, base_scan)?))
     }
 }
 

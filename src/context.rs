@@ -50,7 +50,6 @@ use datafusion::common::{Column, DFField, DFSchema, ToDFSchema};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_expr::execution_props::ExecutionProps;
-use datafusion::physical_plan::filter::FilterExec;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::{
@@ -1314,6 +1313,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     &ExecutionProps::new(),
                                 )?;
 
+                                let mut final_partition_ids =
+                                    Vec::with_capacity(partitions.len());
+
                                 match SeafowlPruningStatistics::from_partitions(
                                     partitions.clone(),
                                     table.schema(),
@@ -1329,9 +1331,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                                                     .iter()
                                                     .map(|p| p.partition_id.unwrap()),
                                             );
-
-                                        let mut final_partition_ids =
-                                            Vec::with_capacity(partitions.len());
 
                                         // Group adjacent partitions eligible for filtering
                                         let mut partitions_grouped: Vec<(
@@ -1360,26 +1359,16 @@ impl SeafowlContext for DefaultSeafowlContext {
                                                 continue;
                                             }
 
-                                            // Combine scan + filter plans, execute and store
-                                            // resulting partition ids
-                                            let base_scan = table
-                                                .partition_scan_plan(
-                                                    &None,
+                                            // Get the plan which will eliminate the affected rows
+                                            let filter_plan = table
+                                                .partition_filter_plan(
                                                     group,
-                                                    &[],
-                                                    None,
+                                                    filter.clone(),
                                                     self.internal_object_store
                                                         .inner
                                                         .clone(),
                                                 )
                                                 .await?;
-
-                                            // Wrap the base scan plan with the filter plan
-                                            let filter_plan: Arc<dyn ExecutionPlan> =
-                                                Arc::new(FilterExec::try_new(
-                                                    filter.clone(),
-                                                    base_scan,
-                                                )?);
 
                                             final_partition_ids.extend(
                                                 self.execute_plan_to_partitions(
@@ -1388,27 +1377,35 @@ impl SeafowlContext for DefaultSeafowlContext {
                                                 .await?,
                                             );
                                         }
-
-                                        self.partition_catalog
-                                            .append_partitions_to_table(
-                                                final_partition_ids,
-                                                new_table_version_id,
-                                            )
-                                            .await?;
                                     }
                                     Err(error) => {
                                         warn!(
-                                                "Failed constructing pruning statistics for table {} (version: {}) during DELETE planning: {}",
+                                                "Failed constructing pruning statistics for table {} (version: {}) during DELETE execution: {}",
                                                 table.name, table.table_version_id, error
                                             );
 
-                                        // TODO: Fallback to scan + filter across all partitions?
-                                        return Err(DataFusionError::Execution(
-                                            "Failed executing DELETE statement"
-                                                .to_string(),
-                                        ));
+                                        // Fallback to scan + filter across all partitions
+                                        let filter_plan = table
+                                            .partition_filter_plan(
+                                                partitions,
+                                                filter.clone(),
+                                                self.internal_object_store.inner.clone(),
+                                            )
+                                            .await?;
+
+                                        final_partition_ids = self
+                                            .execute_plan_to_partitions(&filter_plan)
+                                            .await?;
                                     }
                                 }
+
+                                // Link the new table version with the corresponding partitions
+                                self.partition_catalog
+                                    .append_partitions_to_table(
+                                        final_partition_ids,
+                                        new_table_version_id,
+                                    )
+                                    .await?;
                             }
 
                             Ok(make_dummy_exec())
