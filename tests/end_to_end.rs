@@ -1075,16 +1075,16 @@ async fn test_vacuum_command() {
 
 #[tokio::test]
 async fn test_delete_statement() {
-    async fn scan_partitions(
+    async fn scan_partition(
         context: &DefaultSeafowlContext,
         projection: Option<Vec<usize>>,
-        partitions: SeafowlPartition,
+        partition: SeafowlPartition,
     ) -> Vec<RecordBatch> {
         let table = context.try_get_seafowl_table("test_table").unwrap();
         let plan = table
             .partition_scan_plan(
                 &projection,
-                vec![partitions],
+                vec![partition],
                 &[],
                 None,
                 context.internal_object_store.inner.clone(),
@@ -1158,7 +1158,7 @@ async fn test_delete_statement() {
         .unwrap();
 
     // Assert result of the new partition with id 5
-    let results = scan_partitions(&context, Some(vec![4]), partitions[2].clone()).await;
+    let results = scan_partition(&context, Some(vec![4]), partitions[2].clone()).await;
     let expected = vec![
         "+------------+",
         "| some_value |",
@@ -1177,7 +1177,6 @@ async fn test_delete_statement() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    // TODO: the partition order is swapped here
     let expected = vec![
         "+------------+",
         "| some_value |",
@@ -1208,30 +1207,94 @@ async fn test_delete_statement() {
     assert_partition_ids(&context, 7, vec![1, 4, 5]).await;
 
     //
-    // Execute DELETE with multiple conditions, removing entire partition 4, and trimming partitions 1 and 5
+    // Add another partition for table_version 8
     //
     let plan = context
-        .plan_query("DELETE FROM test_table WHERE some_value < 43 OR some_value > 45")
+        .plan_query("INSERT INTO test_table (some_value) VALUES (48), (49), (50)")
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 8, vec![6]).await;
+    assert_partition_ids(&context, 8, vec![1, 4, 5, 6]).await;
 
-    // Verify results
+    //
+    // Execute DELETE not affecting only partition with id 4, while trimming/combining the rest
+    //
     let plan = context
-        .plan_query("SELECT some_value FROM test_table")
+        .plan_query("DELETE FROM test_table WHERE some_value IN (43, 45, 49)")
         .await
         .unwrap();
-    let results = context.collect(plan).await.unwrap();
+    context.collect(plan).await.unwrap();
 
+    assert_partition_ids(&context, 9, vec![4, 7, 8]).await;
+
+    // Verify new partition contents
+    let partitions = context
+        .partition_catalog
+        .load_table_partitions(9 as TableVersionId)
+        .await
+        .unwrap();
+
+    let results = scan_partition(&context, Some(vec![4]), partitions[1].clone()).await;
     let expected = vec![
         "+------------+",
         "| some_value |",
         "+------------+",
-        "| 43         |",
+        "| 42         |",
         "| 44         |",
-        "| 45         |",
+        "+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    let results = scan_partition(&context, Some(vec![4]), partitions[2].clone()).await;
+    let expected = vec![
+        "+------------+",
+        "| some_value |",
+        "+------------+",
+        "| 46         |",
+        "| 46         |",
+        "| 48         |",
+        "| 50         |",
+        "+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    //
+    // Execute DELETE with multiple qualifiers
+    //
+    let plan = context
+        .plan_query("DELETE FROM test_table WHERE some_value < 41 OR some_value > 46")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    assert_partition_ids(&context, 10, vec![7, 9, 10]).await;
+
+    // Verify new partition contents
+    let partitions = context
+        .partition_catalog
+        .load_table_partitions(10 as TableVersionId)
+        .await
+        .unwrap();
+
+    let results = scan_partition(&context, Some(vec![4]), partitions[1].clone()).await;
+    let expected = vec![
+        "+------------+",
+        "| some_value |",
+        "+------------+",
+        "| 42         |",
+        "| 41         |",
+        "+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    let results = scan_partition(&context, Some(vec![4]), partitions[2].clone()).await;
+    let expected = vec![
+        "+------------+",
+        "| some_value |",
+        "+------------+",
+        "| 46         |",
+        "| 46         |",
         "+------------+",
     ];
     assert_batches_eq!(expected, &results);
@@ -1242,7 +1305,7 @@ async fn test_delete_statement() {
     let plan = context.plan_query("DELETE FROM test_table").await.unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 9, vec![]).await;
+    assert_partition_ids(&context, 11, vec![]).await;
 
     // Verify results
     let plan = context
