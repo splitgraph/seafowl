@@ -8,7 +8,9 @@ use async_trait::async_trait;
 
 use datafusion::common::Column;
 use datafusion::logical_expr::TableProviderFilterPushDown;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::DisplayFormatType;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
@@ -36,10 +38,12 @@ use datafusion_proto::protobuf;
 
 use futures::future;
 use log::warn;
+use object_store::ObjectStore;
 use prost::Message;
 
 use object_store::path::Path;
 
+use crate::data_types::PhysicalPartitionId;
 use crate::{
     catalog::PartitionCatalog,
     data_types::{TableId, TableVersionId},
@@ -101,6 +105,7 @@ impl SchemaProvider for SeafowlCollection {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SeafowlPartition {
+    pub partition_id: Option<PhysicalPartitionId>,
     pub object_storage_id: Arc<str>,
     pub row_count: i32,
     pub columns: Arc<Vec<PartitionColumn>>,
@@ -139,6 +144,61 @@ impl std::fmt::Debug for SeafowlTable {
             .field("table_id", &self.table_id)
             .field("table_version_id", &self.table_version_id)
             .finish()
+    }
+}
+
+impl SeafowlTable {
+    // This code is partially taken from ListingTable but adapted to use an arbitrary
+    // list of Parquet URLs rather than all files in a given directory.
+    pub async fn partition_scan_plan(
+        &self,
+        projection: &Option<Vec<usize>>,
+        partitions: Vec<SeafowlPartition>,
+        filters: &[Expr],
+        limit: Option<usize>,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Build a list of lists of PartitionedFile groups (one file = one partition for the scan)
+        let partitioned_file_lists: Vec<Vec<PartitionedFile>> =
+            future::try_join_all(partitions.iter().map(|p| async {
+                let path = Path::parse(&p.object_storage_id)?;
+                let meta = object_store.head(&path).await?;
+                Ok(vec![PartitionedFile {
+                    object_meta: meta,
+                    partition_values: vec![],
+                    range: None,
+                    extensions: None,
+                }]) as Result<_>
+            }))
+            .await?;
+
+        let config = FileScanConfig {
+            object_store_url: internal_object_store_url(),
+            file_schema: self.schema(),
+            file_groups: partitioned_file_lists,
+            statistics: Statistics::default(),
+            projection: projection.clone(),
+            limit,
+            table_partition_cols: vec![],
+        };
+
+        let format = ParquetFormat::default();
+        format.create_physical_plan(config, filters).await
+    }
+
+    // Wrap a base scan over the supplied partitions with a filter plan
+    pub async fn partition_filter_plan(
+        &self,
+        partitions: Vec<SeafowlPartition>,
+        filter: Arc<dyn PhysicalExpr>,
+        scan_filters: &[Expr],
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let base_scan = self
+            .partition_scan_plan(&None, partitions, scan_filters, None, object_store)
+            .await?;
+
+        Ok(Arc::new(FilterExec::try_new(filter, base_scan)?))
     }
 }
 
@@ -184,43 +244,15 @@ impl TableProvider for SeafowlTable {
             };
         }
 
-        // This code is partially taken from ListingTable but adapted to use an arbitrary
-        // list of Parquet URLs rather than all files in a given directory.
-
         // Get our object store (with a hardcoded scheme)
         let object_store_url = internal_object_store_url();
         let store = ctx.runtime_env.object_store(object_store_url.clone())?;
 
-        // Build a list of lists of PartitionedFile groups (one file = one partition for the scan)
-        let partitioned_file_lists: Vec<Vec<PartitionedFile>> =
-            future::try_join_all(partitions.iter().map(|p| async {
-                let path = Path::parse(&p.object_storage_id)?;
-                let meta = store.head(&path).await?;
-                Ok(vec![PartitionedFile {
-                    object_meta: meta,
-                    partition_values: vec![],
-                    range: None,
-                    extensions: None,
-                }]) as Result<_>
-            }))
-            .await?;
-
-        let config = FileScanConfig {
-            object_store_url,
-            file_schema: self.schema(),
-            file_groups: partitioned_file_lists,
-            statistics: Statistics::default(),
-            projection: projection.clone(),
-            limit,
-            table_partition_cols: vec![],
-        };
-
-        let format = ParquetFormat::default();
-        let plan = format.create_physical_plan(config, filters).await?;
-
         Ok(Arc::new(SeafowlBaseTableScanNode {
-            partitions: Arc::new(partitions),
-            inner: plan,
+            partitions: Arc::new(partitions.clone()),
+            inner: self
+                .partition_scan_plan(projection, partitions, filters, limit, store)
+                .await?,
         }))
     }
 
@@ -244,7 +276,7 @@ pub struct SeafowlPruningStatistics {
 
 impl SeafowlPruningStatistics {
     // Generate maps of min/max/null stats per column, parsing the serialized values stored in partitions
-    fn from_partitions(
+    pub fn from_partitions(
         partitions: Vec<SeafowlPartition>,
         schema: SchemaRef,
     ) -> Result<Self> {
@@ -353,7 +385,7 @@ impl SeafowlPruningStatistics {
     }
 
     // Prune away partitions that are refuted by the provided filter expressions
-    async fn prune(&self, filters: &[Expr]) -> Vec<SeafowlPartition> {
+    pub async fn prune(&self, filters: &[Expr]) -> Vec<SeafowlPartition> {
         let mut partition_mask = vec![true; self.partition_count];
 
         if !filters.is_empty() {
@@ -513,6 +545,7 @@ mod tests {
     use object_store::{memory::InMemory, path::Path, ObjectStore};
     use test_case::test_case;
 
+    use crate::data_types::PhysicalPartitionId;
     use crate::provider::{PartitionColumn, SeafowlPruningStatistics};
     use crate::{
         catalog::MockPartitionCatalog,
@@ -565,6 +598,7 @@ mod tests {
             .with(predicate::eq(1))
             .returning(|_| {
                 Ok(vec![SeafowlPartition {
+                    partition_id: Some(1),
                     object_storage_id: Arc::from("some-file.parquet"),
                     row_count: 3,
                     columns: Arc::new(vec![]),
@@ -690,6 +724,7 @@ mod tests {
             );
 
             partitions.push(SeafowlPartition {
+                partition_id: Some(ind as PhysicalPartitionId),
                 object_storage_id: Arc::from(format!("par{}.parquet", ind)),
                 row_count: 3,
                 columns: Arc::new(vec![PartitionColumn {

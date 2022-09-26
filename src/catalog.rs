@@ -189,6 +189,7 @@ pub trait TableCatalog: Sync + Send {
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
+        inherit_partitions: bool,
     ) -> Result<TableVersionId>;
 
     async fn move_table(
@@ -282,6 +283,9 @@ impl DefaultCatalog {
         let mut iter = partition_columns.peekable();
 
         SeafowlPartition {
+            partition_id: Some(
+                iter.peek().unwrap().table_partition_id as PhysicalPartitionId,
+            ),
             object_storage_id: Arc::from(iter.peek().unwrap().object_storage_id.clone()),
             row_count: iter.peek().unwrap().row_count,
             columns: Arc::new(
@@ -490,9 +494,10 @@ impl TableCatalog for DefaultCatalog {
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
+        inherit_partitions: bool,
     ) -> Result<TableVersionId> {
         self.repository
-            .create_new_table_version(from_version)
+            .create_new_table_version(from_version, inherit_partitions)
             .await
             .map_err(|e| match e {
                 RepositoryError::FKConstraintViolation(_) => {

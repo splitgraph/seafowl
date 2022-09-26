@@ -129,6 +129,7 @@ pub trait Repository: Send + Sync + Debug {
     async fn create_new_table_version(
         &self,
         from_version: TableVersionId,
+        inherit_partitions: bool,
     ) -> Result<TableVersionId, Error>;
 
     async fn move_table(
@@ -177,6 +178,7 @@ pub mod tests {
 
     fn get_test_partition() -> SeafowlPartition {
         SeafowlPartition {
+            partition_id: Some(1),
             object_storage_id: Arc::from(EXPECTED_FILE_NAME.to_string()),
             row_count: 2,
             columns: Arc::new(vec![
@@ -304,7 +306,7 @@ pub mod tests {
 
         // Duplicate the table
         let new_version_id = repository
-            .create_new_table_version(table_version_id)
+            .create_new_table_version(table_version_id, true)
             .await
             .unwrap();
 
@@ -394,7 +396,7 @@ pub mod tests {
 
         // Duplicate the table, check it has the same partitions
         let new_version_id = repository
-            .create_new_table_version(table_version_id)
+            .create_new_table_version(table_version_id, true)
             .await
             .unwrap();
 
