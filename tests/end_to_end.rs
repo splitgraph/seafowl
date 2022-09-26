@@ -1196,6 +1196,18 @@ async fn test_delete_statement() {
     assert_batches_eq!(expected, &results);
 
     //
+    // Execute a no-op DELETE, leaving the new table version the same as the prior one
+    //
+
+    let plan = context
+        .plan_query("DELETE FROM test_table WHERE some_value < 35")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    assert_partition_ids(&context, 7, vec![1, 4, 5]).await;
+
+    //
     // Execute DELETE with multiple conditions, removing entire partition 4, and trimming partitions 1 and 5
     //
     let plan = context
@@ -1204,7 +1216,7 @@ async fn test_delete_statement() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 7, vec![6]).await;
+    assert_partition_ids(&context, 8, vec![6]).await;
 
     // Verify results
     let plan = context
@@ -1230,7 +1242,7 @@ async fn test_delete_statement() {
     let plan = context.plan_query("DELETE FROM test_table").await.unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 8, vec![]).await;
+    assert_partition_ids(&context, 9, vec![]).await;
 
     // Verify results
     let plan = context

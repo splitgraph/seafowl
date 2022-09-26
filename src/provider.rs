@@ -183,8 +183,6 @@ impl SeafowlTable {
         };
 
         let format = ParquetFormat::default();
-        // TODO: filters here probably does nothing, since we handle pruning explicitly ourselves via
-        // `partitions` param
         format.create_physical_plan(config, filters).await
     }
 
@@ -193,10 +191,11 @@ impl SeafowlTable {
         &self,
         partitions: Vec<SeafowlPartition>,
         filter: Arc<dyn PhysicalExpr>,
+        scan_filters: &[Expr],
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let base_scan = self
-            .partition_scan_plan(&None, partitions, &[], None, object_store)
+            .partition_scan_plan(&None, partitions, scan_filters, None, object_store)
             .await?;
 
         Ok(Arc::new(FilterExec::try_new(filter, base_scan)?))

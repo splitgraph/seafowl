@@ -1364,6 +1364,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                                 .partition_filter_plan(
                                                     group,
                                                     filter.clone(),
+                                                    &[expr.clone()],
                                                     self.internal_object_store
                                                         .inner
                                                         .clone(),
@@ -1389,6 +1390,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                             .partition_filter_plan(
                                                 partitions,
                                                 filter.clone(),
+                                                &[expr.clone()],
                                                 self.internal_object_store.inner.clone(),
                                             )
                                             .await?;
