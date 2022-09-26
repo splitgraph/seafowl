@@ -67,6 +67,7 @@ pub enum ApiError {
     UploadBodyLoadError(warp::Error),
     UploadHasHeaderParseError,
     UploadUnsupportedFileFormat(String),
+    QueryDecodeError,
 }
 
 // Wrap DataFusion errors so that we can automagically return an
@@ -74,6 +75,13 @@ pub enum ApiError {
 impl From<DataFusionError> for ApiError {
     fn from(err: DataFusionError) -> Self {
         ApiError::DataFusionError(err)
+    }
+}
+
+// Similarly, wrap Utf8 string decode errors.
+impl From<std::str::Utf8Error> for ApiError {
+    fn from(_e: std::str::Utf8Error) -> ApiError {
+        ApiError::QueryDecodeError
     }
 }
 
@@ -103,6 +111,7 @@ impl ApiError {
             ApiError::UploadFileLoadError(e) => (StatusCode::BAD_REQUEST, format!("Error loading the upload file: {:}", e)),
             ApiError::UploadHasHeaderParseError => (StatusCode::BAD_REQUEST, "Invalid has_header".to_string()),
             ApiError::UploadUnsupportedFileFormat(filename) => (StatusCode::BAD_REQUEST, format!("File {} not supported", filename)),
+            ApiError::QueryDecodeError => (StatusCode::BAD_REQUEST, "QUERY_DECODE_ERROR".to_string()),
         }
     }
 
