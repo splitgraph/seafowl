@@ -1319,7 +1319,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     table.schema(),
                                 ) {
                                     Ok(pruning_stats) => {
-                                        // Determine the set of all partitions that will need to be filtered
+                                        // Determine the set of all partition ids that will need to
+                                        // be filtered
                                         let partitions_to_filter =
                                             HashSet::<PhysicalPartitionId>::from_iter(
                                                 pruning_stats
@@ -1328,66 +1329,64 @@ impl SeafowlContext for DefaultSeafowlContext {
                                                     .iter()
                                                     .map(|p| p.partition_id.unwrap()),
                                             );
-                                        // Group adjacent partitions eligible for filtering + re-chunking
-                                        // to minimise the number of sparse partitions
-                                        let mut filter_batch = Vec::with_capacity(
-                                            partitions_to_filter.len(),
-                                        );
+
                                         let mut final_partition_ids =
                                             Vec::with_capacity(partitions.len());
 
-                                        let mut skip_last = false;
-                                        for (ind, partition) in
-                                            partitions.iter().enumerate()
+                                        // Group adjacent partitions eligible for filtering
+                                        let mut partitions_grouped: Vec<(
+                                            bool,
+                                            Vec<SeafowlPartition>,
+                                        )> = Vec::new();
+                                        for (keep, group) in
+                                            &partitions.into_iter().group_by(|p| {
+                                                !partitions_to_filter
+                                                    .contains(&p.partition_id.unwrap())
+                                            })
                                         {
-                                            if partitions_to_filter.contains(
-                                                &partition.partition_id.unwrap(),
-                                            ) {
-                                                filter_batch.push(partition.clone());
-                                                if ind < partitions.len() - 1 {
-                                                    // Keep trying to batch adjacent partitions for filtering
-                                                    // up to the end
-                                                    continue;
-                                                }
-                                                skip_last = true;
-                                            }
+                                            partitions_grouped
+                                                .push((keep, group.collect()))
+                                        }
 
-                                            if !filter_batch.is_empty() {
-                                                // Combine scan + filter plans, execute and store
-                                                // resulting partition ids
-                                                let base_scan = table
-                                                    .partition_scan_plan(
-                                                        &None,
-                                                        filter_batch.clone(),
-                                                        &[],
-                                                        None,
-                                                        self.internal_object_store
-                                                            .inner
-                                                            .clone(),
-                                                    )
-                                                    .await?;
-
-                                                // Wrap the base scan plan with the filter plan
-                                                let plan: Arc<dyn ExecutionPlan> =
-                                                    Arc::new(FilterExec::try_new(
-                                                        filter.clone(),
-                                                        base_scan,
-                                                    )?);
-
+                                        for (keep, group) in partitions_grouped {
+                                            if keep {
+                                                // Inherit the partition(s) as is from the previous
+                                                // table version
                                                 final_partition_ids.extend(
-                                                    self.execute_plan_to_partitions(
-                                                        &plan,
-                                                    )
-                                                    .await?,
+                                                    group
+                                                        .iter()
+                                                        .map(|p| p.partition_id.unwrap()),
                                                 );
-                                                filter_batch.clear();
+                                                continue;
                                             }
 
-                                            if !skip_last {
-                                                final_partition_ids.push(
-                                                    partition.partition_id.unwrap(),
-                                                );
-                                            }
+                                            // Combine scan + filter plans, execute and store
+                                            // resulting partition ids
+                                            let base_scan = table
+                                                .partition_scan_plan(
+                                                    &None,
+                                                    group,
+                                                    &[],
+                                                    None,
+                                                    self.internal_object_store
+                                                        .inner
+                                                        .clone(),
+                                                )
+                                                .await?;
+
+                                            // Wrap the base scan plan with the filter plan
+                                            let filter_plan: Arc<dyn ExecutionPlan> =
+                                                Arc::new(FilterExec::try_new(
+                                                    filter.clone(),
+                                                    base_scan,
+                                                )?);
+
+                                            final_partition_ids.extend(
+                                                self.execute_plan_to_partitions(
+                                                    &filter_plan,
+                                                )
+                                                .await?,
+                                            );
                                         }
 
                                         self.partition_catalog
