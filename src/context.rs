@@ -1333,19 +1333,18 @@ impl SeafowlContext for DefaultSeafowlContext {
                                             );
 
                                         // Group adjacent partitions eligible for filtering
-                                        let mut partitions_grouped: Vec<(
+                                        let partitions_grouped: Vec<(
                                             bool,
                                             Vec<SeafowlPartition>,
-                                        )> = Vec::new();
-                                        for (keep, group) in
-                                            &partitions.into_iter().group_by(|p| {
+                                        )> = partitions
+                                            .into_iter()
+                                            .group_by(|p| {
                                                 !partitions_to_filter
                                                     .contains(&p.partition_id.unwrap())
                                             })
-                                        {
-                                            partitions_grouped
-                                                .push((keep, group.collect()))
-                                        }
+                                            .into_iter()
+                                            .map(|(keep, group)| (keep, group.collect()))
+                                            .collect();
 
                                         for (keep, group) in partitions_grouped {
                                             if keep {
@@ -1381,9 +1380,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     }
                                     Err(error) => {
                                         warn!(
-                                                "Failed constructing pruning statistics for table {} (version: {}) during DELETE execution: {}",
-                                                table.name, table.table_version_id, error
-                                            );
+                                            "Failed constructing pruning statistics for table {} (version: {}) during DELETE execution: {}",
+                                            table.name, table.table_version_id, error
+                                        );
 
                                         // Fallback to scan + filter across all partitions
                                         let filter_plan = table
