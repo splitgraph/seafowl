@@ -68,7 +68,7 @@ Or download it from [the releases page](https://github.com/splitgraph/seafowl/re
 without Docker:
 
 ```bash
-./seafowl
+SEAFOWL__FRONTEND__HTTP__WRITE_ACCESS=any ./seafowl
 ```
 
 Add a Parquet dataset from HTTP:
@@ -77,11 +77,10 @@ Add a Parquet dataset from HTTP:
 curl -i -H "Content-Type: application/json" localhost:8080/q -d@- <<EOF
 {"query": "CREATE EXTERNAL TABLE tripdata \
 STORED AS PARQUET \
-LOCATION 'https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2022-01.parquet'"}
+LOCATION 'https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2022-01.parquet;
+CREATE TABLE tripdata AS SELECT * FROM staging.tripdata;
+'"}
 EOF
-
-curl -i -H "Content-Type: application/json" localhost:8080/q \
-  -d '{"query": "CREATE TABLE tripdata AS SELECT * FROM staging.tripdata"}'
 ```
 
 Run a query:
