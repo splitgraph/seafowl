@@ -50,6 +50,9 @@ use datafusion::common::{Column, DFField, DFSchema, ToDFSchema};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_expr::execution_props::ExecutionProps;
+use datafusion::physical_expr::expressions::Column as ColumnExpr;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::PhysicalExpr;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::{
@@ -87,7 +90,7 @@ use crate::{
     catalog::{FunctionCatalog, TableCatalog},
     data_types::DatabaseId,
     nodes::{
-        Assignment, CreateFunction, CreateTable, Delete, DropSchema, Insert, RenameTable,
+        CreateFunction, CreateTable, Delete, DropSchema, Insert, RenameTable,
         SeafowlExtensionNode, Update, Vacuum,
     },
     schema::Schema as SeafowlSchema,
@@ -974,25 +977,28 @@ impl SeafowlContext for DefaultSeafowlContext {
                     // Scan through the original table (with selection) and:
                     // SELECT [for each col, "col AS col" if not an assignment, otherwise "expr AS col"]
                     //   FROM original_table WHERE [selection]
-                    // Somehow also split the result by existing partition boundaries and leave unchanged partitions alone
+                    // Also split the result by existing partition boundaries and leave unchanged partitions alone
 
-                    // TODO we need to load the table object here in order to validate the UPDATE clauses
-                    let table_schema: DFSchema = DFSchema::empty();
+                    // Get the actual table schema, since DF needs to validate unqualified columns
+                    // (i.e. ones referenced only by column name, lacking the relation name)
+                    let table_name = name.to_string();
+                    let seafowl_table = self.try_get_seafowl_table(&table_name)?;
+                    let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
 
                     let selection_expr = match selection {
                         None => None,
                         Some(expr) => Some(query_planner.sql_to_rex(expr, &table_schema, &mut HashMap::new())?),
                     };
 
-                    let assignments_expr = assignments.iter().map(|a| {
-                        Ok(Assignment { column: compound_identifier_to_column(&a.id)?, expr: query_planner.sql_to_rex(a.value.clone(), &table_schema, &mut HashMap::new())? })
-                    }).collect::<Result<Vec<Assignment>>>()?;
+                    let assignment_exprs = assignments.iter().map(|a| {
+                        Ok((compound_identifier_to_column(&a.id)?.name, query_planner.sql_to_rex(a.value.clone(), &table_schema, &mut HashMap::new())?))
+                    }).collect::<Result<Vec<(String, Expr)>>>()?;
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Update(Update {
-                            name: name.to_string(),
+                            table: Arc::new(seafowl_table),
                             selection: selection_expr,
-                            assignments: assignments_expr,
+                            assignments: HashMap::from_iter(assignment_exprs),
                             output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
@@ -1243,46 +1249,132 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                             Ok(make_dummy_exec())
                         }
-                        SeafowlExtensionNode::Update(_) => {
-                            // Some kind of a node that combines Filter + Projection?
-                            //
-                            //
-                            //
-                            //    Union
-                            //     |  |
-                            // Filter Projection
-                            //    |    |
-                            //    |   Filter
-                            //    |    |
-                            // TableScan
+                        SeafowlExtensionNode::Update(Update {
+                            table,
+                            selection,
+                            assignments,
+                            ..
+                        }) => {
+                            // Create a new blank table version
+                            let new_table_version_id = self
+                                .table_catalog
+                                .create_new_table_version(table.table_version_id, false)
+                                .await?;
 
-                            // Pass an "initial partition id" in the batch (or ask our TableScan for what each
-                            // partition is pointing to)
-                            //
-                            // If a partition is missing: it stayed the same
-                            // If a partition didn't change (the filter didn't match anything): it stayed the same
-                            //    - but how do we find that out? we need to read through the whole partition to
-                            //      make sure nothing get updated, so that means we need to buffer the result
-                            //      on disk; could we just hash it at the end to see if it changed?
-                            // If a partition is empty: delete it
-                            //
-                            // So:
-                            //
-                            //   - do a scan through Case (projection) around TableScan (with the filter)
-                            //   - for each output partition:
-                            //     - gather it in a temporary file and hash it
-                            //     - find out from the ExecutionPlan which original file it belonged to
-                            //     - if it's the same: do nothing
-                            //     - if it's changed: replace that table version object; upload it
-                            //     - files corresponding to partitions that never got output won't get updated
-                            //
-                            // This also assumes one Parquet file <> one partition
+                            // Load all pre-existing partitions
+                            let partitions = self
+                                .partition_catalog
+                                .load_table_partitions(table.table_version_id)
+                                .await?;
 
-                            // - Duplicate the table (new version)
-                            // - replace partitions that are changed (but we don't know the table_partition i.e. which entry to
-                            // repoint to our new partition)?
-                            Err(DataFusionError::NotImplemented("UPDATE statements are currently unsupported,
-                            as a workaround, use CREATE TABLE AS. See https://github.com/splitgraph/seafowl/issues/18".to_string()))
+                            // By default (e.g. when there is no qualifier/selection, or we somehow
+                            // fail to prune partitions) update all partitions
+                            let mut partitions_to_update =
+                                HashSet::<PhysicalPartitionId>::from_iter(
+                                    partitions.iter().map(|p| p.partition_id.unwrap()),
+                                );
+
+                            if let Some(expr) = selection {
+                                match SeafowlPruningStatistics::from_partitions(
+                                    partitions.clone(),
+                                    table.schema(),
+                                ) {
+                                    Ok(pruning_stats) => {
+                                        // Scope down partition ids which need to be updated
+                                        partitions_to_update = HashSet::from_iter(
+                                                pruning_stats
+                                                    .prune(&[expr.clone()])
+                                                    .await
+                                                    .iter()
+                                                    .map(|p| p.partition_id.unwrap()),
+                                            );
+                                    }
+                                    Err(error) => warn!(
+                                        "Failed constructing pruning statistics for table {} (version: {}) during UPDATE execution: {}",
+                                        table.name, table.table_version_id, error
+                                    )
+                                }
+                            }
+
+                            let schema = table.schema().as_ref().clone();
+                            let df_schema =
+                                table.schema.arrow_schema.clone().to_dfschema()?;
+
+                            // Create a complete projection expression, including just replicating
+                            // the columns omitted in the provided assignments
+                            let projection_exprs = schema
+                                .fields
+                                .iter()
+                                .enumerate()
+                                .map(|(ind, f)| {
+                                    if assignments.contains_key(f.name()) {
+                                        let expr = create_physical_expr(
+                                            &assignments[f.name()],
+                                            &df_schema,
+                                            &schema,
+                                            &ExecutionProps::new(),
+                                        )?;
+                                        Ok((expr, f.name().to_string()))
+                                    } else {
+                                        // Just replicate the omitted columns
+                                        Ok((
+                                            Arc::new(ColumnExpr::new(f.name(), ind))
+                                                as Arc<dyn PhysicalExpr>,
+                                            f.name().to_string(),
+                                        ))
+                                    }
+                                })
+                                .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>>>(
+                                )?;
+
+                            let mut final_partition_ids =
+                                Vec::with_capacity(partitions.len());
+
+                            // Keeping in mind that the number of rows in a partition is an invariant
+                            // for an UPDATE statement, we iterate over each partition, updating the
+                            // ones affected by the selection, while re-using the rest
+                            for p in partitions {
+                                if !partitions_to_update
+                                    .contains(&p.partition_id.unwrap())
+                                {
+                                    final_partition_ids.push(p.partition_id.unwrap());
+                                    continue;
+                                }
+
+                                // Project the affected rows using the provided assignments, filter
+                                // the original rows out, and merge the two outputs
+                                let scan_plan = table
+                                    .partition_scan_plan(
+                                        &None,
+                                        vec![p],
+                                        &[],
+                                        None,
+                                        self.internal_object_store.inner.clone(),
+                                    )
+                                    .await?;
+
+                                // TODO: still need to apply filtering prior to projection (and merge
+                                // the rest of the partition)
+                                let update_plan: Arc<dyn ExecutionPlan> =
+                                    Arc::new(ProjectionExec::try_new(
+                                        projection_exprs.clone(),
+                                        scan_plan,
+                                    )?);
+
+                                final_partition_ids.extend(
+                                    self.execute_plan_to_partitions(&update_plan).await?,
+                                );
+                            }
+
+                            // Link the new table version with the corresponding partitions
+                            self.partition_catalog
+                                .append_partitions_to_table(
+                                    final_partition_ids,
+                                    new_table_version_id,
+                                )
+                                .await?;
+
+                            Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::Delete(Delete {
                             table, selection, ..
