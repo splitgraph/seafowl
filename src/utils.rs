@@ -8,12 +8,14 @@ use std::{
 use arrow::json::LineDelimitedWriter;
 use datafusion::error::Result;
 use hex::encode;
+use itertools::Itertools;
 use log::{debug, info, warn};
 use object_store::path::Path;
 use sha2::{Digest, Sha256};
 use tokio::{fs::File, io::AsyncWrite};
 
 use crate::context::{DefaultSeafowlContext, SeafowlContext};
+use crate::provider::SeafowlPartition;
 
 // Run a one-off command and output its results to a writer
 pub async fn run_one_off_command<W>(
@@ -88,6 +90,22 @@ pub async fn gc_partitions(context: &DefaultSeafowlContext) {
         Err(e) => warn!("Failed to fetch orphan partitions: {:?}", e),
         _ => debug!("No orphan partitions to cleanup found"),
     }
+}
+
+// Group adjacent partitions using the provided function
+pub fn group_partitions<F>(
+    partitions: Vec<SeafowlPartition>,
+    f: F,
+) -> Vec<(bool, Vec<SeafowlPartition>)>
+where
+    F: FnMut(&SeafowlPartition) -> bool,
+{
+    partitions
+        .into_iter()
+        .group_by(f)
+        .into_iter()
+        .map(|(keep, group)| (keep, group.collect()))
+        .collect()
 }
 
 /// A Sha256 hasher that works as a Tokio async writer

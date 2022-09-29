@@ -28,7 +28,7 @@ use crate::datafusion::parser::{DFParser, Statement as DFStatement};
 use crate::datafusion::utils::{build_schema, normalize_ident};
 use crate::object_store::http::try_prepare_http_url;
 use crate::object_store::wrapped::InternalObjectStore;
-use crate::utils::{gc_partitions, hash_file};
+use crate::utils::{gc_partitions, group_partitions, hash_file};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
@@ -48,7 +48,7 @@ use datafusion::common::{Column, DFField, DFSchema, ToDFSchema};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_expr::execution_props::ExecutionProps;
-use datafusion::physical_expr::expressions::{try_cast, Column as ColumnExpr};
+use datafusion::physical_expr::expressions::{cast, Column as ColumnExpr};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::PhysicalExpr;
@@ -1361,7 +1361,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                         let data_type = f.data_type().clone();
                                         if expr.data_type(&schema)? != data_type {
                                             // Literal value potentially mistyped; try to re-cast it
-                                            expr = try_cast(expr, &schema, data_type)?;
+                                            expr = cast(expr, &schema, data_type)?;
                                         }
                                         Ok((expr, f.name().to_string()))
                                     } else {
@@ -1379,22 +1379,15 @@ impl SeafowlContext for DefaultSeafowlContext {
                             let mut final_partition_ids =
                                 Vec::with_capacity(partitions.len());
 
-                            // Group adjacent partitions eligible for updating
-                            let partitions_grouped: Vec<(bool, Vec<SeafowlPartition>)> =
-                                partitions
-                                    .into_iter()
-                                    .group_by(|p| {
-                                        !partitions_to_update
-                                            .contains(&p.partition_id.unwrap())
-                                    })
-                                    .into_iter()
-                                    .map(|(keep, group)| (keep, group.collect()))
-                                    .collect();
-
                             // Iterate over partitions, updating the ones affected by the selection,
                             // while re-using the rest
                             let mut update_plan: Arc<dyn ExecutionPlan>;
-                            for (keep, group) in partitions_grouped {
+                            for (keep, group) in
+                                group_partitions(partitions, |p: &SeafowlPartition| {
+                                    !partitions_to_update
+                                        .contains(&p.partition_id.unwrap())
+                                })
+                            {
                                 if keep {
                                     // Inherit the partition(s) as is from the previous
                                     // table version
@@ -1462,12 +1455,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                                             projection_exprs.clone(),
                                             scan_plan,
                                         )?);
-
-                                        println!("table schema: {:?}", table.schema());
-                                        println!(
-                                            "update schema: {:?}",
-                                            update_plan.schema()
-                                        );
                                     }
                                 }
 
@@ -1538,21 +1525,13 @@ impl SeafowlContext for DefaultSeafowlContext {
                                                     .map(|p| p.partition_id.unwrap()),
                                             );
 
-                                        // Group adjacent partitions eligible for filtering
-                                        let partitions_grouped: Vec<(
-                                            bool,
-                                            Vec<SeafowlPartition>,
-                                        )> = partitions
-                                            .into_iter()
-                                            .group_by(|p| {
+                                        for (keep, group) in group_partitions(
+                                            partitions,
+                                            |p: &SeafowlPartition| {
                                                 !partitions_to_filter
                                                     .contains(&p.partition_id.unwrap())
-                                            })
-                                            .into_iter()
-                                            .map(|(keep, group)| (keep, group.collect()))
-                                            .collect();
-
-                                        for (keep, group) in partitions_grouped {
+                                            },
+                                        ) {
                                             if keep {
                                                 // Inherit the partition(s) as is from the previous
                                                 // table version

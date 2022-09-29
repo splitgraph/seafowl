@@ -1365,7 +1365,7 @@ async fn test_update_statement() {
     // Execute UPDATE with a selection, affecting partitions 1 and 4, and creating table_version 6
     //
     let plan = context
-        .plan_query("UPDATE test_table SET some_int_value = 5555, some_value = some_value - 10 WHERE some_value IN (41, 42, 43)")
+        .plan_query("UPDATE test_table SET some_time = '2022-01-01 21:21:21Z', some_int_value = 5555, some_value = some_value - 10 WHERE some_value IN (41, 42, 43)")
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
@@ -1385,8 +1385,8 @@ async fn test_update_statement() {
         "+-----------------+----------------+------------------+---------------------+------------+",
         "| some_bool_value | some_int_value | some_other_value | some_time           | some_value |",
         "+-----------------+----------------+------------------+---------------------+------------+",
-        "|                 | 5555           |                  | 2022-01-01 20:01:01 | 32         |",
-        "|                 | 5555           |                  | 2022-01-01 20:02:02 | 33         |",
+        "|                 | 5555           |                  | 2022-01-01 21:21:21 | 32         |",
+        "|                 | 5555           |                  | 2022-01-01 21:21:21 | 33         |",
         "|                 | 3333           |                  | 2022-01-01 20:03:03 | 44         |",
         "+-----------------+----------------+------------------+---------------------+------------+",
     ];
@@ -1395,26 +1395,84 @@ async fn test_update_statement() {
     let results =
         scan_partition(&context, None, partitions[3].clone(), "test_table").await;
     let expected = vec![
-        "+-----------------+----------------+------------------+-----------+------------+",
-        "| some_bool_value | some_int_value | some_other_value | some_time | some_value |",
-        "+-----------------+----------------+------------------+-----------+------------+",
-        "|                 | 5555           |                  |           | 32         |",
-        "|                 | 5555           |                  |           | 31         |",
-        "|                 |                |                  |           | 40         |",
-        "+-----------------+----------------+------------------+-----------+------------+",
+        "+-----------------+----------------+------------------+---------------------+------------+",
+        "| some_bool_value | some_int_value | some_other_value | some_time           | some_value |",
+        "+-----------------+----------------+------------------+---------------------+------------+",
+        "|                 | 5555           |                  | 2022-01-01 21:21:21 | 32         |",
+        "|                 | 5555           |                  | 2022-01-01 21:21:21 | 31         |",
+        "|                 |                |                  |                     | 40         |",
+        "+-----------------+----------------+------------------+---------------------+------------+"
     ];
     assert_batches_eq!(expected, &results);
 
     //
-    // Execute UPDATE without a selection, creating table_version 7 with all new partitions
+    // Execute UPDATE that doesn't change anything
     //
     let plan = context
-        .plan_query("UPDATE test_table SET some_value = 42")
+        .plan_query("UPDATE test_table SET some_bool_value = TRUE WHERE some_value = 200")
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 7, vec![7]).await;
+    assert_partition_ids(&context, 7, vec![2, 3, 5, 6]).await;
+
+    //
+    // Execute UPDATE that references a nonexistent column in the assignment or in the selection,
+    // or results in a type mismatch
+    //
+    let err = context
+        .plan_query("UPDATE test_table SET nonexistent = 42 WHERE some_value = 32")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Schema error: No field named 'nonexistent'"));
+
+    let err = context
+        .plan_query("UPDATE test_table SET some_value = 42 WHERE nonexistent = 32")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Schema error: No field named 'nonexistent'"));
+
+    // let err = context
+    //     .plan_query("UPDATE test_table SET some_int_value = 'nope'")
+    //     .await
+    //     .unwrap_err();
+    //
+    // assert!(err
+    //     .to_string()
+    //     .contains("Cannot cast string 'nope' to value of Int64 type")
+    // );
+
+    // // This one's a bit different
+    // let err = context
+    //     .plan_query("UPDATE test_table SET some_other_value = 'nope'")
+    //     .await
+    //     .unwrap_err();
+    //
+    // assert!(err
+    //     .to_string()
+    //     .contains("Unsupported CAST from Utf8 to Decimal128(38, 10)")
+    // );
+
+    //
+    // Execute complex UPDATE (redundant assignment and a case assignment) without a selection,
+    // creating new table_version with a single new partition
+    //
+    let plan = context
+        .plan_query(
+            "UPDATE test_table SET some_bool_value = FALSE, some_bool_value = (some_int_value = 5555), some_value = 42, \
+            some_other_value = CASE WHEN some_int_value = 5555 THEN 5.555 WHEN some_int_value = 3333 THEN 3.333 ELSE 0 END"
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    assert_partition_ids(&context, 8, vec![7]).await;
 
     // Verify results
     let plan = context
@@ -1427,18 +1485,18 @@ async fn test_update_statement() {
         "+-----------------+----------------+------------------+---------------------+------------+",
         "| some_bool_value | some_int_value | some_other_value | some_time           | some_value |",
         "+-----------------+----------------+------------------+---------------------+------------+",
-        "|                 |                |                  |                     | 42         |",
-        "|                 |                |                  |                     | 42         |",
-        "|                 |                |                  |                     | 42         |",
-        "|                 |                |                  |                     | 42         |",
-        "|                 |                |                  |                     | 42         |",
-        "|                 |                |                  |                     | 42         |",
-        "|                 | 5555           |                  | 2022-01-01 20:01:01 | 42         |",
-        "|                 | 5555           |                  | 2022-01-01 20:02:02 | 42         |",
-        "|                 | 3333           |                  | 2022-01-01 20:03:03 | 42         |",
-        "|                 | 5555           |                  |                     | 42         |",
-        "|                 | 5555           |                  |                     | 42         |",
-        "|                 |                |                  |                     | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "| true            | 5555           | 5.5550000000     | 2022-01-01 21:21:21 | 42         |",
+        "| true            | 5555           | 5.5550000000     | 2022-01-01 21:21:21 | 42         |",
+        "| false           | 3333           | 3.3330000000     | 2022-01-01 20:03:03 | 42         |",
+        "| true            | 5555           | 5.5550000000     | 2022-01-01 21:21:21 | 42         |",
+        "| true            | 5555           | 5.5550000000     | 2022-01-01 21:21:21 | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
         "+-----------------+----------------+------------------+---------------------+------------+",
     ];
     assert_batches_eq!(expected, &results);
