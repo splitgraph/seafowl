@@ -98,7 +98,7 @@ pub fn group_partitions<F>(
     f: F,
 ) -> Vec<(bool, Vec<SeafowlPartition>)>
 where
-    F: FnMut(&SeafowlPartition) -> bool,
+    F: Fn(&SeafowlPartition) -> bool,
 {
     partitions
         .into_iter()

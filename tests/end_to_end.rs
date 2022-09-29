@@ -1417,37 +1417,9 @@ async fn test_update_statement() {
     assert_partition_ids(&context, 7, vec![2, 3, 5, 6]).await;
 
     //
-    // Execute UPDATE that references a nonexistent column in the assignment or in the selection,
-    // or results in a type mismatch
+    // Execute UPDATE that causes an error during planning/execution, to test that the subsequent
+    // UPDATE works correctly
     //
-    let err = context
-        .plan_query("UPDATE test_table SET nonexistent = 42 WHERE some_value = 32")
-        .await
-        .unwrap_err();
-
-    assert!(err
-        .to_string()
-        .contains("Schema error: No field named 'nonexistent'"));
-
-    let err = context
-        .plan_query("UPDATE test_table SET some_value = 42 WHERE nonexistent = 32")
-        .await
-        .unwrap_err();
-
-    assert!(err
-        .to_string()
-        .contains("Schema error: No field named 'nonexistent'"));
-
-    let err = context
-        .plan_query("UPDATE test_table SET some_int_value = 'nope'")
-        .await
-        .unwrap_err();
-
-    assert!(err
-        .to_string()
-        .contains("Cannot cast string 'nope' to value of Int64 type"));
-
-    // This one's a bit different
     let err = context
         .plan_query("UPDATE test_table SET some_other_value = 'nope'")
         .await
@@ -1498,4 +1470,43 @@ async fn test_update_statement() {
         "+-----------------+----------------+------------------+---------------------+------------+",
     ];
     assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
+async fn test_update_statement_errors() {
+    let context = make_context_with_pg().await;
+
+    // Creates table with table_versions 1 (empty) and 2
+    create_table_and_insert(&context, "test_table").await;
+
+    //
+    // Execute UPDATE that references a nonexistent column in the assignment or in the selection,
+    // or results in a type mismatch
+    //
+    let err = context
+        .plan_query("UPDATE test_table SET nonexistent = 42 WHERE some_value = 32")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Schema error: No field named 'nonexistent'"));
+
+    let err = context
+        .plan_query("UPDATE test_table SET some_value = 42 WHERE nonexistent = 32")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Schema error: No field named 'nonexistent'"));
+
+    let err = context
+        .plan_query("UPDATE test_table SET some_int_value = 'nope'")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Cannot cast string 'nope' to value of Int64 type"));
 }
