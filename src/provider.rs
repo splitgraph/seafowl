@@ -465,7 +465,7 @@ impl PruningStatistics for SeafowlPruningStatistics {
 // Create a complete projection expression for all columns, simply replicating the columns omitted
 // in the provided assignments, and enveloping CAST (for fixing mistypes) with a CASE expression to
 // scope down the rows to which the assignment is applied
-pub fn projection_expressions(
+pub fn project_expressions(
     schema: &ArrowSchema,
     assignments: &HashBrownMap<String, Expr>,
     selection_expr: Option<Arc<dyn PhysicalExpr>>,

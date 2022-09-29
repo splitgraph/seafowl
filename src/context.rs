@@ -79,7 +79,7 @@ use tokio::sync::Semaphore;
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{PhysicalPartitionId, TableId, TableVersionId};
 use crate::provider::{
-    projection_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
+    project_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
     SeafowlTable,
 };
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
@@ -1325,7 +1325,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                             let mut final_partition_ids =
                                 Vec::with_capacity(partitions.len());
                             let mut update_plan: Arc<dyn ExecutionPlan>;
-                            let projection_expressions = projection_expressions(
+                            let project_expressions = project_expressions(
                                 &schema,
                                 assignments,
                                 selection_expr,
@@ -1359,7 +1359,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     .await?;
 
                                 update_plan = Arc::new(ProjectionExec::try_new(
-                                    projection_expressions.clone(),
+                                    project_expressions.clone(),
                                     scan_plan,
                                 )?);
 
