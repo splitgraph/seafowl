@@ -48,9 +48,7 @@ use datafusion::common::{Column, DFField, DFSchema, ToDFSchema};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_expr::execution_props::ExecutionProps;
-use datafusion::physical_expr::expressions::{case, cast, col};
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::PhysicalExpr;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::{
@@ -81,7 +79,8 @@ use tokio::sync::Semaphore;
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{PhysicalPartitionId, TableId, TableVersionId};
 use crate::provider::{
-    PartitionColumn, SeafowlPartition, SeafowlPruningStatistics, SeafowlTable,
+    projection_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
+    SeafowlTable,
 };
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
@@ -1292,15 +1291,13 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 );
 
                             let schema = table.schema().as_ref().clone();
-                            let df_schema =
-                                table.schema.arrow_schema.clone().to_dfschema()?;
                             let mut selection_expr = None;
 
                             // Try to scope down partition ids which need to be updated with pruning
                             if let Some(expr) = selection {
                                 selection_expr = Some(create_physical_expr(
                                     &expr.clone(),
-                                    &df_schema,
+                                    &schema.clone().to_dfschema()?,
                                     &schema,
                                     &ExecutionProps::new(),
                                 )?);
@@ -1325,56 +1322,17 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 }
                             }
 
-                            // Create a complete projection expression, including replicating
-                            // the columns omitted in the provided assignments
-                            let projection_exprs = schema
-                                .fields
-                                .iter()
-                                .map(|f| {
-                                    if assignments.contains_key(f.name()) {
-                                        let mut expr = create_physical_expr(
-                                            &assignments[f.name()],
-                                            &df_schema,
-                                            &schema,
-                                            &ExecutionProps::new(),
-                                        )?;
-
-                                        let data_type = f.data_type().clone();
-                                        if expr.data_type(&schema)? != data_type {
-                                            // Literal value potentially mistyped; try to re-cast it
-                                            expr = cast(expr, &schema, data_type)?;
-                                        }
-
-                                        // If the selection was specified, use a CASE WHEN
-                                        // (selection expr) THEN (assignment expr) ELSE old row
-                                        // approach
-                                        if let Some(sel_expr) = &selection_expr {
-                                            expr = case(
-                                                None,
-                                                vec![(sel_expr.clone(), expr)],
-                                                Some(col(f.name(), &schema)?),
-                                                &schema,
-                                            )?;
-                                        }
-
-                                        Ok((expr, f.name().to_string()))
-                                    } else {
-                                        // Just replicate the omitted columns
-                                        Ok((
-                                            col(f.name(), &schema)?,
-                                            f.name().to_string(),
-                                        ))
-                                    }
-                                })
-                                .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>>>(
-                                )?;
-
                             let mut final_partition_ids =
                                 Vec::with_capacity(partitions.len());
+                            let mut update_plan: Arc<dyn ExecutionPlan>;
+                            let projection_expressions = projection_expressions(
+                                &schema,
+                                assignments,
+                                selection_expr,
+                            )?;
 
                             // Iterate over partitions, updating the ones affected by the selection,
                             // while re-using the rest
-                            let mut update_plan: Arc<dyn ExecutionPlan>;
                             for (keep, group) in
                                 group_partitions(partitions, |p: &SeafowlPartition| {
                                     !partitions_to_update
@@ -1401,7 +1359,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     .await?;
 
                                 update_plan = Arc::new(ProjectionExec::try_new(
-                                    projection_exprs.clone(),
+                                    projection_expressions.clone(),
                                     scan_plan,
                                 )?);
 

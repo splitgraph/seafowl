@@ -6,15 +6,17 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 
-use datafusion::common::Column;
+use datafusion::common::{Column, ToDFSchema};
+use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::TableProviderFilterPushDown;
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::{case, cast, col};
+use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::DisplayFormatType;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
-    arrow::datatypes::SchemaRef as ArrowSchemaRef,
+    arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
     catalog::{
         catalog::CatalogProvider,
         schema::{MemorySchemaProvider, SchemaProvider},
@@ -37,6 +39,7 @@ use datafusion::{
 use datafusion_proto::protobuf;
 
 use futures::future;
+use hashbrown::HashMap as HashBrownMap;
 use log::warn;
 use object_store::ObjectStore;
 use prost::Message;
@@ -457,6 +460,53 @@ impl PruningStatistics for SeafowlPruningStatistics {
             .get(column.name.as_str())
             .map(|stats| Arc::new(UInt64Array::from(stats.clone())) as ArrayRef)
     }
+}
+
+// Create a complete projection expression for all columns, simply replicating the columns omitted
+// in the provided assignments, and enveloping CAST (for fixing mistypes) with a CASE expression to
+// scope down the rows to which the assignment is applied
+pub fn projection_expressions(
+    schema: &ArrowSchema,
+    assignments: &HashBrownMap<String, Expr>,
+    selection_expr: Option<Arc<dyn PhysicalExpr>>,
+) -> Result<Vec<(Arc<dyn PhysicalExpr>, String)>> {
+    schema
+        .fields
+        .iter()
+        .map(|f| {
+            if assignments.contains_key(f.name()) {
+                let mut expr = create_physical_expr(
+                    &assignments[f.name()],
+                    &schema.clone().to_dfschema()?,
+                    schema,
+                    &ExecutionProps::new(),
+                )?;
+
+                let data_type = f.data_type().clone();
+                if expr.data_type(schema)? != data_type {
+                    // Literal value potentially mistyped; try to re-cast it
+                    expr = cast(expr, schema, data_type)?;
+                }
+
+                // If the selection was specified, use a CASE WHEN
+                // (selection expr) THEN (assignment expr) ELSE (old column value)
+                // approach
+                if let Some(sel_expr) = &selection_expr {
+                    expr = case(
+                        None,
+                        vec![(sel_expr.clone(), expr)],
+                        Some(col(f.name(), schema)?),
+                        schema,
+                    )?;
+                }
+
+                Ok((expr, f.name().to_string()))
+            } else {
+                // Just replicate the omitted columns
+                Ok((col(f.name(), schema)?, f.name().to_string()))
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug)]
