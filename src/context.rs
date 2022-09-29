@@ -48,9 +48,8 @@ use datafusion::common::{Column, DFField, DFSchema, ToDFSchema};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_expr::execution_props::ExecutionProps;
-use datafusion::physical_expr::expressions::{cast, Column as ColumnExpr};
+use datafusion::physical_expr::expressions::{case, cast, col};
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::PhysicalExpr;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
@@ -1292,25 +1291,17 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     partitions.iter().map(|p| p.partition_id.unwrap()),
                                 );
 
-                            // In case a WHERE qualifier has been used in the UPDATE, we'll obtain
-                            // the final output from two plans; one that will update only the rows
-                            // selected by the qualifier (using the projection_filter), and another
-                            // one that will propagate the unchanged rows (using deletion_filter).
-                            let mut projection_filter = None;
-                            let mut deletion_filter = None;
+                            let schema = table.schema().as_ref().clone();
+                            let df_schema =
+                                table.schema.arrow_schema.clone().to_dfschema()?;
+                            let mut selection_expr = None;
 
                             // Try to scope down partition ids which need to be updated with pruning
                             if let Some(expr) = selection {
-                                projection_filter = Some(create_physical_expr(
+                                selection_expr = Some(create_physical_expr(
                                     &expr.clone(),
-                                    &table.schema.arrow_schema.clone().to_dfschema()?,
-                                    table.schema().as_ref(),
-                                    &ExecutionProps::new(),
-                                )?);
-                                deletion_filter = Some(create_physical_expr(
-                                    &expr.clone().not(),
-                                    &table.schema.arrow_schema.clone().to_dfschema()?,
-                                    table.schema().as_ref(),
+                                    &df_schema,
+                                    &schema,
                                     &ExecutionProps::new(),
                                 )?);
 
@@ -1334,17 +1325,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 }
                             }
 
-                            let schema = table.schema().as_ref().clone();
-                            let df_schema =
-                                table.schema.arrow_schema.clone().to_dfschema()?;
-
                             // Create a complete projection expression, including replicating
                             // the columns omitted in the provided assignments
                             let projection_exprs = schema
                                 .fields
                                 .iter()
-                                .enumerate()
-                                .map(|(ind, f)| {
+                                .map(|f| {
                                     if assignments.contains_key(f.name()) {
                                         let mut expr = create_physical_expr(
                                             &assignments[f.name()],
@@ -1352,17 +1338,30 @@ impl SeafowlContext for DefaultSeafowlContext {
                                             &schema,
                                             &ExecutionProps::new(),
                                         )?;
+
                                         let data_type = f.data_type().clone();
                                         if expr.data_type(&schema)? != data_type {
                                             // Literal value potentially mistyped; try to re-cast it
                                             expr = cast(expr, &schema, data_type)?;
                                         }
+
+                                        // If the selection was specified, use a CASE WHEN
+                                        // (selection expr) THEN (assignment expr) ELSE old row
+                                        // approach
+                                        if let Some(sel_expr) = &selection_expr {
+                                            expr = case(
+                                                None,
+                                                vec![(sel_expr.clone(), expr)],
+                                                Some(col(f.name(), &schema)?),
+                                                &schema,
+                                            )?;
+                                        }
+
                                         Ok((expr, f.name().to_string()))
                                     } else {
                                         // Just replicate the omitted columns
                                         Ok((
-                                            Arc::new(ColumnExpr::new(f.name(), ind))
-                                                as Arc<dyn PhysicalExpr>,
+                                            col(f.name(), &schema)?,
                                             f.name().to_string(),
                                         ))
                                     }
@@ -1391,66 +1390,20 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     continue;
                                 }
 
-                                match (
-                                    selection,
-                                    projection_filter.clone(),
-                                    deletion_filter.clone(),
-                                ) {
-                                    (
-                                        Some(expr),
-                                        Some(project_filter),
-                                        Some(delete_filter),
-                                    ) => {
-                                        // Project only the affected rows using the provided assignments
-                                        let projection_input_plan = table
-                                            .partition_filter_plan(
-                                                group.clone(),
-                                                project_filter,
-                                                &[expr.clone()],
-                                                self.internal_object_store.inner.clone(),
-                                            )
-                                            .await?;
+                                let scan_plan = table
+                                    .partition_scan_plan(
+                                        &None,
+                                        group,
+                                        &[],
+                                        None,
+                                        self.internal_object_store.inner.clone(),
+                                    )
+                                    .await?;
 
-                                        let projection_plan =
-                                            Arc::new(ProjectionExec::try_new(
-                                                projection_exprs.clone(),
-                                                projection_input_plan,
-                                            )?);
-
-                                        // Filter out the old rows that are updated via the projection plan
-                                        let delete_plan = table
-                                            .partition_filter_plan(
-                                                group,
-                                                delete_filter,
-                                                &[expr.clone().not()],
-                                                self.internal_object_store.inner.clone(),
-                                            )
-                                            .await?;
-
-                                        // Merge the two plan outputs for the final update plan
-                                        update_plan = Arc::new(UnionExec::new(vec![
-                                            projection_plan,
-                                            delete_plan,
-                                        ]));
-                                    }
-                                    (_, _, _) => {
-                                        // No selection was specified, update all rows in the partitions
-                                        let scan_plan = table
-                                            .partition_scan_plan(
-                                                &None,
-                                                group,
-                                                &[],
-                                                None,
-                                                self.internal_object_store.inner.clone(),
-                                            )
-                                            .await?;
-
-                                        update_plan = Arc::new(ProjectionExec::try_new(
-                                            projection_exprs.clone(),
-                                            scan_plan,
-                                        )?);
-                                    }
-                                }
+                                update_plan = Arc::new(ProjectionExec::try_new(
+                                    projection_exprs.clone(),
+                                    scan_plan,
+                                )?);
 
                                 final_partition_ids.extend(
                                     self.execute_plan_to_partitions(
