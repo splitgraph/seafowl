@@ -124,6 +124,45 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
     context.collect(plan).await.unwrap();
 }
 
+// A helper function for asserting contents of a given partition
+async fn scan_partition(
+    context: &DefaultSeafowlContext,
+    projection: Option<Vec<usize>>,
+    partition: SeafowlPartition,
+    table_name: &str,
+) -> Vec<RecordBatch> {
+    let table = context.try_get_seafowl_table(table_name).unwrap();
+    let plan = table
+        .partition_scan_plan(
+            &projection,
+            vec![partition],
+            &[],
+            None,
+            context.internal_object_store.inner.clone(),
+        )
+        .await
+        .unwrap();
+
+    context.collect(plan).await.unwrap()
+}
+
+// Used for checking partition ids making up a given table version
+async fn assert_partition_ids(
+    context: &DefaultSeafowlContext,
+    table_version: TableVersionId,
+    expected_partition_ids: Vec<i64>,
+) {
+    let partitions = context
+        .partition_catalog
+        .load_table_partitions(table_version)
+        .await
+        .unwrap();
+
+    let partition_ids: Vec<i64> =
+        partitions.iter().map(|p| p.partition_id.unwrap()).collect();
+    assert_eq!(partition_ids, expected_partition_ids);
+}
+
 #[tokio::test]
 async fn test_information_schema() {
     let context = make_context_with_pg().await;
@@ -1075,42 +1114,6 @@ async fn test_vacuum_command() {
 
 #[tokio::test]
 async fn test_delete_statement() {
-    async fn scan_partition(
-        context: &DefaultSeafowlContext,
-        projection: Option<Vec<usize>>,
-        partition: SeafowlPartition,
-    ) -> Vec<RecordBatch> {
-        let table = context.try_get_seafowl_table("test_table").unwrap();
-        let plan = table
-            .partition_scan_plan(
-                &projection,
-                vec![partition],
-                &[],
-                None,
-                context.internal_object_store.inner.clone(),
-            )
-            .await
-            .unwrap();
-
-        context.collect(plan).await.unwrap()
-    }
-
-    async fn assert_partition_ids(
-        context: &DefaultSeafowlContext,
-        table_version: TableVersionId,
-        expected_partition_ids: Vec<i64>,
-    ) {
-        let partitions = context
-            .partition_catalog
-            .load_table_partitions(table_version)
-            .await
-            .unwrap();
-
-        let partition_ids: Vec<i64> =
-            partitions.iter().map(|p| p.partition_id.unwrap()).collect();
-        assert_eq!(partition_ids, expected_partition_ids);
-    }
-
     let context = make_context_with_pg().await;
 
     // Creates table with table_versions 1 (empty) and 2
@@ -1158,7 +1161,9 @@ async fn test_delete_statement() {
         .unwrap();
 
     // Assert result of the new partition with id 5
-    let results = scan_partition(&context, Some(vec![4]), partitions[2].clone()).await;
+    let results =
+        scan_partition(&context, Some(vec![4]), partitions[2].clone(), "test_table")
+            .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
@@ -1235,7 +1240,9 @@ async fn test_delete_statement() {
         .await
         .unwrap();
 
-    let results = scan_partition(&context, Some(vec![4]), partitions[1].clone()).await;
+    let results =
+        scan_partition(&context, Some(vec![4]), partitions[1].clone(), "test_table")
+            .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
@@ -1246,7 +1253,9 @@ async fn test_delete_statement() {
     ];
     assert_batches_eq!(expected, &results);
 
-    let results = scan_partition(&context, Some(vec![4]), partitions[2].clone()).await;
+    let results =
+        scan_partition(&context, Some(vec![4]), partitions[2].clone(), "test_table")
+            .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
@@ -1277,7 +1286,9 @@ async fn test_delete_statement() {
         .await
         .unwrap();
 
-    let results = scan_partition(&context, Some(vec![4]), partitions[1].clone()).await;
+    let results =
+        scan_partition(&context, Some(vec![4]), partitions[1].clone(), "test_table")
+            .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
@@ -1288,7 +1299,9 @@ async fn test_delete_statement() {
     ];
     assert_batches_eq!(expected, &results);
 
-    let results = scan_partition(&context, Some(vec![4]), partitions[2].clone()).await;
+    let results =
+        scan_partition(&context, Some(vec![4]), partitions[2].clone(), "test_table")
+            .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
@@ -1315,4 +1328,185 @@ async fn test_delete_statement() {
     let results = context.collect(plan).await.unwrap();
 
     assert!(results.is_empty());
+}
+
+#[tokio::test]
+async fn test_update_statement() {
+    let context = make_context_with_pg().await;
+
+    // Creates table with table_versions 1 (empty) and 2
+    create_table_and_insert(&context, "test_table").await;
+
+    // Add another partition for table_version 3
+    let plan = context
+        .plan_query("INSERT INTO test_table (some_value) VALUES (45), (46), (47)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // Add another partition for table_version 4
+    let plan = context
+        .plan_query("INSERT INTO test_table (some_value) VALUES (46), (47), (48)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // Add another partition for table_version 5
+    let plan = context
+        .plan_query("INSERT INTO test_table (some_value) VALUES (42), (41), (40)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // We have 4 partitions from 4 INSERTS
+    assert_partition_ids(&context, 5, vec![1, 2, 3, 4]).await;
+
+    //
+    // Execute UPDATE with a selection, affecting partitions 1 and 4, and creating table_version 6
+    //
+    let plan = context
+        .plan_query("UPDATE test_table SET some_time = '2022-01-01 21:21:21Z', some_int_value = 5555, some_value = some_value - 10 WHERE some_value IN (41, 42, 43)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    assert_partition_ids(&context, 6, vec![2, 3, 5, 6]).await;
+
+    // Verify new partition contents
+    let partitions = context
+        .partition_catalog
+        .load_table_partitions(6 as TableVersionId)
+        .await
+        .unwrap();
+
+    let results =
+        scan_partition(&context, None, partitions[2].clone(), "test_table").await;
+    let expected = vec![
+        "+-----------------+----------------+------------------+---------------------+------------+",
+        "| some_bool_value | some_int_value | some_other_value | some_time           | some_value |",
+        "+-----------------+----------------+------------------+---------------------+------------+",
+        "|                 | 5555           |                  | 2022-01-01 21:21:21 | 32         |",
+        "|                 | 5555           |                  | 2022-01-01 21:21:21 | 33         |",
+        "|                 | 3333           |                  | 2022-01-01 20:03:03 | 44         |",
+        "+-----------------+----------------+------------------+---------------------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    let results =
+        scan_partition(&context, None, partitions[3].clone(), "test_table").await;
+    let expected = vec![
+        "+-----------------+----------------+------------------+---------------------+------------+",
+        "| some_bool_value | some_int_value | some_other_value | some_time           | some_value |",
+        "+-----------------+----------------+------------------+---------------------+------------+",
+        "|                 | 5555           |                  | 2022-01-01 21:21:21 | 32         |",
+        "|                 | 5555           |                  | 2022-01-01 21:21:21 | 31         |",
+        "|                 |                |                  |                     | 40         |",
+        "+-----------------+----------------+------------------+---------------------+------------+"
+    ];
+    assert_batches_eq!(expected, &results);
+
+    //
+    // Execute UPDATE that doesn't change anything
+    //
+    let plan = context
+        .plan_query("UPDATE test_table SET some_bool_value = TRUE WHERE some_value = 200")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    assert_partition_ids(&context, 7, vec![2, 3, 5, 6]).await;
+
+    //
+    // Execute UPDATE that causes an error during planning/execution, to test that the subsequent
+    // UPDATE works correctly
+    //
+    let err = context
+        .plan_query("UPDATE test_table SET some_other_value = 'nope'")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Unsupported CAST from Utf8 to Decimal128(38, 10)"));
+
+    //
+    // Execute complex UPDATE (redundant assignment and a case assignment) without a selection,
+    // creating new table_version with a single new partition
+    //
+    let plan = context
+        .plan_query(
+            "UPDATE test_table SET some_bool_value = FALSE, some_bool_value = (some_int_value = 5555), some_value = 42, \
+            some_other_value = CASE WHEN some_int_value = 5555 THEN 5.555 WHEN some_int_value = 3333 THEN 3.333 ELSE 0 END"
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    assert_partition_ids(&context, 8, vec![7]).await;
+
+    // Verify results
+    let plan = context
+        .plan_query("SELECT * FROM test_table")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+-----------------+----------------+------------------+---------------------+------------+",
+        "| some_bool_value | some_int_value | some_other_value | some_time           | some_value |",
+        "+-----------------+----------------+------------------+---------------------+------------+",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "| true            | 5555           | 5.5550000000     | 2022-01-01 21:21:21 | 42         |",
+        "| true            | 5555           | 5.5550000000     | 2022-01-01 21:21:21 | 42         |",
+        "| false           | 3333           | 3.3330000000     | 2022-01-01 20:03:03 | 42         |",
+        "| true            | 5555           | 5.5550000000     | 2022-01-01 21:21:21 | 42         |",
+        "| true            | 5555           | 5.5550000000     | 2022-01-01 21:21:21 | 42         |",
+        "|                 |                | 0.0000000000     |                     | 42         |",
+        "+-----------------+----------------+------------------+---------------------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
+async fn test_update_statement_errors() {
+    let context = make_context_with_pg().await;
+
+    // Creates table with table_versions 1 (empty) and 2
+    create_table_and_insert(&context, "test_table").await;
+
+    //
+    // Execute UPDATE that references a nonexistent column in the assignment or in the selection,
+    // or results in a type mismatch
+    //
+    let err = context
+        .plan_query("UPDATE test_table SET nonexistent = 42 WHERE some_value = 32")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Schema error: No field named 'nonexistent'"));
+
+    let err = context
+        .plan_query("UPDATE test_table SET some_value = 42 WHERE nonexistent = 32")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Schema error: No field named 'nonexistent'"));
+
+    let err = context
+        .plan_query("UPDATE test_table SET some_int_value = 'nope'")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Cannot cast string 'nope' to value of Int64 type"));
 }

@@ -25,12 +25,10 @@ use datafusion::execution::DiskManager;
 use datafusion_proto::protobuf;
 
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
-use crate::datafusion::utils::{
-    build_schema, compound_identifier_to_column, normalize_ident,
-};
+use crate::datafusion::utils::{build_schema, normalize_ident};
 use crate::object_store::http::try_prepare_http_url;
 use crate::object_store::wrapped::InternalObjectStore;
-use crate::utils::{gc_partitions, hash_file};
+use crate::utils::{gc_partitions, group_partitions, hash_file};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
@@ -50,6 +48,7 @@ use datafusion::common::{Column, DFField, DFSchema, ToDFSchema};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_expr::execution_props::ExecutionProps;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::{
@@ -80,14 +79,15 @@ use tokio::sync::Semaphore;
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{PhysicalPartitionId, TableId, TableVersionId};
 use crate::provider::{
-    PartitionColumn, SeafowlPartition, SeafowlPruningStatistics, SeafowlTable,
+    project_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
+    SeafowlTable,
 };
 use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
 use crate::{
     catalog::{FunctionCatalog, TableCatalog},
     data_types::DatabaseId,
     nodes::{
-        Assignment, CreateFunction, CreateTable, Delete, DropSchema, Insert, RenameTable,
+        CreateFunction, CreateTable, Delete, DropSchema, Insert, RenameTable,
         SeafowlExtensionNode, Update, Vacuum,
     },
     schema::Schema as SeafowlSchema,
@@ -271,13 +271,16 @@ fn temp_partition_file_writer(
 pub async fn plan_to_object_store(
     state: &SessionState,
     plan: &Arc<dyn ExecutionPlan>,
+    output_schema: Option<SchemaRef>,
     store: Arc<InternalObjectStore>,
     disk_manager: Arc<DiskManager>,
     max_partition_size: u32,
 ) -> Result<Vec<SeafowlPartition>> {
     let mut current_partition_size = 0;
-    let (mut current_partition_file_path, mut writer) =
-        temp_partition_file_writer(disk_manager.clone(), plan.schema())?;
+    let (mut current_partition_file_path, mut writer) = temp_partition_file_writer(
+        disk_manager.clone(),
+        output_schema.clone().unwrap_or_else(|| plan.schema()),
+    )?;
     let mut partition_file_paths = vec![current_partition_file_path];
     let mut tasks = vec![];
 
@@ -289,6 +292,18 @@ pub async fn plan_to_object_store(
 
         while let Some(batch) = stream.next().await {
             let mut batch = batch?;
+
+            // If the output schema is provided, and the batch is not aligned with it, try to coerce
+            // the batch to it (aligning only nullability info).
+            // This comes up when the UPDATE has a literal assignment for a nullable field; the used
+            // projection plan inherits the nullability from the `Literal`, which in turn just looks
+            // at whether the used value is null, disregarding the corresponding column/schema.
+            if let Some(schema) = output_schema.clone() {
+                if batch.schema() != schema {
+                    batch = RecordBatch::try_new(schema, batch.columns().to_vec())?;
+                }
+            }
+
             let mut leftover_partition_capacity =
                 (max_partition_size - current_partition_size) as usize;
 
@@ -672,18 +687,22 @@ impl DefaultSeafowlContext {
     async fn execute_plan_to_table(
         &self,
         physical_plan: &Arc<dyn ExecutionPlan>,
+        output_schema: Option<SchemaRef>,
         name: Option<String>,
         from_table_version: Option<TableVersionId>,
     ) -> Result<TableVersionId> {
-        let partition_ids = self.execute_plan_to_partitions(physical_plan).await?;
+        let partition_ids = self
+            .execute_plan_to_partitions(physical_plan, output_schema.clone())
+            .await?;
 
         // Create/Update table metadata
         let new_table_version_id;
         match (name, from_table_version) {
             (Some(name), _) => {
+                let schema = output_schema.unwrap_or_else(|| physical_plan.schema());
                 // Create an empty table with an empty version
                 (_, new_table_version_id) = self
-                    .exec_create_table(&name, &physical_plan.schema().to_dfschema_ref()?)
+                    .exec_create_table(&name, &schema.to_dfschema_ref()?)
                     .await?;
             }
             (_, Some(from_table_version)) => {
@@ -713,6 +732,7 @@ impl DefaultSeafowlContext {
     async fn execute_plan_to_partitions(
         &self,
         physical_plan: &Arc<dyn ExecutionPlan>,
+        output_schema: Option<SchemaRef>,
     ) -> Result<Vec<PhysicalPartitionId>> {
         let disk_manager = self.inner.runtime_env().disk_manager.clone();
         let store = self.get_internal_object_store();
@@ -721,6 +741,7 @@ impl DefaultSeafowlContext {
         let partitions = plan_to_object_store(
             &self.inner.state(),
             physical_plan,
+            output_schema,
             store,
             disk_manager,
             self.max_partition_size,
@@ -974,25 +995,31 @@ impl SeafowlContext for DefaultSeafowlContext {
                     // Scan through the original table (with selection) and:
                     // SELECT [for each col, "col AS col" if not an assignment, otherwise "expr AS col"]
                     //   FROM original_table WHERE [selection]
-                    // Somehow also split the result by existing partition boundaries and leave unchanged partitions alone
+                    // Also split the result by existing partition boundaries and leave unchanged partitions alone
 
-                    // TODO we need to load the table object here in order to validate the UPDATE clauses
-                    let table_schema: DFSchema = DFSchema::empty();
+                    // Get the actual table schema, since DF needs to validate unqualified columns
+                    // (i.e. ones referenced only by column name, lacking the relation name)
+                    let table_name = name.to_string();
+                    let seafowl_table = self.try_get_seafowl_table(&table_name)?;
+                    let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
 
                     let selection_expr = match selection {
                         None => None,
                         Some(expr) => Some(query_planner.sql_to_rex(expr, &table_schema, &mut HashMap::new())?),
                     };
 
-                    let assignments_expr = assignments.iter().map(|a| {
-                        Ok(Assignment { column: compound_identifier_to_column(&a.id)?, expr: query_planner.sql_to_rex(a.value.clone(), &table_schema, &mut HashMap::new())? })
-                    }).collect::<Result<Vec<Assignment>>>()?;
+                    let assignment_exprs = assignments.iter().map(|a| {
+                        Ok((
+                            table_schema.field_with_unqualified_name(&normalize_ident(&a.id[0]))?.name().clone(),
+                            query_planner.sql_to_rex(a.value.clone(), &table_schema, &mut HashMap::new())?
+                        ))
+                    }).collect::<Result<Vec<(String, Expr)>>>()?;
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Update(Update {
-                            name: name.to_string(),
+                            table: Arc::new(seafowl_table),
                             selection: selection_expr,
-                            assignments: assignments_expr,
+                            assignments: HashMap::from_iter(assignment_exprs),
                             output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
@@ -1198,7 +1225,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // This is actually CREATE TABLE AS
                 let physical = self.create_physical_plan(input).await?;
 
-                self.execute_plan_to_table(&physical, Some(name.to_string()), None)
+                self.execute_plan_to_table(&physical, None, Some(name.to_string()), None)
                     .await?;
 
                 Ok(make_dummy_exec())
@@ -1237,52 +1264,129 @@ impl SeafowlContext for DefaultSeafowlContext {
                             self.execute_plan_to_table(
                                 &physical,
                                 None,
+                                None,
                                 Some(table.table_version_id),
                             )
                             .await?;
 
                             Ok(make_dummy_exec())
                         }
-                        SeafowlExtensionNode::Update(_) => {
-                            // Some kind of a node that combines Filter + Projection?
-                            //
-                            //
-                            //
-                            //    Union
-                            //     |  |
-                            // Filter Projection
-                            //    |    |
-                            //    |   Filter
-                            //    |    |
-                            // TableScan
+                        SeafowlExtensionNode::Update(Update {
+                            table,
+                            selection,
+                            assignments,
+                            ..
+                        }) => {
+                            // Load all pre-existing partitions
+                            let partitions = self
+                                .partition_catalog
+                                .load_table_partitions(table.table_version_id)
+                                .await?;
 
-                            // Pass an "initial partition id" in the batch (or ask our TableScan for what each
-                            // partition is pointing to)
-                            //
-                            // If a partition is missing: it stayed the same
-                            // If a partition didn't change (the filter didn't match anything): it stayed the same
-                            //    - but how do we find that out? we need to read through the whole partition to
-                            //      make sure nothing get updated, so that means we need to buffer the result
-                            //      on disk; could we just hash it at the end to see if it changed?
-                            // If a partition is empty: delete it
-                            //
-                            // So:
-                            //
-                            //   - do a scan through Case (projection) around TableScan (with the filter)
-                            //   - for each output partition:
-                            //     - gather it in a temporary file and hash it
-                            //     - find out from the ExecutionPlan which original file it belonged to
-                            //     - if it's the same: do nothing
-                            //     - if it's changed: replace that table version object; upload it
-                            //     - files corresponding to partitions that never got output won't get updated
-                            //
-                            // This also assumes one Parquet file <> one partition
+                            // By default (e.g. when there is no qualifier/selection, or we somehow
+                            // fail to prune partitions) update all partitions
+                            let mut partitions_to_update =
+                                HashSet::<PhysicalPartitionId>::from_iter(
+                                    partitions.iter().map(|p| p.partition_id.unwrap()),
+                                );
 
-                            // - Duplicate the table (new version)
-                            // - replace partitions that are changed (but we don't know the table_partition i.e. which entry to
-                            // repoint to our new partition)?
-                            Err(DataFusionError::NotImplemented("UPDATE statements are currently unsupported,
-                            as a workaround, use CREATE TABLE AS. See https://github.com/splitgraph/seafowl/issues/18".to_string()))
+                            let schema = table.schema().as_ref().clone();
+                            let mut selection_expr = None;
+
+                            // Try to scope down partition ids which need to be updated with pruning
+                            if let Some(expr) = selection {
+                                selection_expr = Some(create_physical_expr(
+                                    &expr.clone(),
+                                    &schema.clone().to_dfschema()?,
+                                    &schema,
+                                    &ExecutionProps::new(),
+                                )?);
+
+                                match SeafowlPruningStatistics::from_partitions(
+                                    partitions.clone(),
+                                    table.schema(),
+                                ) {
+                                    Ok(pruning_stats) => {
+                                        partitions_to_update = HashSet::from_iter(
+                                                pruning_stats
+                                                    .prune(&[expr.clone()])
+                                                    .await
+                                                    .iter()
+                                                    .map(|p| p.partition_id.unwrap()),
+                                            );
+                                    }
+                                    Err(error) => warn!(
+                                        "Failed constructing pruning statistics for table {} (version: {}) during UPDATE execution: {}",
+                                        table.name, table.table_version_id, error
+                                    )
+                                }
+                            }
+
+                            let mut final_partition_ids =
+                                Vec::with_capacity(partitions.len());
+                            let mut update_plan: Arc<dyn ExecutionPlan>;
+                            let project_expressions = project_expressions(
+                                &schema,
+                                assignments,
+                                selection_expr,
+                            )?;
+
+                            // Iterate over partitions, updating the ones affected by the selection,
+                            // while re-using the rest
+                            for (keep, group) in
+                                group_partitions(partitions, |p: &SeafowlPartition| {
+                                    !partitions_to_update
+                                        .contains(&p.partition_id.unwrap())
+                                })
+                            {
+                                if keep {
+                                    // Inherit the partition(s) as is from the previous
+                                    // table version
+                                    final_partition_ids.extend(
+                                        group.iter().map(|p| p.partition_id.unwrap()),
+                                    );
+                                    continue;
+                                }
+
+                                let scan_plan = table
+                                    .partition_scan_plan(
+                                        &None,
+                                        group,
+                                        &[],
+                                        None,
+                                        self.internal_object_store.inner.clone(),
+                                    )
+                                    .await?;
+
+                                update_plan = Arc::new(ProjectionExec::try_new(
+                                    project_expressions.clone(),
+                                    scan_plan,
+                                )?);
+
+                                final_partition_ids.extend(
+                                    self.execute_plan_to_partitions(
+                                        &update_plan,
+                                        Some(table.schema()),
+                                    )
+                                    .await?,
+                                );
+                            }
+
+                            // Create a new blank table version
+                            let new_table_version_id = self
+                                .table_catalog
+                                .create_new_table_version(table.table_version_id, false)
+                                .await?;
+
+                            // Link the new table version with the corresponding partitions
+                            self.partition_catalog
+                                .append_partitions_to_table(
+                                    final_partition_ids,
+                                    new_table_version_id,
+                                )
+                                .await?;
+
+                            Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::Delete(Delete {
                             table, selection, ..
@@ -1332,21 +1436,13 @@ impl SeafowlContext for DefaultSeafowlContext {
                                                     .map(|p| p.partition_id.unwrap()),
                                             );
 
-                                        // Group adjacent partitions eligible for filtering
-                                        let partitions_grouped: Vec<(
-                                            bool,
-                                            Vec<SeafowlPartition>,
-                                        )> = partitions
-                                            .into_iter()
-                                            .group_by(|p| {
+                                        for (keep, group) in group_partitions(
+                                            partitions,
+                                            |p: &SeafowlPartition| {
                                                 !partitions_to_filter
                                                     .contains(&p.partition_id.unwrap())
-                                            })
-                                            .into_iter()
-                                            .map(|(keep, group)| (keep, group.collect()))
-                                            .collect();
-
-                                        for (keep, group) in partitions_grouped {
+                                            },
+                                        ) {
                                             if keep {
                                                 // Inherit the partition(s) as is from the previous
                                                 // table version
@@ -1373,6 +1469,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                             final_partition_ids.extend(
                                                 self.execute_plan_to_partitions(
                                                     &filter_plan,
+                                                    None,
                                                 )
                                                 .await?,
                                             );
@@ -1395,7 +1492,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                                             .await?;
 
                                         final_partition_ids = self
-                                            .execute_plan_to_partitions(&filter_plan)
+                                            .execute_plan_to_partitions(
+                                                &filter_plan,
+                                                None,
+                                            )
                                             .await?;
                                     }
                                 }
@@ -1573,7 +1673,7 @@ impl SeafowlContext for DefaultSeafowlContext {
             }
         };
 
-        self.execute_plan_to_table(&plan, full_table_name, from_table_version)
+        self.execute_plan_to_table(&plan, None, full_table_name, from_table_version)
             .await?;
 
         Ok(true)
@@ -1858,6 +1958,7 @@ mod tests {
         let partitions = plan_to_object_store(
             &sf_context.inner.state(),
             &execution_plan,
+            None,
             object_store.clone(),
             disk_manager,
             2,
@@ -2015,6 +2116,7 @@ mod tests {
         let partitions = plan_to_object_store(
             &sf_context.inner.state(),
             &execution_plan,
+            None,
             object_store,
             disk_manager,
             max_partition_size,

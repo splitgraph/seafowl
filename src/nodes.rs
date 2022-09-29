@@ -1,8 +1,7 @@
 use std::{any::Any, fmt, sync::Arc, vec};
 
-use datafusion::logical_plan::{
-    Column, DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode,
-};
+use datafusion::logical_plan::{DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode};
+use hashbrown::HashMap;
 
 use crate::data_types::TableId;
 use crate::{provider::SeafowlTable, wasm_udf::data_types::CreateFunctionDetails};
@@ -31,19 +30,13 @@ pub struct Insert {
 }
 
 #[derive(Debug, Clone)]
-pub struct Assignment {
-    pub column: Column,
-    pub expr: Expr,
-}
-
-#[derive(Debug, Clone)]
 pub struct Update {
-    /// The table name (TODO: should this be a table ref?)
-    pub name: String,
+    /// The table to update
+    pub table: Arc<SeafowlTable>,
     /// WHERE clause
     pub selection: Option<Expr>,
     /// Columns to update
-    pub assignments: Vec<Assignment>,
+    pub assignments: HashMap<String, Expr>,
     /// Dummy result schema for the plan (empty)
     pub output_schema: DFSchemaRef,
 }
@@ -168,8 +161,8 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::CreateTable(CreateTable { name, .. }) => {
                 write!(f, "Create: {}", name)
             }
-            SeafowlExtensionNode::Update(Update { name, .. }) => {
-                write!(f, "Update: {}", name)
+            SeafowlExtensionNode::Update(Update { table, .. }) => {
+                write!(f, "Update: {}", table.name)
             }
             SeafowlExtensionNode::Delete(Delete { table, .. }) => {
                 write!(f, "Delete: {}", table.name)
