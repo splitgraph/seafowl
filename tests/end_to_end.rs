@@ -1438,26 +1438,24 @@ async fn test_update_statement() {
         .to_string()
         .contains("Schema error: No field named 'nonexistent'"));
 
-    // let err = context
-    //     .plan_query("UPDATE test_table SET some_int_value = 'nope'")
-    //     .await
-    //     .unwrap_err();
-    //
-    // assert!(err
-    //     .to_string()
-    //     .contains("Cannot cast string 'nope' to value of Int64 type")
-    // );
+    let err = context
+        .plan_query("UPDATE test_table SET some_int_value = 'nope'")
+        .await
+        .unwrap_err();
 
-    // // This one's a bit different
-    // let err = context
-    //     .plan_query("UPDATE test_table SET some_other_value = 'nope'")
-    //     .await
-    //     .unwrap_err();
-    //
-    // assert!(err
-    //     .to_string()
-    //     .contains("Unsupported CAST from Utf8 to Decimal128(38, 10)")
-    // );
+    assert!(err
+        .to_string()
+        .contains("Cannot cast string 'nope' to value of Int64 type"));
+
+    // This one's a bit different
+    let err = context
+        .plan_query("UPDATE test_table SET some_other_value = 'nope'")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Unsupported CAST from Utf8 to Decimal128(38, 10)"));
 
     //
     // Execute complex UPDATE (redundant assignment and a case assignment) without a selection,

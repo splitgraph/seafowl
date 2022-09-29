@@ -1279,12 +1279,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                             assignments,
                             ..
                         }) => {
-                            // Create a new blank table version
-                            let new_table_version_id = self
-                                .table_catalog
-                                .create_new_table_version(table.table_version_id, false)
-                                .await?;
-
                             // Load all pre-existing partitions
                             let partitions = self
                                 .partition_catalog
@@ -1466,6 +1460,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     .await?,
                                 );
                             }
+
+                            // Create a new blank table version
+                            let new_table_version_id = self
+                                .table_catalog
+                                .create_new_table_version(table.table_version_id, false)
+                                .await?;
 
                             // Link the new table version with the corresponding partitions
                             self.partition_catalog
