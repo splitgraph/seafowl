@@ -4,6 +4,11 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Cached GET API now accepts URL-encoded query text in X-Seafowl-Header
+  (<https://github.com/splitgraph/seafowl/pull/122>)
+- Add support for `DELETE` statements (<https://github.com/splitgraph/seafowl/pull/121>)
+- Add support for `UPDATE` statements (<https://github.com/splitgraph/seafowl/pull/127>)
+
 ## [0.2.0] - 2022-09-21
 
 **Breaking**: Previous versions of Seafowl won't be able to read data written by this version.
