@@ -35,8 +35,8 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-12-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-12-upgrade", package = "convergence-arrow", optional = true }
+convergence = { version = "0.7.0", optional = true }
+convergence-arrow = { version = "0.7.0", optional = true }
 datafusion = "12"
 datafusion-expr = "12"
 datafusion-proto = "12"
