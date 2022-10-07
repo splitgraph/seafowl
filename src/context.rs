@@ -646,8 +646,8 @@ impl DefaultSeafowlContext {
             name,
             &function_code,
             &details.entrypoint,
-            details.input_types.iter().map(get_wasm_type).collect(),
-            get_wasm_type(&details.return_type),
+            details.input_types.iter().map(|t| get_wasm_type(t).unwrap()).collect(),
+            get_wasm_type(&details.return_type).unwrap(),
             get_volatility(&details.volatility),
         )?;
         let mut mut_session_ctx = self.inner.clone();
@@ -2320,8 +2320,8 @@ mod tests {
             {
                 "entrypoint": "sintau",
                 "language": "wasm",
-                "input_types": ["f32"],
-                "return_type": "f32",
+                "input_types": ["FLOAT"],
+                "return_type": "FLOAT",
                 "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
             }';"#,
         )

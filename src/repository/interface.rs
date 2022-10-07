@@ -168,7 +168,7 @@ pub mod tests {
 
     use crate::provider::PartitionColumn;
     use crate::wasm_udf::data_types::{
-        CreateFunctionLanguage, CreateFunctionVolatility, CreateFunctionWASMType,
+        CreateFunctionLanguage, CreateFunctionVolatility,
     };
 
     use super::*;
@@ -423,10 +423,10 @@ pub mod tests {
                     entrypoint: "entrypoint".to_string(),
                     language: CreateFunctionLanguage::Wasm,
                     input_types: vec![
-                        CreateFunctionWASMType::F32,
-                        CreateFunctionWASMType::I64,
+                        sqlparser::ast::DataType::Real,
+                        sqlparser::ast::DataType::BigInt(None),
                     ],
-                    return_type: CreateFunctionWASMType::I32,
+                    return_type: sqlparser::ast::DataType::Integer(None),
                     data: "data".to_string(),
                     volatility: CreateFunctionVolatility::Volatile,
                 },
@@ -445,8 +445,8 @@ pub mod tests {
             id: function_id,
             entrypoint: "entrypoint".to_string(),
             language: "Wasm".to_string(),
-            input_types: r#"["f32","i64"]"#.to_string(),
-            return_type: "I32".to_string(),
+            input_types: r#"["REAL","BIGINT"]"#.to_string(),
+            return_type: "INTEGER".to_string(),
             data: "data".to_string(),
             volatility: "Volatile".to_string(),
         }];

@@ -11,8 +11,7 @@ use mockall::automock;
 use crate::data_types::FunctionId;
 use crate::provider::SeafowlFunction;
 use crate::wasm_udf::data_types::{
-    CreateFunctionDetails, CreateFunctionLanguage, CreateFunctionVolatility,
-    CreateFunctionWASMType,
+    CreateFunctionDetails, CreateFunctionLanguage, CreateFunctionVolatility, string_to_datatype
 };
 use crate::{
     data_types::{
@@ -663,13 +662,14 @@ impl DefaultCatalog {
             volatility,
         } = item;
 
+        let parsed_input_types_array:Vec<String> = serde_json::from_str(input_types)?;
+
         Ok(CreateFunctionDetails {
             entrypoint: entrypoint.to_string(),
             language: CreateFunctionLanguage::from_str(language.as_str())?,
-            input_types: serde_json::from_str::<Vec<CreateFunctionWASMType>>(
-                input_types,
-            )?,
-            return_type: CreateFunctionWASMType::from_str(return_type.as_str())?,
+            // TODO: error handling!
+            input_types: parsed_input_types_array.iter().map(|s| string_to_datatype(s.as_str()).unwrap()).collect_vec(),
+            return_type: string_to_datatype(return_type.as_str()).unwrap(),
             data: data.to_string(),
             volatility: CreateFunctionVolatility::from_str(volatility.as_str())?,
         })

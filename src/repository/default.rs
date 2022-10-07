@@ -403,7 +403,8 @@ impl Repository for $repo {
         function_name: &str,
         details: &CreateFunctionDetails,
     ) -> Result<FunctionId, Error> {
-        let input_types = serde_json::to_string(&details.input_types).expect("Couldn't serialize input types!");
+        let input_type_names = details.input_types.iter().map(|dt| $crate::wasm_udf::data_types::datatype_to_string(&dt)).collect::<Vec<_>>();
+        let input_types = serde_json::to_string(&input_type_names).expect("Couldn't serialize input types!");
 
         let new_function_id: i64 = sqlx::query(
             r#"
