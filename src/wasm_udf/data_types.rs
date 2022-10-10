@@ -5,12 +5,13 @@ use strum_macros::{Display, EnumString};
 use wasmtime::ValType;
 
 // WASM to DataFusion conversions
-pub fn get_wasm_type(t: &CreateFunctionWASMType) -> ValType {
+pub fn get_wasm_type(t: &CreateFunctionDataType) -> ValType {
     match t {
-        CreateFunctionWASMType::I32 => ValType::I32,
-        CreateFunctionWASMType::I64 => ValType::I64,
-        CreateFunctionWASMType::F32 => ValType::F32,
-        CreateFunctionWASMType::F64 => ValType::F64,
+        CreateFunctionDataType::INT => ValType::I32,
+        CreateFunctionDataType::BIGINT => ValType::I64,
+        CreateFunctionDataType::FLOAT => ValType::F32,
+        CreateFunctionDataType::REAL => ValType::F32,
+        CreateFunctionDataType::DOUBLE => ValType::F64,
     }
 }
 
@@ -23,12 +24,20 @@ pub fn get_volatility(t: &CreateFunctionVolatility) -> Volatility {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, EnumString, Display, Clone)]
-#[serde(rename_all = "camelCase")]
-pub enum CreateFunctionWASMType {
-    I32,
-    I64,
-    F32,
-    F64,
+pub enum CreateFunctionDataType {
+    //SMALLINT
+    INT,
+    BIGINT,
+    //CHAR
+    //VARCHAR
+    //TEXT
+    //DECIMAL(p,s)
+    FLOAT,
+    REAL,
+    DOUBLE,
+    //BOOLEAN
+    //DATE
+    //TIMESTAMP
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, EnumString, Display, Clone)]
@@ -60,8 +69,8 @@ pub struct CreateFunctionDetails {
     pub entrypoint: String,
     #[serde(default)]
     pub language: CreateFunctionLanguage,
-    pub input_types: Vec<CreateFunctionWASMType>,
-    pub return_type: CreateFunctionWASMType,
+    pub input_types: Vec<CreateFunctionDataType>,
+    pub return_type: CreateFunctionDataType,
     pub data: String,
     #[serde(default)]
     pub volatility: CreateFunctionVolatility,
@@ -78,8 +87,8 @@ mod tests {
             r#"{
             "entrypoint": "some_function",
             "language": "wasm",
-            "input_types": ["i64", "i64", "i64"],
-            "return_type": "i64",
+            "input_types": ["BIGINT", "BIGINT", "BIGINT"],
+            "return_type": "BIGINT",
             "data": "AGFzbQEAAAABGAVgA35"
         }"#,
         )
@@ -91,11 +100,11 @@ mod tests {
                 entrypoint: "some_function".to_string(),
                 language: CreateFunctionLanguage::Wasm,
                 input_types: vec![
-                    CreateFunctionWASMType::I64,
-                    CreateFunctionWASMType::I64,
-                    CreateFunctionWASMType::I64
+                    CreateFunctionDataType::BIGINT,
+                    CreateFunctionDataType::BIGINT,
+                    CreateFunctionDataType::BIGINT
                 ],
-                return_type: CreateFunctionWASMType::I64,
+                return_type: CreateFunctionDataType::BIGINT,
                 data: "AGFzbQEAAAABGAVgA35".to_string(),
                 volatility: CreateFunctionVolatility::Volatile
             }
