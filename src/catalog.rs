@@ -669,7 +669,9 @@ impl DefaultCatalog {
             input_types: serde_json::from_str::<Vec<CreateFunctionDataType>>(
                 input_types,
             )?,
-            return_type: CreateFunctionDataType::from_str(return_type.as_str())?,
+            return_type: CreateFunctionDataType::from_str(
+                &return_type.as_str().to_ascii_uppercase(),
+            )?,
             data: data.to_string(),
             volatility: CreateFunctionVolatility::from_str(volatility.as_str())?,
         })

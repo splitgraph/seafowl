@@ -445,7 +445,7 @@ pub mod tests {
             id: function_id,
             entrypoint: "entrypoint".to_string(),
             language: "Wasm".to_string(),
-            input_types: r#"["FLOAT","BIGINT"]"#.to_string(),
+            input_types: r#"["float","bigint"]"#.to_string(),
             return_type: "INT".to_string(),
             data: "data".to_string(),
             volatility: "Volatile".to_string(),
