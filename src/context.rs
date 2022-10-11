@@ -843,10 +843,18 @@ impl SeafowlContext for DefaultSeafowlContext {
 
         match statement {
             DFStatement::Statement(s) => match *s {
-                // Delegate SELECT / EXPLAIN to the basic DataFusion logical planner
+                Statement::Query(q) => {
+                    // Determine if one of the tables references a non-latest version version using
+                    // time-travel. If so, load the specified table version in the schema's map,
+                    // rename by appending an explicit table_version_id, and do a switcheroo in the
+                    // statement itself.
+
+                    query_planner.sql_statement_to_plan(Statement::Query(q))
+                },
+
+                // Delegate generic queries to the basic DataFusion logical planner
                 // (though note EXPLAIN [our custom query] will mean we have to implement EXPLAIN ourselves)
                 Statement::Explain { .. }
-                | Statement::Query { .. }
                 | Statement::ShowVariable { .. }
                 | Statement::ShowTables { .. }
                 | Statement::ShowColumns { .. }

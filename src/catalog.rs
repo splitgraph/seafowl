@@ -294,7 +294,7 @@ impl DefaultCatalog {
                     r#type: Arc::from(partition.column_type.clone()),
                     min_value: Arc::new(partition.min_value.clone()),
                     max_value: Arc::new(partition.max_value.clone()),
-                    null_count: None, // TODO: set this from partition object
+                    null_count: partition.null_count,
                 })
                 .collect(),
             ),

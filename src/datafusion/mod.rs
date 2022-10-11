@@ -5,4 +5,6 @@
 //     points, so it's easier to copy-paste the module and make our own alterations
 
 pub mod parser;
+pub mod rewrite;
 pub mod utils;
+pub mod visit;
