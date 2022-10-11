@@ -11,20 +11,250 @@ use datafusion::{
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 
-use std::sync::Arc;
-use wasmtime::{Instance, Module, Store, Val, ValType};
+use wasmtime::{Engine, Instance, Module, Store, Val, ValType};
 
-fn wasm_type_to_arrow_type(t: &ValType) -> Result<DataType> {
+use super::data_types::{get_wasm_type, CreateFunctionDataType, CreateFunctionLanguage};
+
+use wasi_common::pipe::{ReadPipe, WritePipe};
+use wasmtime_wasi::sync::WasiCtxBuilder;
+
+use std::result::Result as StdResult;
+use std::sync::{Arc, RwLock};
+
+extern crate rmp_serde;
+extern crate serde;
+use rmp_serde::Serializer;
+
+use serde::Serialize;
+
+use rmpv::Value;
+
+fn sql_type_to_arrow_type(t: &CreateFunctionDataType) -> Result<DataType> {
     match t {
-        ValType::I32 => Ok(DataType::Int32),
-        ValType::I64 => Ok(DataType::Int64),
-        ValType::F32 => Ok(DataType::Float32),
-        ValType::F64 => Ok(DataType::Float64),
-        _ => Err(DataFusionError::Internal(format!(
-            "Unsupported WASM type: {:?}",
-            t
-        ))),
+        // legacy WASM-native type names
+        CreateFunctionDataType::I32 => Ok(DataType::Int32),
+        CreateFunctionDataType::I64 => Ok(DataType::Int64),
+        CreateFunctionDataType::F32 => Ok(DataType::Float32),
+        CreateFunctionDataType::F64 => Ok(DataType::Float64),
+        // DDL type names
+        CreateFunctionDataType::INT => Ok(DataType::Int32),
+        CreateFunctionDataType::BIGINT => Ok(DataType::Int64),
+        CreateFunctionDataType::FLOAT => Ok(DataType::Float32),
+        CreateFunctionDataType::REAL => Ok(DataType::Float32),
+        CreateFunctionDataType::DOUBLE => Ok(DataType::Float64),
     }
+}
+
+fn messagepack_encode(
+    v: &Value,
+    buf: &mut Vec<u8>,
+) -> StdResult<(), rmp_serde::encode::Error> {
+    return v.serialize(&mut Serializer::new(buf));
+}
+
+fn messagepack_decode(buf: &mut Vec<u8>) -> StdResult<Value, rmp_serde::decode::Error> {
+    return rmp_serde::from_slice(buf);
+}
+
+fn invoke_wasi_messagepack(
+    module_name: String,
+    args: &Value,
+) -> StdResult<Value, wasmtime_wasi::Error> {
+    let engine = Engine::default();
+    let mut linker = wasmtime::Linker::new(&engine);
+    wasmtime_wasi::add_to_linker(&mut linker, |s| s)?;
+
+    let stdout_buf: Vec<u8> = vec![];
+    let stdout_mutex = Arc::new(RwLock::new(stdout_buf));
+    let stdout = WritePipe::from_shared(stdout_mutex.clone());
+
+    eprintln!("host about to serialize args {:?} ", args);
+    let mut serialized_input = Vec::new();
+    // TODO: error handling on encode
+    messagepack_encode(args, &mut serialized_input)?;
+    eprintln!("args serialized as {:?} bytes", serialized_input.len());
+    // let u: User = serde_json::from_str(j).unwrap();
+    let stdin = ReadPipe::from(serialized_input);
+
+    let wasi = WasiCtxBuilder::new()
+        .stdout(Box::new(stdout))
+        .stdin(Box::new(stdin))
+        // TODO: inherit stderr for debugging purposes?
+        .inherit_stderr()
+        .build();
+    let mut store = Store::new(&engine, wasi);
+
+    let module = Module::from_file(&engine, &module_name)?;
+    linker.module(&mut store, &module_name, &module)?;
+
+    let instance = linker.instantiate(&mut store, &module)?;
+    let instance_main = instance.get_typed_func::<(), (), _>(&mut store, "_start")?;
+    instance_main.call(&mut store, ())?;
+
+    let mut buffer: Vec<u8> = Vec::new();
+    stdout_mutex
+        .read()
+        .unwrap()
+        .iter()
+        .for_each(|i| buffer.push(*i));
+    let result: Value = messagepack_decode(&mut buffer)?;
+    println!("host received result {:?}", result);
+    return Ok(result);
+}
+
+fn make_scalar_function_wasi_messagepack(
+    module_bytes: &[u8],
+    function_name: &str,
+    input_types: Vec<CreateFunctionDataType>,
+    return_type: CreateFunctionDataType,
+) -> Result<ScalarFunctionImplementation> {
+    let mut store = Store::<()>::default();
+    let module = Module::from_binary(store.engine(), module_bytes).map_err(|e| {
+        DataFusionError::Internal(format!("Error loading module: {:?}", e))
+    })?;
+
+    // Pre-flight checks to make sure the function exists
+    let instance = Instance::new(&mut store, &module, &[]).map_err(|e| {
+        DataFusionError::Internal(format!("Error instantiating module: {:?}", e))
+    })?;
+
+    let _func = instance
+        .get_func(&mut store, function_name)
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Error loading function {:?}",
+                function_name
+            ))
+        })?;
+
+    // This function has to be of type Fn instead of FnMut. The function invocation (func.call)
+    // needs a mutable context, which forces this closure to be FnMut.
+    // This means we have to create a store and load the function inside of this closure, discarding
+    // the store after we're done.
+
+    // Capture the function name and the module code
+    let function_name = function_name.to_owned();
+    let module_bytes = module_bytes.to_owned();
+    let inner = move |args: &[ArrayRef]| {
+        // Load the function again
+        let mut store = Store::<()>::default();
+
+        let module = Module::from_binary(store.engine(), &module_bytes).map_err(|e| {
+            DataFusionError::Internal(format!("Error loading module: {:?}", e))
+        })?;
+
+        let instance = Instance::new(&mut store, &module, &[]).map_err(|e| {
+            DataFusionError::Internal(format!("Error instantiating module: {:?}", e))
+        })?;
+
+        let func = instance
+            .get_func(&mut store, &function_name)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "Error loading function {:?}",
+                    function_name
+                ))
+            })?;
+
+        // this is guaranteed by DataFusion based on the function's signature.
+        assert_eq!(args.len(), input_types.len());
+
+        // Length of the vectorized array
+        let array_len = args.get(0).unwrap().len();
+
+        // Buffer for the results
+        let mut results: Vec<Val> = Vec::new();
+        results.resize(array_len, Val::null());
+
+        for i in 0..array_len {
+            let mut params: Vec<Val> = Vec::with_capacity(args.len());
+            // Build a slice of WASM Val values to pass to the function
+            for j in 0..args.len() {
+                let wasm_val = match input_types.get(j).unwrap() {
+                    CreateFunctionDataType::I32 => Val::I32(
+                        args.get(j)
+                            .unwrap()
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .expect("cast failed")
+                            .value(i),
+                    ),
+                    CreateFunctionDataType::I64 => Val::I64(
+                        args.get(j)
+                            .unwrap()
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .expect("cast failed")
+                            .value(i),
+                    ),
+                    CreateFunctionDataType::F32 => Val::F32(
+                        args.get(j)
+                            .unwrap()
+                            .as_any()
+                            .downcast_ref::<Float32Array>()
+                            .expect("cast failed")
+                            .value(i)
+                            .to_bits(),
+                    ),
+                    CreateFunctionDataType::F64 => Val::F64(
+                        args.get(j)
+                            .unwrap()
+                            .as_any()
+                            .downcast_ref::<Float64Array>()
+                            .expect("cast failed")
+                            .value(i)
+                            .to_bits(),
+                    ),
+                    _ => panic!("unexpected type"),
+                };
+                params.push(wasm_val);
+            }
+
+            // Get the function to write its output to a slice of the results' buffer
+            func.call(&mut store, &params, &mut results[i..i + 1])
+                .map_err(|e| {
+                    DataFusionError::Execution(format!(
+                        "Error executing function {:?}: {:?}",
+                        function_name, e
+                    ))
+                })?;
+        }
+
+        // Convert the results back into Arrow (Arc<dyn Array>)
+        // These functions panic on type mismatches, which shouldn't happen because
+        // we pre-validated them above (unless the function returns a different type
+        // than it advertised)
+        let array = match return_type {
+            CreateFunctionDataType::I32 => Arc::new(
+                results
+                    .iter()
+                    .map(|r| r.unwrap_i32())
+                    .collect::<Int32Array>(),
+            ) as ArrayRef,
+            CreateFunctionDataType::I64 => Arc::new(
+                results
+                    .iter()
+                    .map(|r| r.unwrap_i64())
+                    .collect::<Int64Array>(),
+            ) as ArrayRef,
+            CreateFunctionDataType::F32 => Arc::new(
+                results
+                    .iter()
+                    .map(|r| r.unwrap_f32())
+                    .collect::<Float32Array>(),
+            ) as ArrayRef,
+            CreateFunctionDataType::F64 => Arc::new(
+                results
+                    .iter()
+                    .map(|r| r.unwrap_f64())
+                    .collect::<Float64Array>(),
+            ) as ArrayRef,
+            _ => panic!("unexpected type"),
+        };
+        Ok(array)
+    };
+
+    Ok(make_scalar_function(inner))
 }
 
 /// Build a DataFusion scalar function from WASM module bytecode.
@@ -186,26 +416,38 @@ fn make_scalar_function_from_wasm(
 }
 
 pub fn create_udf_from_wasm(
+    language: &CreateFunctionLanguage,
     name: &str,
     module_bytes: &[u8],
     function_name: &str,
-    input_types: Vec<ValType>,
-    return_type: ValType,
+    input_types: &Vec<CreateFunctionDataType>,
+    return_type: &CreateFunctionDataType,
     volatility: Volatility,
 ) -> Result<ScalarUDF> {
-    // Convert input/output types. We only support the basic {I,F}{32,64} and not function references / V128
     let df_input_types = input_types
         .iter()
-        .map(wasm_type_to_arrow_type)
+        .map(sql_type_to_arrow_type)
         .collect::<Result<_>>()?;
-    let df_return_type = Arc::new(wasm_type_to_arrow_type(&return_type)?);
+    let df_return_type = Arc::new(sql_type_to_arrow_type(return_type)?);
 
-    let function = make_scalar_function_from_wasm(
-        module_bytes,
-        function_name,
-        input_types,
-        return_type,
-    )?;
+    let function = match language {
+        CreateFunctionLanguage::Wasm => {
+            let converted_input_types = input_types.iter().map(get_wasm_type).collect();
+            make_scalar_function_from_wasm(
+                module_bytes,
+                function_name,
+                // Convert input/output types. We only support the basic {I,F}{32,64} and not function references / V128
+                converted_input_types,
+                get_wasm_type(return_type),
+            )?
+        }
+        CreateFunctionLanguage::WasiMessagePack => make_scalar_function_wasi_messagepack(
+            module_bytes,
+            function_name,
+            input_types.to_owned(),
+            return_type.to_owned(),
+        )?,
+    };
 
     Ok(create_udf(
         name,
@@ -258,33 +500,36 @@ f95f3c90f2533d2267773eac66313f1d00803ff725303d03fd3fbe17a6d1\
 
         // sin(2*pi*x)
         let sintau = create_udf_from_wasm(
+            &CreateFunctionLanguage::Wasm,
             "sintau",
             &bytes,
             "sintau",
-            vec![ValType::F32],
-            ValType::F32,
+            &vec![CreateFunctionDataType::F32],
+            &CreateFunctionDataType::F32,
             Volatility::Immutable,
         )
         .unwrap();
 
         // 2^x
         let exp2 = create_udf_from_wasm(
+            &CreateFunctionLanguage::Wasm,
             "exp2",
             &bytes,
             "exp2",
-            vec![ValType::F32],
-            ValType::F32,
+            &vec![CreateFunctionDataType::F32],
+            &CreateFunctionDataType::F32,
             Volatility::Immutable,
         )
         .unwrap();
 
         // log2(x)
         let log2 = create_udf_from_wasm(
+            &CreateFunctionLanguage::Wasm,
             "log2",
             &bytes,
             "log2",
-            vec![ValType::F32],
-            ValType::F32,
+            &vec![CreateFunctionDataType::F32],
+            &CreateFunctionDataType::F32,
             Volatility::Immutable,
         )
         .unwrap();
@@ -380,22 +625,32 @@ c40201087f230041206b2203240020032002370318200320013703102003\
 
         // speck_encrypt_block(plaintext_block, key_msb, key_lsb)
         let speck_encrypt_block = create_udf_from_wasm(
+            &CreateFunctionLanguage::Wasm,
             "speck_encrypt_block",
             &speck,
             "speck_encrypt_block",
-            vec![ValType::I64, ValType::I64, ValType::I64],
-            ValType::I64,
+            &vec![
+                CreateFunctionDataType::I64,
+                CreateFunctionDataType::I64,
+                CreateFunctionDataType::I64,
+            ],
+            &CreateFunctionDataType::I64,
             Volatility::Immutable,
         )
         .unwrap();
 
         // speck_decrypt_block(ciphertext_block, key_msb, key_lsb)
         let speck_decrypt_block = create_udf_from_wasm(
+            &CreateFunctionLanguage::Wasm,
             "speck_decrypt_block",
             &speck,
             "speck_decrypt_block",
-            vec![ValType::I64, ValType::I64, ValType::I64],
-            ValType::I64,
+            &vec![
+                CreateFunctionDataType::I64,
+                CreateFunctionDataType::I64,
+                CreateFunctionDataType::I64,
+            ],
+            &CreateFunctionDataType::I64,
             Volatility::Immutable,
         )
         .unwrap();

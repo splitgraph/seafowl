@@ -11,9 +11,9 @@ pub fn get_wasm_type(t: &CreateFunctionDataType) -> ValType {
     match t {
         // temporary support for legacy WASM-native names:
         CreateFunctionDataType::I32 => ValType::I32,
-        CreateFunctionDataType::I64 => ValType::I32,
+        CreateFunctionDataType::I64 => ValType::I64,
         CreateFunctionDataType::F32 => ValType::F32,
-        CreateFunctionDataType::F64 => ValType::F32,
+        CreateFunctionDataType::F64 => ValType::F64,
         // Supported DDL type names
         CreateFunctionDataType::INT => ValType::I32,
         CreateFunctionDataType::BIGINT => ValType::I64,
@@ -72,6 +72,7 @@ impl Default for CreateFunctionVolatility {
 #[serde(rename_all = "camelCase")]
 pub enum CreateFunctionLanguage {
     Wasm,
+    WasiMessagePack
 }
 impl Default for CreateFunctionLanguage {
     fn default() -> Self {

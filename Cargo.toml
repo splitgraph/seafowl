@@ -68,6 +68,9 @@ prost = "0.11"
 rand = "0.8"
 regex = ">=1.6.0"
 reqwest = { version = "0.11.11", features = [ "stream" ] }
+rmp = "0.8.11"
+rmp-serde = "1.1.1"
+rmpv = { version = "1.0.0", features = ["with-serde"] }
 serde = "1.0.138"
 serde_json = "1.0.81"
 sha2 = ">=0.10.1"
@@ -79,9 +82,11 @@ tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
 url = "2.2"
 warp = "0.3"
+wasi-common = "1.0.1"
 
 # For WASM user-defined functions
-wasmtime = "0.40.0"
+wasmtime = "1.0.1"
+wasmtime-wasi = "1.0.1"
 
 [patch.crates-io]
 # Arrow 26 that picks up Date64 -> Timestamp cast needed for remote tables
