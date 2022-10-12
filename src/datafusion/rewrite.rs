@@ -28,8 +28,7 @@ where
 #[cfg(test)]
 mod tests {
     use datafusion::sql::parser::Statement;
-    use itertools::Itertools;
-    use sqlparser::ast::{ObjectName, SetExpr, Statement as SQLStatement, TableFactor};
+    use sqlparser::ast::{ObjectName, Statement as SQLStatement};
     use std::ops::Deref;
     use test_case::test_case;
 
@@ -50,8 +49,8 @@ mod tests {
         "Fully qualified table name")
     ]
     fn test_table_name_rewrite(table_name: &str) {
-        let stmts = DFParser::parse_sql(format!("SELECT * FROM {}", table_name).as_str())
-            .unwrap();
+        let query = format!("SELECT * FROM {}", table_name);
+        let stmts = DFParser::parse_sql(query.as_str()).unwrap();
 
         let mut q = if let Statement::Statement(stmt) = &stmts[0] {
             if let SQLStatement::Query(query) = stmt.deref() {
@@ -73,15 +72,7 @@ mod tests {
         };
         rewriter.visit_query(&mut q);
 
-        if let SetExpr::Select(select) = *q.body {
-            if let TableFactor::Table { name, .. } = &select.from[0].relation {
-                assert_eq!(
-                    name.0.iter().map(|i| i.value.clone()).join("."),
-                    table_name.replace("test_table", "aaaa"),
-                )
-            }
-        } else {
-            panic!("Expected SetExpr not matched!");
-        }
+        // Ensure table name in the original query has been replaced
+        assert_eq!(format!("{}", q), query.replace("test_table", "aaaa"),)
     }
 }
