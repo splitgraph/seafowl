@@ -42,6 +42,7 @@ fn sql_type_to_arrow_type(t: &CreateFunctionDataType) -> Result<DataType> {
         CreateFunctionDataType::FLOAT => Ok(DataType::Float32),
         CreateFunctionDataType::REAL => Ok(DataType::Float32),
         CreateFunctionDataType::DOUBLE => Ok(DataType::Float64),
+        CreateFunctionDataType::TEXT => Ok(DataType::Utf8),
     }
 }
 
@@ -61,7 +62,6 @@ fn invoke_wasi_messagepack(
     function_name: &str,
     args: Vec<Value>,
 ) -> StdResult<Value, wasmtime_wasi::Error> {
-
     let mut serialized_input = Vec::new();
     // TODO: error handling on encode
     let args_array = Value::Array(args);
@@ -87,12 +87,16 @@ fn invoke_wasi_messagepack(
         .inherit_stderr()
         .build();
     let mut store = Store::new(&engine, wasi);
-    wasmtime_wasi::snapshots::preview_1::add_wasi_snapshot_preview1_to_linker(&mut linker, |s| s)?;
+    wasmtime_wasi::snapshots::preview_1::add_wasi_snapshot_preview1_to_linker(
+        &mut linker,
+        |s| s,
+    )?;
 
     // Instantiate our module with the imports we've created, and run it.
     let module = Module::from_binary(&engine, &module_bytes)?;
     let instance = linker.instantiate(&mut store, &module)?;
-    let instance_func = instance.get_typed_func::<(), (), _>(&mut store, function_name)?;
+    let instance_func =
+        instance.get_typed_func::<(), (), _>(&mut store, function_name)?;
     instance_func.call(&mut store, ())?;
 
     let mut buffer: Vec<u8> = Vec::new();
@@ -112,7 +116,6 @@ fn make_scalar_function_wasi_messagepack(
     input_types: Vec<CreateFunctionDataType>,
     return_type: CreateFunctionDataType,
 ) -> Result<ScalarFunctionImplementation> {
-
     // This function has to be of type Fn instead of FnMut. The function invocation (func.call)
     // needs a mutable context, which forces this closure to be FnMut.
     // This means we have to create a store and load the function inside of this closure, discarding
@@ -122,7 +125,6 @@ fn make_scalar_function_wasi_messagepack(
     let function_name = function_name.to_owned();
     let module_bytes = module_bytes.to_owned();
     let inner = move |args: &[ArrayRef]| {
-
         // this is guaranteed by DataFusion based on the function's signature.
         assert_eq!(args.len(), input_types.len());
 
@@ -176,13 +178,16 @@ fn make_scalar_function_wasi_messagepack(
                 params.push(messagepack_value);
             }
 
-            results.push(invoke_wasi_messagepack(&module_bytes, &function_name, params)
-            .map_err(|_| {
-                DataFusionError::Internal(format!(
-                    "Error invoking function {:?}",
-                    function_name
-                ))
-            })?);
+            results.push(
+                invoke_wasi_messagepack(&module_bytes, &function_name, params).map_err(
+                    |_| {
+                        DataFusionError::Internal(format!(
+                            "Error invoking function {:?}",
+                            function_name
+                        ))
+                    },
+                )?,
+            );
         }
 
         // Convert the results back into Arrow (Arc<dyn Array>)
@@ -205,10 +210,15 @@ fn make_scalar_function_wasi_messagepack(
             CreateFunctionDataType::F32 => Arc::new(
                 results
                     .iter()
-                    .map(|v| match v {
-                        Value::F32(n) => Ok(*n),
-                        _ => Err(DataFusionError::Internal("error unwrapping f32 value".to_string()))
-                    }.unwrap())
+                    .map(|v| {
+                        match v {
+                            Value::F32(n) => Ok(*n),
+                            _ => Err(DataFusionError::Internal(
+                                "error unwrapping f32 value".to_string(),
+                            )),
+                        }
+                        .unwrap()
+                    })
                     .collect::<Float32Array>(),
             ) as ArrayRef,
             CreateFunctionDataType::F64 => Arc::new(
@@ -400,13 +410,16 @@ pub fn create_udf_from_wasm(
 
     let function = match language {
         CreateFunctionLanguage::Wasm => {
-            let converted_input_types = input_types.iter().map(get_wasm_type).collect();
+            let converted_input_types = input_types
+                .iter()
+                .map(|t| get_wasm_type(t).unwrap())
+                .collect();
             make_scalar_function_from_wasm(
                 module_bytes,
                 function_name,
                 // Convert input/output types. We only support the basic {I,F}{32,64} and not function references / V128
                 converted_input_types,
-                get_wasm_type(return_type),
+                get_wasm_type(return_type)?,
             )?
         }
         CreateFunctionLanguage::WasiMessagePack => make_scalar_function_wasi_messagepack(
@@ -679,7 +692,7 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         ctx.sql(
             "CREATE TABLE int64_values AS
             SELECT CAST(v1 AS BIGINT) AS v1, CAST(v2 AS BIGINT) AS v2
-            FROM (VALUES (1, 2), (3, 4), (5, 6), (7, 8), (9, 10)) d (v1, v2)"
+            FROM (VALUES (1, 2), (3, 4), (5, 6), (7, 8), (9, 10)) d (v1, v2)",
         )
         .await
         .unwrap();
@@ -690,10 +703,7 @@ c40201087f230041206b2203240020032002370318200320013703102003\
             "adder",
             &wasi_messagepack_adder,
             "_start",
-            &vec![
-                CreateFunctionDataType::I64,
-                CreateFunctionDataType::I64,
-            ],
+            &vec![CreateFunctionDataType::I64, CreateFunctionDataType::I64],
             &CreateFunctionDataType::I64,
             Volatility::Immutable,
         )
@@ -702,15 +712,18 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         ctx.register_udf(adder_udf);
 
         let results = ctx
-        .sql(
-            "SELECT
+            .sql(
+                "SELECT
                     v1,
                     v2,
                     CAST(adder(v1, v2) AS BIGINT) AS sum
             FROM int64_values;",
-        )
-        .await
-        .unwrap().collect().await.unwrap();
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
 
         let expected = vec![
             "+----+----+-----+",
@@ -725,6 +738,62 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         ];
 
         assert_batches_eq!(expected, &results);
+    }
 
+    #[tokio::test]
+    async fn test_wasi_messagepack_concat() {
+        let mut wasm_filename = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        wasm_filename.push_str("/resources/test/wasi-messagepack-string-udfs.wasm");
+        // adder function: (i64, i64) -> i64
+        let wasi_messagepack_adder = get_file_as_byte_vec(&wasm_filename);
+
+        let mut ctx = SessionContext::new();
+        ctx.sql(
+            "CREATE TABLE text_values AS
+            SELECT CAST(s1 AS TEXT) AS s1, CAST(s2 AS TEXT) AS s2
+            FROM (VALUES ('foo', 'bar'), ('big', 'int'), ('con', 'gress')) d (s1, s2)",
+        )
+        .await
+        .unwrap();
+
+        // speck_encrypt_block(plaintext_block, key_msb, key_lsb)
+        let concat_udf = create_udf_from_wasm(
+            &CreateFunctionLanguage::WasiMessagePack,
+            "concat",
+            &wasi_messagepack_adder,
+            "concat",
+            &vec![CreateFunctionDataType::TEXT, CreateFunctionDataType::TEXT],
+            &CreateFunctionDataType::TEXT,
+            Volatility::Immutable,
+        )
+        .unwrap();
+
+        ctx.register_udf(concat_udf);
+
+        let results = ctx
+            .sql(
+                "SELECT
+                s1,
+                s2,
+                CAST(concat(s1, s2) AS TEXT) AS concat_result
+            FROM text_values;",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+-----+-------+---------------+",
+            "| s1  | s2    | concat_result |",
+            "+-----+-------+---------------+",
+            "| foo | bar   | foobar        |",
+            "| big | int   | bigint        |",
+            "| con | gress | congress      |",
+            "+-----+-------+---------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
     }
 }
