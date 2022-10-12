@@ -62,7 +62,7 @@ pub struct SeafowlDatabase {
 }
 
 impl CatalogProvider for SeafowlDatabase {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

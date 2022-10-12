@@ -380,6 +380,29 @@ impl Repository for $repo {
         Ok(new_version)
     }
 
+    async fn get_all_table_versions(
+        &self,
+        database_id: DatabaseId,
+    ) -> Result<Vec<AllTableVersionsResult>, Error> {
+        let table_versions = sqlx::query_as(
+            r#"SELECT
+                collection.name,
+                table.name,
+                table_version.id,
+                table_version.creation_time
+            FROM table_version
+            INNER JOIN table ON table.id = table_version.table_id
+            INNER JOIN collection ON collection.id = table.collection_id
+            WHERE collection.database_id = $1"#
+        )
+            .bind(database_id)
+            .fetch(&self.executor)
+            .try_collect()
+            .await.map_err($repo::interpret_error)?;
+
+        Ok(table_versions)
+    }
+
     async fn move_table(
         &self,
         table_id: TableId,

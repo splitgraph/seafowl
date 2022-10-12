@@ -6,7 +6,7 @@ use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     data_types::{
         CollectionId, DatabaseId, FunctionId, PhysicalPartitionId, TableId,
-        TableVersionId,
+        TableVersionId, Timestamp,
     },
     provider::SeafowlPartition,
     schema::Schema,
@@ -20,6 +20,14 @@ pub struct AllDatabaseColumnsResult {
     pub table_version_id: TableVersionId,
     pub column_name: String,
     pub column_type: String,
+}
+
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
+pub struct AllTableVersionsResult {
+    pub collection_name: String,
+    pub table_name: String,
+    pub table_version_id: TableVersionId,
+    pub creation_time: Timestamp,
 }
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
@@ -131,6 +139,11 @@ pub trait Repository: Send + Sync + Debug {
         from_version: TableVersionId,
         inherit_partitions: bool,
     ) -> Result<TableVersionId, Error>;
+
+    async fn get_all_table_versions(
+        &self,
+        database_id: DatabaseId,
+    ) -> Result<Vec<AllTableVersionsResult>>;
 
     async fn move_table(
         &self,

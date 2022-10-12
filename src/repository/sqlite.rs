@@ -24,7 +24,8 @@ use crate::implement_repository;
 use super::{
     default::RepositoryQueries,
     interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Error, Repository, Result,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTableVersionsResult,
+        Error, Repository, Result,
     },
 };
 

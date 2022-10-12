@@ -78,6 +78,7 @@ use tokio::sync::Semaphore;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{PhysicalPartitionId, TableId, TableVersionId};
+use crate::datafusion::visit::VisitorMut;
 use crate::provider::{
     project_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
     SeafowlTable,
@@ -91,6 +92,7 @@ use crate::{
         SeafowlExtensionNode, Update, Vacuum,
     },
     schema::Schema as SeafowlSchema,
+    version::TableVersionProcessor,
 };
 
 // Scheme used for URLs referencing the object store that we use to register
@@ -843,11 +845,19 @@ impl SeafowlContext for DefaultSeafowlContext {
 
         match statement {
             DFStatement::Statement(s) => match *s {
-                Statement::Query(q) => {
-                    // Determine if one of the tables references a non-latest version version using
-                    // time-travel. If so, load the specified table version in the schema's map,
-                    // rename by appending an explicit table_version_id, and do a switcheroo in the
-                    // statement itself.
+                Statement::Query(mut q) => {
+                    // Determine if one of the tables references a non-latest version using table
+                    // function syntax. If so, rename the table in the query by appending the
+                    // explicit timestamp and add it to the schema provider's map.
+
+                    let mut version_processor = TableVersionProcessor::new();
+                    version_processor.visit_query(&mut q);
+
+                    if !version_processor.tables_renamed.is_empty() {
+                        // 1. load the table versions specified by the (validated) timestamps
+                        // 2. recreate the schema where the catalog provider has a map of all tables
+                        // 3. recreate the query planner with the new state
+                    }
 
                     query_planner.sql_statement_to_plan(Statement::Query(q))
                 },

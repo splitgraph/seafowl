@@ -8,7 +8,6 @@ use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
 
-use crate::data_types::FunctionId;
 use crate::provider::SeafowlFunction;
 use crate::wasm_udf::data_types::{
     CreateFunctionDetails, CreateFunctionLanguage, CreateFunctionVolatility,
@@ -16,7 +15,8 @@ use crate::wasm_udf::data_types::{
 };
 use crate::{
     data_types::{
-        CollectionId, DatabaseId, PhysicalPartitionId, TableId, TableVersionId,
+        CollectionId, DatabaseId, FunctionId, PhysicalPartitionId, TableId,
+        TableVersionId,
     },
     provider::{
         PartitionColumn, SeafowlCollection, SeafowlDatabase, SeafowlPartition,
@@ -24,7 +24,7 @@ use crate::{
     },
     repository::interface::{
         AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTablePartitionsResult,
-        Error as RepositoryError, Repository,
+        AllTableVersionsResult, Error as RepositoryError, Repository,
     },
     schema::Schema,
 };
@@ -191,6 +191,11 @@ pub trait TableCatalog: Sync + Send {
         from_version: TableVersionId,
         inherit_partitions: bool,
     ) -> Result<TableVersionId>;
+
+    async fn get_all_table_versions(
+        &self,
+        database_id: DatabaseId,
+    ) -> Result<Vec<AllTableVersionsResult>>;
 
     async fn move_table(
         &self,
@@ -505,6 +510,16 @@ impl TableCatalog for DefaultCatalog {
                 }
                 _ => Self::to_sqlx_error(e),
             })
+    }
+
+    async fn get_all_table_versions(
+        &self,
+        database_id: DatabaseId,
+    ) -> Result<Vec<AllTableVersionsResult>> {
+        self.repository
+            .get_all_table_versions(database_id)
+            .await
+            .map_err(Self::to_sqlx_error)
     }
 
     async fn move_table(

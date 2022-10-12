@@ -23,7 +23,8 @@ use crate::{
 use super::{
     default::RepositoryQueries,
     interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Error, Repository, Result,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTableVersionsResult,
+        Error, Repository, Result,
     },
 };
 
