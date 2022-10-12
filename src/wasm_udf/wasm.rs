@@ -57,39 +57,43 @@ fn messagepack_decode(buf: &mut Vec<u8>) -> StdResult<Value, rmp_serde::decode::
 }
 
 fn invoke_wasi_messagepack(
-    module_name: String,
-    args: &Value,
+    module_bytes: &Vec<u8>,
+    function_name: &str,
+    args: Vec<Value>,
 ) -> StdResult<Value, wasmtime_wasi::Error> {
-    let engine = Engine::default();
-    let mut linker = wasmtime::Linker::new(&engine);
-    wasmtime_wasi::add_to_linker(&mut linker, |s| s)?;
+
+    let mut serialized_input = Vec::new();
+    // TODO: error handling on encode
+    let args_array = Value::Array(args);
+    messagepack_encode(&args_array, &mut serialized_input)?;
+    eprintln!("args serialized as {:?} bytes", serialized_input.len());
+    // let u: User = serde_json::from_str(j).unwrap();
+    let stdin = ReadPipe::from(serialized_input);
 
     let stdout_buf: Vec<u8> = vec![];
     let stdout_mutex = Arc::new(RwLock::new(stdout_buf));
     let stdout = WritePipe::from_shared(stdout_mutex.clone());
 
-    eprintln!("host about to serialize args {:?} ", args);
-    let mut serialized_input = Vec::new();
-    // TODO: error handling on encode
-    messagepack_encode(args, &mut serialized_input)?;
-    eprintln!("args serialized as {:?} bytes", serialized_input.len());
-    // let u: User = serde_json::from_str(j).unwrap();
-    let stdin = ReadPipe::from(serialized_input);
+    // Define the WASI functions globally on the `Config`.
+    let engine = Engine::default();
+    let mut linker = wasmtime::Linker::new(&engine);
 
+    // Create a WASI context and put it in a Store; all instances in the store
+    // share this context. `WasiCtxBuilder` provides a number of ways to
+    // configure what the target program will have access to.
     let wasi = WasiCtxBuilder::new()
         .stdout(Box::new(stdout))
         .stdin(Box::new(stdin))
-        // TODO: inherit stderr for debugging purposes?
         .inherit_stderr()
         .build();
     let mut store = Store::new(&engine, wasi);
+    wasmtime_wasi::snapshots::preview_1::add_wasi_snapshot_preview1_to_linker(&mut linker, |s| s)?;
 
-    let module = Module::from_file(&engine, &module_name)?;
-    linker.module(&mut store, &module_name, &module)?;
-
+    // Instantiate our module with the imports we've created, and run it.
+    let module = Module::from_binary(&engine, &module_bytes)?;
     let instance = linker.instantiate(&mut store, &module)?;
-    let instance_main = instance.get_typed_func::<(), (), _>(&mut store, "_start")?;
-    instance_main.call(&mut store, ())?;
+    let instance_func = instance.get_typed_func::<(), (), _>(&mut store, function_name)?;
+    instance_func.call(&mut store, ())?;
 
     let mut buffer: Vec<u8> = Vec::new();
     stdout_mutex
@@ -108,24 +112,6 @@ fn make_scalar_function_wasi_messagepack(
     input_types: Vec<CreateFunctionDataType>,
     return_type: CreateFunctionDataType,
 ) -> Result<ScalarFunctionImplementation> {
-    let mut store = Store::<()>::default();
-    let module = Module::from_binary(store.engine(), module_bytes).map_err(|e| {
-        DataFusionError::Internal(format!("Error loading module: {:?}", e))
-    })?;
-
-    // Pre-flight checks to make sure the function exists
-    let instance = Instance::new(&mut store, &module, &[]).map_err(|e| {
-        DataFusionError::Internal(format!("Error instantiating module: {:?}", e))
-    })?;
-
-    let _func = instance
-        .get_func(&mut store, function_name)
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "Error loading function {:?}",
-                function_name
-            ))
-        })?;
 
     // This function has to be of type Fn instead of FnMut. The function invocation (func.call)
     // needs a mutable context, which forces this closure to be FnMut.
@@ -136,25 +122,6 @@ fn make_scalar_function_wasi_messagepack(
     let function_name = function_name.to_owned();
     let module_bytes = module_bytes.to_owned();
     let inner = move |args: &[ArrayRef]| {
-        // Load the function again
-        let mut store = Store::<()>::default();
-
-        let module = Module::from_binary(store.engine(), &module_bytes).map_err(|e| {
-            DataFusionError::Internal(format!("Error loading module: {:?}", e))
-        })?;
-
-        let instance = Instance::new(&mut store, &module, &[]).map_err(|e| {
-            DataFusionError::Internal(format!("Error instantiating module: {:?}", e))
-        })?;
-
-        let func = instance
-            .get_func(&mut store, &function_name)
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "Error loading function {:?}",
-                    function_name
-                ))
-            })?;
 
         // this is guaranteed by DataFusion based on the function's signature.
         assert_eq!(args.len(), input_types.len());
@@ -163,61 +130,59 @@ fn make_scalar_function_wasi_messagepack(
         let array_len = args.get(0).unwrap().len();
 
         // Buffer for the results
-        let mut results: Vec<Val> = Vec::new();
-        results.resize(array_len, Val::null());
+        let mut results: Vec<Value> = Vec::with_capacity(array_len);
 
-        for i in 0..array_len {
-            let mut params: Vec<Val> = Vec::with_capacity(args.len());
+        for row_ix in 0..array_len {
+            let mut params: Vec<Value> = Vec::with_capacity(args.len());
             // Build a slice of WASM Val values to pass to the function
-            for j in 0..args.len() {
-                let wasm_val = match input_types.get(j).unwrap() {
-                    CreateFunctionDataType::I32 => Val::I32(
-                        args.get(j)
+            for col_ix in 0..args.len() {
+                let messagepack_value = match input_types.get(col_ix).unwrap() {
+                    CreateFunctionDataType::I32 => Value::from(
+                        args.get(col_ix)
                             .unwrap()
                             .as_any()
                             .downcast_ref::<Int32Array>()
                             .expect("cast failed")
-                            .value(i),
+                            .value(row_ix),
                     ),
-                    CreateFunctionDataType::I64 => Val::I64(
-                        args.get(j)
+                    CreateFunctionDataType::I64 => Value::from(
+                        args.get(col_ix)
                             .unwrap()
                             .as_any()
                             .downcast_ref::<Int64Array>()
                             .expect("cast failed")
-                            .value(i),
+                            .value(row_ix),
                     ),
-                    CreateFunctionDataType::F32 => Val::F32(
-                        args.get(j)
+                    CreateFunctionDataType::F32 => Value::from(
+                        args.get(col_ix)
                             .unwrap()
                             .as_any()
                             .downcast_ref::<Float32Array>()
                             .expect("cast failed")
-                            .value(i)
+                            .value(row_ix)
                             .to_bits(),
                     ),
-                    CreateFunctionDataType::F64 => Val::F64(
-                        args.get(j)
+                    CreateFunctionDataType::F64 => Value::from(
+                        args.get(col_ix)
                             .unwrap()
                             .as_any()
                             .downcast_ref::<Float64Array>()
                             .expect("cast failed")
-                            .value(i)
+                            .value(row_ix)
                             .to_bits(),
                     ),
                     _ => panic!("unexpected type"),
                 };
-                params.push(wasm_val);
+                params.push(messagepack_value);
             }
 
-            // Get the function to write its output to a slice of the results' buffer
-            func.call(&mut store, &params, &mut results[i..i + 1])
-                .map_err(|e| {
-                    DataFusionError::Execution(format!(
-                        "Error executing function {:?}: {:?}",
-                        function_name, e
-                    ))
-                })?;
+            results.push(invoke_wasi_messagepack(&module_bytes, &function_name, params)
+            .map_err(|_| {
+                DataFusionError::Internal(format!(
+                    "Error invoking function {:?}",
+                    function_name
+                ))
+            })?);
         }
 
         // Convert the results back into Arrow (Arc<dyn Array>)
@@ -228,25 +193,28 @@ fn make_scalar_function_wasi_messagepack(
             CreateFunctionDataType::I32 => Arc::new(
                 results
                     .iter()
-                    .map(|r| r.unwrap_i32())
+                    .map(|v| i32::try_from(v.as_i64().unwrap()).ok())
                     .collect::<Int32Array>(),
             ) as ArrayRef,
             CreateFunctionDataType::I64 => Arc::new(
                 results
                     .iter()
-                    .map(|r| r.unwrap_i64())
+                    .map(|v| v.as_i64().unwrap())
                     .collect::<Int64Array>(),
             ) as ArrayRef,
             CreateFunctionDataType::F32 => Arc::new(
                 results
                     .iter()
-                    .map(|r| r.unwrap_f32())
+                    .map(|v| match v {
+                        Value::F32(n) => Ok(*n),
+                        _ => Err(DataFusionError::Internal("error unwrapping f32 value".to_string()))
+                    }.unwrap())
                     .collect::<Float32Array>(),
             ) as ArrayRef,
             CreateFunctionDataType::F64 => Arc::new(
                 results
                     .iter()
-                    .map(|r| r.unwrap_f64())
+                    .map(|v| v.as_f64().unwrap())
                     .collect::<Float64Array>(),
             ) as ArrayRef,
             _ => panic!("unexpected type"),
@@ -466,7 +434,7 @@ mod tests {
     use datafusion::assert_batches_eq;
 
     #[tokio::test]
-    async fn test_wasi_math() {
+    async fn test_wasm_math() {
         // Source: https://gist.github.com/going-digital/02e46c44d89237c07bc99cd440ebfa43
         let bytes = decode(
             "\
@@ -575,7 +543,7 @@ f95f3c90f2533d2267773eac66313f1d00803ff725303d03fd3fbe17a6d1\
     }
 
     #[tokio::test]
-    async fn test_wasi_encryption() {
+    async fn test_wasm_encryption() {
         // Speck64/128 block cipher
         // Original from https://github.com/madmo/speck/; adapted for WASM
         // in github.com/mildbyte/speck-wasm
@@ -686,5 +654,77 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         ];
 
         assert_batches_eq!(expected, &results);
+    }
+
+    use std::io::Read;
+
+    // from: https://www.reddit.com/r/rust/comments/dekpl5/how_to_read_binary_data_from_a_file_into_a_vecu8/
+    fn get_file_as_byte_vec(filename: &String) -> Vec<u8> {
+        let mut f = std::fs::File::open(&filename).expect("no file found");
+        let metadata = std::fs::metadata(&filename).expect("unable to read metadata");
+        let mut buffer = vec![0; metadata.len() as usize];
+        f.read(&mut buffer).expect("buffer overflow");
+
+        buffer
+    }
+
+    #[tokio::test]
+    async fn test_wasi_messagepack_adder() {
+        let mut wasm_filename = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        wasm_filename.push_str("/resources/test/wasi-messagepack-adder.wasm");
+        // adder function: (i64, i64) -> i64
+        let wasi_messagepack_adder = get_file_as_byte_vec(&wasm_filename);
+
+        let mut ctx = SessionContext::new();
+        ctx.sql(
+            "CREATE TABLE int64_values AS
+            SELECT CAST(v1 AS BIGINT) AS v1, CAST(v2 AS BIGINT) AS v2
+            FROM (VALUES (1, 2), (3, 4), (5, 6), (7, 8), (9, 10)) d (v1, v2)"
+        )
+        .await
+        .unwrap();
+
+        // speck_encrypt_block(plaintext_block, key_msb, key_lsb)
+        let adder_udf = create_udf_from_wasm(
+            &CreateFunctionLanguage::WasiMessagePack,
+            "adder",
+            &wasi_messagepack_adder,
+            "_start",
+            &vec![
+                CreateFunctionDataType::I64,
+                CreateFunctionDataType::I64,
+            ],
+            &CreateFunctionDataType::I64,
+            Volatility::Immutable,
+        )
+        .unwrap();
+
+        ctx.register_udf(adder_udf);
+
+        let results = ctx
+        .sql(
+            "SELECT
+                    v1,
+                    v2,
+                    CAST(adder(v1, v2) AS BIGINT) AS sum
+            FROM int64_values;",
+        )
+        .await
+        .unwrap().collect().await.unwrap();
+
+        let expected = vec![
+            "+----+----+-----+",
+            "| v1 | v2 | sum |",
+            "+----+----+-----+",
+            "| 1  | 2  | 3   |",
+            "| 3  | 4  | 7   |",
+            "| 5  | 6  | 11  |",
+            "| 7  | 8  | 15  |",
+            "| 9  | 10 | 19  |",
+            "+----+----+-----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
     }
 }
