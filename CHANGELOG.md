@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Allow using SQL types in WASM UDF definitions (<https://github.com/splitgraph/seafowl/pull/147>)
+
 ## [0.2.1] - 2022-09-30
 
 - Cached GET API now accepts URL-encoded query text in X-Seafowl-Header
