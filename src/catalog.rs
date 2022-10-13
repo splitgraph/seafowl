@@ -3,10 +3,12 @@ use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::catalog::schema::MemorySchemaProvider;
+use datafusion::datasource::TableProvider;
 use datafusion::error::DataFusionError;
 use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
+use parking_lot::RwLock;
 
 use crate::provider::SeafowlFunction;
 use crate::wasm_udf::data_types::{
@@ -311,7 +313,7 @@ impl DefaultCatalog {
         &self,
         table_name: &str,
         table_columns: I,
-    ) -> (Arc<str>, Arc<SeafowlTable>)
+    ) -> (Arc<str>, Arc<dyn TableProvider>)
     where
         I: Iterator<Item = &'a AllDatabaseColumnsResult>,
     {
@@ -363,7 +365,7 @@ impl DefaultCatalog {
             Arc::from(collection_name.to_string()),
             Arc::new(SeafowlCollection {
                 name: Arc::from(collection_name.to_string()),
-                tables,
+                tables: RwLock::new(tables),
             }),
         )
     }

@@ -42,6 +42,7 @@ use futures::future;
 use hashbrown::HashMap as HashBrownMap;
 use log::warn;
 use object_store::ObjectStore;
+use parking_lot::RwLock;
 use prost::Message;
 
 use object_store::path::Path;
@@ -85,7 +86,7 @@ impl CatalogProvider for SeafowlDatabase {
 
 pub struct SeafowlCollection {
     pub name: Arc<str>,
-    pub tables: HashMap<Arc<str>, Arc<SeafowlTable>>,
+    pub tables: RwLock<HashMap<Arc<str>, Arc<dyn TableProvider>>>,
 }
 
 impl SchemaProvider for SeafowlCollection {
@@ -94,15 +95,33 @@ impl SchemaProvider for SeafowlCollection {
     }
 
     fn table_names(&self) -> Vec<String> {
-        self.tables.keys().map(|s| s.to_string()).collect()
+        let tables = self.tables.read();
+        tables.keys().map(|s| s.to_string()).collect()
     }
 
     fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        self.tables.get(name).map(|c| Arc::clone(c) as _)
+        let tables = self.tables.read();
+        tables.get(name).map(|c| Arc::clone(c) as _)
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        self.tables.contains_key(name)
+        let tables = self.tables.read();
+        tables.contains_key(name)
+    }
+
+    fn register_table(
+        &self,
+        name: String,
+        table: Arc<dyn TableProvider>,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        if self.table_exist(name.as_str()) {
+            return Err(DataFusionError::Execution(format!(
+                "The table {} already exists",
+                name
+            )));
+        }
+        let mut tables = self.tables.write();
+        Ok(tables.insert(Arc::from(name), table))
     }
 }
 

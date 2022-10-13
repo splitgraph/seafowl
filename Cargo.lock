@@ -3335,6 +3335,7 @@ dependencies = [
  "mockall",
  "moka",
  "object_store",
+ "parking_lot 0.12.1",
  "percent-encoding",
  "pretty_env_logger",
  "prost",

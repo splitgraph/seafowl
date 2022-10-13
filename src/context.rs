@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use base64::decode;
 use bytes::BytesMut;
+
 use datafusion::datasource::TableProvider;
 use datafusion::sql::ResolvedTableReference;
 use itertools::Itertools;
@@ -869,8 +870,6 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                         println!("{:?}", table_versions);
 
-                        let _a = 1;
-
                         // 1. load the table versions specified by the (validated) timestamps
                         // 2. register the new tables in the schema provider's map
                     }
@@ -1720,6 +1719,7 @@ pub mod test_utils {
 
     use mockall::predicate;
     use object_store::memory::InMemory;
+    use parking_lot::RwLock;
 
     use crate::{
         catalog::{
@@ -1823,13 +1823,15 @@ pub mod test_utils {
             table_version_id: 0,
             catalog: partition_catalog_ptr.clone(),
         };
-        let tables =
-            StdHashMap::from([(Arc::from("some_table"), Arc::from(singleton_table))]);
+        let tables = StdHashMap::from([(
+            Arc::from("some_table"),
+            Arc::from(singleton_table) as Arc<dyn TableProvider>,
+        )]);
         let collections = StdHashMap::from([(
             Arc::from("testcol"),
             Arc::from(SeafowlCollection {
                 name: Arc::from("testcol"),
-                tables,
+                tables: RwLock::new(tables),
             }),
         )]);
 
