@@ -1,3 +1,4 @@
+use arrow::{array::PrimitiveArray, datatypes::ArrowPrimitiveType};
 /// Creating DataFusion UDFs from WASM bytecode
 use datafusion::{
     arrow::{
@@ -110,6 +111,18 @@ fn invoke_wasi_messagepack(
     return Ok(result);
 }
 
+fn get_arrow_value<T>(args: &[ArrayRef], row_ix: usize, col_ix: usize) -> T::Native
+where
+    T: ArrowPrimitiveType,
+{
+    args.get(col_ix)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .expect("cast failed")
+        .value(row_ix)
+}
+
 fn make_scalar_function_wasi_messagepack(
     module_bytes: &[u8],
     function_name: &str,
@@ -139,39 +152,27 @@ fn make_scalar_function_wasi_messagepack(
             // Build a slice of WASM Val values to pass to the function
             for col_ix in 0..args.len() {
                 let messagepack_value = match input_types.get(col_ix).unwrap() {
-                    CreateFunctionDataType::I32 => Value::from(
-                        args.get(col_ix)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .expect("cast failed")
-                            .value(row_ix),
-                    ),
-                    CreateFunctionDataType::I64 => Value::from(
-                        args.get(col_ix)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Int64Array>()
-                            .expect("cast failed")
-                            .value(row_ix),
-                    ),
+                    CreateFunctionDataType::I32 => {
+                        Value::from(get_arrow_value::<arrow::datatypes::Int32Type>(
+                            args, row_ix, col_ix,
+                        ))
+                    }
+                    CreateFunctionDataType::I64 => {
+                        Value::from(get_arrow_value::<arrow::datatypes::Int64Type>(
+                            args, row_ix, col_ix,
+                        ))
+                    }
                     CreateFunctionDataType::F32 => Value::from(
-                        args.get(col_ix)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Float32Array>()
-                            .expect("cast failed")
-                            .value(row_ix)
-                            .to_bits(),
+                        get_arrow_value::<arrow::datatypes::Float32Type>(
+                            args, row_ix, col_ix,
+                        )
+                        .to_bits(),
                     ),
                     CreateFunctionDataType::F64 => Value::from(
-                        args.get(col_ix)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Float64Array>()
-                            .expect("cast failed")
-                            .value(row_ix)
-                            .to_bits(),
+                        get_arrow_value::<arrow::datatypes::Float64Type>(
+                            args, row_ix, col_ix,
+                        )
+                        .to_bits(),
                     ),
                     _ => panic!("unexpected type"),
                 };
@@ -302,44 +303,28 @@ fn make_scalar_function_from_wasm(
         let mut results: Vec<Val> = Vec::new();
         results.resize(array_len, Val::null());
 
-        for i in 0..array_len {
+        for row_ix in 0..array_len {
             let mut params: Vec<Val> = Vec::with_capacity(args.len());
             // Build a slice of WASM Val values to pass to the function
-            for j in 0..args.len() {
-                let wasm_val = match input_types.get(j).unwrap() {
-                    ValType::I32 => Val::I32(
-                        args.get(j)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .expect("cast failed")
-                            .value(i),
-                    ),
-                    ValType::I64 => Val::I64(
-                        args.get(j)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Int64Array>()
-                            .expect("cast failed")
-                            .value(i),
-                    ),
+            for col_ix in 0..args.len() {
+                let wasm_val = match input_types.get(col_ix).unwrap() {
+                    ValType::I32 => Val::I32(get_arrow_value::<
+                        arrow::datatypes::Int32Type,
+                    >(args, row_ix, col_ix)),
+                    ValType::I64 => Val::I64(get_arrow_value::<
+                        arrow::datatypes::Int64Type,
+                    >(args, row_ix, col_ix)),
                     ValType::F32 => Val::F32(
-                        args.get(j)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Float32Array>()
-                            .expect("cast failed")
-                            .value(i)
-                            .to_bits(),
+                        get_arrow_value::<arrow::datatypes::Float32Type>(
+                            args, row_ix, col_ix,
+                        )
+                        .to_bits(),
                     ),
                     ValType::F64 => Val::F64(
-                        args.get(j)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Float64Array>()
-                            .expect("cast failed")
-                            .value(i)
-                            .to_bits(),
+                        get_arrow_value::<arrow::datatypes::Float64Type>(
+                            args, row_ix, col_ix,
+                        )
+                        .to_bits(),
                     ),
                     _ => panic!("unexpected type"),
                 };
@@ -347,7 +332,7 @@ fn make_scalar_function_from_wasm(
             }
 
             // Get the function to write its output to a slice of the results' buffer
-            func.call(&mut store, &params, &mut results[i..i + 1])
+            func.call(&mut store, &params, &mut results[row_ix..row_ix + 1])
                 .map_err(|e| {
                     DataFusionError::Execution(format!(
                         "Error executing function {:?}: {:?}",
