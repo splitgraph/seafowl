@@ -42,6 +42,8 @@ const trimQuery = sql => sql.trim().replace(/(?:\r\n|\r|\n)/g, " ");
 
 const hash = sql => crypto.createHash('sha256').update(sql).digest('hex');
 
+const inspect = require('util').inspect;
+
 const request = (endpoint, options={}, cb) => {
     let {protocol, hostname, port, pathname} = new URL(endpoint);
     const mod = protocol === 'https:' ? 'https' : 'http';
@@ -66,13 +68,12 @@ const readQuery = (endpoint, query) => new Promise((resolve, reject) => {
     };
 
     const req = request(endpoint, options, res => {
-      console.log(`statusCode: ${res.statusCode}`);
+      const statusCode = res.statusCode;
       res.on('data', d => {
-        if (d.length === 0) {
-            resolve(response)
-        } else {
-            response += d;
-        }
+          response += d.toString('utf8');
+      });
+      res.on('close', d => {
+          resolve({response, statusCode});
       });
     });
 
@@ -99,14 +100,12 @@ const writeQuery = (endpoint, query, password) => new Promise((resolve, reject) 
     };
 
     const req = request(endpoint, options, res => {
-      console.log(`statusCode: ${res.statusCode}`);
-
+      const statusCode = res.statusCode;
       res.on('data', d => {
-        if (d.length === 0) {
-            resolve(response)
-        } else {
-            response += d;
-        }
+          response += d.toString('utf8');
+      });
+      res.on('close', d => {
+          resolve({response, statusCode});
       });
     });
 
@@ -128,10 +127,12 @@ if (require.main === module) {
     } else {
         result = writeQuery(endpoint, args.join(" "), process.env['PASSWORD'])
     }
-    result.then(
-        data => process.stdout.write(data),
-        error => console.error(error)
-    )
+    (async () => {
+        await result.then(
+            ({response, statusCode})=> console.log(`code: ${statusCode}\n${inspect(JSON.parse(response))}`),
+            error => console.error(error)
+        );
+    })();
 }
 
 module.exports = {readQuery, writeQuery}
