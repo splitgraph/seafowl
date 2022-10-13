@@ -91,9 +91,7 @@ use crate::provider::{
     project_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
     SeafowlTable,
 };
-use crate::wasm_udf::data_types::{
-    get_volatility, CreateFunctionDetails,
-};
+use crate::wasm_udf::data_types::{get_volatility, CreateFunctionDetails};
 use crate::{
     catalog::{FunctionCatalog, TableCatalog},
     data_types::DatabaseId,

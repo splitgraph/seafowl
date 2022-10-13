@@ -1,4 +1,7 @@
-use arrow::{array::PrimitiveArray, datatypes::ArrowPrimitiveType};
+use arrow::{
+    array::{PrimitiveArray, StringArray},
+    datatypes::ArrowPrimitiveType,
+};
 /// Creating DataFusion UDFs from WASM bytecode
 use datafusion::{
     arrow::{
@@ -47,19 +50,20 @@ fn sql_type_to_arrow_type(t: &CreateFunctionDataType) -> Result<DataType> {
     }
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 fn messagepack_encode(
     v: &Value,
     buf: &mut Vec<u8>,
 ) -> StdResult<(), rmp_serde::encode::Error> {
-    return v.serialize(&mut Serializer::new(buf));
+    v.serialize(&mut Serializer::new(buf))
 }
 
-fn messagepack_decode(buf: &mut Vec<u8>) -> StdResult<Value, rmp_serde::decode::Error> {
-    return rmp_serde::from_slice(buf);
+fn messagepack_decode(buf: &mut [u8]) -> StdResult<Value, rmp_serde::decode::Error> {
+    rmp_serde::from_slice(buf)
 }
 
 fn invoke_wasi_messagepack(
-    module_bytes: &Vec<u8>,
+    module_bytes: &[u8],
     function_name: &str,
     args: Vec<Value>,
 ) -> StdResult<Value, wasmtime_wasi::Error> {
@@ -67,18 +71,14 @@ fn invoke_wasi_messagepack(
     // TODO: error handling on encode
     let args_array = Value::Array(args);
     messagepack_encode(&args_array, &mut serialized_input)?;
-    eprintln!("args serialized as {:?} bytes", serialized_input.len());
     // let u: User = serde_json::from_str(j).unwrap();
     let stdin = ReadPipe::from(serialized_input);
-
     let stdout_buf: Vec<u8> = vec![];
     let stdout_mutex = Arc::new(RwLock::new(stdout_buf));
     let stdout = WritePipe::from_shared(stdout_mutex.clone());
-
     // Define the WASI functions globally on the `Config`.
     let engine = Engine::default();
     let mut linker = wasmtime::Linker::new(&engine);
-
     // Create a WASI context and put it in a Store; all instances in the store
     // share this context. `WasiCtxBuilder` provides a number of ways to
     // configure what the target program will have access to.
@@ -92,14 +92,12 @@ fn invoke_wasi_messagepack(
         &mut linker,
         |s| s,
     )?;
-
     // Instantiate our module with the imports we've created, and run it.
-    let module = Module::from_binary(&engine, &module_bytes)?;
+    let module = Module::from_binary(&engine, module_bytes)?;
     let instance = linker.instantiate(&mut store, &module)?;
     let instance_func =
         instance.get_typed_func::<(), (), _>(&mut store, function_name)?;
     instance_func.call(&mut store, ())?;
-
     let mut buffer: Vec<u8> = Vec::new();
     stdout_mutex
         .read()
@@ -107,8 +105,7 @@ fn invoke_wasi_messagepack(
         .iter()
         .for_each(|i| buffer.push(*i));
     let result: Value = messagepack_decode(&mut buffer)?;
-    println!("host received result {:?}", result);
-    return Ok(result);
+    Ok(result)
 }
 
 fn get_arrow_value<T>(args: &[ArrayRef], row_ix: usize, col_ix: usize) -> T::Native
@@ -133,7 +130,6 @@ fn make_scalar_function_wasi_messagepack(
     // needs a mutable context, which forces this closure to be FnMut.
     // This means we have to create a store and load the function inside of this closure, discarding
     // the store after we're done.
-
     // Capture the function name and the module code
     let function_name = function_name.to_owned();
     let module_bytes = module_bytes.to_owned();
@@ -174,11 +170,18 @@ fn make_scalar_function_wasi_messagepack(
                         )
                         .to_bits(),
                     ),
+                    CreateFunctionDataType::TEXT => Value::from(
+                        args.get(col_ix)
+                            .unwrap()
+                            .as_any()
+                            .downcast_ref::<arrow::array::StringArray>()
+                            .expect("cast failed")
+                            .value(row_ix),
+                    ),
                     _ => panic!("unexpected type"),
                 };
                 params.push(messagepack_value);
             }
-
             results.push(
                 invoke_wasi_messagepack(&module_bytes, &function_name, params).map_err(
                     |_| {
@@ -228,6 +231,10 @@ fn make_scalar_function_wasi_messagepack(
                     .map(|v| v.as_f64().unwrap())
                     .collect::<Float64Array>(),
             ) as ArrayRef,
+            CreateFunctionDataType::TEXT => {
+                Arc::new(results.iter().map(|v| v.as_str()).collect::<StringArray>())
+                    as ArrayRef
+            }
             _ => panic!("unexpected type"),
         };
         Ok(array)
@@ -657,12 +664,12 @@ c40201087f230041206b2203240020032002370318200320013703102003\
     use std::io::Read;
 
     // from: https://www.reddit.com/r/rust/comments/dekpl5/how_to_read_binary_data_from_a_file_into_a_vecu8/
+    #[allow(clippy::all)]
     fn get_file_as_byte_vec(filename: &String) -> Vec<u8> {
         let mut f = std::fs::File::open(&filename).expect("no file found");
         let metadata = std::fs::metadata(&filename).expect("unable to read metadata");
         let mut buffer = vec![0; metadata.len() as usize];
         f.read(&mut buffer).expect("buffer overflow");
-
         buffer
     }
 
@@ -744,9 +751,9 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         // speck_encrypt_block(plaintext_block, key_msb, key_lsb)
         let concat_udf = create_udf_from_wasm(
             &CreateFunctionLanguage::WasiMessagePack,
-            "concat",
+            "concat2",
             &wasi_messagepack_adder,
-            "concat",
+            "concat2",
             &vec![CreateFunctionDataType::TEXT, CreateFunctionDataType::TEXT],
             &CreateFunctionDataType::TEXT,
             Volatility::Immutable,
@@ -760,7 +767,7 @@ c40201087f230041206b2203240020032002370318200320013703102003\
                 "SELECT
                 s1,
                 s2,
-                CAST(concat(s1, s2) AS TEXT) AS concat_result
+                CAST(concat2(s1, s2) AS TEXT) AS concat_result
             FROM text_values;",
             )
             .await

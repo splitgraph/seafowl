@@ -23,8 +23,9 @@ pub fn get_wasm_type(t: &CreateFunctionDataType) -> Result<ValType, DataFusionEr
         CreateFunctionDataType::DOUBLE => Ok(ValType::F64),
 
         e => Err(DataFusionError::Internal(format!(
-            "UDFs with language 'wasm' do not support data type {}", e
-        )))
+            "UDFs with language 'wasm' do not support data type {}",
+            e
+        ))),
     }
 }
 
@@ -77,7 +78,7 @@ impl Default for CreateFunctionVolatility {
 #[serde(rename_all = "camelCase")]
 pub enum CreateFunctionLanguage {
     Wasm,
-    WasiMessagePack
+    WasiMessagePack,
 }
 impl Default for CreateFunctionLanguage {
     fn default() -> Self {
