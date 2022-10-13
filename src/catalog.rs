@@ -195,6 +195,7 @@ pub trait TableCatalog: Sync + Send {
     async fn get_all_table_versions(
         &self,
         database_id: DatabaseId,
+        table_names: Vec<String>,
     ) -> Result<Vec<AllTableVersionsResult>>;
 
     async fn move_table(
@@ -515,9 +516,10 @@ impl TableCatalog for DefaultCatalog {
     async fn get_all_table_versions(
         &self,
         database_id: DatabaseId,
+        table_names: Vec<String>,
     ) -> Result<Vec<AllTableVersionsResult>> {
         self.repository
-            .get_all_table_versions(database_id)
+            .get_all_table_versions(database_id, table_names)
             .await
             .map_err(Self::to_sqlx_error)
     }

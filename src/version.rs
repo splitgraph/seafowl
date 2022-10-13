@@ -46,10 +46,10 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
                 Value::SingleQuotedString(value),
             ))) = &func_args[0]
             {
-                name.0.last_mut().unwrap().value =
-                    TableVersionProcessor::table_with_version(name, value);
                 self.tables_renamed
                     .insert((name.clone(), value.to_string()));
+                name.0.last_mut().unwrap().value =
+                    TableVersionProcessor::table_with_version(name, value);
                 *args = None;
             }
         }

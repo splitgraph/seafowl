@@ -50,6 +50,7 @@
 /// Queries that are different between SQLite and PG
 pub struct RepositoryQueries {
     pub all_columns_in_database: &'static str,
+    pub all_table_versions: &'static str,
 }
 
 #[macro_export]
@@ -383,22 +384,29 @@ impl Repository for $repo {
     async fn get_all_table_versions(
         &self,
         database_id: DatabaseId,
+        table_names: Vec<String>,
     ) -> Result<Vec<AllTableVersionsResult>, Error> {
-        let table_versions = sqlx::query_as(
-            r#"SELECT
-                collection.name,
-                table.name,
-                table_version.id,
-                table_version.creation_time
-            FROM table_version
-            INNER JOIN table ON table.id = table_version.table_id
-            INNER JOIN collection ON collection.id = table.collection_id
-            WHERE collection.database_id = $1"#
-        )
+        // We have to manually construct the query since SQLite doesn't have the proper Encode trait
+        let mut builder: QueryBuilder<_> = QueryBuilder::new($repo::QUERIES.all_table_versions);
+
+        builder.push_bind(database_id);
+
+        if !table_names.is_empty() {
+            builder.push(" AND \"table\".name IN (");
+            let mut separated = builder.separated(", ");
+            for table_name in table_names.iter() {
+                separated.push_bind(table_name);
+            }
+            separated.push_unseparated(")");
+        }
+
+        let query = builder.build_query_as();
+        let table_versions = query
             .bind(database_id)
             .fetch(&self.executor)
             .try_collect()
-            .await.map_err($repo::interpret_error)?;
+            .await
+            .map_err($repo::interpret_error)?;
 
         Ok(table_versions)
     }

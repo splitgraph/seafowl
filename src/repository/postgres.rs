@@ -57,6 +57,15 @@ impl PostgresRepository {
         WHERE collection.database_id = $1
         ORDER BY collection_name, table_name
         "#,
+        all_table_versions: r#"SELECT
+                collection.name AS collection_name,
+                "table".name AS table_name,
+                table_version.id AS table_version_id,
+                CAST(EXTRACT(EPOCH FROM table_version.creation_time) AS INT8) AS creation_time
+            FROM table_version
+            INNER JOIN "table" ON "table".id = table_version.table_id
+            INNER JOIN collection ON collection.id = "table".collection_id
+            WHERE collection.database_id = "#,
     };
 
     pub async fn try_new(
@@ -89,7 +98,7 @@ impl PostgresRepository {
             .max_connections(16)
             .idle_timeout(Duration::from_millis(30000))
             .test_before_acquire(true)
-            .after_connect(move |c| {
+            .after_connect(move |c, _m| {
                 let schema_name = schema_name.to_owned();
                 Box::pin(async move {
                     let query = format!("SET search_path TO {},public;", schema_name);

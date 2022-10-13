@@ -854,9 +854,25 @@ impl SeafowlContext for DefaultSeafowlContext {
                     version_processor.visit_query(&mut q);
 
                     if !version_processor.tables_renamed.is_empty() {
+                        // Get a unique list of tables that have versions specified, as some may have
+                        // more than one
+                        let versioned_tables = version_processor
+                            .tables_renamed
+                            .iter()
+                            .map(|(t, _)| t.0.last().unwrap().value.clone())
+                            .unique()
+                            .collect();
+
+                        let table_versions = self.table_catalog
+                            .get_all_table_versions(self.database_id, versioned_tables)
+                            .await?;
+
+                        println!("{:?}", table_versions);
+
+                        let _a = 1;
+
                         // 1. load the table versions specified by the (validated) timestamps
-                        // 2. recreate the schema where the catalog provider has a map of all tables
-                        // 3. recreate the query planner with the new state
+                        // 2. register the new tables in the schema provider's map
                     }
 
                     query_planner.sql_statement_to_plan(Statement::Query(q))

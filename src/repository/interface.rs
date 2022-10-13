@@ -143,6 +143,7 @@ pub trait Repository: Send + Sync + Debug {
     async fn get_all_table_versions(
         &self,
         database_id: DatabaseId,
+        table_names: Vec<String>,
     ) -> Result<Vec<AllTableVersionsResult>>;
 
     async fn move_table(
