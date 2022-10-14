@@ -847,31 +847,19 @@ impl SeafowlContext for DefaultSeafowlContext {
         match statement {
             DFStatement::Statement(s) => match *s {
                 Statement::Query(mut q) => {
-                    // Determine if one of the tables references a non-latest version using table
-                    // function syntax. If so, rename the table in the query by appending the
+                    // Determine if some of the tables reference a non-latest version using table
+                    // function syntax. If so, rename the tables in the query by appending the
                     // explicit timestamp and add it to the schema provider's map.
 
-                    let mut version_processor = TableVersionProcessor::new();
+                    let mut version_processor = TableVersionProcessor::new(self.database.clone(), DEFAULT_SCHEMA.to_string());
                     version_processor.visit_query(&mut q);
 
                     if !version_processor.tables_renamed.is_empty() {
-                        // Get a unique list of tables that have versions specified, as some may have
-                        // more than one
-                        let versioned_tables = version_processor
-                            .tables_renamed
-                            .iter()
-                            .map(|(t, _)| t.0.last().unwrap().value.clone())
-                            .unique()
-                            .collect();
-
-                        let table_versions = self.table_catalog
-                            .get_all_table_versions(self.database_id, versioned_tables)
-                            .await?;
-
-                        println!("{:?}", table_versions);
-
-                        // 1. load the table versions specified by the (validated) timestamps
-                        // 2. register the new tables in the schema provider's map
+                        for (table_ref, table_provider) in version_processor.load_versions(self.table_catalog.clone()).await? {
+                            if !self.inner.table_exist(table_ref)? {
+                                self.inner.register_table(table_ref, table_provider)?;
+                            }
+                        }
                     }
 
                     query_planner.sql_statement_to_plan(Statement::Query(q))

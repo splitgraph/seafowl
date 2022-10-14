@@ -26,7 +26,7 @@ use crate::{
     },
     repository::interface::{
         AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTablePartitionsResult,
-        AllTableVersionsResult, Error as RepositoryError, Repository,
+        Error as RepositoryError, Repository, TableVersionsResult,
     },
     schema::Schema,
 };
@@ -196,9 +196,8 @@ pub trait TableCatalog: Sync + Send {
 
     async fn get_all_table_versions(
         &self,
-        database_id: DatabaseId,
         table_names: Vec<String>,
-    ) -> Result<Vec<AllTableVersionsResult>>;
+    ) -> Result<Vec<TableVersionsResult>>;
 
     async fn move_table(
         &self,
@@ -517,11 +516,10 @@ impl TableCatalog for DefaultCatalog {
 
     async fn get_all_table_versions(
         &self,
-        database_id: DatabaseId,
         table_names: Vec<String>,
-    ) -> Result<Vec<AllTableVersionsResult>> {
+    ) -> Result<Vec<TableVersionsResult>> {
         self.repository
-            .get_all_table_versions(database_id, table_names)
+            .get_all_table_versions(table_names)
             .await
             .map_err(Self::to_sqlx_error)
     }

@@ -23,7 +23,8 @@ pub struct AllDatabaseColumnsResult {
 }
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
-pub struct AllTableVersionsResult {
+pub struct TableVersionsResult {
+    pub database_name: String,
     pub collection_name: String,
     pub table_name: String,
     pub table_version_id: TableVersionId,
@@ -142,9 +143,8 @@ pub trait Repository: Send + Sync + Debug {
 
     async fn get_all_table_versions(
         &self,
-        database_id: DatabaseId,
         table_names: Vec<String>,
-    ) -> Result<Vec<AllTableVersionsResult>>;
+    ) -> Result<Vec<TableVersionsResult>>;
 
     async fn move_table(
         &self,

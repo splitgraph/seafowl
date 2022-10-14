@@ -24,8 +24,8 @@ use crate::implement_repository;
 use super::{
     default::RepositoryQueries,
     interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTableVersionsResult,
-        Error, Repository, Result,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Error, Repository, Result,
+        TableVersionsResult,
     },
 };
 
@@ -66,6 +66,7 @@ impl SqliteRepository {
         ORDER BY collection_name, table_name
         "#,
         all_table_versions: r#"SELECT
+                database.name AS database_name,
                 collection.name AS collection_name,
                 "table".name AS table_name,
                 table_version.id AS table_version_id,
@@ -73,7 +74,7 @@ impl SqliteRepository {
             FROM table_version
             INNER JOIN "table" ON "table".id = table_version.table_id
             INNER JOIN collection ON collection.id = "table".collection_id
-            WHERE collection.database_id = "#,
+            INNER JOIN database ON database.id = collection.database_id"#,
     };
 
     pub async fn try_new(dsn: String) -> std::result::Result<Self, sqlx::Error> {
