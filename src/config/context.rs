@@ -40,8 +40,8 @@ async fn build_catalog(
                 .await
                 .expect("Error setting up the database"),
         ),
-        schema::Catalog::Sqlite(schema::Sqlite { dsn }) => Arc::new(
-            SqliteRepository::try_new(dsn.to_string())
+        schema::Catalog::Sqlite(schema::Sqlite { dsn, journal_mode }) => Arc::new(
+            SqliteRepository::try_new(dsn.to_string(), *journal_mode)
                 .await
                 .expect("Error setting up the database"),
         ),
@@ -153,6 +153,7 @@ pub async fn build_context(
 #[cfg(test)]
 mod tests {
     use crate::context::SeafowlContext;
+    use sqlx::sqlite::SqliteJournalMode;
 
     use super::*;
 
@@ -162,6 +163,7 @@ mod tests {
             object_store: schema::ObjectStore::InMemory(schema::InMemory {}),
             catalog: schema::Catalog::Sqlite(schema::Sqlite {
                 dsn: "sqlite::memory:".to_string(),
+                journal_mode: SqliteJournalMode::Wal,
             }),
             frontend: schema::Frontend {
                 #[cfg(feature = "frontend-postgres")]

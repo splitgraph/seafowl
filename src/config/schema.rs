@@ -9,6 +9,7 @@ use log::info;
 use rand::distributions::{Alphanumeric, DistString};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use sqlx::sqlite::SqliteJournalMode;
 
 pub const DEFAULT_DATA_DIR: &str = "seafowl-data";
 pub const DEFAULT_SQLITE_DB: &str = "seafowl.sqlite";
@@ -132,9 +133,26 @@ pub struct Postgres {
     pub schema: String,
 }
 
+#[derive(Deserialize)]
+#[serde(remote = "sqlx::sqlite::SqliteJournalMode", rename_all = "snake_case")]
+pub enum SqliteJournalModeDef {
+    Delete,
+    Truncate,
+    Persist,
+    Memory,
+    Wal,
+    Off,
+}
+
+fn default_journal_mode() -> SqliteJournalMode {
+    SqliteJournalMode::Wal
+}
+
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Sqlite {
     pub dsn: String,
+    #[serde(with = "SqliteJournalModeDef", default = "default_journal_mode")]
+    pub journal_mode: SqliteJournalMode,
 }
 
 fn default_schema() -> String {
@@ -266,7 +284,7 @@ pub struct Runtime {
 }
 
 pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigError> {
-    let in_memory_catalog = matches!(config.catalog, Catalog::Sqlite(Sqlite { ref dsn }) if dsn.contains(":memory:"));
+    let in_memory_catalog = matches!(config.catalog, Catalog::Sqlite(Sqlite { ref dsn, journal_mode: _ }) if dsn.contains(":memory:"));
 
     let in_memory_object_store = matches!(config.object_store, ObjectStore::InMemory(_));
 
@@ -327,6 +345,7 @@ mod tests {
         HttpFrontend, Local, ObjectStore, Postgres, Runtime, SeafowlConfig, S3,
     };
     use crate::config::schema::{Misc, Sqlite};
+    use sqlx::sqlite::SqliteJournalMode;
     use std::{collections::HashMap, path::PathBuf};
 
     const TEST_CONFIG_S3: &str = r#"
@@ -508,6 +527,7 @@ upload_data_max_length = 1
                 }),
                 catalog: Catalog::Sqlite(Sqlite {
                     dsn: "sqlite://file.sqlite".to_string(),
+                    journal_mode: SqliteJournalMode::Wal,
                 }),
                 frontend: Frontend {
                     #[cfg(feature = "frontend-postgres")]
