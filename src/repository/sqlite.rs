@@ -2,6 +2,7 @@ use std::{fmt::Debug, iter::zip, str::FromStr};
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
+use sqlx::sqlite::SqliteJournalMode;
 use sqlx::{
     migrate::Migrator,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -66,8 +67,13 @@ impl SqliteRepository {
         "#,
     };
 
-    pub async fn try_new(dsn: String) -> std::result::Result<Self, sqlx::Error> {
-        let options = SqliteConnectOptions::from_str(&dsn)?.create_if_missing(true);
+    pub async fn try_new(
+        dsn: String,
+        journal_mode: SqliteJournalMode,
+    ) -> std::result::Result<Self, sqlx::Error> {
+        let options = SqliteConnectOptions::from_str(&dsn)?
+            .create_if_missing(true)
+            .journal_mode(journal_mode);
 
         let pool = SqlitePoolOptions::new().connect_with(options).await?;
         let repo = Self { executor: pool };
@@ -98,6 +104,7 @@ implement_repository!(SqliteRepository);
 
 #[cfg(test)]
 mod tests {
+    use sqlx::sqlite::SqliteJournalMode;
     use std::sync::Arc;
 
     use super::super::interface::tests::run_generic_repository_tests;
@@ -106,9 +113,12 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_repository() {
         let repository = Arc::new(
-            SqliteRepository::try_new("sqlite::memory:".to_string())
-                .await
-                .unwrap(),
+            SqliteRepository::try_new(
+                "sqlite::memory:".to_string(),
+                SqliteJournalMode::Wal,
+            )
+            .await
+            .unwrap(),
         );
 
         run_generic_repository_tests(repository).await;
