@@ -861,7 +861,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         version_processor.visit_query(&mut q);
                         let tables_by_version = self
                             .table_catalog
-                            .load_tables_by_version(self.database_id, version_processor.table_version_ids()).await?;
+                            .load_tables_by_version(self.database_id, Some(version_processor.table_version_ids())).await?;
 
                         for ((table, version), table_version_id) in &version_processor.table_versions {
                             let mut name = table.clone();

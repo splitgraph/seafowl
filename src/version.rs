@@ -44,7 +44,7 @@ impl TableVersionProcessor {
         format!("{}:{}", name.0.last().unwrap().value, version_id.unwrap())
     }
 
-    // // Try to parse the specified version timestamp into a Unix epoch
+    // Try to parse the specified version timestamp into a Unix epoch
     pub fn version_to_epoch(version: &String) -> Result<Timestamp> {
         // TODO: Extend the supported formats for specifying the datetime
         let dt = DateTime::parse_from_rfc3339(version).map_err(|e| {

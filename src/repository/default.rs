@@ -80,11 +80,9 @@ impl Repository for $repo {
     async fn get_all_columns_in_database(
         &self,
         database_id: DatabaseId,
-        table_version_ids: Vec<TableVersionId>,
+        table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error> {
-        let mut builder: QueryBuilder<_> = if table_version_ids.is_empty() {
-            QueryBuilder::new($repo::QUERIES.latest_table_versions)
-        } else {
+        let mut builder: QueryBuilder<_> = if let Some(table_version_ids) = table_version_ids {
             let mut b = QueryBuilder::new(r#"
             WITH desired_table_versions AS (
                 SELECT table_id, id FROM table_version
@@ -92,7 +90,7 @@ impl Repository for $repo {
 
             b.push(" WHERE table_version.id IN (");
             let mut separated = b.separated(", ");
-            for table_version_id in table_version_ids.iter() {
+            for table_version_id in table_version_ids.into_iter() {
                 separated.push_bind(table_version_id);
             }
             separated.push_unseparated(")");
@@ -103,6 +101,8 @@ impl Repository for $repo {
             "#);
 
             b
+        } else {
+            QueryBuilder::new($repo::QUERIES.latest_table_versions)
         };
 
         builder.push(r#"

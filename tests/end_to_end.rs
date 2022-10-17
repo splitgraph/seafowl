@@ -1736,4 +1736,37 @@ async fn test_table_time_travel() {
         &version_timestamps,
     )
     .await;
+
+    //
+    // Verify that information schema is not polluted with versioned tables/columns
+    //
+
+    let results = list_tables_query(&context).await;
+
+    let expected = vec![
+        "+--------------------+------------+",
+        "| table_schema       | table_name |",
+        "+--------------------+------------+",
+        "| information_schema | columns    |",
+        "| information_schema | tables     |",
+        "| information_schema | views      |",
+        "| public             | test_table |",
+        "+--------------------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    let results = list_columns_query(&context).await;
+
+    let expected = vec![
+        "+--------------+------------+------------------+-----------------------------+",
+        "| table_schema | table_name | column_name      | data_type                   |",
+        "+--------------+------------+------------------+-----------------------------+",
+        "| public       | test_table | some_bool_value  | Boolean                     |",
+        "| public       | test_table | some_int_value   | Int64                       |",
+        "| public       | test_table | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table | some_value       | Float32                     |",
+        "+--------------+------------+------------------+-----------------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
 }

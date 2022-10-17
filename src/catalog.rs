@@ -160,7 +160,7 @@ pub trait TableCatalog: Sync + Send {
     async fn load_tables_by_version(
         &self,
         database_id: DatabaseId,
-        table_version_ids: Vec<TableVersionId>,
+        table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<HashMap<TableVersionId, Arc<SeafowlTable>>>;
     async fn get_database_id_by_name(
         &self,
@@ -379,7 +379,7 @@ impl TableCatalog for DefaultCatalog {
     async fn load_database(&self, database_id: DatabaseId) -> Result<SeafowlDatabase> {
         let all_columns = self
             .repository
-            .get_all_columns_in_database(database_id, vec![])
+            .get_all_columns_in_database(database_id, None)
             .await
             .map_err(Self::to_sqlx_error)?;
 
@@ -403,12 +403,10 @@ impl TableCatalog for DefaultCatalog {
         })
     }
 
-    // NB: It's kind of awkward not returning simply a vec of tables here, but since the tables
-    // don't convey the schema name information on their own we have to do it like this.
     async fn load_tables_by_version(
         &self,
         database_id: DatabaseId,
-        table_version_ids: Vec<TableVersionId>,
+        table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<HashMap<TableVersionId, Arc<SeafowlTable>>> {
         let table_columns = self
             .repository

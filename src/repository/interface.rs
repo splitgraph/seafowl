@@ -79,7 +79,7 @@ pub trait Repository: Send + Sync + Debug {
     async fn get_all_columns_in_database(
         &self,
         database_id: DatabaseId,
-        table_version_ids: Vec<TableVersionId>,
+        table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
     async fn get_all_partitions_in_table(
@@ -310,7 +310,7 @@ pub mod tests {
         // Test loading all columns
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id, vec![])
+            .get_all_columns_in_database(database_id, None)
             .await
             .expect("Error getting all columns");
 
@@ -327,7 +327,7 @@ pub mod tests {
 
         // Test all columns again: we should have the schema for the latest table version
         let all_columns = repository
-            .get_all_columns_in_database(database_id, vec![])
+            .get_all_columns_in_database(database_id, None)
             .await
             .expect("Error getting all columns");
 
@@ -339,6 +339,28 @@ pub mod tests {
                 "testtable".to_string()
             )
         );
+
+        // Try to get the original version again explicitly
+        let all_columns = repository
+            .get_all_columns_in_database(database_id, Some(vec![1 as TableVersionId]))
+            .await
+            .expect("Error getting all columns");
+
+        assert_eq!(
+            all_columns,
+            expected(1, "testcol".to_string(), "testtable".to_string())
+        );
+
+        // Check the existing table versions
+        let all_table_versions: Vec<TableVersionId> = repository
+            .get_all_table_versions(vec!["testtable".to_string()])
+            .await
+            .expect("Error getting all columns")
+            .iter()
+            .map(|tv| tv.table_version_id)
+            .collect();
+
+        assert_eq!(all_table_versions, vec![1, new_version_id]);
 
         (database_id, table_id, table_version_id)
     }
@@ -481,7 +503,7 @@ pub mod tests {
             .unwrap();
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id, vec![])
+            .get_all_columns_in_database(database_id, None)
             .await
             .expect("Error getting all columns");
 
@@ -505,7 +527,7 @@ pub mod tests {
             .unwrap();
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id, vec![])
+            .get_all_columns_in_database(database_id, None)
             .await
             .expect("Error getting all columns");
 
