@@ -37,26 +37,12 @@ pub struct PostgresRepository {
 impl PostgresRepository {
     pub const MIGRATOR: Migrator = sqlx::migrate!("migrations/postgres");
     pub const QUERIES: RepositoryQueries = RepositoryQueries {
-        all_columns_in_database: r#"
-        WITH latest_table_version AS (
+        latest_table_versions: r#"
+        WITH desired_table_versions AS (
             SELECT DISTINCT ON (table_id) table_id, id
             FROM table_version
             ORDER BY table_id, creation_time DESC, id DESC
-        )
-        SELECT
-            collection.name AS collection_name,
-            "table".name AS table_name,
-            "table".id AS table_id,
-            latest_table_version.id AS table_version_id,
-            table_column.name AS column_name,
-            table_column.type AS column_type
-        FROM collection
-        INNER JOIN "table" ON collection.id = "table".collection_id
-        INNER JOIN latest_table_version ON "table".id = latest_table_version.table_id
-        INNER JOIN table_column ON table_column.table_version_id = latest_table_version.id
-        WHERE collection.database_id = $1
-        ORDER BY collection_name, table_name
-        "#,
+        )"#,
         all_table_versions: r#"SELECT
                 database.name AS database_name,
                 collection.name AS collection_name,

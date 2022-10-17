@@ -86,7 +86,7 @@ impl CatalogProvider for SeafowlDatabase {
 
 pub struct SeafowlCollection {
     pub name: Arc<str>,
-    pub tables: RwLock<HashMap<Arc<str>, Arc<dyn TableProvider>>>,
+    pub tables: RwLock<HashMap<Arc<str>, Arc<SeafowlTable>>>,
 }
 
 impl SchemaProvider for SeafowlCollection {
@@ -121,7 +121,22 @@ impl SchemaProvider for SeafowlCollection {
             )));
         }
         let mut tables = self.tables.write();
-        Ok(tables.insert(Arc::from(name), table))
+        let old_table = tables.insert(
+            Arc::from(name),
+            Arc::new(
+                table
+                    .as_any()
+                    .downcast_ref::<SeafowlTable>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution(format!(
+                            "Couldn't cast table {:?} to SeafowlTable",
+                            table.schema(),
+                        ))
+                    })?
+                    .clone(),
+            ),
+        );
+        Ok(old_table.map(|t| t as Arc<dyn TableProvider>))
     }
 }
 

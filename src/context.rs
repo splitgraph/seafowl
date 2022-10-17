@@ -854,8 +854,23 @@ impl SeafowlContext for DefaultSeafowlContext {
                     let mut version_processor = TableVersionProcessor::new(self.database.clone(), DEFAULT_SCHEMA.to_string());
                     version_processor.visit_query(&mut q);
 
-                    if !version_processor.tables_renamed.is_empty() {
-                        for (table_ref, table_provider) in version_processor.load_versions(self.table_catalog.clone()).await? {
+                    if !version_processor.table_versions.is_empty() {
+                        version_processor.triage_version_ids(self.table_catalog.clone()).await?;
+                        // We now have table_version_ids for each table with version specified; do another
+                        // run over the query AST to rewrite the table.
+                        version_processor.visit_query(&mut q);
+                        let tables_by_version = self
+                            .table_catalog
+                            .load_tables_by_version(self.database_id, version_processor.table_version_ids()).await?;
+
+                        for ((table, version), table_version_id) in &version_processor.table_versions {
+                            let mut name = table.clone();
+                            name.0.last_mut().unwrap().value =
+                                version_processor.table_with_version(&name, version);
+                            let full_name = name.to_string();
+                            let table_ref = TableReference::from(full_name.as_str());
+                            let table_provider = tables_by_version[&table_version_id.unwrap()].clone();
+
                             if !self.inner.table_exist(table_ref)? {
                                 self.inner.register_table(table_ref, table_provider)?;
                             }
@@ -1811,10 +1826,8 @@ pub mod test_utils {
             table_version_id: 0,
             catalog: partition_catalog_ptr.clone(),
         };
-        let tables = StdHashMap::from([(
-            Arc::from("some_table"),
-            Arc::from(singleton_table) as Arc<dyn TableProvider>,
-        )]);
+        let tables =
+            StdHashMap::from([(Arc::from("some_table"), Arc::from(singleton_table))]);
         let collections = StdHashMap::from([(
             Arc::from("testcol"),
             Arc::from(SeafowlCollection {

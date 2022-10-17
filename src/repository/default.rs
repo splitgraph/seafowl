@@ -49,7 +49,7 @@
 
 /// Queries that are different between SQLite and PG
 pub struct RepositoryQueries {
-    pub all_columns_in_database: &'static str,
+    pub latest_table_versions: &'static str,
     pub all_table_versions: &'static str,
 }
 
@@ -80,12 +80,57 @@ impl Repository for $repo {
     async fn get_all_columns_in_database(
         &self,
         database_id: DatabaseId,
+        table_version_ids: Vec<TableVersionId>,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error> {
+        let mut builder: QueryBuilder<_> = if table_version_ids.is_empty() {
+            QueryBuilder::new($repo::QUERIES.latest_table_versions)
+        } else {
+            let mut b = QueryBuilder::new(r#"
+            WITH desired_table_versions AS (
+                SELECT table_id, id FROM table_version
+            "#);
 
-        let columns = sqlx::query_as($repo::QUERIES.all_columns_in_database)
-        .bind(database_id)
-        .fetch_all(&self.executor)
-        .await.map_err($repo::interpret_error)?;
+            b.push(" WHERE table_version.id IN (");
+            let mut separated = b.separated(", ");
+            for table_version_id in table_version_ids.iter() {
+                separated.push_bind(table_version_id);
+            }
+            separated.push_unseparated(")");
+
+            b.push(r#"
+                ORDER BY table_id, creation_time DESC, id DESC
+            )
+            "#);
+
+            b
+        };
+
+        builder.push(r#"
+        SELECT
+            collection.name AS collection_name,
+            "table".name AS table_name,
+            "table".id AS table_id,
+            desired_table_versions.id AS table_version_id,
+            table_column.name AS column_name,
+            table_column.type AS column_type
+        FROM collection
+        INNER JOIN "table" ON collection.id = "table".collection_id
+        INNER JOIN desired_table_versions ON "table".id = desired_table_versions.table_id
+        INNER JOIN table_column ON table_column.table_version_id = desired_table_versions.id
+        WHERE collection.database_id = "#);
+        builder.push_bind(database_id);
+
+        builder.push(r#"
+        ORDER BY collection_name, table_name
+        "#);
+
+        let query = builder.build_query_as();
+        let columns = query
+            .fetch(&self.executor)
+            .try_collect()
+            .await
+            .map_err($repo::interpret_error)?;
+
         Ok(columns)
     }
 

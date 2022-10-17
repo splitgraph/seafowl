@@ -1,7 +1,6 @@
 use crate::catalog::TableCatalog;
 use crate::data_types::{TableVersionId, Timestamp};
 use chrono::DateTime;
-use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::sql::TableReference;
 use hashbrown::HashMap;
@@ -14,13 +13,19 @@ use std::sync::Arc;
 use crate::datafusion::visit::{visit_table_table_factor, VisitorMut};
 
 // A struct for walking the query AST, visiting all tables and rewriting any table reference that
-// uses time travel syntax (i.e. table function syntax) from `table('2022-01-01 20:01:01Z')` into
-// "table:2022-01-01 20:01:01Z".
+// uses time travel syntax (i.e. table function syntax). It does so in two runs, first collecting
+// all table references such as `table('2022-01-01 20:01:01Z')`, and then (after collecting the
+// corresponding version ids via `triage_version_ids`) renaming the table to "table:<table_version_id>"
+// (and also removing the table func expressions from the statement).
+// The reason we do this in 2 runs is so that we that we can parse and triage the version specifier
+// into a corresponding table_version_id, with which we will rename the table. By doing so, we make
+// sure that no redundant entries to schema provider's table map will be made, given that many different
+// version specifiers can point to the same table_version_id.
 pub struct TableVersionProcessor {
     pub default_catalog: String,
     pub default_schema: String,
-    pub tables_visited: Vec<ObjectName>,
-    pub tables_renamed: HashMap<(ObjectName, String), Option<TableVersionId>>,
+    pub table_versions: HashMap<(ObjectName, String), Option<TableVersionId>>,
+    rewrite_ready: bool,
 }
 
 impl TableVersionProcessor {
@@ -28,14 +33,15 @@ impl TableVersionProcessor {
         Self {
             default_catalog,
             default_schema,
-            tables_visited: vec![],
-            tables_renamed: HashMap::<(ObjectName, String), Option<TableVersionId>>::new(
+            table_versions: HashMap::<(ObjectName, String), Option<TableVersionId>>::new(
             ),
+            rewrite_ready: false,
         }
     }
 
-    pub fn table_with_version(name: &ObjectName, version: &String) -> String {
-        format!("{}:{}", name.0.last().unwrap().value, version)
+    pub fn table_with_version(&self, name: &ObjectName, version: &str) -> String {
+        let version_id = self.table_versions[&(name.clone(), version.to_owned())];
+        format!("{}:{}", name.0.last().unwrap().value, version_id.unwrap())
     }
 
     // // Try to parse the specified version timestamp into a Unix epoch
@@ -82,25 +88,16 @@ impl TableVersionProcessor {
         }
     }
 
-    pub async fn load_versions(
+    pub async fn triage_version_ids(
         &mut self,
         table_catalog: Arc<dyn TableCatalog>,
-    ) -> Result<Vec<(TableReference, Arc<dyn TableProvider>)>> {
-        // Get a unique list of table names that have versions specified, as some may have
-        // more than one
-        let versioned_tables = self
-            .tables_renamed
-            .iter()
-            .map(|((t, _), _)| t.0.last().unwrap().value.clone())
-            .unique()
-            .collect();
-
+    ) -> Result<()> {
         // Fetch all available versions for the versioned tables from the metadata store, and
         // collect them into a table: [..., (vi, ti), ...] map (vi being the table version id
         // and ti the Unix epoch when that version was created for the i-th version).
         let table_versions: HashMap<ObjectName, Vec<(TableVersionId, Timestamp)>> =
             table_catalog
-                .get_all_table_versions(versioned_tables)
+                .get_all_table_versions(self.get_versioned_tables())
                 .await?
                 .into_iter()
                 .group_by(|tv| {
@@ -121,9 +118,9 @@ impl TableVersionProcessor {
                 })
                 .collect();
 
-        // Update the map with renamed tables with exact the corresponding table_version_ids which should
+        // Update the map of the renamed tables with the corresponding table_version_id which should
         // be loaded for the specified versions
-        for (table_version, table_version_id) in self.tables_renamed.iter_mut() {
+        for (table_version, table_version_id) in self.table_versions.iter_mut() {
             let table = &table_version.0;
             let version = &table_version.1;
             let id = TableVersionProcessor::get_version_id(
@@ -139,7 +136,28 @@ impl TableVersionProcessor {
             *table_version_id = Some(id);
         }
 
-        Ok(vec![])
+        self.rewrite_ready = true;
+
+        Ok(())
+    }
+
+    // Get a unique list of table names that have versions specified, as some may have
+    // more than one.
+    fn get_versioned_tables(&self) -> Vec<String> {
+        self.table_versions
+            .iter()
+            .map(|((t, _), _)| t.0.last().unwrap().value.clone())
+            .unique()
+            .collect()
+    }
+
+    // Get a unique list of table_version_ids (if collected), as some version references may point to
+    // more than one.
+    pub fn table_version_ids(&self) -> Vec<TableVersionId> {
+        self.table_versions
+            .values()
+            .filter_map(|&table_version_id| table_version_id)
+            .collect()
     }
 }
 
@@ -151,31 +169,34 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
         args: &'ast mut Option<Vec<FunctionArg>>,
         with_hints: &'ast mut [Expr],
     ) {
-        self.tables_visited.push(name.clone());
         if let Some(func_args) = args {
-            // TODO: Support named func args for more flexible syntax?
+            // TODO: Support named func args for even more flexible syntax?
             // TODO: if func_args length is not exactly 1 error out
             if let FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
                 Value::SingleQuotedString(value),
             ))) = &func_args[0]
             {
-                let full_name = name.to_string();
-                let resolved_ref = TableReference::from(full_name.as_str())
+                let unresolved_name = name.to_string();
+                let resolved_ref = TableReference::from(unresolved_name.as_str())
                     .resolve(&*self.default_catalog, &*self.default_schema);
-                self.tables_renamed.insert(
-                    (
-                        ObjectName(vec![
-                            Ident::new(resolved_ref.catalog),
-                            Ident::new(resolved_ref.schema),
-                            Ident::new(resolved_ref.table),
-                        ]),
-                        value.to_string(),
-                    ),
-                    None,
-                );
-                name.0.last_mut().unwrap().value =
-                    TableVersionProcessor::table_with_version(name, value);
-                *args = None;
+                let full_object_name = ObjectName(vec![
+                    Ident::new(resolved_ref.catalog),
+                    Ident::new(resolved_ref.schema),
+                    Ident::new(resolved_ref.table),
+                ]);
+                if !self.rewrite_ready {
+                    // We haven't yet fetched/triaged the table versions ids; for now just collect
+                    // all table raw versions specified.
+
+                    self.table_versions
+                        .insert((full_object_name, value.to_string()), None);
+                } else {
+                    // Do the actual name rewrite
+                    name.0.last_mut().unwrap().value =
+                        self.table_with_version(&full_object_name, value);
+                    // Void the function table arg struct to leave a clean printable statement
+                    *args = None;
+                }
             }
         }
         visit_table_table_factor(self, name, alias, args, with_hints)
@@ -184,6 +205,7 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
 
 #[cfg(test)]
 mod tests {
+    use crate::data_types::TableVersionId;
     use datafusion::sql::parser::Statement;
     use sqlparser::ast::Statement as SQLStatement;
     use std::ops::Deref;
@@ -225,9 +247,18 @@ mod tests {
             "test_catalog".to_string(),
             "test_schema".to_string(),
         );
+        // Do a first pass
+        rewriter.visit_query(&mut q);
+
+        // Set a mock table version id and do another pass for actually renaming the table
+        let id = 42 as TableVersionId;
+        for table_version_id in rewriter.table_versions.values_mut() {
+            *table_version_id = Some(id);
+        }
+        rewriter.rewrite_ready = true;
         rewriter.visit_query(&mut q);
 
         // Ensure table name in the original query has been renamed to appropriate version
-        assert_eq!(format!("{}", q), format!("{}:{}", query, version_timestamp))
+        assert_eq!(format!("{}", q), format!("{}:{}", query, id))
     }
 }

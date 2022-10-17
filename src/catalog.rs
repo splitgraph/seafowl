@@ -3,7 +3,6 @@ use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::catalog::schema::MemorySchemaProvider;
-use datafusion::datasource::TableProvider;
 use datafusion::error::DataFusionError;
 use itertools::Itertools;
 #[cfg(test)]
@@ -158,6 +157,11 @@ impl From<Error> for DataFusionError {
 #[async_trait]
 pub trait TableCatalog: Sync + Send {
     async fn load_database(&self, id: DatabaseId) -> Result<SeafowlDatabase>;
+    async fn load_tables_by_version(
+        &self,
+        database_id: DatabaseId,
+        table_version_ids: Vec<TableVersionId>,
+    ) -> Result<HashMap<TableVersionId, Arc<SeafowlTable>>>;
     async fn get_database_id_by_name(
         &self,
         database_name: &str,
@@ -312,7 +316,7 @@ impl DefaultCatalog {
         &self,
         table_name: &str,
         table_columns: I,
-    ) -> (Arc<str>, Arc<dyn TableProvider>)
+    ) -> (Arc<str>, Arc<SeafowlTable>)
     where
         I: Iterator<Item = &'a AllDatabaseColumnsResult>,
     {
@@ -375,7 +379,7 @@ impl TableCatalog for DefaultCatalog {
     async fn load_database(&self, database_id: DatabaseId) -> Result<SeafowlDatabase> {
         let all_columns = self
             .repository
-            .get_all_columns_in_database(database_id)
+            .get_all_columns_in_database(database_id, vec![])
             .await
             .map_err(Self::to_sqlx_error)?;
 
@@ -397,6 +401,29 @@ impl TableCatalog for DefaultCatalog {
             collections,
             staging_schema: self.staging_schema.clone(),
         })
+    }
+
+    // NB: It's kind of awkward not returning simply a vec of tables here, but since the tables
+    // don't convey the schema name information on their own we have to do it like this.
+    async fn load_tables_by_version(
+        &self,
+        database_id: DatabaseId,
+        table_version_ids: Vec<TableVersionId>,
+    ) -> Result<HashMap<TableVersionId, Arc<SeafowlTable>>> {
+        let table_columns = self
+            .repository
+            .get_all_columns_in_database(database_id, table_version_ids)
+            .await
+            .map_err(Self::to_sqlx_error)?;
+
+        let tables = table_columns
+            .iter()
+            .group_by(|col| (&col.table_name, &col.table_version_id))
+            .into_iter()
+            .map(|((tn, &tv), tc)| (tv, self.build_table(tn, tc).1))
+            .collect();
+
+        Ok(tables)
     }
 
     async fn create_table(

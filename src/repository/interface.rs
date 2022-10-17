@@ -79,6 +79,7 @@ pub trait Repository: Send + Sync + Debug {
     async fn get_all_columns_in_database(
         &self,
         database_id: DatabaseId,
+        table_version_ids: Vec<TableVersionId>,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
     async fn get_all_partitions_in_table(
@@ -309,7 +310,7 @@ pub mod tests {
         // Test loading all columns
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id)
+            .get_all_columns_in_database(database_id, vec![])
             .await
             .expect("Error getting all columns");
 
@@ -326,7 +327,7 @@ pub mod tests {
 
         // Test all columns again: we should have the schema for the latest table version
         let all_columns = repository
-            .get_all_columns_in_database(database_id)
+            .get_all_columns_in_database(database_id, vec![])
             .await
             .expect("Error getting all columns");
 
@@ -480,7 +481,7 @@ pub mod tests {
             .unwrap();
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id)
+            .get_all_columns_in_database(database_id, vec![])
             .await
             .expect("Error getting all columns");
 
@@ -504,7 +505,7 @@ pub mod tests {
             .unwrap();
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id)
+            .get_all_columns_in_database(database_id, vec![])
             .await
             .expect("Error getting all columns");
 
