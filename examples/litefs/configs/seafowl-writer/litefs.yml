@@ -1,0 +1,14 @@
+http:
+  addr: ":9090"
+
+exec: "/usr/local/bin/seafowl -c /etc/seafowl/seafowl.toml"
+
+mount-dir: "/data/seafowl/db"
+data-dir: "/data/seafowl/litefs"
+
+# Use static leadership instead of relying on Consul
+static:
+  primary: true
+
+  hostname: "seafowl-writer"
+  advertise-url: "http://seafowl-writer:9090"

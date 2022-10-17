@@ -1,0 +1,62 @@
+services:
+  minio:
+    image: quay.io/minio/minio:RELEASE.2022-08-13T21-54-44Z
+    entrypoint: sh
+    command: -c 'mkdir -p /data/seafowl/ && minio server --console-address ":9001" /data'
+    expose:
+      - "9000"
+      - "9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    volumes:
+      - minio-data:/data
+
+  seafowl-writer:
+    build:
+      dockerfile: seafowl/Dockerfile
+    ports:
+      - "8080:80"
+    image: litefs-seafowl
+    deploy:
+      restart_policy:
+        condition: unless-stopped
+
+    # Get FUSE working inside the container
+    cap_add:
+      - SYS_ADMIN
+    privileged: true
+    devices:
+      - /dev/fuse
+
+    volumes:
+      - ./configs/seafowl-writer:/etc/seafowl
+      - litefs-data:/data/seafowl
+
+  seafowl-reader:
+    build:
+      dockerfile: seafowl/Dockerfile
+    ports:
+      - "8081:80"
+    image: litefs-seafowl
+    deploy:
+      restart_policy:
+        condition: unless-stopped
+
+    # Get FUSE working inside the container
+    cap_add:
+      - SYS_ADMIN
+    privileged: true
+    devices:
+      - /dev/fuse
+
+    volumes:
+      - ./configs/seafowl-reader:/etc/seafowl
+
+volumes:
+  # Data directory for the Minio instance storing Parquet files
+  minio-data: {}
+  # Data directory for the LiteFS data for the writer Seafowl instance
+  litefs-data: {}
