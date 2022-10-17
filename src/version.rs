@@ -47,13 +47,12 @@ impl TableVersionProcessor {
     // // Try to parse the specified version timestamp into a Unix epoch
     pub fn version_to_epoch(version: &String) -> Result<Timestamp> {
         // TODO: Extend the supported formats for specifying the datetime
-        let dt =
-            DateTime::parse_from_str(version, "%Y-%m-%d %H:%M:%S %z").map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Failed to parse version {} as timestamp: {:?}",
-                    version, e
-                ))
-            })?;
+        let dt = DateTime::parse_from_rfc3339(version).map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Failed to parse version {} as timestamp: {:?}",
+                version, e
+            ))
+        })?;
 
         Ok(dt.timestamp() as Timestamp)
     }

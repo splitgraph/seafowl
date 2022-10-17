@@ -1,17 +1,21 @@
 use std::env;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow::record_batch::RecordBatch;
+use chrono::{TimeZone, Utc};
 use datafusion::{assert_batches_eq, assert_contains};
 use futures::TryStreamExt;
+use hashbrown::HashMap;
 use itertools::Itertools;
 use object_store::path::Path;
+use tokio::time::sleep;
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::DefaultSeafowlContext;
 use seafowl::context::SeafowlContext;
-use seafowl::data_types::TableVersionId;
+use seafowl::data_types::{TableVersionId, Timestamp};
 use seafowl::provider::SeafowlPartition;
 use seafowl::repository::postgres::testutils::get_random_schema;
 
@@ -1509,4 +1513,121 @@ async fn test_update_statement_errors() {
     assert!(err
         .to_string()
         .contains("Cannot cast string 'nope' to value of Int64 type"));
+}
+
+#[tokio::test]
+async fn test_table_time_travel() {
+    let context = make_context_with_pg().await;
+    let mut version_results = HashMap::<TableVersionId, Vec<RecordBatch>>::new();
+    let mut version_timestamps = HashMap::<TableVersionId, Timestamp>::new();
+
+    async fn record_result_and_timestamp(
+        context: &DefaultSeafowlContext,
+        version_id: TableVersionId,
+        version_results: &mut HashMap<TableVersionId, Vec<RecordBatch>>,
+        version_timestamps: &mut HashMap<TableVersionId, Timestamp>,
+    ) {
+        let plan = context
+            .plan_query("SELECT * FROM test_table")
+            .await
+            .unwrap();
+        let results = context.collect(plan).await.unwrap();
+
+        // We do a 2 x 1 second pause here because our version timestamp resolution is 1 second, and
+        // we want to be able to verify the disambiguate the versions below
+        sleep(Duration::from_secs(1)).await;
+        version_results.insert(version_id, results);
+        version_timestamps.insert(version_id, Utc::now().timestamp() as Timestamp);
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    // Creates table with table_versions 1 (empty) and 2
+    create_table_and_insert(&context, "test_table").await;
+    record_result_and_timestamp(
+        &context,
+        2 as TableVersionId,
+        &mut version_results,
+        &mut version_timestamps,
+    )
+    .await;
+
+    // Add another partition for table_version 3
+    let plan = context
+        .plan_query("INSERT INTO test_table (some_value) VALUES (45), (46), (47)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+    record_result_and_timestamp(
+        &context,
+        3 as TableVersionId,
+        &mut version_results,
+        &mut version_timestamps,
+    )
+    .await;
+
+    // Add another partition for table_version 4
+    let plan = context
+        .plan_query("INSERT INTO test_table (some_value) VALUES (46), (47), (48)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+    record_result_and_timestamp(
+        &context,
+        4 as TableVersionId,
+        &mut version_results,
+        &mut version_timestamps,
+    )
+    .await;
+
+    // Add another partition for table_version 5
+    let plan = context
+        .plan_query("INSERT INTO test_table (some_value) VALUES (42), (41), (40)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    //
+    // Now use the recorded timestamps to query specific earlier table versions and compare them to
+    // the recorded results for that version.
+    //
+
+    async fn query_table_version(
+        context: &DefaultSeafowlContext,
+        version_id: TableVersionId,
+        version_results: &HashMap<TableVersionId, Vec<RecordBatch>>,
+        version_timestamps: &HashMap<TableVersionId, Timestamp>,
+    ) {
+        let timestamp = Utc
+            .timestamp(version_timestamps[&version_id], 0)
+            .to_rfc3339();
+        let plan = context
+            .plan_query(format!("SELECT * FROM test_table('{}')", timestamp).as_str())
+            .await
+            .unwrap();
+        let results = context.collect(plan).await.unwrap();
+
+        assert_eq!(version_results[&version_id], results);
+    }
+
+    query_table_version(
+        &context,
+        2 as TableVersionId,
+        &version_results,
+        &version_timestamps,
+    )
+    .await;
+    query_table_version(
+        &context,
+        3 as TableVersionId,
+        &version_results,
+        &version_timestamps,
+    )
+    .await;
+    query_table_version(
+        &context,
+        4 as TableVersionId,
+        &version_results,
+        &version_timestamps,
+    )
+    .await;
 }
