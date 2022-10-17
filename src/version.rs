@@ -215,22 +215,27 @@ mod tests {
     use crate::version::TableVersionProcessor;
 
     #[test_case(
-        "SELECT * FROM test_table";
+        "SELECT * FROM test_table('test_version')";
         "Basic select with bare table name")
     ]
     #[test_case(
-        "SELECT * FROM some_schema.test_table";
+        "SELECT * FROM some_schema.test_table('test_version')";
         "Basic select with schema and table name")
     ]
     #[test_case(
-        "SELECT * FROM some_db.some_schema.test_table";
+        "SELECT * FROM some_db.some_schema.test_table('test_version')";
         "Basic select with fully qualified table name")
     ]
+    #[test_case(
+        "WITH some_cte AS (SELECT 1 AS k) SELECT t.*, k.* FROM some_schema.test_table('test_version') AS t JOIN some_cte AS c ON t.k = c.k";
+        "CTE without a version reference")
+    ]
+    #[test_case(
+        "WITH some_cte AS (SELECT * FROM other_table('test_version') AS k) SELECT t.*, k.* FROM some_schema.test_table('test_version') AS t JOIN some_cte AS c ON t.k = c.k";
+        "CTE with a version reference")
+    ]
     fn test_table_version_rewrite(query: &str) {
-        let version_timestamp = "2022-01-01 20:01:01Z";
-        let stmts =
-            DFParser::parse_sql(format!("{}('{}')", query, version_timestamp).as_str())
-                .unwrap();
+        let stmts = DFParser::parse_sql(query).unwrap();
 
         let mut q = if let Statement::Statement(stmt) = &stmts[0] {
             if let SQLStatement::Query(query) = stmt.deref() {
@@ -258,6 +263,9 @@ mod tests {
         rewriter.visit_query(&mut q);
 
         // Ensure table name in the original query has been renamed to appropriate version
-        assert_eq!(format!("{}", q), format!("{}:{}", query, id))
+        assert_eq!(
+            format!("{}", q),
+            query.replace("('test_version')", format!(":{}", id).as_str())
+        )
     }
 }
