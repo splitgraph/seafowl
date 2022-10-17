@@ -1,4 +1,0 @@
-addr: ":9090"
-
-dbs:
-  - path: /data/seafowl
