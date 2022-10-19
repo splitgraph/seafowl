@@ -1640,7 +1640,7 @@ async fn test_table_time_travel() {
         let results = context.collect(plan).await.unwrap();
 
         // We do a 2 x 1 second pause here because our version timestamp resolution is 1 second, and
-        // we want to be able to verify the disambiguate the versions below
+        // we want to be able to disambiguate the different versions
         sleep(Duration::from_secs(1)).await;
         version_results.insert(version_id, results);
         version_timestamps.insert(version_id, Utc::now().timestamp() as Timestamp);
@@ -1691,23 +1691,37 @@ async fn test_table_time_travel() {
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
+    record_result_and_timestamp(
+        &context,
+        5 as TableVersionId,
+        &mut version_results,
+        &mut version_timestamps,
+    )
+    .await;
 
     //
     // Now use the recorded timestamps to query specific earlier table versions and compare them to
     // the recorded results for that version.
     //
 
+    let timestamp_to_rfc3339 =
+        |timestamp: Timestamp| -> String { Utc.timestamp(timestamp, 0).to_rfc3339() };
+
     async fn query_table_version(
         context: &DefaultSeafowlContext,
         version_id: TableVersionId,
         version_results: &HashMap<TableVersionId, Vec<RecordBatch>>,
         version_timestamps: &HashMap<TableVersionId, Timestamp>,
+        timestamp_converter: fn(Timestamp) -> String,
     ) {
-        let timestamp = Utc
-            .timestamp(version_timestamps[&version_id], 0)
-            .to_rfc3339();
         let plan = context
-            .plan_query(format!("SELECT * FROM test_table('{}')", timestamp).as_str())
+            .plan_query(
+                format!(
+                    "SELECT * FROM test_table('{}')",
+                    timestamp_converter(version_timestamps[&version_id])
+                )
+                .as_str(),
+            )
             .await
             .unwrap();
         let results = context.collect(plan).await.unwrap();
@@ -1720,6 +1734,7 @@ async fn test_table_time_travel() {
         2 as TableVersionId,
         &version_results,
         &version_timestamps,
+        timestamp_to_rfc3339,
     )
     .await;
     query_table_version(
@@ -1727,6 +1742,7 @@ async fn test_table_time_travel() {
         3 as TableVersionId,
         &version_results,
         &version_timestamps,
+        timestamp_to_rfc3339,
     )
     .await;
     query_table_version(
@@ -1734,8 +1750,59 @@ async fn test_table_time_travel() {
         4 as TableVersionId,
         &version_results,
         &version_timestamps,
+        timestamp_to_rfc3339,
     )
     .await;
+    query_table_version(
+        &context,
+        5 as TableVersionId,
+        &version_results,
+        &version_timestamps,
+        timestamp_to_rfc3339,
+    )
+    .await;
+
+    //
+    // Use multiple different version specifiers in the same complex query: ensure row differences
+    // between different versions are consistent
+    //
+
+    let plan = context
+        .plan_query(
+            format!(
+                r#"
+                WITH diff_2_3 AS (
+                    SELECT * FROM test_table('{}')
+                    EXCEPT
+                    SELECT * FROM test_table('{}')
+                ), diff_3_4 AS (
+                    SELECT * FROM test_table('{}')
+                    EXCEPT
+                    SELECT * FROM test_table('{}')
+                ), diff_2_4 AS (
+                    SELECT * FROM test_table('{}')
+                    EXCEPT
+                    SELECT * FROM test_table('{}')
+                )
+                SELECT * FROM diff_2_3
+                UNION
+                SELECT * FROM diff_3_4
+                EXCEPT
+                SELECT * FROM diff_2_4
+            "#,
+                timestamp_to_rfc3339(version_timestamps[&2]),
+                timestamp_to_rfc3339(version_timestamps[&3]),
+                timestamp_to_rfc3339(version_timestamps[&3]),
+                timestamp_to_rfc3339(version_timestamps[&4]),
+                timestamp_to_rfc3339(version_timestamps[&2]),
+                timestamp_to_rfc3339(version_timestamps[&4]),
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+    assert!(results.is_empty());
 
     //
     // Verify that information schema is not polluted with versioned tables/columns

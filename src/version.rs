@@ -169,7 +169,6 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
         with_hints: &'ast mut [Expr],
     ) {
         if let Some(func_args) = args {
-            // TODO: Support named func args for even more flexible syntax?
             // TODO: if func_args length is not exactly 1 error out
             if let FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
                 Value::SingleQuotedString(value),

@@ -855,6 +855,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                     version_processor.visit_query(&mut q);
 
                     if !version_processor.table_versions.is_empty() {
+                        // Create a new session context and session state, to avoid potential race
+                        // conditions leading to schema provider map leaking into other queries (and
+                        // thus polluting e.g. the information_schema output), or even worse reloading
+                        // the map and having the versioned query error out during execution.
+                        let session_ctx = SessionContext::with_state(state.clone());
+
                         version_processor.triage_version_ids(self.table_catalog.clone()).await?;
                         // We now have table_version_ids for each table with version specified; do another
                         // run over the query AST to rewrite the table.
@@ -871,10 +877,14 @@ impl SeafowlContext for DefaultSeafowlContext {
                             let table_ref = TableReference::from(full_name.as_str());
                             let table_provider = tables_by_version[&table_version_id.unwrap()].clone();
 
-                            if !self.inner.table_exist(table_ref)? {
-                                self.inner.register_table(table_ref, table_provider)?;
+                            if !session_ctx.table_exist(table_ref)? {
+                                session_ctx.register_table(table_ref, table_provider)?;
                             }
                         }
+
+                        let state = session_ctx.state.read().clone();
+                        let query_planner = SqlToRel::new(&state);
+                        return query_planner.sql_statement_to_plan(Statement::Query(q));
                     }
 
                     query_planner.sql_statement_to_plan(Statement::Query(q))
