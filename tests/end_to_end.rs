@@ -6,9 +6,10 @@ use arrow::record_batch::RecordBatch;
 use chrono::{TimeZone, Utc};
 use datafusion::{assert_batches_eq, assert_contains};
 use futures::TryStreamExt;
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use itertools::Itertools;
 use object_store::path::Path;
+use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
 use tokio::time::sleep;
 
 use seafowl::config::context::build_context;
@@ -1763,6 +1764,19 @@ async fn test_table_time_travel() {
     .await;
 
     //
+    // Try to query a non-existent version (timestamp older than the oldest version)
+    //
+
+    let err = context
+        .plan_query("SELECT * FROM test_table('2012-12-21 20:12:21 +00:00')")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("No recorded table versions for the provided timestamp"));
+
+    //
     // Use multiple different version specifiers in the same complex query: ensure row differences
     // between different versions are consistent
     //
@@ -1771,31 +1785,31 @@ async fn test_table_time_travel() {
         .plan_query(
             format!(
                 r#"
-                WITH diff_2_3 AS (
+                WITH diff_3_2 AS (
                     SELECT * FROM test_table('{}')
                     EXCEPT
                     SELECT * FROM test_table('{}')
-                ), diff_3_4 AS (
+                ), diff_4_3 AS (
                     SELECT * FROM test_table('{}')
                     EXCEPT
                     SELECT * FROM test_table('{}')
-                ), diff_2_4 AS (
+                ), diff_4_2 AS (
                     SELECT * FROM test_table('{}')
                     EXCEPT
                     SELECT * FROM test_table('{}')
                 )
-                SELECT * FROM diff_2_3
+                SELECT * FROM diff_3_2
                 UNION
-                SELECT * FROM diff_3_4
+                SELECT * FROM diff_4_3
                 EXCEPT
-                SELECT * FROM diff_2_4
+                SELECT * FROM diff_4_2
             "#,
-                timestamp_to_rfc3339(version_timestamps[&2]),
                 timestamp_to_rfc3339(version_timestamps[&3]),
+                timestamp_to_rfc3339(version_timestamps[&2]),
+                timestamp_to_rfc3339(version_timestamps[&4]),
                 timestamp_to_rfc3339(version_timestamps[&3]),
                 timestamp_to_rfc3339(version_timestamps[&4]),
                 timestamp_to_rfc3339(version_timestamps[&2]),
-                timestamp_to_rfc3339(version_timestamps[&4]),
             )
             .as_str(),
         )
@@ -1803,6 +1817,28 @@ async fn test_table_time_travel() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
     assert!(results.is_empty());
+
+    // Ensure the context table map contains the versioned + the latest table entries
+    assert_eq!(
+        HashSet::<String>::from_iter(
+            context
+                .inner()
+                .state
+                .read()
+                .catalog_list
+                .catalog(DEFAULT_DB)
+                .unwrap()
+                .schema(DEFAULT_SCHEMA)
+                .unwrap()
+                .table_names()
+        ),
+        HashSet::<String>::from_iter(vec![
+            "test_table".to_string(),
+            "test_table:2".to_string(),
+            "test_table:3".to_string(),
+            "test_table:4".to_string(),
+        ]),
+    );
 
     //
     // Verify that information schema is not polluted with versioned tables/columns

@@ -47,12 +47,20 @@ impl TableVersionProcessor {
     // Try to parse the specified version timestamp into a Unix epoch
     pub fn version_to_epoch(version: &String) -> Result<Timestamp> {
         // TODO: Extend the supported formats for specifying the datetime
-        let dt = DateTime::parse_from_rfc3339(version).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to parse version {} as timestamp: {:?}",
-                version, e
-            ))
-        })?;
+        let dt = if let Ok(dt_rfc3339) = DateTime::parse_from_rfc3339(version) {
+            dt_rfc3339
+        } else if let Ok(dt_str_1) =
+            DateTime::parse_from_str(version, "%Y-%m-%d %H:%M:%S %z")
+        {
+            dt_str_1
+        } else if let Ok(dt_rfc2822) = DateTime::parse_from_rfc2822(version) {
+            dt_rfc2822
+        } else {
+            return Err(DataFusionError::Execution(format!(
+                "Failed to parse version {} as timestamp",
+                version
+            )));
+        };
 
         Ok(dt.timestamp() as Timestamp)
     }
@@ -169,7 +177,6 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
         with_hints: &'ast mut [Expr],
     ) {
         if let Some(func_args) = args {
-            // TODO: if func_args length is not exactly 1 error out
             if let FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
                 Value::SingleQuotedString(value),
             ))) = &func_args[0]
