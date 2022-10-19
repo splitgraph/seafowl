@@ -1754,6 +1754,7 @@ pub mod test_utils {
     use crate::config::context::build_context;
     use crate::config::schema;
     use crate::config::schema::{Catalog, SeafowlConfig, Sqlite};
+    use sqlx::sqlite::SqliteJournalMode;
     use std::collections::HashMap as StdHashMap;
 
     use super::*;
@@ -1783,6 +1784,7 @@ pub mod test_utils {
             object_store: schema::ObjectStore::InMemory(schema::InMemory {}),
             catalog: Catalog::Sqlite(Sqlite {
                 dsn: "sqlite://:memory:".to_string(),
+                journal_mode: SqliteJournalMode::Wal,
             }),
             frontend: Default::default(),
             runtime: Default::default(),
