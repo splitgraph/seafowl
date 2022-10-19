@@ -46,7 +46,7 @@ impl TableVersionProcessor {
 
     // Try to parse the specified version timestamp into a Unix epoch
     pub fn version_to_epoch(version: &String) -> Result<Timestamp> {
-        // TODO: Extend the supported formats for specifying the datetime
+        // TODO: Further extend the supported formats for specifying the datetime
         let dt = if let Ok(dt_rfc3339) = DateTime::parse_from_rfc3339(version) {
             dt_rfc3339
         } else if let Ok(dt_str_1) =
@@ -79,14 +79,14 @@ impl TableVersionProcessor {
             Ok(n) => Ok(table_versions[n].0),
             Err(n) => {
                 // We haven't found an exact match, which is expected. Instead we have the index at
-                // which the provided timestamp would fit in the versions vector.
+                // which the provided timestamp would fit in the sorted versions vector.
                 if n >= 1 {
                     // We're guaranteed to have at least 1 table version prior to the timestamp specified.
                     // Return that version.
                     return Ok(table_versions[n - 1].0);
                 }
 
-                // The timestamp specified occurs prior to earliest available table version.
+                // The timestamp specified occurs prior to the earliest available table version.
                 Err(DataFusionError::Execution(format!(
                     "No recorded table versions for the provided timestamp {}",
                     version
@@ -272,6 +272,25 @@ mod tests {
         assert_eq!(
             format!("{}", q),
             query.replace("('test_version')", format!(":{}", id).as_str())
+        )
+    }
+
+    #[test_case(
+        "2017-07-14T02:40:00+00:00";
+        "RFC 3339")
+    ]
+    #[test_case(
+        "2017-07-14 02:40:00 +00:00";
+        "Format 1")
+    ]
+    #[test_case(
+        "Fri, 14 Jul 2017 02:40:00 +0000";
+        "RFC 2822")
+    ]
+    fn test_version_timestamp_parsing(version: &str) {
+        assert_eq!(
+            TableVersionProcessor::version_to_epoch(&version.to_string()).unwrap(),
+            1_500_000_000,
         )
     }
 }
