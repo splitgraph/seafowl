@@ -121,7 +121,7 @@ impl Repository for $repo {
         builder.push_bind(database_id);
 
         builder.push(r#"
-        ORDER BY collection_name, table_name, column_name
+        ORDER BY collection_name, table_name, table_version_id, column_name
         "#);
 
         let query = builder.build_query_as();

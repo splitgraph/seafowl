@@ -1730,38 +1730,16 @@ async fn test_table_time_travel() {
         assert_eq!(version_results[&version_id], results);
     }
 
-    query_table_version(
-        &context,
-        2 as TableVersionId,
-        &version_results,
-        &version_timestamps,
-        timestamp_to_rfc3339,
-    )
-    .await;
-    query_table_version(
-        &context,
-        3 as TableVersionId,
-        &version_results,
-        &version_timestamps,
-        timestamp_to_rfc3339,
-    )
-    .await;
-    query_table_version(
-        &context,
-        4 as TableVersionId,
-        &version_results,
-        &version_timestamps,
-        timestamp_to_rfc3339,
-    )
-    .await;
-    query_table_version(
-        &context,
-        5 as TableVersionId,
-        &version_results,
-        &version_timestamps,
-        timestamp_to_rfc3339,
-    )
-    .await;
+    for version_id in [2, 3, 4, 5] {
+        query_table_version(
+            &context,
+            version_id as TableVersionId,
+            &version_results,
+            &version_timestamps,
+            timestamp_to_rfc3339,
+        )
+        .await;
+    }
 
     //
     // Try to query a non-existent version (timestamp older than the oldest version)
@@ -1777,8 +1755,10 @@ async fn test_table_time_travel() {
         .contains("No recorded table versions for the provided timestamp"));
 
     //
-    // Use multiple different version specifiers in the same complex query: ensure row differences
-    // between different versions are consistent
+    // Use multiple different version specifiers in the same complex query (including the latest
+    // version both explicitly and in the default notation).
+    // Ensures row differences between different versions are consistent:
+    // 5 - ((5 - 4) + (4 - 3) + (3 - 2)) = 2
     //
 
     let plan = context
@@ -1793,30 +1773,34 @@ async fn test_table_time_travel() {
                     SELECT * FROM test_table('{}')
                     EXCEPT
                     SELECT * FROM test_table('{}')
-                ), diff_4_2 AS (
+                ), diff_5_4 AS (
                     SELECT * FROM test_table('{}')
                     EXCEPT
                     SELECT * FROM test_table('{}')
                 )
-                SELECT * FROM diff_3_2
-                UNION
-                SELECT * FROM diff_4_3
-                EXCEPT
-                SELECT * FROM diff_4_2
+                SELECT * FROM test_table
+                EXCEPT (
+                    SELECT * FROM diff_5_4
+                    UNION
+                    SELECT * FROM diff_4_3
+                    UNION
+                    SELECT * FROM diff_3_2
+                )
+                ORDER BY some_int_value
             "#,
                 timestamp_to_rfc3339(version_timestamps[&3]),
                 timestamp_to_rfc3339(version_timestamps[&2]),
                 timestamp_to_rfc3339(version_timestamps[&4]),
                 timestamp_to_rfc3339(version_timestamps[&3]),
+                timestamp_to_rfc3339(version_timestamps[&5]),
                 timestamp_to_rfc3339(version_timestamps[&4]),
-                timestamp_to_rfc3339(version_timestamps[&2]),
             )
             .as_str(),
         )
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
-    assert!(results.is_empty());
+    assert_eq!(version_results[&2], results);
 
     // Ensure the context table map contains the versioned + the latest table entries
     assert_eq!(
@@ -1837,6 +1821,7 @@ async fn test_table_time_travel() {
             "test_table:2".to_string(),
             "test_table:3".to_string(),
             "test_table:4".to_string(),
+            "test_table:5".to_string(),
         ]),
     );
 
