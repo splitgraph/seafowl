@@ -849,7 +849,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Statement::Query(mut q) => {
                     // Determine if some of the tables reference a non-latest version using table
                     // function syntax. If so, rename the tables in the query by appending the
-                    // explicit timestamp and add it to the schema provider's map.
+                    // explicit version id for the provided timestamp and add it to the schema
+                    // provider's map.
 
                     let mut version_processor = TableVersionProcessor::new(self.database.clone(), DEFAULT_SCHEMA.to_string());
                     version_processor.visit_query(&mut q);
@@ -858,27 +859,31 @@ impl SeafowlContext for DefaultSeafowlContext {
                         // Create a new session context and session state, to avoid potential race
                         // conditions leading to schema provider map leaking into other queries (and
                         // thus polluting e.g. the information_schema output), or even worse reloading
-                        // the map and having the versioned query error out during execution.
+                        // the map and having the versioned query fail during execution.
                         let session_ctx = SessionContext::with_state(state.clone());
 
                         version_processor.triage_version_ids(self.table_catalog.clone()).await?;
                         // We now have table_version_ids for each table with version specified; do another
                         // run over the query AST to rewrite the table.
                         version_processor.visit_query(&mut q);
+                        debug!("Time travel query rewritten to: {}", q);
+
                         let tables_by_version = self
                             .table_catalog
                             .load_tables_by_version(self.database_id, Some(version_processor.table_version_ids())).await?;
 
                         for ((table, version), table_version_id) in &version_processor.table_versions {
-                            let mut name = table.clone();
-                            name.0.last_mut().unwrap().value =
-                                version_processor.table_with_version(&name, version);
-                            let full_name = name.to_string();
-                            let table_ref = TableReference::from(full_name.as_str());
-                            let table_provider = tables_by_version[&table_version_id.unwrap()].clone();
+                            if let Some(table_version_id) = table_version_id {
+                                let mut name = table.clone();
+                                name.0.last_mut().unwrap().value =
+                                    version_processor.table_with_version(&name, version);
+                                let full_name = name.to_string();
+                                let table_ref = TableReference::from(full_name.as_str());
+                                let table_provider = tables_by_version[table_version_id].clone();
 
-                            if !session_ctx.table_exist(table_ref)? {
-                                session_ctx.register_table(table_ref, table_provider)?;
+                                if !session_ctx.table_exist(table_ref)? {
+                                    session_ctx.register_table(table_ref, table_provider)?;
+                                }
                             }
                         }
 

@@ -6,8 +6,8 @@ use arrow::record_batch::RecordBatch;
 use chrono::{TimeZone, Utc};
 use datafusion::{assert_batches_eq, assert_contains};
 use futures::TryStreamExt;
-use hashbrown::{HashMap, HashSet};
-use itertools::Itertools;
+use hashbrown::HashMap;
+use itertools::{sorted, Itertools};
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
 use tokio::time::sleep;
@@ -1804,7 +1804,7 @@ async fn test_table_time_travel() {
 
     // Ensure the context table map contains the versioned + the latest table entries
     assert_eq!(
-        HashSet::<String>::from_iter(
+        sorted(
             context
                 .inner()
                 .state
@@ -1815,14 +1815,14 @@ async fn test_table_time_travel() {
                 .schema(DEFAULT_SCHEMA)
                 .unwrap()
                 .table_names()
-        ),
-        HashSet::<String>::from_iter(vec![
+        )
+        .collect::<Vec<String>>(),
+        vec![
             "test_table".to_string(),
             "test_table:2".to_string(),
             "test_table:3".to_string(),
             "test_table:4".to_string(),
-            "test_table:5".to_string(),
-        ]),
+        ],
     );
 
     //

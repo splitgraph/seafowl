@@ -88,12 +88,14 @@ impl Repository for $repo {
                 SELECT table_id, id FROM table_version
             "#);
 
-            b.push(" WHERE table_version.id IN (");
-            let mut separated = b.separated(", ");
-            for table_version_id in table_version_ids.into_iter() {
-                separated.push_bind(table_version_id);
+            if !table_version_ids.is_empty() {
+                b.push(" WHERE table_version.id IN (");
+                let mut separated = b.separated(", ");
+                for table_version_id in table_version_ids.into_iter() {
+                    separated.push_bind(table_version_id);
+                }
+                separated.push_unseparated(")");
             }
-            separated.push_unseparated(")");
 
             b.push(r#"
                 ORDER BY table_id, creation_time DESC, id DESC

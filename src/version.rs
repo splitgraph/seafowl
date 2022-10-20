@@ -40,8 +40,14 @@ impl TableVersionProcessor {
     }
 
     pub fn table_with_version(&self, name: &ObjectName, version: &str) -> String {
-        let version_id = self.table_versions[&(name.clone(), version.to_owned())];
-        format!("{}:{}", name.0.last().unwrap().value, version_id.unwrap())
+        if let Some(version_id) = self.table_versions[&(name.clone(), version.to_owned())]
+        {
+            format!("{}:{}", name.0.last().unwrap().value, version_id)
+        } else {
+            // The resolved table version id is None; this should only happen when we resolved
+            // the id to the latest table version, in which case no rewrite is needed.
+            name.0.last().unwrap().value.clone()
+        }
     }
 
     // Try to parse the specified version timestamp into a Unix epoch
@@ -65,7 +71,7 @@ impl TableVersionProcessor {
         Ok(dt.timestamp() as Timestamp)
     }
 
-    fn get_version_id(
+    fn resolve_version_id(
         version: &String,
         table_versions: &[(TableVersionId, Timestamp)],
     ) -> Result<TableVersionId> {
@@ -102,7 +108,7 @@ impl TableVersionProcessor {
         // Fetch all available versions for the versioned tables from the metadata store, and
         // collect them into a table: [..., (vi, ti), ...] map (vi being the table version id
         // and ti the Unix epoch when that version was created for the i-th version).
-        let table_versions: HashMap<ObjectName, Vec<(TableVersionId, Timestamp)>> =
+        let all_table_versions: HashMap<ObjectName, Vec<(TableVersionId, Timestamp)>> =
             table_catalog
                 .get_all_table_versions(self.get_versioned_tables())
                 .await?
@@ -130,15 +136,21 @@ impl TableVersionProcessor {
         for (table_version, table_version_id) in self.table_versions.iter_mut() {
             let table = &table_version.0;
             let version = &table_version.1;
-            let id = TableVersionProcessor::get_version_id(
-                version,
-                table_versions.get(table).ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "No versions found for table {}",
-                        table
-                    ))
-                })?,
-            )?;
+            let all_versions = all_table_versions.get(table).ok_or_else(|| {
+                DataFusionError::Execution(format!(
+                    "No versions found for table {}",
+                    table
+                ))
+            })?;
+
+            let id = TableVersionProcessor::resolve_version_id(version, all_versions)?;
+
+            if id >= all_versions.last().unwrap().0 {
+                // The resolved table version id points to the latest table version; skip rewriting
+                // the table reference to that version, since we already have it loaded in the
+                // default table map of the schema provider.
+                continue;
+            }
 
             *table_version_id = Some(id);
         }
@@ -191,7 +203,7 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
                 ]);
                 if !self.rewrite_ready {
                     // We haven't yet fetched/triaged the table versions ids; for now just collect
-                    // all table raw versions specified.
+                    // all raw table versions.
 
                     self.table_versions
                         .insert((full_object_name, value.to_string()), None);
