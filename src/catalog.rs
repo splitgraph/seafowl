@@ -7,8 +7,8 @@ use datafusion::error::DataFusionError;
 use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
+use parking_lot::RwLock;
 
-use crate::data_types::FunctionId;
 use crate::provider::SeafowlFunction;
 use crate::wasm_udf::data_types::{
     CreateFunctionDataType, CreateFunctionDetails, CreateFunctionLanguage,
@@ -16,7 +16,8 @@ use crate::wasm_udf::data_types::{
 };
 use crate::{
     data_types::{
-        CollectionId, DatabaseId, PhysicalPartitionId, TableId, TableVersionId,
+        CollectionId, DatabaseId, FunctionId, PhysicalPartitionId, TableId,
+        TableVersionId,
     },
     provider::{
         PartitionColumn, SeafowlCollection, SeafowlDatabase, SeafowlPartition,
@@ -24,7 +25,7 @@ use crate::{
     },
     repository::interface::{
         AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTablePartitionsResult,
-        Error as RepositoryError, Repository,
+        Error as RepositoryError, Repository, TableVersionsResult,
     },
     schema::Schema,
 };
@@ -156,6 +157,11 @@ impl From<Error> for DataFusionError {
 #[async_trait]
 pub trait TableCatalog: Sync + Send {
     async fn load_database(&self, id: DatabaseId) -> Result<SeafowlDatabase>;
+    async fn load_tables_by_version(
+        &self,
+        database_id: DatabaseId,
+        table_version_ids: Option<Vec<TableVersionId>>,
+    ) -> Result<HashMap<TableVersionId, Arc<SeafowlTable>>>;
     async fn get_database_id_by_name(
         &self,
         database_name: &str,
@@ -191,6 +197,11 @@ pub trait TableCatalog: Sync + Send {
         from_version: TableVersionId,
         inherit_partitions: bool,
     ) -> Result<TableVersionId>;
+
+    async fn get_all_table_versions(
+        &self,
+        table_names: Vec<String>,
+    ) -> Result<Vec<TableVersionsResult>>;
 
     async fn move_table(
         &self,
@@ -294,7 +305,7 @@ impl DefaultCatalog {
                     r#type: Arc::from(partition.column_type.clone()),
                     min_value: Arc::new(partition.min_value.clone()),
                     max_value: Arc::new(partition.max_value.clone()),
-                    null_count: None, // TODO: set this from partition object
+                    null_count: partition.null_count,
                 })
                 .collect(),
             ),
@@ -357,7 +368,7 @@ impl DefaultCatalog {
             Arc::from(collection_name.to_string()),
             Arc::new(SeafowlCollection {
                 name: Arc::from(collection_name.to_string()),
-                tables,
+                tables: RwLock::new(tables),
             }),
         )
     }
@@ -368,7 +379,7 @@ impl TableCatalog for DefaultCatalog {
     async fn load_database(&self, database_id: DatabaseId) -> Result<SeafowlDatabase> {
         let all_columns = self
             .repository
-            .get_all_columns_in_database(database_id)
+            .get_all_columns_in_database(database_id, None)
             .await
             .map_err(Self::to_sqlx_error)?;
 
@@ -390,6 +401,27 @@ impl TableCatalog for DefaultCatalog {
             collections,
             staging_schema: self.staging_schema.clone(),
         })
+    }
+
+    async fn load_tables_by_version(
+        &self,
+        database_id: DatabaseId,
+        table_version_ids: Option<Vec<TableVersionId>>,
+    ) -> Result<HashMap<TableVersionId, Arc<SeafowlTable>>> {
+        let table_columns = self
+            .repository
+            .get_all_columns_in_database(database_id, table_version_ids)
+            .await
+            .map_err(Self::to_sqlx_error)?;
+
+        let tables = table_columns
+            .iter()
+            .group_by(|col| (&col.table_name, &col.table_version_id))
+            .into_iter()
+            .map(|((tn, &tv), tc)| (tv, self.build_table(tn, tc).1))
+            .collect();
+
+        Ok(tables)
     }
 
     async fn create_table(
@@ -505,6 +537,16 @@ impl TableCatalog for DefaultCatalog {
                 }
                 _ => Self::to_sqlx_error(e),
             })
+    }
+
+    async fn get_all_table_versions(
+        &self,
+        table_names: Vec<String>,
+    ) -> Result<Vec<TableVersionsResult>> {
+        self.repository
+            .get_all_table_versions(table_names)
+            .await
+            .map_err(Self::to_sqlx_error)
     }
 
     async fn move_table(

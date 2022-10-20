@@ -49,7 +49,8 @@
 
 /// Queries that are different between SQLite and PG
 pub struct RepositoryQueries {
-    pub all_columns_in_database: &'static str,
+    pub latest_table_versions: &'static str,
+    pub all_table_versions: &'static str,
 }
 
 #[macro_export]
@@ -79,12 +80,59 @@ impl Repository for $repo {
     async fn get_all_columns_in_database(
         &self,
         database_id: DatabaseId,
+        table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error> {
+        let mut builder: QueryBuilder<_> = if let Some(table_version_ids) = table_version_ids {
+            let mut b = QueryBuilder::new(r#"
+            WITH desired_table_versions AS (
+                SELECT table_id, id FROM table_version
+            "#);
 
-        let columns = sqlx::query_as($repo::QUERIES.all_columns_in_database)
-        .bind(database_id)
-        .fetch_all(&self.executor)
-        .await.map_err($repo::interpret_error)?;
+            if !table_version_ids.is_empty() {
+                b.push(" WHERE table_version.id IN (");
+                let mut separated = b.separated(", ");
+                for table_version_id in table_version_ids.into_iter() {
+                    separated.push_bind(table_version_id);
+                }
+                separated.push_unseparated(")");
+            }
+
+            b.push(r#"
+                ORDER BY table_id, creation_time DESC, id DESC
+            )
+            "#);
+
+            b
+        } else {
+            QueryBuilder::new($repo::QUERIES.latest_table_versions)
+        };
+
+        builder.push(r#"
+        SELECT
+            collection.name AS collection_name,
+            "table".name AS table_name,
+            "table".id AS table_id,
+            desired_table_versions.id AS table_version_id,
+            table_column.name AS column_name,
+            table_column.type AS column_type
+        FROM collection
+        INNER JOIN "table" ON collection.id = "table".collection_id
+        INNER JOIN desired_table_versions ON "table".id = desired_table_versions.table_id
+        INNER JOIN table_column ON table_column.table_version_id = desired_table_versions.id
+        WHERE collection.database_id = "#);
+        builder.push_bind(database_id);
+
+        builder.push(r#"
+        ORDER BY collection_name, table_name, table_version_id, column_name
+        "#);
+
+        let query = builder.build_query_as();
+        let columns = query
+            .fetch(&self.executor)
+            .try_collect()
+            .await
+            .map_err($repo::interpret_error)?;
+
         Ok(columns)
     }
 
@@ -378,6 +426,32 @@ impl Repository for $repo {
         }
 
         Ok(new_version)
+    }
+
+    async fn get_all_table_versions(
+        &self,
+        table_names: Vec<String>,
+    ) -> Result<Vec<TableVersionsResult>, Error> {
+        // We have to manually construct the query since SQLite doesn't have the proper Encode trait
+        let mut builder: QueryBuilder<_> = QueryBuilder::new($repo::QUERIES.all_table_versions);
+
+        if !table_names.is_empty() {
+            builder.push(" WHERE \"table\".name IN (");
+            let mut separated = builder.separated(", ");
+            for table_name in table_names.iter() {
+                separated.push_bind(table_name);
+            }
+            separated.push_unseparated(")");
+        }
+
+        let query = builder.build_query_as();
+        let table_versions = query
+            .fetch(&self.executor)
+            .try_collect()
+            .await
+            .map_err($repo::interpret_error)?;
+
+        Ok(table_versions)
     }
 
     async fn move_table(

@@ -1,17 +1,22 @@
 use std::env;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow::record_batch::RecordBatch;
+use chrono::{TimeZone, Utc};
 use datafusion::{assert_batches_eq, assert_contains};
 use futures::TryStreamExt;
-use itertools::Itertools;
+use hashbrown::HashMap;
+use itertools::{sorted, Itertools};
 use object_store::path::Path;
+use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
+use tokio::time::sleep;
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::DefaultSeafowlContext;
 use seafowl::context::SeafowlContext;
-use seafowl::data_types::TableVersionId;
+use seafowl::data_types::{TableVersionId, Timestamp};
 use seafowl::provider::SeafowlPartition;
 use seafowl::repository::postgres::testutils::get_random_schema;
 
@@ -1615,4 +1620,241 @@ async fn test_update_statement_errors() {
     assert!(err
         .to_string()
         .contains("Cannot cast string 'nope' to value of Int64 type"));
+}
+
+#[tokio::test]
+async fn test_table_time_travel() {
+    let context = make_context_with_pg().await;
+    let mut version_results = HashMap::<TableVersionId, Vec<RecordBatch>>::new();
+    let mut version_timestamps = HashMap::<TableVersionId, Timestamp>::new();
+
+    async fn record_result_and_timestamp(
+        context: &DefaultSeafowlContext,
+        version_id: TableVersionId,
+        version_results: &mut HashMap<TableVersionId, Vec<RecordBatch>>,
+        version_timestamps: &mut HashMap<TableVersionId, Timestamp>,
+    ) {
+        let plan = context
+            .plan_query("SELECT * FROM test_table")
+            .await
+            .unwrap();
+        let results = context.collect(plan).await.unwrap();
+
+        // We do a 2 x 1 second pause here because our version timestamp resolution is 1 second, and
+        // we want to be able to disambiguate the different versions
+        sleep(Duration::from_secs(1)).await;
+        version_results.insert(version_id, results);
+        version_timestamps.insert(version_id, Utc::now().timestamp() as Timestamp);
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    // Creates table with table_versions 1 (empty) and 2
+    create_table_and_insert(&context, "test_table").await;
+    record_result_and_timestamp(
+        &context,
+        2 as TableVersionId,
+        &mut version_results,
+        &mut version_timestamps,
+    )
+    .await;
+
+    // Add another partition for table_version 3
+    let plan = context
+        .plan_query("INSERT INTO test_table (some_value) VALUES (45), (46), (47)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+    record_result_and_timestamp(
+        &context,
+        3 as TableVersionId,
+        &mut version_results,
+        &mut version_timestamps,
+    )
+    .await;
+
+    // Add another partition for table_version 4
+    let plan = context
+        .plan_query("INSERT INTO test_table (some_value) VALUES (46), (47), (48)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+    record_result_and_timestamp(
+        &context,
+        4 as TableVersionId,
+        &mut version_results,
+        &mut version_timestamps,
+    )
+    .await;
+
+    // Add another partition for table_version 5
+    let plan = context
+        .plan_query("INSERT INTO test_table (some_value) VALUES (42), (41), (40)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+    record_result_and_timestamp(
+        &context,
+        5 as TableVersionId,
+        &mut version_results,
+        &mut version_timestamps,
+    )
+    .await;
+
+    //
+    // Now use the recorded timestamps to query specific earlier table versions and compare them to
+    // the recorded results for that version.
+    //
+
+    let timestamp_to_rfc3339 =
+        |timestamp: Timestamp| -> String { Utc.timestamp(timestamp, 0).to_rfc3339() };
+
+    async fn query_table_version(
+        context: &DefaultSeafowlContext,
+        version_id: TableVersionId,
+        version_results: &HashMap<TableVersionId, Vec<RecordBatch>>,
+        version_timestamps: &HashMap<TableVersionId, Timestamp>,
+        timestamp_converter: fn(Timestamp) -> String,
+    ) {
+        let plan = context
+            .plan_query(
+                format!(
+                    "SELECT * FROM test_table('{}')",
+                    timestamp_converter(version_timestamps[&version_id])
+                )
+                .as_str(),
+            )
+            .await
+            .unwrap();
+        let results = context.collect(plan).await.unwrap();
+
+        assert_eq!(version_results[&version_id], results);
+    }
+
+    for version_id in [2, 3, 4, 5] {
+        query_table_version(
+            &context,
+            version_id as TableVersionId,
+            &version_results,
+            &version_timestamps,
+            timestamp_to_rfc3339,
+        )
+        .await;
+    }
+
+    //
+    // Try to query a non-existent version (timestamp older than the oldest version)
+    //
+
+    let err = context
+        .plan_query("SELECT * FROM test_table('2012-12-21 20:12:21 +00:00')")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("No recorded table versions for the provided timestamp"));
+
+    //
+    // Use multiple different version specifiers in the same complex query (including the latest
+    // version both explicitly and in the default notation).
+    // Ensures row differences between different versions are consistent:
+    // 5 - ((5 - 4) + (4 - 3) + (3 - 2)) = 2
+    //
+
+    let plan = context
+        .plan_query(
+            format!(
+                r#"
+                WITH diff_3_2 AS (
+                    SELECT * FROM test_table('{}')
+                    EXCEPT
+                    SELECT * FROM test_table('{}')
+                ), diff_4_3 AS (
+                    SELECT * FROM test_table('{}')
+                    EXCEPT
+                    SELECT * FROM test_table('{}')
+                ), diff_5_4 AS (
+                    SELECT * FROM test_table('{}')
+                    EXCEPT
+                    SELECT * FROM test_table('{}')
+                )
+                SELECT * FROM test_table
+                EXCEPT (
+                    SELECT * FROM diff_5_4
+                    UNION
+                    SELECT * FROM diff_4_3
+                    UNION
+                    SELECT * FROM diff_3_2
+                )
+                ORDER BY some_int_value
+            "#,
+                timestamp_to_rfc3339(version_timestamps[&3]),
+                timestamp_to_rfc3339(version_timestamps[&2]),
+                timestamp_to_rfc3339(version_timestamps[&4]),
+                timestamp_to_rfc3339(version_timestamps[&3]),
+                timestamp_to_rfc3339(version_timestamps[&5]),
+                timestamp_to_rfc3339(version_timestamps[&4]),
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+    assert_eq!(version_results[&2], results);
+
+    // Ensure the context table map contains the versioned + the latest table entries
+    assert_eq!(
+        sorted(
+            context
+                .inner()
+                .state
+                .read()
+                .catalog_list
+                .catalog(DEFAULT_DB)
+                .unwrap()
+                .schema(DEFAULT_SCHEMA)
+                .unwrap()
+                .table_names()
+        )
+        .collect::<Vec<String>>(),
+        vec![
+            "test_table".to_string(),
+            "test_table:2".to_string(),
+            "test_table:3".to_string(),
+            "test_table:4".to_string(),
+        ],
+    );
+
+    //
+    // Verify that information schema is not polluted with versioned tables/columns
+    //
+
+    let results = list_tables_query(&context).await;
+
+    let expected = vec![
+        "+--------------------+------------+",
+        "| table_schema       | table_name |",
+        "+--------------------+------------+",
+        "| information_schema | columns    |",
+        "| information_schema | tables     |",
+        "| information_schema | views      |",
+        "| public             | test_table |",
+        "+--------------------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    let results = list_columns_query(&context).await;
+
+    let expected = vec![
+        "+--------------+------------+------------------+-----------------------------+",
+        "| table_schema | table_name | column_name      | data_type                   |",
+        "+--------------+------------+------------------+-----------------------------+",
+        "| public       | test_table | some_bool_value  | Boolean                     |",
+        "| public       | test_table | some_int_value   | Int64                       |",
+        "| public       | test_table | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table | some_value       | Float32                     |",
+        "+--------------+------------+------------------+-----------------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
 }
