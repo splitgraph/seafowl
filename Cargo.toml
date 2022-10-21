@@ -39,7 +39,7 @@ convergence = { git = "https://github.com/splitgraph/convergence", branch = "dat
 convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-12-upgrade", package = "convergence-arrow", optional = true }
 datafusion = "12"
 datafusion-expr = "12"
-datafusion-proto = "12"
+datafusion-proto = "13"
 futures = "0.3"
 hashbrown = { version = "0.12", features = ["raw"] }
 hex = ">=0.4.0"
