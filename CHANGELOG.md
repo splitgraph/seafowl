@@ -4,6 +4,10 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Add support for time travel queries (`SELECT * FROM table('2022-01-01T00:00:00')`)
+  (<https://github.com/splitgraph/seafowl/pull/154>)
+- Allow overriding SQLite journal mode (<https://github.com/splitgraph/seafowl/pull/158>)
+
 ## [0.2.2] - 2022-10-12
 
 - Allow using SQL types in WASM UDF definitions (<https://github.com/splitgraph/seafowl/pull/147>)
