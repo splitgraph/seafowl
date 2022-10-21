@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.2.3] - 2022-10-21
+
 - Add support for time travel queries (`SELECT * FROM table('2022-01-01T00:00:00')`)
   (<https://github.com/splitgraph/seafowl/pull/154>)
 - Allow overriding SQLite journal mode (<https://github.com/splitgraph/seafowl/pull/158>)
@@ -39,7 +41,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.2...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/splitgraph/seafowl/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/splitgraph/seafowl/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/splitgraph/seafowl/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/splitgraph/seafowl/compare/v0.1.1...v0.2.0
