@@ -10,6 +10,7 @@ pub mod object_store;
 pub mod provider;
 pub mod repository;
 pub mod schema;
+pub mod system_tables;
 pub mod utils;
 pub mod version;
 pub mod wasm_udf;
