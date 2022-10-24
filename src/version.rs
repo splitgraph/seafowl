@@ -103,6 +103,7 @@ impl TableVersionProcessor {
 
     pub async fn triage_version_ids(
         &mut self,
+        database: String,
         table_catalog: Arc<dyn TableCatalog>,
     ) -> Result<()> {
         // Fetch all available versions for the versioned tables from the metadata store, and
@@ -110,7 +111,10 @@ impl TableVersionProcessor {
         // and ti the Unix epoch when that version was created for the i-th version).
         let all_table_versions: HashMap<ObjectName, Vec<(TableVersionId, Timestamp)>> =
             table_catalog
-                .get_all_table_versions(self.get_versioned_tables())
+                .get_all_table_versions(
+                    database.as_str(),
+                    Some(self.get_versioned_tables()),
+                )
                 .await?
                 .into_iter()
                 .group_by(|tv| {

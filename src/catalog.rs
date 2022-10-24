@@ -10,6 +10,7 @@ use mockall::automock;
 use parking_lot::RwLock;
 
 use crate::provider::SeafowlFunction;
+use crate::system_tables::SystemSchemaProvider;
 use crate::wasm_udf::data_types::{
     CreateFunctionDataType, CreateFunctionDetails, CreateFunctionLanguage,
     CreateFunctionVolatility,
@@ -200,7 +201,8 @@ pub trait TableCatalog: Sync + Send {
 
     async fn get_all_table_versions(
         &self,
-        table_names: Vec<String>,
+        database_name: &str,
+        table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>>;
 
     async fn move_table(
@@ -395,11 +397,17 @@ impl TableCatalog for DefaultCatalog {
             .map(|(cn, cc)| self.build_collection(cn, cc))
             .collect();
 
+        // TODO load the database name too
+        let name: Arc<str> = Arc::from(DEFAULT_DB);
+
         Ok(SeafowlDatabase {
-            // TODO load the database name too
-            name: Arc::from(DEFAULT_DB),
+            name: name.clone(),
             collections,
             staging_schema: self.staging_schema.clone(),
+            system_schema: Arc::new(SystemSchemaProvider::new(
+                name,
+                Arc::new(self.clone()),
+            )),
         })
     }
 
@@ -541,10 +549,11 @@ impl TableCatalog for DefaultCatalog {
 
     async fn get_all_table_versions(
         &self,
-        table_names: Vec<String>,
+        database_name: &str,
+        table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>> {
         self.repository
-            .get_all_table_versions(table_names)
+            .get_all_table_versions(database_name, table_names)
             .await
             .map_err(Self::to_sqlx_error)
     }
