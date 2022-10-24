@@ -181,13 +181,14 @@ async fn test_information_schema() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------+------------+",
-        "| table_catalog | table_schema       | table_name | table_type |",
-        "+---------------+--------------------+------------+------------+",
-        "| default       | information_schema | columns    | VIEW       |",
-        "| default       | information_schema | tables     | VIEW       |",
-        "| default       | information_schema | views      | VIEW       |",
-        "+---------------+--------------------+------------+------------+",
+        "+---------------+--------------------+----------------+------------+",
+        "| table_catalog | table_schema       | table_name     | table_type |",
+        "+---------------+--------------------+----------------+------------+",
+        "| default       | information_schema | columns        | VIEW       |",
+        "| default       | system             | table_versions | VIEW       |",
+        "| default       | information_schema | tables         | VIEW       |",
+        "| default       | information_schema | views          | VIEW       |",
+        "+---------------+--------------------+----------------+------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -214,15 +215,19 @@ async fn test_create_table() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+------------+------------------+-----------------------------+",
-        "| table_schema | table_name | column_name      | data_type                   |",
-        "+--------------+------------+------------------+-----------------------------+",
-        "| public       | test_table | some_bool_value  | Boolean                     |",
-        "| public       | test_table | some_int_value   | Int64                       |",
-        "| public       | test_table | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table | some_value       | Float32                     |",
-        "+--------------+------------+------------------+-----------------------------+",
+        "+--------------+----------------+------------------+-----------------------------+",
+        "| table_schema | table_name     | column_name      | data_type                   |",
+        "+--------------+----------------+------------------+-----------------------------+",
+        "| system       | table_versions | table_schema     | Utf8                        |",
+        "| system       | table_versions | table_name       | Utf8                        |",
+        "| system       | table_versions | table_version_id | Int64                       |",
+        "| system       | table_versions | creation_time    | Timestamp(Second, None)     |",
+        "| public       | test_table     | some_bool_value  | Boolean                     |",
+        "| public       | test_table     | some_int_value   | Int64                       |",
+        "| public       | test_table     | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table     | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table     | some_value       | Float32                     |",
+        "+--------------+----------------+------------------+-----------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -502,20 +507,24 @@ async fn test_create_table_move_and_drop() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| table_schema | table_name   | column_name      | data_type                   |",
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| public       | test_table_1 | some_bool_value  | Boolean                     |",
-        "| public       | test_table_1 | some_int_value   | Int64                       |",
-        "| public       | test_table_1 | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_1 | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_1 | some_value       | Float32                     |",
-        "| public       | test_table_2 | some_bool_value  | Boolean                     |",
-        "| public       | test_table_2 | some_int_value   | Int64                       |",
-        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_2 | some_value       | Float32                     |",
-        "+--------------+--------------+------------------+-----------------------------+",
+        "+--------------+----------------+------------------+-----------------------------+",
+        "| table_schema | table_name     | column_name      | data_type                   |",
+        "+--------------+----------------+------------------+-----------------------------+",
+        "| system       | table_versions | table_schema     | Utf8                        |",
+        "| system       | table_versions | table_name       | Utf8                        |",
+        "| system       | table_versions | table_version_id | Int64                       |",
+        "| system       | table_versions | creation_time    | Timestamp(Second, None)     |",
+        "| public       | test_table_1   | some_bool_value  | Boolean                     |",
+        "| public       | test_table_1   | some_int_value   | Int64                       |",
+        "| public       | test_table_1   | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table_1   | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table_1   | some_value       | Float32                     |",
+        "| public       | test_table_2   | some_bool_value  | Boolean                     |",
+        "| public       | test_table_2   | some_int_value   | Int64                       |",
+        "| public       | test_table_2   | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table_2   | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table_2   | some_value       | Float32                     |",
+        "+--------------+----------------+------------------+-----------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -542,15 +551,16 @@ async fn test_create_table_move_and_drop() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+--------------+",
-        "| table_schema       | table_name   |",
-        "+--------------------+--------------+",
-        "| information_schema | columns      |",
-        "| information_schema | tables       |",
-        "| information_schema | views        |",
-        "| public             | test_table_2 |",
-        "| public             | test_table_3 |",
-        "+--------------------+--------------+",
+        "+--------------------+----------------+",
+        "| table_schema       | table_name     |",
+        "+--------------------+----------------+",
+        "| information_schema | columns        |",
+        "| information_schema | tables         |",
+        "| information_schema | views          |",
+        "| public             | test_table_2   |",
+        "| public             | test_table_3   |",
+        "| system             | table_versions |",
+        "+--------------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -586,15 +596,16 @@ async fn test_create_table_move_and_drop() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+--------------+",
-        "| table_schema       | table_name   |",
-        "+--------------------+--------------+",
-        "| information_schema | columns      |",
-        "| information_schema | tables       |",
-        "| information_schema | views        |",
-        "| new_schema         | test_table_3 |",
-        "| public             | test_table_2 |",
-        "+--------------------+--------------+",
+        "+--------------------+----------------+",
+        "| table_schema       | table_name     |",
+        "+--------------------+----------------+",
+        "| information_schema | columns        |",
+        "| information_schema | tables         |",
+        "| information_schema | views          |",
+        "| new_schema         | test_table_3   |",
+        "| public             | test_table_2   |",
+        "| system             | table_versions |",
+        "+--------------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -608,15 +619,19 @@ async fn test_create_table_move_and_drop() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| table_schema | table_name   | column_name      | data_type                   |",
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| public       | test_table_2 | some_bool_value  | Boolean                     |",
-        "| public       | test_table_2 | some_int_value   | Int64                       |",
-        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_2 | some_value       | Float32                     |",
-        "+--------------+--------------+------------------+-----------------------------+",
+        "+--------------+----------------+------------------+-----------------------------+",
+        "| table_schema | table_name     | column_name      | data_type                   |",
+        "+--------------+----------------+------------------+-----------------------------+",
+        "| system       | table_versions | table_schema     | Utf8                        |",
+        "| system       | table_versions | table_name       | Utf8                        |",
+        "| system       | table_versions | table_version_id | Int64                       |",
+        "| system       | table_versions | creation_time    | Timestamp(Second, None)     |",
+        "| public       | test_table_2   | some_bool_value  | Boolean                     |",
+        "| public       | test_table_2   | some_int_value   | Int64                       |",
+        "| public       | test_table_2   | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table_2   | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table_2   | some_value       | Float32                     |",
+        "+--------------+----------------+------------------+-----------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -628,7 +643,16 @@ async fn test_create_table_move_and_drop() {
 
     let results = list_columns_query(&context).await;
 
-    let expected = vec!["++", "++"];
+    let expected = vec![
+        "+--------------+----------------+------------------+-------------------------+",
+        "| table_schema | table_name     | column_name      | data_type               |",
+        "+--------------+----------------+------------------+-------------------------+",
+        "| system       | table_versions | table_schema     | Utf8                    |",
+        "| system       | table_versions | table_name       | Utf8                    |",
+        "| system       | table_versions | table_version_id | Int64                   |",
+        "| system       | table_versions | creation_time    | Timestamp(Second, None) |",
+        "+--------------+----------------+------------------+-------------------------+",
+    ];
 
     assert_batches_eq!(expected, &results);
 }
@@ -665,15 +689,16 @@ async fn test_create_table_drop_schema() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+--------------+",
-        "| table_schema       | table_name   |",
-        "+--------------------+--------------+",
-        "| information_schema | columns      |",
-        "| information_schema | tables       |",
-        "| information_schema | views        |",
-        "| new_schema         | test_table_2 |",
-        "| public             | test_table_1 |",
-        "+--------------------+--------------+",
+        "+--------------------+----------------+",
+        "| table_schema       | table_name     |",
+        "+--------------------+----------------+",
+        "| information_schema | columns        |",
+        "| information_schema | tables         |",
+        "| information_schema | views          |",
+        "| new_schema         | test_table_2   |",
+        "| public             | test_table_1   |",
+        "| system             | table_versions |",
+        "+--------------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -686,14 +711,15 @@ async fn test_create_table_drop_schema() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+--------------+",
-        "| table_schema       | table_name   |",
-        "+--------------------+--------------+",
-        "| information_schema | columns      |",
-        "| information_schema | tables       |",
-        "| information_schema | views        |",
-        "| new_schema         | test_table_2 |",
-        "+--------------------+--------------+",
+        "+--------------------+----------------+",
+        "| table_schema       | table_name     |",
+        "+--------------------+----------------+",
+        "| information_schema | columns        |",
+        "| information_schema | tables         |",
+        "| information_schema | views          |",
+        "| new_schema         | test_table_2   |",
+        "| system             | table_versions |",
+        "+--------------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -706,13 +732,14 @@ async fn test_create_table_drop_schema() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+------------+",
-        "| table_schema       | table_name |",
-        "+--------------------+------------+",
-        "| information_schema | columns    |",
-        "| information_schema | tables     |",
-        "| information_schema | views      |",
-        "+--------------------+------------+",
+        "+--------------------+----------------+",
+        "| table_schema       | table_name     |",
+        "+--------------------+----------------+",
+        "| information_schema | columns        |",
+        "| information_schema | tables         |",
+        "| information_schema | views          |",
+        "| system             | table_versions |",
+        "+--------------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -735,14 +762,15 @@ async fn test_create_table_drop_schema() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+--------------+",
-        "| table_schema       | table_name   |",
-        "+--------------------+--------------+",
-        "| information_schema | columns      |",
-        "| information_schema | tables       |",
-        "| information_schema | views        |",
-        "| public             | test_table_1 |",
-        "+--------------------+--------------+",
+        "+--------------------+----------------+",
+        "| table_schema       | table_name     |",
+        "+--------------------+----------------+",
+        "| information_schema | columns        |",
+        "| information_schema | tables         |",
+        "| information_schema | views          |",
+        "| public             | test_table_1   |",
+        "| system             | table_versions |",
+        "+--------------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 }
@@ -1025,14 +1053,15 @@ async fn test_create_external_table_http() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+------------+",
-        "| table_schema       | table_name |",
-        "+--------------------+------------+",
-        "| information_schema | columns    |",
-        "| information_schema | tables     |",
-        "| information_schema | views      |",
-        "| staging            | file       |",
-        "+--------------------+------------+",
+        "+--------------------+----------------+",
+        "| table_schema       | table_name     |",
+        "+--------------------+----------------+",
+        "| information_schema | columns        |",
+        "| information_schema | tables         |",
+        "| information_schema | views          |",
+        "| staging            | file           |",
+        "| system             | table_versions |",
+        "+--------------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -1832,29 +1861,56 @@ async fn test_table_time_travel() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+------------+",
-        "| table_schema       | table_name |",
-        "+--------------------+------------+",
-        "| information_schema | columns    |",
-        "| information_schema | tables     |",
-        "| information_schema | views      |",
-        "| public             | test_table |",
-        "+--------------------+------------+",
+        "+--------------------+----------------+",
+        "| table_schema       | table_name     |",
+        "+--------------------+----------------+",
+        "| information_schema | columns        |",
+        "| information_schema | tables         |",
+        "| information_schema | views          |",
+        "| public             | test_table     |",
+        "| system             | table_versions |",
+        "+--------------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+------------+------------------+-----------------------------+",
-        "| table_schema | table_name | column_name      | data_type                   |",
-        "+--------------+------------+------------------+-----------------------------+",
-        "| public       | test_table | some_bool_value  | Boolean                     |",
-        "| public       | test_table | some_int_value   | Int64                       |",
-        "| public       | test_table | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table | some_value       | Float32                     |",
-        "+--------------+------------+------------------+-----------------------------+",
+        "+--------------+----------------+------------------+-----------------------------+",
+        "| table_schema | table_name     | column_name      | data_type                   |",
+        "+--------------+----------------+------------------+-----------------------------+",
+        "| system       | table_versions | table_schema     | Utf8                        |",
+        "| system       | table_versions | table_name       | Utf8                        |",
+        "| system       | table_versions | table_version_id | Int64                       |",
+        "| system       | table_versions | creation_time    | Timestamp(Second, None)     |",
+        "| public       | test_table     | some_bool_value  | Boolean                     |",
+        "| public       | test_table     | some_int_value   | Int64                       |",
+        "| public       | test_table     | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table     | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table     | some_value       | Float32                     |",
+        "+--------------+----------------+------------------+-----------------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    //
+    // Verify that the new table versions are shown in the corresponding system table
+    //
+    let plan = context
+        .plan_query("SELECT table_schema, table_name, table_version_id FROM system.table_versions")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+--------------+------------+------------------+",
+        "| table_schema | table_name | table_version_id |",
+        "+--------------+------------+------------------+",
+        "| public       | test_table | 1                |",
+        "| public       | test_table | 2                |",
+        "| public       | test_table | 3                |",
+        "| public       | test_table | 4                |",
+        "| public       | test_table | 5                |",
+        "+--------------+------------+------------------+",
     ];
     assert_batches_eq!(expected, &results);
 }

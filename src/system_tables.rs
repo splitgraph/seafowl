@@ -1,4 +1,4 @@
-//! Implementation for creating virtual Seafowl system tables, inspired by influxdb_iox system tables
+//! Mechanism for creating virtual Seafowl system tables, inspired by influxdb_iox system tables
 //! and datafusion's information_schema.
 
 use crate::catalog::TableCatalog;
@@ -17,12 +17,21 @@ use datafusion_expr::{Expr, TableType};
 use std::any::Any;
 use std::sync::Arc;
 
-const _SYSTEM_SCHEMA: &str = "system";
+pub const SYSTEM_SCHEMA: &str = "system";
 const TABLE_VERSIONS: &str = "table_versions";
 
 pub struct SystemSchemaProvider {
-    database: String,
+    database: Arc<str>,
     table_catalog: Arc<dyn TableCatalog>,
+}
+
+impl SystemSchemaProvider {
+    pub fn new(database: Arc<str>, table_catalog: Arc<dyn TableCatalog>) -> Self {
+        Self {
+            database,
+            table_catalog,
+        }
+    }
 }
 
 impl SchemaProvider for SystemSchemaProvider {
@@ -37,7 +46,7 @@ impl SchemaProvider for SystemSchemaProvider {
     fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
         match name {
             TABLE_VERSIONS => {
-                // Lazy instantiate the table, but defer loading the rows until the scan is called.
+                // Lazy instantiate the table, but defer loading the rows until the actual scan is invoked.
                 let table = TableVersionsTable::new(
                     self.database.clone(),
                     self.table_catalog.clone(),
@@ -104,24 +113,25 @@ where
 }
 
 struct TableVersionsTable {
-    _database: String,
+    database: Arc<str>,
     schema: SchemaRef,
     table_catalog: Arc<dyn TableCatalog>,
 }
 
 impl TableVersionsTable {
-    fn new(database: String, table_catalog: Arc<dyn TableCatalog>) -> Self {
+    fn new(database: Arc<str>, table_catalog: Arc<dyn TableCatalog>) -> Self {
         Self {
             // This is dictated by the output of `get_all_table_versions`, except that we omit the
             // database_name field, since we scope down to the database at hand.
-            _database: database,
+            database,
             schema: Arc::new(Schema::new(vec![
                 Field::new("table_schema", DataType::Utf8, false),
                 Field::new("table_name", DataType::Utf8, false),
                 Field::new("table_version_id", DataType::Int64, false),
                 Field::new(
                     "creation_time",
-                    DataType::Timestamp(TimeUnit::Second, Some("UTC".to_string())),
+                    // TODO: should we be using a concrete timezone here?
+                    DataType::Timestamp(TimeUnit::Second, None),
                     false,
                 ),
             ])),
@@ -137,7 +147,10 @@ impl SeafowlSystemTable for TableVersionsTable {
     }
 
     async fn load_record_batch(&self) -> Result<RecordBatch> {
-        let table_versions = self.table_catalog.get_all_table_versions(vec![]).await?;
+        let table_versions = self
+            .table_catalog
+            .get_all_table_versions(&*self.database, None)
+            .await?;
 
         let mut builder = StructBuilder::from_fields(
             self.schema.fields().clone(),
@@ -153,7 +166,7 @@ impl SeafowlSystemTable for TableVersionsTable {
             builder
                 .field_builder::<StringBuilder>(1)
                 .unwrap()
-                .append_value(&table_version.database_name.clone());
+                .append_value(&table_version.table_name.clone());
             builder
                 .field_builder::<Int64Builder>(2)
                 .unwrap()
@@ -162,6 +175,8 @@ impl SeafowlSystemTable for TableVersionsTable {
                 .field_builder::<TimestampSecondBuilder>(3)
                 .unwrap()
                 .append_value(table_version.creation_time);
+
+            builder.append(true);
         }
 
         let struct_array = builder.finish();

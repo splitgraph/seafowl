@@ -430,18 +430,24 @@ impl Repository for $repo {
 
     async fn get_all_table_versions(
         &self,
-        table_names: Vec<String>,
+        database_name: &str,
+        table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>, Error> {
         // We have to manually construct the query since SQLite doesn't have the proper Encode trait
         let mut builder: QueryBuilder<_> = QueryBuilder::new($repo::QUERIES.all_table_versions);
 
-        if !table_names.is_empty() {
-            builder.push(" WHERE \"table\".name IN (");
-            let mut separated = builder.separated(", ");
-            for table_name in table_names.iter() {
-                separated.push_bind(table_name);
+        builder.push(" WHERE database.name = ");
+        builder.push_bind(database_name);
+
+        if let Some(table_names) = table_names {
+            if !table_names.is_empty() {
+                builder.push(" AND \"table\".name IN (");
+                let mut separated = builder.separated(", ");
+                for table_name in table_names.into_iter() {
+                    separated.push_bind(table_name);
+                }
+                separated.push_unseparated(")");
             }
-            separated.push_unseparated(")");
         }
 
         let query = builder.build_query_as();

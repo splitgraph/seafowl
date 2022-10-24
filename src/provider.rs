@@ -48,6 +48,7 @@ use prost::Message;
 use object_store::path::Path;
 
 use crate::data_types::PhysicalPartitionId;
+use crate::system_tables::{SystemSchemaProvider, SYSTEM_SCHEMA};
 use crate::{
     catalog::PartitionCatalog,
     data_types::{TableId, TableVersionId},
@@ -60,6 +61,7 @@ pub struct SeafowlDatabase {
     pub name: Arc<str>,
     pub collections: HashMap<Arc<str>, Arc<SeafowlCollection>>,
     pub staging_schema: Arc<MemorySchemaProvider>,
+    pub system_schema: Arc<SystemSchemaProvider>,
 }
 
 impl CatalogProvider for SeafowlDatabase {
@@ -71,13 +73,15 @@ impl CatalogProvider for SeafowlDatabase {
         self.collections
             .keys()
             .map(|s| s.to_string())
-            .chain([STAGING_SCHEMA.to_string()])
+            .chain([STAGING_SCHEMA.to_string(), SYSTEM_SCHEMA.to_string()])
             .collect()
     }
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         if name == STAGING_SCHEMA {
             Some(self.staging_schema.clone())
+        } else if name == SYSTEM_SCHEMA {
+            Some(self.system_schema.clone())
         } else {
             self.collections.get(name).map(|c| Arc::clone(c) as _)
         }

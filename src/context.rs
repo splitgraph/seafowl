@@ -862,7 +862,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         // the map and having the versioned query fail during execution.
                         let session_ctx = SessionContext::with_state(state.clone());
 
-                        version_processor.triage_version_ids(self.table_catalog.clone()).await?;
+                        version_processor.triage_version_ids(self.database.clone(), self.table_catalog.clone()).await?;
                         // We now have table_version_ids for each table with version specified; do another
                         // run over the query AST to rewrite the table.
                         version_processor.visit_query(&mut q);
@@ -1759,6 +1759,7 @@ pub mod test_utils {
     use crate::config::context::build_context;
     use crate::config::schema;
     use crate::config::schema::{Catalog, SeafowlConfig, Sqlite};
+    use crate::system_tables::SystemSchemaProvider;
     use sqlx::sqlite::SqliteJournalMode;
     use std::collections::HashMap as StdHashMap;
 
@@ -1862,6 +1863,10 @@ pub mod test_utils {
                     name: Arc::from("testdb"),
                     collections: collections.clone(),
                     staging_schema: Arc::new(MemorySchemaProvider::new()),
+                    system_schema: Arc::new(SystemSchemaProvider::new(
+                        Arc::from("testdb"),
+                        Arc::new(MockTableCatalog::new()),
+                    )),
                 })
             });
 

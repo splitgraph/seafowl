@@ -144,7 +144,8 @@ pub trait Repository: Send + Sync + Debug {
 
     async fn get_all_table_versions(
         &self,
-        table_names: Vec<String>,
+        database_name: &str,
+        table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>>;
 
     async fn move_table(
@@ -353,7 +354,7 @@ pub mod tests {
 
         // Check the existing table versions
         let all_table_versions: Vec<TableVersionId> = repository
-            .get_all_table_versions(vec!["testtable".to_string()])
+            .get_all_table_versions("testdb", Some(vec!["testtable".to_string()]))
             .await
             .expect("Error getting all columns")
             .iter()
