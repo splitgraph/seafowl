@@ -4,6 +4,11 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Add `system.table_versions` table for inspecting table history
+  (<https://github.com/splitgraph/seafowl/pull/168>)
+- Add SQLite `catalog.read_only` option for compatibility with LiteFS replicas
+  (<https://github.com/splitgraph/seafowl/pull/171>)
+
 ## [0.2.3] - 2022-10-21
 
 - Add support for time travel queries (`SELECT * FROM table('2022-01-01T00:00:00')`)
