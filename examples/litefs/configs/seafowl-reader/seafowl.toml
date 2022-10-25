@@ -2,17 +2,17 @@
 type = "s3"
 access_key_id = "minioadmin"
 secret_access_key = "minioadmin"
-endpoint = "https://minio:9000"
+endpoint = "http://minio:9000"
 bucket = "seafowl"
 
 [catalog]
 type = "sqlite"
-dsn = "sqlite:///data/seafowl/db/seafowl.sqlite?mode=ro"
-# Disable journalling to get LiteFS working
+dsn = "/data/seafowl/db/seafowl.sqlite"
+# Run SQLite in read-only mode and disable journaling
 journal_mode = "off"
+read_only = true
 
 [frontend.http]
 bind_host = "0.0.0.0"
-bind_port = "80"
 read_access = "any"
 write_access = "off"
