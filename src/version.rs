@@ -199,7 +199,7 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
             {
                 let unresolved_name = name.to_string();
                 let resolved_ref = TableReference::from(unresolved_name.as_str())
-                    .resolve(&*self.default_catalog, &*self.default_schema);
+                    .resolve(&self.default_catalog, &self.default_schema);
                 let full_object_name = ObjectName(vec![
                     Ident::new(resolved_ref.catalog),
                     Ident::new(resolved_ref.schema),
