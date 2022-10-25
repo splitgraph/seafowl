@@ -13,6 +13,37 @@ deploy a PostgreSQL cluster. There will be a single Seafowl writer instance that
 requests to. Reader Seafowl replicas will pull changes to the SQLite database from the writer and
 will be otherwise completely stateless.
 
+## Architecture
+
+```mermaid
+flowchart LR;
+    subgraph Ingress
+        nginx;
+    end
+
+    subgraph Writer
+        seafowl-writer;
+    end
+
+    nginx-->seafowl-writer;
+    nginx-->seafowl-reader-1;
+    nginx-->seafowl-reader-2;
+    nginx-->seafowl-reader-3;
+
+    seafowl-writer-->minio;
+    seafowl-writer-->|LiteFS replication|Readers;
+
+    subgraph Object storage
+        minio;
+    end
+
+    subgraph Readers
+        seafowl-reader-1-->minio;
+        seafowl-reader-2-->minio;
+        seafowl-reader-3-->minio;
+    end
+```
+
 ## Notes on LiteFS
 
 This example uses LiteFS's ["static leasing"](https://fly.io/docs/litefs/config/#static-leasing)
