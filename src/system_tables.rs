@@ -149,7 +149,7 @@ impl SeafowlSystemTable for TableVersionsTable {
     async fn load_record_batch(&self) -> Result<RecordBatch> {
         let table_versions = self
             .table_catalog
-            .get_all_table_versions(&*self.database, None)
+            .get_all_table_versions(&self.database, None)
             .await?;
 
         let mut builder = StructBuilder::from_fields(
