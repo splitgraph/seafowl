@@ -40,8 +40,21 @@ async fn build_catalog(
                 .await
                 .expect("Error setting up the database"),
         ),
-        schema::Catalog::Sqlite(schema::Sqlite { dsn, journal_mode }) => Arc::new(
+        schema::Catalog::Sqlite(schema::Sqlite {
+            dsn,
+            journal_mode,
+            read_only: false,
+        }) => Arc::new(
             SqliteRepository::try_new(dsn.to_string(), *journal_mode)
+                .await
+                .expect("Error setting up the database"),
+        ),
+        schema::Catalog::Sqlite(schema::Sqlite {
+            dsn,
+            journal_mode,
+            read_only: true,
+        }) => Arc::new(
+            SqliteRepository::try_new_read_only(dsn.to_string(), *journal_mode)
                 .await
                 .expect("Error setting up the database"),
         ),
@@ -164,6 +177,7 @@ mod tests {
             catalog: schema::Catalog::Sqlite(schema::Sqlite {
                 dsn: "sqlite::memory:".to_string(),
                 journal_mode: SqliteJournalMode::Wal,
+                read_only: false,
             }),
             frontend: schema::Frontend {
                 #[cfg(feature = "frontend-postgres")]

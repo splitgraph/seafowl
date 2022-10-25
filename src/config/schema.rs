@@ -153,6 +153,8 @@ pub struct Sqlite {
     pub dsn: String,
     #[serde(with = "SqliteJournalModeDef", default = "default_journal_mode")]
     pub journal_mode: SqliteJournalMode,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 fn default_schema() -> String {
@@ -284,7 +286,7 @@ pub struct Runtime {
 }
 
 pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigError> {
-    let in_memory_catalog = matches!(config.catalog, Catalog::Sqlite(Sqlite { ref dsn, journal_mode: _ }) if dsn.contains(":memory:"));
+    let in_memory_catalog = matches!(config.catalog, Catalog::Sqlite(Sqlite { ref dsn, journal_mode: _, read_only: _ }) if dsn.contains(":memory:"));
 
     let in_memory_object_store = matches!(config.object_store, ObjectStore::InMemory(_));
 
@@ -528,6 +530,7 @@ upload_data_max_length = 1
                 catalog: Catalog::Sqlite(Sqlite {
                     dsn: "sqlite://file.sqlite".to_string(),
                     journal_mode: SqliteJournalMode::Wal,
+                    read_only: false,
                 }),
                 frontend: Frontend {
                     #[cfg(feature = "frontend-postgres")]

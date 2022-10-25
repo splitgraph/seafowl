@@ -1791,6 +1791,7 @@ pub mod test_utils {
             catalog: Catalog::Sqlite(Sqlite {
                 dsn: "sqlite://:memory:".to_string(),
                 journal_mode: SqliteJournalMode::Wal,
+                read_only: false,
             }),
             frontend: Default::default(),
             runtime: Default::default(),

@@ -78,6 +78,23 @@ impl SqliteRepository {
         Ok(repo)
     }
 
+    ///
+    /// Create a new `SqliteRepository` in read-only mode: assumes the
+    /// database already exists and doesn't run migrations. Intended to be used
+    /// in environments such as a pre-baked Docker image / LiteFS replica.
+    pub async fn try_new_read_only(
+        dsn: String,
+        journal_mode: SqliteJournalMode,
+    ) -> std::result::Result<Self, sqlx::Error> {
+        let options = SqliteConnectOptions::from_str(&dsn)?
+            .read_only(true)
+            .journal_mode(journal_mode);
+
+        let pool = SqlitePoolOptions::new().connect_with(options).await?;
+        let repo = Self { executor: pool };
+        Ok(repo)
+    }
+
     pub fn interpret_error(error: sqlx::Error) -> Error {
         if let sqlx::Error::Database(ref d) = error {
             // Reference: https://www.sqlite.org/rescode.html
@@ -101,8 +118,10 @@ implement_repository!(SqliteRepository);
 
 #[cfg(test)]
 mod tests {
+    use crate::repository::interface::Repository;
     use sqlx::sqlite::SqliteJournalMode;
     use std::sync::Arc;
+    use tempfile::NamedTempFile;
 
     use super::super::interface::tests::run_generic_repository_tests;
     use super::SqliteRepository;
@@ -119,5 +138,37 @@ mod tests {
         );
 
         run_generic_repository_tests(repository).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_repository_read_only() {
+        // Make a temporary SQLite file in the RW mode, then try
+        // reading from it in RO mode
+
+        let temp_file = NamedTempFile::new().unwrap();
+
+        let rw_repository = SqliteRepository::try_new(
+            temp_file.path().to_string_lossy().to_string(),
+            SqliteJournalMode::Wal,
+        )
+        .await
+        .unwrap();
+
+        let db_id = rw_repository.create_database("testdb").await.unwrap();
+
+        let ro_repository = SqliteRepository::try_new_read_only(
+            temp_file.path().to_string_lossy().to_string(),
+            SqliteJournalMode::Wal,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            ro_repository
+                .get_database_id_by_name("testdb")
+                .await
+                .unwrap(),
+            db_id
+        );
     }
 }
