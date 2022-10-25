@@ -1,3 +1,13 @@
+# Architecture:
+#
+#         reader
+# NGINX   reader                       minio
+#           v liteFS replication
+#         writer
+#
+# Running:
+# docker compose up --scale seafowl-reader=3 -d
+
 services:
   minio:
     image: quay.io/minio/minio:RELEASE.2022-08-13T21-54-44Z
@@ -14,11 +24,10 @@ services:
     volumes:
       - minio-data:/data
 
+  # Single "writer" instance
   seafowl-writer:
     build:
       dockerfile: seafowl/Dockerfile
-    ports:
-      - "8080:80"
     image: litefs-seafowl
     deploy:
       restart_policy:
@@ -33,13 +42,13 @@ services:
 
     volumes:
       - ./configs/seafowl-writer:/etc/seafowl
-      - litefs-data:/data/seafowl
+      - litefs-data:/data/seafowl/litefs
 
+  # "Reader" instances, arbitrarily scalable. Pull SQLite data from
+  # the static "writer" instance
   seafowl-reader:
     build:
       dockerfile: seafowl/Dockerfile
-    ports:
-      - "8081:80"
     image: litefs-seafowl
     deploy:
       restart_policy:
@@ -54,6 +63,16 @@ services:
 
     volumes:
       - ./configs/seafowl-reader:/etc/seafowl
+
+  # NGINX proxy. When the URL is prefixed with /w/, it'll redirect
+  # to the single writer instance. Otherwise, it'll redirect to one
+  # of the reader replicas.
+  nginx:
+    image: nginx:1.23.1
+    ports:
+      - "8080:80"
+    volumes:
+      - ./configs/nginx:/etc/nginx/
 
 volumes:
   # Data directory for the Minio instance storing Parquet files
