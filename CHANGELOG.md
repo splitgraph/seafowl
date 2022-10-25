@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.2.4] - 2022-10-25
+
 - Add `system.table_versions` table for inspecting table history
   (<https://github.com/splitgraph/seafowl/pull/168>)
 - Add SQLite `catalog.read_only` option for compatibility with LiteFS replicas
@@ -46,7 +48,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.3...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/splitgraph/seafowl/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/splitgraph/seafowl/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/splitgraph/seafowl/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/splitgraph/seafowl/compare/v0.2.0...v0.2.1
