@@ -25,7 +25,7 @@ frontend-postgres = ["convergence", "convergence-arrow"]
 object-store-s3 = ["object_store/aws"]
 
 [dependencies]
-arrow = { version = "22.0.0", features = ["prettyprint"] }
+arrow = { version = "25.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 base64 = "0.13.0"
 
