@@ -42,6 +42,7 @@ use sqlparser::ast::{
     AlterTableOperation, ObjectType, Statement, TableFactor, TableWithJoins,
 };
 
+use arrow_integration_test::field_to_json;
 use std::iter::zip;
 use std::sync::Arc;
 
@@ -67,6 +68,7 @@ use datafusion::{
     prelude::SessionContext,
     sql::{planner::SqlToRel, TableReference},
 };
+
 use datafusion_expr::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     DropTable, Extension, LogicalPlan, Projection,
@@ -204,7 +206,7 @@ fn build_partition_columns(
 
                 PartitionColumn {
                     name: Arc::from(column.name().to_string()),
-                    r#type: Arc::from(column.to_json().to_string()),
+                    r#type: Arc::from(field_to_json(column).to_string()),
                     min_value: Arc::new(min_value),
                     max_value: Arc::new(max_value),
                     null_count: stats.null_count.map(|nc| nc as i32),
@@ -216,7 +218,7 @@ fn build_partition_columns(
             .iter()
             .map(|column| PartitionColumn {
                 name: Arc::from(column.name().to_string()),
-                r#type: Arc::from(column.to_json().to_string()),
+                r#type: Arc::from(field_to_json(column).to_string()),
                 min_value: Arc::new(None),
                 max_value: Arc::new(None),
                 null_count: None,

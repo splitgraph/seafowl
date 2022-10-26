@@ -10,6 +10,7 @@ use warp::Rejection;
 
 use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
+use arrow_integration_test::schema_from_json;
 use bytes::{BufMut, Bytes};
 
 use datafusion::datasource::DefaultTableSource;
@@ -297,7 +298,7 @@ pub async fn upload(
                 load_part(p).await.map_err(ApiError::UploadBodyLoadError)?;
 
             csv_schema = Some(
-                Schema::from(
+                schema_from_json(
                     &serde_json::from_slice::<serde_json::Value>(value_bytes.as_slice())
                         .map_err(ApiError::UploadSchemaDeserializationError)?,
                 )
