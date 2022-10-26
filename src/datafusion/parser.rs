@@ -50,6 +50,10 @@ fn parse_file_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
 }
 
+fn parse_file_compression_type(s: &str) -> Result<String, ParserError> {
+    Ok(s.to_uppercase())
+}
+
 // XXX SEAFOWL: removed the struct definitions here because we want to use
 // the original datafusion::sql::parser structs in order to pass them back
 // to its logical planner
@@ -347,6 +351,12 @@ impl<'a> DFParser<'a> {
             false => ',',
         };
 
+        let file_compression_type = if self.parse_has_file_compression_type() {
+            self.parse_file_compression_type()?
+        } else {
+            "".to_string()
+        };
+
         let table_partition_cols = if self.parse_has_partition() {
             self.parse_partitions()?
         } else {
@@ -365,6 +375,7 @@ impl<'a> DFParser<'a> {
             location,
             table_partition_cols,
             if_not_exists,
+            file_compression_type,
         };
         Ok(Statement::CreateExternalTable(create))
     }
@@ -377,6 +388,14 @@ impl<'a> DFParser<'a> {
         }
     }
 
+    /// Parses the set of
+    fn parse_file_compression_type(&mut self) -> Result<String, ParserError> {
+        match self.parser.next_token() {
+            Token::Word(w) => parse_file_compression_type(&w.value),
+            unexpected => self.expected("one of GZIP, BZIP2", unexpected),
+        }
+    }
+
     fn consume_token(&mut self, expected: &Token) -> bool {
         let token = self.parser.peek_token().to_string().to_uppercase();
         let token = Token::make_keyword(&token);
@@ -386,6 +405,10 @@ impl<'a> DFParser<'a> {
         } else {
             false
         }
+    }
+    fn parse_has_file_compression_type(&mut self) -> bool {
+        self.consume_token(&Token::make_keyword("COMPRESSION"))
+            & self.consume_token(&Token::make_keyword("TYPE"))
     }
 
     fn parse_csv_has_header(&mut self) -> bool {

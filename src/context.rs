@@ -14,10 +14,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use std::fs::File;
 
-use datafusion::datasource::file_format::avro::{AvroFormat, DEFAULT_AVRO_EXTENSION};
-use datafusion::datasource::file_format::csv::{CsvFormat, DEFAULT_CSV_EXTENSION};
-use datafusion::datasource::file_format::json::{JsonFormat, DEFAULT_JSON_EXTENSION};
-use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use datafusion::datasource::file_format::avro::{AvroFormat};
+use datafusion::datasource::file_format::csv::{CsvFormat};
+use datafusion::datasource::file_format::json::{JsonFormat};
+
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
@@ -43,9 +43,11 @@ use sqlparser::ast::{
 
 use arrow_integration_test::field_to_json;
 use std::iter::zip;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::common::{Column, DFField, DFSchema, ToDFSchema};
+use datafusion::datasource::file_format::file_type::{FileCompressionType, FileType};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_expr::execution_props::ExecutionProps;
@@ -764,36 +766,43 @@ impl DefaultSeafowlContext {
             })
     }
 
-    // Copied from DataFUsion's source code (private functions)
+    // Copied from DataFusion's source code (private functions)
     async fn create_listing_table(
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let (file_format, file_extension) = match cmd.file_type.as_str() {
-            "CSV" => (
-                Arc::new(
-                    CsvFormat::default()
-                        .with_has_header(cmd.has_header)
-                        .with_delimiter(cmd.delimiter as u8),
-                ) as Arc<dyn FileFormat>,
-                DEFAULT_CSV_EXTENSION,
-            ),
-            "PARQUET" => (
-                Arc::new(ParquetFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_PARQUET_EXTENSION,
-            ),
-            "AVRO" => (
-                Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_AVRO_EXTENSION,
-            ),
-            "JSON" => (
-                Arc::new(JsonFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_JSON_EXTENSION,
-            ),
-            _ => Err(DataFusionError::Execution(
+        let file_compression_type =
+            match FileCompressionType::from_str(cmd.file_compression_type.as_str()) {
+                Ok(t) => t,
+                Err(_) => Err(DataFusionError::Execution(
+                    "Only known FileCompressionTypes can be ListingTables!".to_string(),
+                ))?,
+            };
+
+        let file_type = match FileType::from_str(cmd.file_type.as_str()) {
+            Ok(t) => t,
+            Err(_) => Err(DataFusionError::Execution(
                 "Only known FileTypes can be ListingTables!".to_string(),
             ))?,
         };
+
+        let file_extension =
+            file_type.get_ext_with_compression(file_compression_type.to_owned())?;
+
+        let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::CSV => Arc::new(
+                CsvFormat::default()
+                    .with_has_header(cmd.has_header)
+                    .with_delimiter(cmd.delimiter as u8)
+                    .with_file_compression_type(file_compression_type),
+            ),
+            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::JSON => Arc::new(
+                JsonFormat::default().with_file_compression_type(file_compression_type),
+            ),
+        };
+
         let table = self.inner.table(cmd.name.as_str());
         match (cmd.if_not_exists, table) {
             (true, Ok(_)) => Ok(make_dummy_exec()),
@@ -806,7 +815,7 @@ impl DefaultSeafowlContext {
                 };
                 let options = ListingOptions {
                     format: file_format,
-                    collect_stat: false,
+                    collect_stat: self.inner.copied_config().collect_statistics,
                     file_extension: file_extension.to_owned(),
                     target_partitions: self.inner.copied_config().target_partitions,
                     table_partition_cols: cmd.table_partition_cols.clone(),
