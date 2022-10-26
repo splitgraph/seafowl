@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use base64::decode;
 use bytes::BytesMut;
 
-use datafusion::datasource::TableProvider;
+use datafusion::datasource::{provider_as_source, TableProvider};
 use datafusion::sql::ResolvedTableReference;
 use itertools::Itertools;
 use object_store::local::LocalFileSystem;
@@ -74,7 +74,7 @@ use datafusion_expr::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     DropTable, Extension, LogicalPlan, Projection,
 };
-use datafusion_expr::{cast, Expr};
+use datafusion_expr::{cast, Expr, LogicalPlanBuilder};
 use log::{debug, info, warn};
 use prost::Message;
 use tempfile::TempPath;
@@ -1061,7 +1061,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     // Get the actual table schema, since DF needs to validate unqualified columns
                     // (i.e. ones referenced only by column name, lacking the relation name)
                     let table_name = name.to_string();
-                    let seafowl_table = self.try_get_seafowl_table(&table_name)?;
+                    let seafowl_table = Arc::new(self.try_get_seafowl_table(&table_name)?);
                     let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
 
                     let selection_expr = match selection {
@@ -1078,9 +1078,13 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Update(Update {
-                            table: Arc::new(seafowl_table),
+                            table: seafowl_table.clone(),
+                            table_plan: Arc::new(LogicalPlanBuilder::scan(table_name,
+                                provider_as_source(seafowl_table),
+                                None,
+                            )?.build()?),
                             selection: selection_expr,
-                            assignments: HashMap::from_iter(assignment_exprs),
+                            assignments: assignment_exprs,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
@@ -1093,7 +1097,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     // Get the actual table schema, since DF needs to validate unqualified columns
                     // (i.e. ones referenced only by column name, lacking the relation name)
                     let table_name = table_name.to_string();
-                    let seafowl_table = self.try_get_seafowl_table(&table_name)?;
+                    let seafowl_table = Arc::new(self.try_get_seafowl_table(&table_name)?);
                     let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
 
                     let selection_expr = match selection {
@@ -1103,7 +1107,12 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Delete(Delete {
-                            table: Arc::new(seafowl_table),
+                            table: seafowl_table.clone(),
+                            table_plan: Arc::new(LogicalPlanBuilder::scan(table_name,
+                                                                          provider_as_source(seafowl_table),
+                                                                          None,
+                            )?
+                                .build()?),
                             selection: selection_expr,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
@@ -1385,10 +1394,15 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                             let mut final_partition_ids =
                                 Vec::with_capacity(partitions.len());
+
+                            // Deduplicate assignments (we have to keep them as a vector in order
+                            // to keep the order of column name -> expression mapping)
+                            let assignment_map = HashMap::from_iter(assignments.clone());
+
                             let mut update_plan: Arc<dyn ExecutionPlan>;
                             let project_expressions = project_expressions(
                                 &schema,
-                                assignments,
+                                &assignment_map,
                                 selection_expr,
                             )?;
 
