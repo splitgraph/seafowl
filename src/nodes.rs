@@ -1,5 +1,5 @@
 use datafusion::common::DFSchemaRef;
-use std::collections::HashMap;
+
 use std::{any::Any, fmt, sync::Arc, vec};
 
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
@@ -36,8 +36,10 @@ pub struct Update {
     pub table: Arc<SeafowlTable>,
     /// WHERE clause
     pub selection: Option<Expr>,
+    /// Subplan for a table scan without a WHERE clause (used by the query optimizer)
+    pub table_plan: Arc<LogicalPlan>,
     /// Columns to update
-    pub assignments: HashMap<String, Expr>,
+    pub assignments: Vec<(String, Expr)>,
     /// Dummy result schema for the plan (empty)
     pub output_schema: DFSchemaRef,
 }
@@ -46,6 +48,8 @@ pub struct Update {
 pub struct Delete {
     /// The table to delete from
     pub table: Arc<SeafowlTable>,
+    /// Subplan for a table scan without a WHERE clause (used by the query optimizer)
+    pub table_plan: Arc<LogicalPlan>,
     /// WHERE clause
     pub selection: Option<Expr>,
     /// Dummy result schema for the plan (empty)
@@ -116,7 +120,16 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
     fn inputs(&self) -> Vec<&LogicalPlan> {
         match self {
             SeafowlExtensionNode::Insert(Insert { input, .. }) => vec![input.as_ref()],
-            // TODO Update/Delete will probably have children
+
+            // For UPDATE/DELETE, the optimizer needs to know the schema of the "input" (in this
+            // case, our tables we're updating) in order to optimize this node's expressions (in our
+            // case, the WHERE ... and the SET col = expr clauses).
+            SeafowlExtensionNode::Update(Update { table_plan, .. }) => {
+                vec![table_plan.as_ref()]
+            }
+            SeafowlExtensionNode::Delete(Delete { table_plan, .. }) => {
+                vec![table_plan.as_ref()]
+            }
             _ => vec![],
         }
     }
@@ -151,7 +164,23 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
         // NB: this is used by the plan optimizer (gets expressions(), optimizes them,
         // calls from_template(optimized_exprs) and we'll need to expose our expressions here
         // and support from_template for a given node if we want them to be optimized.
-        vec![]
+        match self {
+            // For UPDATEs, we pack a list of all SET col = expr expressions and append
+            // the WHERE clause expression at the end, if it exists.
+            SeafowlExtensionNode::Update(Update {
+                assignments,
+                selection,
+                ..
+            }) => assignments
+                .iter()
+                .map(|(_, e)| e.clone())
+                .chain(selection.clone().into_iter())
+                .collect::<Vec<Expr>>(),
+            SeafowlExtensionNode::Delete(Delete { selection, .. }) => {
+                selection.clone().into_iter().collect::<Vec<Expr>>()
+            }
+            _ => vec![],
+        }
     }
 
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -191,11 +220,10 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
 
     fn from_template(
         &self,
-        _exprs: &[Expr],
+        exprs: &[Expr],
         inputs: &[LogicalPlan],
     ) -> Arc<dyn UserDefinedLogicalNode> {
         match self {
-            // This is the only node for which we return `inputs` in inputs()
             SeafowlExtensionNode::Insert(Insert {
                 table,
                 input,
@@ -207,6 +235,67 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                     None => input.clone(),
                 },
                 output_schema: output_schema.clone(),
+            })),
+
+            SeafowlExtensionNode::Update(Update {
+                table,
+                selection,
+                table_plan,
+                assignments,
+                output_schema,
+            }) => {
+                // Defensive assertion to make sure that DataFusion gave us back the correct number
+                // of expressions.
+                let expected_len =
+                    assignments.len() + (if selection.is_some() { 1 } else { 0 });
+                if exprs.len() != expected_len {
+                    // DataFusion doesn't let us give back an Error and this really shouldn't
+                    // happen. Other alternatives (like partially initializing the node) might hide
+                    // errors downstream, so panic here instead.
+                    panic!("DataFusion optimizer returned incorrect number of expressions. Expected {}, got {}", expected_len, exprs.len())
+                };
+
+                Arc::new(SeafowlExtensionNode::Update(Update {
+                    // We ignore the optimized "inputs" in this case (it's just a TableScan without
+                    // filters) and keep our old one
+                    table: table.clone(),
+                    table_plan: table_plan.clone(),
+                    output_schema: output_schema.clone(),
+
+                    // Unpack the assignments and the selection expression
+                    assignments: assignments
+                        .iter()
+                        .zip(exprs.iter())
+                        .map(|((col, _), new_expr)| (col.clone(), new_expr.clone()))
+                        .collect(),
+                    // If we have a selection expression in this node, the last entry in the list is
+                    // the optimized expression
+                    selection: if selection.is_none() {
+                        None
+                    } else {
+                        exprs.get(assignments.len() + 1).cloned()
+                    },
+                }))
+            }
+
+            SeafowlExtensionNode::Delete(Delete {
+                table,
+                table_plan,
+                selection,
+                output_schema,
+            }) => Arc::new(SeafowlExtensionNode::Delete(Delete {
+                table: table.clone(),
+                table_plan: table_plan.clone(),
+                output_schema: output_schema.clone(),
+                selection: if selection.is_none() {
+                    None
+                } else {
+                    let e = exprs.first();
+                    if e.is_none() {
+                        panic!("DataFusion optimizer returned incorrect number of expressions. Expected 1, got 0");
+                    }
+                    e.cloned()
+                },
             })),
             _ => Arc::from(self.clone()),
         }
