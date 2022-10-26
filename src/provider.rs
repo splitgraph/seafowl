@@ -29,13 +29,13 @@ use datafusion::{
     },
     execution::context::{SessionState, TaskContext},
     logical_expr::TableType,
-    logical_plan::Expr,
     physical_expr::PhysicalSortExpr,
     physical_plan::{
         file_format::FileScanConfig, ExecutionPlan, Partitioning,
         SendableRecordBatchStream, Statistics,
     },
 };
+use datafusion_expr::Expr;
 use datafusion_proto::protobuf;
 
 use futures::future;
@@ -220,6 +220,7 @@ impl SeafowlTable {
             projection: projection.clone(),
             limit,
             table_partition_cols: vec![],
+            config_options: Arc::new(Default::default()),
         };
 
         let format = ParquetFormat::default();
@@ -533,7 +534,6 @@ pub fn project_expressions(
                         None,
                         vec![(sel_expr.clone(), expr)],
                         Some(col(f.name(), schema)?),
-                        schema,
                     )?;
                 }
 

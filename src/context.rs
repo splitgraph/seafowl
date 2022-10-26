@@ -14,9 +14,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use std::fs::File;
 
-use datafusion::datasource::file_format::avro::{AvroFormat};
-use datafusion::datasource::file_format::csv::{CsvFormat};
-use datafusion::datasource::file_format::json::{JsonFormat};
+use datafusion::datasource::file_format::avro::AvroFormat;
+use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::file_format::json::JsonFormat;
 
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -74,7 +74,7 @@ use datafusion_expr::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     DropTable, Extension, LogicalPlan, Projection,
 };
-use datafusion_expr::Expr;
+use datafusion_expr::{cast, Expr};
 use log::{debug, info, warn};
 use prost::Message;
 use tempfile::TempPath;
@@ -1024,10 +1024,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                         expr: target_schema.fields().iter().zip(plan.schema().field_names()).map(|(table_field, query_field_name)| {
                             // Generate CAST (source_col AS table_col_type) AS table_col
                             // If the type is the same, this will be optimized out.
-                            Expr::Cast{
-                                expr: Box::new(Expr::Column(Column::from_name(query_field_name))),
-                                data_type: table_field.data_type().clone()
-                            }.alias(table_field.name())
+                            cast(
+                                Expr::Column(Column::from_name(query_field_name)),
+                                table_field.data_type().clone()).alias(table_field.name()
+                            )
                         }).collect(),
                         input: Arc::new(plan),
                         schema: Arc::new(target_schema),
