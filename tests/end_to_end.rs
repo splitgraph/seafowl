@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,7 +7,6 @@ use arrow::record_batch::RecordBatch;
 use chrono::{TimeZone, Utc};
 use datafusion::{assert_batches_eq, assert_contains};
 use futures::TryStreamExt;
-use hashbrown::HashMap;
 use itertools::{sorted, Itertools};
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
