@@ -1,7 +1,7 @@
+use std::collections::HashMap;
 use std::{any::Any, fmt, sync::Arc, vec};
 
 use datafusion::logical_plan::{DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode};
-use hashbrown::HashMap;
 
 use crate::data_types::TableId;
 use crate::{provider::SeafowlTable, wasm_udf::data_types::CreateFunctionDetails};

@@ -39,7 +39,6 @@ use datafusion::{
 use datafusion_proto::protobuf;
 
 use futures::future;
-use hashbrown::HashMap as HashBrownMap;
 use log::warn;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
@@ -505,7 +504,7 @@ impl PruningStatistics for SeafowlPruningStatistics {
 // scope down the rows to which the assignment is applied
 pub fn project_expressions(
     schema: &ArrowSchema,
-    assignments: &HashBrownMap<String, Expr>,
+    assignments: &HashMap<String, Expr>,
     selection_expr: Option<Arc<dyn PhysicalExpr>>,
 ) -> Result<Vec<(Arc<dyn PhysicalExpr>, String)>> {
     schema

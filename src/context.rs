@@ -8,7 +8,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::sql::ResolvedTableReference;
 use itertools::Itertools;
 use object_store::local::LocalFileSystem;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tokio::fs::File as AsyncFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
@@ -32,7 +32,6 @@ use crate::object_store::wrapped::InternalObjectStore;
 use crate::utils::{gc_partitions, group_partitions, hash_file};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
-use hashbrown::HashMap;
 
 #[cfg(test)]
 use mockall::automock;

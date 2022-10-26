@@ -3,11 +3,11 @@ use crate::data_types::{TableVersionId, Timestamp};
 use chrono::DateTime;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::sql::TableReference;
-use hashbrown::HashMap;
 use itertools::Itertools;
 use sqlparser::ast::{
     Expr, FunctionArg, FunctionArgExpr, Ident, ObjectName, TableAlias, Value,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::datafusion::visit::{visit_table_table_factor, VisitorMut};
