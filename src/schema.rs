@@ -1,3 +1,4 @@
+use arrow_integration_test::{field_from_json, field_to_json};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
@@ -13,7 +14,7 @@ pub struct Schema {
 
 impl Schema {
     fn field_from_json(json: Value) -> Result<ArrowField, ArrowError> {
-        ArrowField::from(&json)
+        field_from_json(&json)
     }
 
     pub fn from_column_names_types<'a, I>(columns: I) -> Self
@@ -37,7 +38,7 @@ impl Schema {
         self.arrow_schema
             .fields()
             .iter()
-            .map(|f| (f.name().clone(), f.to_json().to_string()))
+            .map(|f| (f.name().clone(), field_to_json(f).to_string()))
             .collect()
     }
 }

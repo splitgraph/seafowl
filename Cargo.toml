@@ -25,7 +25,11 @@ frontend-postgres = ["convergence", "convergence-arrow"]
 object-store-s3 = ["object_store/aws"]
 
 [dependencies]
-arrow = { version = "22.0.0", features = ["prettyprint"] }
+arrow = "25.0.0"
+# For the JSON format support
+# https://github.com/apache/arrow-rs/pull/2868
+# https://github.com/apache/arrow-rs/pull/2724
+arrow-integration-test = "25.0.0"
 async-trait = "0.1.41"
 base64 = "0.13.0"
 
@@ -35,11 +39,14 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-12-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-12-upgrade", package = "convergence-arrow", optional = true }
-datafusion = "12"
-datafusion-expr = "12"
-datafusion-proto = "12"
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-13-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-13-upgrade", package = "convergence-arrow", optional = true }
+
+# DataFusion post-13 update that picks up Arrow 25.0.0
+datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "784f10bb57f86a4db2e01a6cb51da742af0dd9d9" }
+datafusion-expr = { git = "https://github.com/apache/arrow-datafusion", rev = "784f10bb57f86a4db2e01a6cb51da742af0dd9d9" }
+datafusion-proto = { git = "https://github.com/apache/arrow-datafusion", rev = "784f10bb57f86a4db2e01a6cb51da742af0dd9d9" }
+
 futures = "0.3"
 hashbrown = { version = "0.12", features = ["raw"] }
 hex = ">=0.4.0"
@@ -59,7 +66,7 @@ reqwest = { version = "0.11.11", features = [ "stream" ] }
 serde = "1.0.138"
 serde_json = "1.0.81"
 sha2 = ">=0.10.1"
-sqlparser = "0.23"
+sqlparser = "0.25"
 sqlx = { version = "0.6.2", features = [ "runtime-tokio-rustls", "sqlite" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
@@ -72,8 +79,8 @@ warp = "0.3"
 wasmtime = "0.40.0"
 
 [patch.crates-io]
-# Pick up https://github.com/apache/arrow-rs/pull/2731
-object_store = { git = "https://github.com/apache/arrow-rs", rev = "5f441eedff2b7621c46aded8b1caf3b665b8e8a9", package = "object_store" }
+datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "784f10bb57f86a4db2e01a6cb51da742af0dd9d9" }
+
 
 [dev-dependencies]
 mockall = "0.11.1"
