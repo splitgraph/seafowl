@@ -1946,12 +1946,12 @@ mod tests {
     use super::test_utils::mock_context;
 
     const PARTITION_1_FILE_NAME: &str =
-        "f48028e0f51f9447a90c407e9b0caa0f2af13f421db4939dc9b60825e0a26079.parquet";
+        "4c643a98a232ba10452165d3673af89c09999b8f747efb2f4fec163fbcd325df.parquet";
     const PARTITION_2_FILE_NAME: &str =
-        "6a4d8c5721ab70411ad52b807cdde40ade15641b6168513ebd3e1e8e4eb4505b.parquet";
+        "7b1aaeaed9cf57509b2ecb31e9c298880e26cd269c93cc2fdb4973f2a6649f90.parquet";
 
     const EXPECTED_INSERT_FILE_NAME: &str =
-        "3d552f85de97027297b42f6ffa644f5f1555b6b18131a4537b208b51ee4ef39f.parquet";
+        "bacf07bd78884b01c3d6d80c6799e6b9bd9281fa0224a2c20b6474745376b208.parquet";
 
     fn to_min_max_value(value: ScalarValue) -> Arc<Option<Vec<u8>>> {
         Arc::from(scalar_value_to_bytes(&value))
@@ -2230,7 +2230,7 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "Insert: some_table\
-            \n  Projection: CAST(#column1 AS Date64) AS date, CAST(#column2 AS Float64) AS value\
+            \n  Projection: CAST(column1 AS Date64) AS date, CAST(column2 AS Float64) AS value\
             \n    Values: (Utf8(\"2022-01-01T12:00:00\"), Int64(42))"
         );
     }
@@ -2249,8 +2249,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(format!("{:?}", plan), "Insert: some_table\
-        \n  Projection: CAST(#my_date AS Date64) AS date, CAST(#my_value AS Float64) AS value\
-        \n    Projection: #testdb.testcol.some_table.date AS my_date, #testdb.testcol.some_table.value AS my_value\
+        \n  Projection: CAST(my_date AS Date64) AS date, CAST(my_value AS Float64) AS value\
+        \n    Projection: testdb.testcol.some_table.date AS my_date, testdb.testcol.some_table.value AS my_value\
         \n      TableScan: testdb.testcol.some_table");
     }
 
@@ -2268,7 +2268,7 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "Insert: some_table\
-            \n  Projection: CAST(#column1 AS Date64) AS date, CAST(#column2 AS Float64) AS value\
+            \n  Projection: CAST(column1 AS Date64) AS date, CAST(column2 AS Float64) AS value\
             \n    Values: (Utf8(\"2022-01-01T12:00:00\"), Int64(42))"
         );
     }

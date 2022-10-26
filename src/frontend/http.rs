@@ -898,9 +898,9 @@ mod tests {
         let context = in_memory_context_with_single_table().await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp = query_uncached_endpoint(&handler, "SELECT 1/0").await;
+        let resp = query_uncached_endpoint(&handler, "SELECT 'notanint'::int").await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(resp.body(), "Arrow error: Divide by zero error");
+        assert_eq!(resp.body(), "Arrow error: Cast error: Cannot cast string 'notanint' to value of Int32 type");
     }
 
     #[tokio::test]
