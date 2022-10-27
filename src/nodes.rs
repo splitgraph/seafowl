@@ -1,4 +1,6 @@
 use datafusion::common::DFSchemaRef;
+use datafusion::error::DataFusionError;
+use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 
 use std::{any::Any, fmt, sync::Arc, vec};
 
@@ -110,6 +112,40 @@ impl SeafowlExtensionNode {
     pub fn from_dynamic(node: &Arc<dyn UserDefinedLogicalNode>) -> Option<&Self> {
         node.as_any().downcast_ref::<Self>()
     }
+}
+
+// Code for removing aliases in DELETE/UPDATE predicates
+// Copied from `datafusion_expr::utils::from_plan` for Filter
+// The query optimizer adds aliases to rewritten expressions in order
+// to make them keep the same names. This is not needed in filters and, in our
+// case, breaks partition pruning, which makes updates/deletes less efficient.
+
+// To fix this, we remove all aliases in all expressions used by UPDATE/DELETE
+struct RemoveAliases {}
+
+impl ExprRewriter for RemoveAliases {
+    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion, DataFusionError> {
+        match expr {
+            Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery { .. } => {
+                // subqueries could contain aliases so we don't recurse into those
+                Ok(RewriteRecursion::Stop)
+            }
+            Expr::Alias(_, _) => Ok(RewriteRecursion::Mutate),
+            _ => Ok(RewriteRecursion::Continue),
+        }
+    }
+
+    fn mutate(&mut self, expr: Expr) -> Result<Expr, DataFusionError> {
+        Ok(expr.unalias())
+    }
+}
+
+fn remove_aliases(predicate: Expr) -> Expr {
+    let mut remove_aliases = RemoveAliases {};
+    // NB we can't propagate errors in our logical nodes' from_template
+    // (unlike vanilla DataFusion's from_plan), so we have to cross our fingers
+    // and panic if something went wrong during the rewrite.
+    predicate.rewrite(&mut remove_aliases).unwrap()
 }
 
 impl UserDefinedLogicalNode for SeafowlExtensionNode {
@@ -284,6 +320,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                     panic!("DataFusion optimizer returned incorrect number of expressions. Expected {}, got {}", expected_len, exprs.len())
                 };
 
+                let exprs: Vec<Expr> =
+                    exprs.iter().map(|e| remove_aliases(e.clone())).collect();
+
                 Arc::new(SeafowlExtensionNode::Update(Update {
                     // We ignore the optimized "inputs" in this case (it's just a TableScan without
                     // filters) and keep our old one
@@ -302,7 +341,7 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                     selection: if selection.is_none() {
                         None
                     } else {
-                        exprs.get(assignments.len() + 1).cloned()
+                        exprs.get(assignments.len()).cloned()
                     },
                 }))
             }
@@ -323,7 +362,7 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                     if e.is_none() {
                         panic!("DataFusion optimizer returned incorrect number of expressions. Expected 1, got 0");
                     }
-                    e.cloned()
+                    e.cloned().map(remove_aliases)
                 },
             })),
             _ => Arc::from(self.clone()),
