@@ -88,10 +88,7 @@ fn invoke_wasi_messagepack(
         .inherit_stderr()
         .build();
     let mut store = Store::new(&engine, wasi);
-    wasmtime_wasi::snapshots::preview_1::add_wasi_snapshot_preview1_to_linker(
-        &mut linker,
-        |s| s,
-    )?;
+    wasmtime_wasi::add_to_linker(&mut linker, |s| s)?;
     // Instantiate our module with the imports we've created, and run it.
     let module = Module::from_binary(&engine, module_bytes)?;
     let instance = linker.instantiate(&mut store, &module)?;
@@ -184,10 +181,10 @@ fn make_scalar_function_wasi_messagepack(
             }
             results.push(
                 invoke_wasi_messagepack(&module_bytes, &function_name, params).map_err(
-                    |_| {
+                    |err| {
                         DataFusionError::Internal(format!(
-                            "Error invoking function {:?}",
-                            function_name
+                            "Error invoking function {:?}: {:?}",
+                            function_name, err
                         ))
                     },
                 )?,
