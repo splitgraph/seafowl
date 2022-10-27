@@ -7,6 +7,7 @@ use futures::{stream, StreamExt};
 
 use object_store::path::Path;
 use object_store::{GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore};
+use percent_encoding::{utf8_percent_encode, percent_decode_str, NON_ALPHANUMERIC};
 
 use crate::object_store::cache::CachingObjectStore;
 use datafusion::prelude::SessionContext;
@@ -87,7 +88,7 @@ impl HttpObjectStore {
     }
 
     fn get_uri(&self, path: &Path) -> String {
-        format!("{}://{}", &self.scheme, path)
+        format!("{}://{}", &self.scheme, percent_decode_str(path.to_string().as_str()).decode_utf8().unwrap())
     }
 
     fn request_builder(&self, path: &Path) -> RequestBuilder {
@@ -305,15 +306,18 @@ pub fn add_http_object_store(context: &SessionContext) {
 /// pass the path to us as `some-host.com/file.parquet` (as it strips the scheme and the fake host)
 /// and the object store instance will re-append the correct scheme back to the URL.
 ///
+/// We also URI-encode the full location after that. This is because DataFusion strips the query
+/// from the location (e.g. ?something=something_else) and that is important in AWS S3 signatures.
+///
 /// Returns a `None` if the location doesn't start with `http://` / `https://`.
 pub fn try_prepare_http_url(location: &str) -> Option<String> {
     location.strip_prefix("http://").map_or_else(
         || {
             location
                 .strip_prefix("https://")
-                .map(|l| format!("https://{}/{}", ANYHOST, l))
+                .map(|l| format!("https://{}/{}", ANYHOST, utf8_percent_encode(l, NON_ALPHANUMERIC)))
         },
-        |l| Some(format!("http://{}/{}", ANYHOST, l)),
+        |l| Some(format!("http://{}/{}", ANYHOST, utf8_percent_encode(l, NON_ALPHANUMERIC))),
     )
 }
 
