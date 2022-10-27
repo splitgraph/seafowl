@@ -1076,7 +1076,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         ))
                     }).collect::<Result<Vec<(String, Expr)>>>()?;
 
-                    Ok(LogicalPlan::Extension(Extension {
+                    let logical_plan = LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Update(Update {
                             table: seafowl_table.clone(),
                             table_plan: Arc::new(LogicalPlanBuilder::scan(table_name,
@@ -1087,7 +1087,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                             assignments: assignment_exprs,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
-                    }))
+                    });
+
+                    // Run the optimizer in order to apply required transformations to the query plan
+                    // (e.g. type coercions for the WHERE clause)
+                    self.inner.optimize(&logical_plan)
                 }
                 Statement::Delete {
                     table_name,
@@ -1105,7 +1109,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         Some(expr) => Some(query_planner.sql_to_rex(expr, &table_schema, &mut HashMap::new())?),
                     };
 
-                    Ok(LogicalPlan::Extension(Extension {
+                    let logical_plan = LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Delete(Delete {
                             table: seafowl_table.clone(),
                             table_plan: Arc::new(LogicalPlanBuilder::scan(table_name,
@@ -1116,7 +1120,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                             selection: selection_expr,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
-                    }))
+                    });
+
+                    // Run the optimizer in order to apply required transformations to the query plan
+                    // (e.g. type coercions for the WHERE clause)
+                    self.inner.optimize(&logical_plan)
                 },
                 Statement::CreateFunction {
                     temporary: false,
