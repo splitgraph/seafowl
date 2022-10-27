@@ -176,9 +176,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 .map(|(_, e)| e.clone())
                 .chain(selection.clone().into_iter())
                 .collect::<Vec<Expr>>(),
-            SeafowlExtensionNode::Delete(Delete { selection, .. }) => {
-                selection.clone().into_iter().collect::<Vec<Expr>>()
-            }
+            SeafowlExtensionNode::Delete(Delete {
+                selection: Some(e), ..
+            }) => vec![e.clone()],
             _ => vec![],
         }
     }
