@@ -1385,6 +1385,18 @@ async fn test_delete_statement() {
 
     create_table_and_some_partitions(&context, "test_table", None).await;
 
+    // Check DELETE's query plan to make sure 46 (int) gets cast to a float value
+    // by the optimizer
+    // (NB: EXPLAIN isn't supported for user-defined nodes)
+    let plan = context
+        .create_logical_plan("DELETE FROM test_table WHERE some_value > 46")
+        .await
+        .unwrap();
+    assert_eq!(
+        format!("{}", plan.display()),
+        "Delete: test_table WHERE some_value > Float32(46)"
+    );
+
     //
     // Execute DELETE affecting partitions 2, 3 and creating table_version 6
     //
@@ -1578,13 +1590,21 @@ async fn test_update_statement() {
 
     create_table_and_some_partitions(&context, "test_table", None).await;
 
+    // Check the UPDATE query plan to make sure IN (41, 42, 43) (int) get cast to a float value
+    let query = "UPDATE test_table
+    SET some_time = '2022-01-01 21:21:21Z', some_int_value = 5555, some_value = some_value - 10
+    WHERE some_value IN (41, 42, 43)";
+
+    let plan = context.create_logical_plan(query).await.unwrap();
+    assert_eq!(
+        format!("{}", plan.display()),
+        "Update: test_table, SET: some_time = Utf8(\"2022-01-01 21:21:21Z\"), some_int_value = Int64(5555), some_value = some_value - Float32(10) WHERE some_value IN ([Float32(41), Float32(42), Float32(43)])"
+    );
+
     //
     // Execute UPDATE with a selection, affecting partitions 1 and 4, and creating table_version 6
     //
-    let plan = context
-        .plan_query("UPDATE test_table SET some_time = '2022-01-01 21:21:21Z', some_int_value = 5555, some_value = some_value - 10 WHERE some_value IN (41, 42, 43)")
-        .await
-        .unwrap();
+    let plan = context.plan_query(query).await.unwrap();
     context.collect(plan).await.unwrap();
 
     assert_partition_ids(&context, 6, vec![2, 3, 5, 6]).await;
