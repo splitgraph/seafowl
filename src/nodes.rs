@@ -191,11 +191,40 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::CreateTable(CreateTable { name, .. }) => {
                 write!(f, "Create: {}", name)
             }
-            SeafowlExtensionNode::Update(Update { table, .. }) => {
-                write!(f, "Update: {}", table.name)
+            SeafowlExtensionNode::Update(Update {
+                table,
+                assignments,
+                selection,
+                ..
+            }) => {
+                write!(
+                    f,
+                    "Update: {}, SET: {}",
+                    table.name,
+                    assignments
+                        .iter()
+                        .map(|(c, e)| format!("{} = {}", c, e))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )?;
+                if let Some(s) = selection {
+                    write!(f, " WHERE {}", s)?;
+                }
+                Ok(())
             }
-            SeafowlExtensionNode::Delete(Delete { table, .. }) => {
+            SeafowlExtensionNode::Delete(Delete {
+                table,
+                selection: None,
+                ..
+            }) => {
                 write!(f, "Delete: {}", table.name)
+            }
+            SeafowlExtensionNode::Delete(Delete {
+                table,
+                selection: Some(e),
+                ..
+            }) => {
+                write!(f, "Delete: {} WHERE {}", table.name, e)
             }
             SeafowlExtensionNode::CreateFunction(CreateFunction { name, .. }) => {
                 write!(f, "CreateFunction: {}", name)
