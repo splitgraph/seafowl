@@ -2,7 +2,7 @@
 
 /** # DEMO NODEJS SEAFOWL CLIENT
  *  This is a very simple client using only builtin node functions.
- *  To execute a read-only query against a locally running seafowl instance, run:
+ *  To execute a query against a locally running seafowl instance, run:
  *
  *  ```
  *  node seafowl-client.js 'SELECT 1;'
@@ -28,6 +28,12 @@
  *  node seafowl-client.js "$(cat test1.sql)"
  *  ```
  *
+ *  or 
+ *
+ *  ```
+ *  node seafowl-client.js -f test1.sql
+ *  ```
+ *
  *  To submit a password with a write query, set the `PASSWORD` env var:
  *
  *  ```
@@ -36,6 +42,8 @@
  */
 
 const crypto = require("crypto");
+
+const fs = require("fs");
 
 const trimQuery = (sql) => sql.trim().replace(/(?:\r\n|\r|\n)/g, " ");
 
@@ -81,11 +89,13 @@ const readQuery = (endpoint, query) =>
     });
 
     req.on("error", (error) => {
-      reject(error);
+      reject({error, res});
     });
 
     req.end();
   });
+
+const errorStatusCode = statusCode => statusCode > 399 || statusCode < 200;
 
 const writeQuery = (endpoint, query, password) =>
   new Promise((resolve, reject) => {
@@ -109,33 +119,47 @@ const writeQuery = (endpoint, query, password) =>
         response += d.toString("utf8");
       });
       res.on("close", (d) => {
+        if (errorStatusCode(statusCode)) {
+          reject({res, error: new Error(`${statusCode}: ${response}`)})
+        }
         resolve({ response, statusCode });
       });
     });
-
     req.write(data);
 
     req.on("error", (error) => {
-      reject(error);
+      reject({error, res});
     });
 
     req.end();
   });
 
+const parseNDJSON = ndjson => ndjson.trim().split('\n').map(line => JSON.parse(line));
+
 if (require.main === module) {
   const endpoint = process.env["ENDPOINT"] ?? "http://localhost:8080/q";
   const args = process.argv.slice(2);
+  const firstArg = args[0]?.trim();
   let result;
-  if (args[0]?.trim() === "-r") {
+  if (firstArg === "-r") {
     result = readQuery(endpoint, args.slice(1).join(" "));
+  } else if (firstArg === "-f") {
+    result = writeQuery(endpoint, fs.readFileSync(args[1]?.trim(), {encoding: 'utf-8'}), process.env["PASSWORD"]);
   } else {
     result = writeQuery(endpoint, args.join(" "), process.env["PASSWORD"]);
   }
   (async () => {
     await result.then(
-      ({ response, statusCode }) =>
-        console.log(`code: ${statusCode}\n${inspect(JSON.parse(response))}`),
-      (error) => console.error(error)
+      ({ response, statusCode }) => {
+        if (response) {
+          console.log(`code: ${statusCode}\n${inspect(parseNDJSON(response))}`);
+        } else {
+          console.log(`code: ${statusCode}`);
+        }
+      },
+      ({error, res}) => {
+        console.error(error);
+      }
     );
   })();
 }
