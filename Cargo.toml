@@ -75,7 +75,7 @@ url = "2.2"
 warp = "0.3"
 
 # For WASM user-defined functions
-wasmtime = "0.40.0"
+wasmtime = "2.0.0"
 
 [patch.crates-io]
 datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "784f10bb57f86a4db2e01a6cb51da742af0dd9d9" }
