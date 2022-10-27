@@ -5,6 +5,7 @@ use base64::decode;
 use bytes::BytesMut;
 
 use datafusion::datasource::{provider_as_source, TableProvider};
+use datafusion::parquet::basic::Compression;
 use datafusion::sql::ResolvedTableReference;
 use itertools::Itertools;
 use object_store::local::LocalFileSystem;
@@ -266,6 +267,7 @@ fn temp_partition_file_writer(
 
     let writer_properties = WriterProperties::builder()
         .set_max_row_group_size(MAX_ROW_GROUP_SIZE)
+        .set_compression(Compression::ZSTD)
         .build();
     let writer =
         ArrowWriter::try_new(file_writer, arrow_schema, Some(writer_properties))?;
