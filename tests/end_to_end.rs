@@ -27,11 +27,11 @@ mod http_testutils;
 
 // Object store IDs for frequently-used test data
 const FILENAME_1: &str =
-    "d5ebca57fc79b2f43b91595ae5dde26e67a2d20e62b44f210100229e980614ad.parquet";
+    "1476361e3c8491d32fa9410f53a04a9509e8380d36e4acd4ed9ccc917b7f3736.parquet";
 const FILENAME_2: &str =
-    "3dcad71b37e901f358b3f9e835b9819af965cebbd31dfd11d1094776794eeabb.parquet";
+    "b6efca8f331fb03a4c86c062445c3bf51bf22f09db07d18f0c04d6d82a83d85f.parquet";
 const FILENAME_RECHUNKED: &str =
-    "edd2f33fc6429ff98f9f4c1047acb69db9216a803ce7aa00ef825af13da2b02f.parquet";
+    "a9ceb6cfdc8fcd364d8b30bfde11e90503423052d32b0a655846368ba1f5b366.parquet";
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
@@ -1348,9 +1348,9 @@ async fn test_vacuum_command() {
     // NB: we have duplicates here which is expected, see: https://github.com/splitgraph/seafowl/issues/5
     let orphans = vec![
         FILENAME_1,
-        "b3651688b4030de7ba4afa294c367792dd01916f12b2c7df620f4b8772427650.parquet",
+        "7b4ddceb7b8ac1869de495c355fd957ce94a891a1770c7e540fce4e47cd25a0e.parquet",
         FILENAME_1,
-        "411951cd34bc5465269db28635d45172f0062b21def0e6980271072b0d25100d.parquet",
+        "b3e703ac60edd787afcdafc07b8cbb1fd6f5eb6c83e32f4a92ab7c77773bb151.parquet",
     ];
 
     assert_orphan_partitions(context.clone(), orphans.clone()).await;

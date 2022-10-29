@@ -1970,12 +1970,12 @@ mod tests {
     use super::test_utils::mock_context;
 
     const PARTITION_1_FILE_NAME: &str =
-        "4c643a98a232ba10452165d3673af89c09999b8f747efb2f4fec163fbcd325df.parquet";
+        "19ac37377b6477297ed620d6fed5bd5baeb13bcbdcd21da47865dad9ea7bd691.parquet";
     const PARTITION_2_FILE_NAME: &str =
-        "7b1aaeaed9cf57509b2ecb31e9c298880e26cd269c93cc2fdb4973f2a6649f90.parquet";
+        "b7903885103721b7e36e7645e808da0beac6fa3f69b858201aac42c17de504bf.parquet";
 
     const EXPECTED_INSERT_FILE_NAME: &str =
-        "bacf07bd78884b01c3d6d80c6799e6b9bd9281fa0224a2c20b6474745376b208.parquet";
+        "fa319dc4b3544bc5b427216e8cb6954f331284699e5c6032a03f5f2a8cc9a27b.parquet";
 
     fn to_min_max_value(value: ScalarValue) -> Arc<Option<Vec<u8>>> {
         Arc::from(scalar_value_to_bytes(&value))
