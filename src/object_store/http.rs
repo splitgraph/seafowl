@@ -95,6 +95,7 @@ impl HttpObjectStore {
         }
     }
 
+    /// Reverse the URL encoding done by `try_prepare_http_url`
     fn get_uri(&self, path: &Path) -> String {
         let path_str = path.to_string();
         let decoded = percent_decode_str(path_str.as_str()).decode_utf8().unwrap();
@@ -351,17 +352,21 @@ pub fn add_http_object_store(context: &SessionContext) {
     );
 }
 
-/// Prepare a URL (`LOCATION` clause) so that DataFusion can directly route it to the object store.
+/// Prepare a URL (`LOCATION` clause) so that DataFusion can directly route it to this HTTP object store.
 ///
-/// This is done by injecting a special `anyhost` hostname inside of the URL, for example:
-/// `https://some-host.com/file.parquet` -> `https://anyhost/some-host.com/file.parquet`. This is
-/// because DataFusion routes URLs to object store instances based on the scheme and the host. Hence,
-/// in this case, `LOCATION 'https://some-host.com/file.parquet'` will get DataFusion to
-/// pass the path to us as `some-host.com/file.parquet` (as it strips the scheme and the fake host)
-/// and the object store instance will re-append the correct scheme back to the URL.
+/// We do two hacks here to get this working.
 ///
-/// We also URI-encode the full location after that. This is because DataFusion strips the query
-/// from the location (e.g. ?something=something_else) and that is important in AWS S3 signatures.
+/// 1) DataFusion routes URLs to object store instances based on the scheme and the host, but the HTTP
+///    store can handle any host. DataFusion also strips the host and the scheme. To work around this,
+///    we prepend a special `anyhost` hostname inside of the URL, for example:
+///    `https://some-host.com/file.parquet` -> `https://anyhost/some-host.com/file.parquet`.
+///    Hence, in this case, `LOCATION 'https://some-host.com/file.parquet'` will get DataFusion to
+///    pass the path to us as `some-host.com/file.parquet` (as it strips the scheme and the fake host)
+///    and the object store instance will re-append the correct scheme back to the URL.
+/// 2) DataFusion also strips the query string, which is important in AWS signatures. To stop it from
+///    doing that, we URI-encode the full location to make it look like it's part of the URL path.
+///
+/// This means that the location that our object store gets needs to be decoded (see HttpObjectStore::get_uri)
 ///
 /// Returns a `None` if the location doesn't start with `http://` / `https://`.
 pub fn try_prepare_http_url(location: &str) -> Option<String> {
