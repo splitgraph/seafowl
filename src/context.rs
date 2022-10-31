@@ -1978,7 +1978,7 @@ mod tests {
 
     use super::*;
 
-    use super::test_utils::mock_context;
+    use super::test_utils::{in_memory_context, mock_context};
 
     const PARTITION_1_FILE_NAME: &str =
         "19ac37377b6477297ed620d6fed5bd5baeb13bcbdcd21da47865dad9ea7bd691.parquet";
@@ -2288,6 +2288,56 @@ mod tests {
         \n    Projection: testdb.testcol.some_table.date AS my_date, testdb.testcol.some_table.value AS my_value\
         \n      TableScan: testdb.testcol.some_table");
     }
+
+    #[tokio::test]
+    async fn test_execute_insert_from_other_table() -> Result<()> {
+        let context = Arc::new(in_memory_context().await);
+        context
+            .collect(
+                context
+                    .plan_query("CREATE TABLE test_table (key INTEGER, value STRING);")
+                    .await?,
+            )
+            .await?;
+
+        context
+            .collect(
+                context
+                    .plan_query("INSERT INTO test_table VALUES (1, 'one'), (2, 'two');")
+                    .await?,
+            )
+            .await?;
+
+        context
+        .collect(
+            context
+                .plan_query("INSERT INTO test_table(key, value) SELECT * FROM test_table WHERE value = 'two'")
+                .await?,
+        )
+        .await?;
+
+        let results = context
+            .collect(
+                context
+                    .plan_query("SELECT * FROM test_table ORDER BY key ASC")
+                    .await?,
+            )
+            .await?;
+
+        let expected = vec![
+            "+-----+-------+",
+            "| key | value |",
+            "+-----+-------+",
+            "| 1   | one   |",
+            "| 2   | two   |",
+            "| 2   | two   |",
+            "+-----+-------+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
 
     #[tokio::test]
     async fn test_plan_insert_all() {
