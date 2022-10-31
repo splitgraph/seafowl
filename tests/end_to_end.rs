@@ -1139,7 +1139,11 @@ async fn test_create_external_table_http() {
     */
 
     let (mock_server, _) = http_testutils::make_mock_parquet_server(true, true).await;
-    let url = format!("{}/some/file.parquet", &mock_server.uri());
+    // Add a query string that's ignored by the mock (make sure DataFusion doesn't eat the whole URL)
+    let url = format!(
+        "{}/some/file.parquet?query_string=ignore",
+        &mock_server.uri()
+    );
 
     let context = make_context_with_pg().await;
 
