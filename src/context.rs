@@ -772,6 +772,7 @@ impl DefaultSeafowlContext {
     async fn create_listing_table(
         &self,
         cmd: &CreateExternalTable,
+        filter_suffix: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let file_compression_type =
             match FileCompressionType::from_str(cmd.file_compression_type.as_str()) {
@@ -788,8 +789,12 @@ impl DefaultSeafowlContext {
             ))?,
         };
 
-        let file_extension =
-            file_type.get_ext_with_compression(file_compression_type.to_owned())?;
+        // Change from default DataFusion behaviour: allow disabling filtering by an extension
+        let file_extension = if filter_suffix {
+            file_type.get_ext_with_compression(file_compression_type.to_owned())?
+        } else {
+            "".to_string()
+        };
 
         let file_format: Arc<dyn FileFormat> = match file_type {
             FileType::CSV => Arc::new(
@@ -1239,8 +1244,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                 let mut cmd = cmd.clone();
                 cmd.name = reference_to_name(&resolved_reference);
 
-                let location =
-                    try_prepare_http_url(location).unwrap_or_else(|| location.into());
+                let (location, is_http) = match try_prepare_http_url(location) {
+                    Some(new_loc) => (new_loc, true),
+                    None => (location.into(), false),
+                };
 
                 // Disallow the seafowl:// scheme (which is registered with DataFusion as our internal
                 // object store but shouldn't be accessible via CREATE EXTERNAL TABLE)
@@ -1261,7 +1268,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // Proceed as per standard DataFusion code
                 match file_type.as_str() {
                     "PARQUET" | "CSV" | "JSON" | "AVRO" => {
-                        self.create_listing_table(&cmd).await
+                        // Change here: if we're using an HTTP object store with a single file,
+                        // we don't need to make sure it has the correct extension (since it's a
+                        // single file and not a directory where we need to filter for the required
+                        // file type)
+                        self.create_listing_table(&cmd, !is_http).await
                     }
                     // Disallow custom formats (only useful if we're registering a table
                     // factory provider here)
