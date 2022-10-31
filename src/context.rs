@@ -47,7 +47,7 @@ use std::iter::zip;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use datafusion::common::{Column, DFField, DFSchema, ToDFSchema};
+use datafusion::common::{DFField, DFSchema, ToDFSchema};
 use datafusion::datasource::file_format::file_type::{FileCompressionType, FileType};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::physical_expr::create_physical_expr;
@@ -1028,11 +1028,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                     // cast the columns when we're writing to Parquet)
 
                     let plan = LogicalPlan::Projection(Projection {
-                        expr: target_schema.fields().iter().zip(plan.schema().field_names()).map(|(table_field, query_field_name)| {
+                        expr: target_schema.fields().iter().zip(plan.schema().fields()).map(|(table_field, query_field)| {
                             // Generate CAST (source_col AS table_col_type) AS table_col
                             // If the type is the same, this will be optimized out.
                             cast(
-                                Expr::Column(Column::from_qualified_name(&query_field_name)),
+                                Expr::Column(query_field.qualified_column()),
                                 table_field.data_type().clone()
                             ).alias(table_field.name())
                         }).collect(),
@@ -2312,6 +2312,57 @@ mod tests {
         .collect(
             context
                 .plan_query("INSERT INTO test_table(key, value) SELECT * FROM test_table WHERE value = 'two'")
+                .await?,
+        )
+        .await?;
+
+        let results = context
+            .collect(
+                context
+                    .plan_query("SELECT * FROM test_table ORDER BY key ASC")
+                    .await?,
+            )
+            .await?;
+
+        let expected = vec![
+            "+-----+-------+",
+            "| key | value |",
+            "+-----+-------+",
+            "| 1   | one   |",
+            "| 2   | two   |",
+            "| 2   | two   |",
+            "+-----+-------+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_execute_insert_from_other_table_schema_qualifier() -> Result<()> {
+        let context = Arc::new(in_memory_context().await);
+        context
+            .collect(
+                context
+                    .plan_query("CREATE TABLE test_table (key INTEGER, value STRING);")
+                    .await?,
+            )
+            .await?;
+
+        context
+            .collect(
+                context
+                    .plan_query(
+                        "INSERT INTO public.test_table VALUES (1, 'one'), (2, 'two');",
+                    )
+                    .await?,
+            )
+            .await?;
+
+        context
+        .collect(
+            context
+                .plan_query("INSERT INTO test_table(key, value) SELECT * FROM public.test_table WHERE value = 'two'")
                 .await?,
         )
         .await?;
