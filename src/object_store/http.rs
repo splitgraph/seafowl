@@ -7,10 +7,13 @@ use futures::{stream, StreamExt};
 
 use object_store::path::Path;
 use object_store::{GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore};
-use percent_encoding::{utf8_percent_encode, percent_decode_str, NON_ALPHANUMERIC};
+use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 
 use crate::object_store::cache::CachingObjectStore;
 use datafusion::prelude::SessionContext;
+use lazy_static::lazy_static;
+use log::warn;
+use regex::Regex;
 use reqwest::{header, Client, RequestBuilder, Response, StatusCode};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -22,6 +25,11 @@ use tokio::io::AsyncWrite;
 pub const ANYHOST: &str = "anyhost";
 pub const MIN_FETCH_SIZE: u64 = 2 * 1024 * 1024;
 pub const HTTP_CACHE_CAPACITY: u64 = 512 * 1024 * 1024;
+
+lazy_static! {
+    static ref CONTENT_RANGE_RE: Regex =
+        Regex::new(r"(^bytes)\s+(\d+)\s?-\s?(\d+)?\s?/?\s?(\d+|\*)?").unwrap();
+}
 
 #[derive(Debug)]
 pub struct HttpObjectStore {
@@ -88,7 +96,9 @@ impl HttpObjectStore {
     }
 
     fn get_uri(&self, path: &Path) -> String {
-        format!("{}://{}", &self.scheme, percent_decode_str(path.to_string().as_str()).decode_utf8().unwrap())
+        let path_str = path.to_string();
+        let decoded = percent_decode_str(path_str.as_str()).decode_utf8().unwrap();
+        format!("{}://{}", &self.scheme, decoded)
     }
 
     fn request_builder(&self, path: &Path) -> RequestBuilder {
@@ -108,6 +118,40 @@ impl HttpObjectStore {
             .await
             .and_then(|r| r.error_for_status())
             .map_err(HttpObjectStoreError::HttpClientError)
+    }
+
+    /// Emulate the results of a HEAD request by using a GET request with
+    /// an empty range
+    ///
+    /// Workaround for AWS S3 not supporting pre-signing for both HEAD and GET:
+    ///
+    /// https://stackoverflow.com/questions/15717230/pre-signing-amazon-s3-urls-for-both-head-and-get-verbs
+    async fn head_via_get(&self, location: &Path) -> object_store::Result<ObjectMeta> {
+        let response = self
+            .send(self.request_builder(location).header("Range", "bytes=0-0"))
+            .await?;
+
+        let content_range_str = response
+            .headers()
+            .get(header::CONTENT_RANGE)
+            .ok_or(HttpObjectStoreError::NoContentLengthResponse)?
+            .to_str()
+            .map_err(|_| HttpObjectStoreError::NoContentLengthResponse)?;
+
+        let length = CONTENT_RANGE_RE
+            .captures(content_range_str)
+            .ok_or(HttpObjectStoreError::NoContentLengthResponse)?
+            .get(4)
+            .unwrap()
+            .as_str() // The regex is static, so capture group 4 is guaranteed to exist
+            .parse::<u64>()
+            .map_err(|_| HttpObjectStoreError::NoContentLengthResponse)?;
+
+        Ok(ObjectMeta {
+            location: location.clone(),
+            last_modified: Utc::now(),
+            size: usize::try_from(length).expect("unsupported size on this platform"),
+        })
     }
 }
 
@@ -175,12 +219,22 @@ impl ObjectStore for HttpObjectStore {
     }
 
     async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
+        let uri = self.get_uri(location);
         let response = self
-            .send(self.client.head(self.get_uri(location)).header(
+            .send(self.client.head(&uri).header(
                 "User-Agent",
                 format!("Seafowl/{}", env!("VERGEN_GIT_SEMVER")),
             ))
-            .await?;
+            .await;
+
+        if let Err(HttpObjectStoreError::HttpClientError(ref e)) = response {
+            if e.status() == Some(StatusCode::FORBIDDEN) {
+                warn!("HEAD request for location {} failed. Assuming an S3-like API and trying to emulate HEAD via GET", &uri);
+                return self.head_via_get(location).await;
+            }
+        }
+
+        let response = response?;
 
         let length = response
             .headers()
@@ -313,11 +367,21 @@ pub fn add_http_object_store(context: &SessionContext) {
 pub fn try_prepare_http_url(location: &str) -> Option<String> {
     location.strip_prefix("http://").map_or_else(
         || {
-            location
-                .strip_prefix("https://")
-                .map(|l| format!("https://{}/{}", ANYHOST, utf8_percent_encode(l, NON_ALPHANUMERIC)))
+            location.strip_prefix("https://").map(|l| {
+                format!(
+                    "https://{}/{}",
+                    ANYHOST,
+                    utf8_percent_encode(l, NON_ALPHANUMERIC)
+                )
+            })
         },
-        |l| Some(format!("http://{}/{}", ANYHOST, utf8_percent_encode(l, NON_ALPHANUMERIC))),
+        |l| {
+            Some(format!(
+                "http://{}/{}",
+                ANYHOST,
+                utf8_percent_encode(l, NON_ALPHANUMERIC)
+            ))
+        },
     )
 }
 
@@ -348,7 +412,7 @@ mod tests {
     #[tokio::test]
     async fn test_head() {
         let store = make_cached_object_store();
-        let (server, body) = make_mock_parquet_server(false).await;
+        let (server, body) = make_mock_parquet_server(false, true).await;
         // The object store expects just a path, which it treats as the host (prepending the
         // scheme instead)
         let server_uri = server.uri();
@@ -365,10 +429,26 @@ mod tests {
         assert!(err.to_string().contains("Status(404)"));
     }
 
+    /// Test we correctly fall back to using a GET with a zero range to get the length of the
+    /// document if HEAD isn't supported
+    #[tokio::test]
+    async fn test_head_get_emulation() {
+        let store = make_cached_object_store();
+        let (server, body) = make_mock_parquet_server(true, false).await;
+        let server_uri = server.uri();
+        let server_uri = server_uri.strip_prefix("http://").unwrap();
+
+        let url = format!("{}/some/file.parquet", &server_uri);
+
+        let result = store.head(&Path::from(url.as_str())).await.unwrap();
+        assert_eq!(result.location.to_string(), url);
+        assert_eq!(result.size, body.len());
+    }
+
     #[tokio::test]
     async fn test_get() {
         let store = make_cached_object_store();
-        let (server, body) = make_mock_parquet_server(false).await;
+        let (server, body) = make_mock_parquet_server(false, true).await;
         let server_uri = server.uri();
         let server_uri = server_uri.strip_prefix("http://").unwrap();
         let url = format!("{}/some/file.parquet", &server_uri);
@@ -387,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_server_range() {
         let store = make_cached_object_store();
-        let (server, body) = make_mock_parquet_server(true).await;
+        let (server, body) = make_mock_parquet_server(true, true).await;
         let server_uri = server.uri();
         let server_uri = server_uri.strip_prefix("http://").unwrap();
         let url = format!("{}/some/file.parquet", &server_uri);

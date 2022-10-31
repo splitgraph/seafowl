@@ -43,6 +43,10 @@ impl Respond for MockResponse {
                     "attachment; filename=\"file.parquet\"",
                 )
                 .append_header("Content-Length", body_len.to_string().as_str())
+                .append_header(
+                    "Content-Range",
+                    format!("bytes {}-{}/{}", start, end, self.body.len()).as_str(),
+                )
         } else {
             ResponseTemplate::new(200)
                 .set_body_bytes(self.body.clone())
@@ -55,7 +59,10 @@ impl Respond for MockResponse {
     }
 }
 
-pub async fn make_mock_parquet_server(supports_ranges: bool) -> (MockServer, Vec<u8>) {
+pub async fn make_mock_parquet_server(
+    supports_ranges: bool,
+    supports_head: bool,
+) -> (MockServer, Vec<u8>) {
     // Make a simple Parquet file
     let schema = Arc::new(Schema::new(vec![Field::new(
         "col_1",
@@ -91,15 +98,23 @@ pub async fn make_mock_parquet_server(supports_ranges: bool) -> (MockServer, Vec
         .mount(&mock_server)
         .await;
 
-    Mock::given(method("HEAD"))
-        .and(path("/some/file.parquet"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .append_header("Content-Length", body.len().to_string().as_str())
-                .append_header("Accept-Ranges", "bytes"),
-        )
-        .mount(&mock_server)
-        .await;
+    if supports_head {
+        Mock::given(method("HEAD"))
+            .and(path("/some/file.parquet"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("Content-Length", body.len().to_string().as_str())
+                    .append_header("Accept-Ranges", "bytes"),
+            )
+            .mount(&mock_server)
+            .await;
+    } else {
+        // For presigned S3 URLs, the server doesn't support HEAD requests
+        Mock::given(method("HEAD"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&mock_server)
+            .await;
+    }
 
     (mock_server, body)
 }

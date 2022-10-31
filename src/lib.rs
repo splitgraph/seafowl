@@ -14,3 +14,5 @@ pub mod system_tables;
 pub mod utils;
 pub mod version;
 pub mod wasm_udf;
+
+extern crate lazy_static;
