@@ -1032,9 +1032,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                             // Generate CAST (source_col AS table_col_type) AS table_col
                             // If the type is the same, this will be optimized out.
                             cast(
-                                Expr::Column(Column::from_name(query_field_name)),
-                                table_field.data_type().clone()).alias(table_field.name()
-                            )
+                                Expr::Column(Column::from_qualified_name(&query_field_name)),
+                                table_field.data_type().clone()
+                            ).alias(table_field.name())
                         }).collect(),
                         input: Arc::new(plan),
                         schema: Arc::new(target_schema),
@@ -2337,7 +2337,6 @@ mod tests {
 
         Ok(())
     }
-
 
     #[tokio::test]
     async fn test_plan_insert_all() {
