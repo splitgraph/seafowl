@@ -426,7 +426,7 @@ mod tests {
     #[tokio::test]
     async fn test_range_coalescing(range: Range<usize>) {
         let store = make_cached_object_store_small_fetch();
-        let (server, body) = make_mock_parquet_server(true).await;
+        let (server, body) = make_mock_parquet_server(true, true).await;
         let server_uri = server.uri();
         let server_uri = server_uri.strip_prefix("http://").unwrap();
         let url = format!("{}/some/file.parquet", &server_uri);
@@ -458,7 +458,7 @@ mod tests {
     #[tokio::test]
     async fn test_cache_caching_eviction() {
         let store = make_cached_object_store_small_disk_size();
-        let (server, _body) = make_mock_parquet_server(true).await;
+        let (server, _body) = make_mock_parquet_server(true, true).await;
         let server_uri = server.uri();
         let server_uri = server_uri.strip_prefix("http://").unwrap();
         let url = format!("{}/some/file.parquet", &server_uri);
