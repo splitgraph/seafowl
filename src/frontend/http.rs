@@ -398,6 +398,10 @@ fn load_parquet_bytes(
     Ok((schema.as_ref().clone(), partition))
 }
 
+// We need the allow to silence the compiler: it asks us to add warp::generic::Tuple to the first
+// parameter of the return type, but that struct is not exportable (generic is private).
+// TODO: Fix the signature and remove the allow attribute at some point.
+#[allow(opaque_hidden_inferred_bound)]
 pub fn filters(
     context: Arc<dyn SeafowlContext>,
     config: HttpFrontend,

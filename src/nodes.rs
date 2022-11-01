@@ -311,8 +311,7 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             }) => {
                 // Defensive assertion to make sure that DataFusion gave us back the correct number
                 // of expressions.
-                let expected_len =
-                    assignments.len() + (if selection.is_some() { 1 } else { 0 });
+                let expected_len = assignments.len() + usize::from(selection.is_some());
                 if exprs.len() != expected_len {
                     // DataFusion doesn't let us give back an Error and this really shouldn't
                     // happen. Other alternatives (like partially initializing the node) might hide

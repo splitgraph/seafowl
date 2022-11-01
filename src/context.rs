@@ -844,6 +844,27 @@ impl DefaultSeafowlContext {
             ))),
         }
     }
+
+    async fn create_remote_table(
+        &self,
+        cmd: &CreateExternalTable,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let table = self.inner.table(cmd.name.as_str());
+
+        if table.is_ok() {
+            return if cmd.if_not_exists {
+                Ok(make_dummy_exec())
+            } else {
+                Err(DataFusionError::Execution(format!(
+                    "Table '{:?}' already exists",
+                    cmd.name
+                )))
+            };
+        }
+
+        // TODO: construct the remote table and register it in the context
+        Ok(make_dummy_exec())
+    }
 }
 
 #[async_trait]
@@ -1265,8 +1286,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // so inject it into the CreateExternalTable command as well.
                 cmd.location = location;
 
-                // Proceed as per standard DataFusion code
                 match file_type.as_str() {
+                    "TABLE" => {
+                        // Remote aka foreign table reference
+                        self.create_remote_table(&cmd).await
+                    }
                     "PARQUET" | "CSV" | "JSON" | "AVRO" => {
                         // Change here: if we're using an HTTP object store with a single file,
                         // we don't need to make sure it has the correct extension (since it's a
