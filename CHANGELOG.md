@@ -4,6 +4,15 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Upgrade to DataFusion 13 (784f10bb) / Arrow 25.0.0
+  (<https://github.com/splitgraph/seafowl/pull/176>)
+- Use ZSTD compression in Parquet files (<https://github.com/splitgraph/seafowl/pull/182>)
+- Fix HTTP external tables using pre-signed S3 URLs
+  (<https://github.com/splitgraph/seafowl/pull/183>)
+- Fix `INSERT INTO .. SELECT FROM` (<https://github.com/splitgraph/seafowl/pull/184>)
+- Fix some `OUTER JOIN` issues by using a minimum of 2 `target_partition`s
+  (<https://github.com/splitgraph/seafowl/pull/189>)
+
 ## [0.2.4] - 2022-10-25
 
 - Add `system.table_versions` table for inspecting table history
