@@ -67,16 +67,16 @@ fn invoke_wasi_messagepack(
     function_name: &str,
     args: Vec<Value>,
 ) -> StdResult<Value, wasmtime_wasi::Error> {
-    let mut serialized_input = Vec::new();
-    // TODO: error handling on encode
+    // Write UDF input to stdin
     let args_array = Value::Array(args);
+    let mut serialized_input = Vec::new();
+    // TODO: handle error encoding arguments
     messagepack_encode(&args_array, &mut serialized_input)?;
-    // let u: User = serde_json::from_str(j).unwrap();
     let stdin = ReadPipe::from(serialized_input);
+    // Create pipe for stdout which UDF writes output to
     let stdout_buf: Vec<u8> = vec![];
     let stdout_mutex = Arc::new(RwLock::new(stdout_buf));
     let stdout = WritePipe::from_shared(stdout_mutex.clone());
-    // Define the WASI functions globally on the `Config`.
     let engine = Engine::default();
     let mut linker = wasmtime::Linker::new(&engine);
     // Create a WASI context and put it in a Store; all instances in the store
@@ -88,19 +88,25 @@ fn invoke_wasi_messagepack(
         .inherit_stderr()
         .build();
     let mut store = Store::new(&engine, wasi);
+    // Add both wasi_unstable and wasi_snapshot_preview1 WASI modules
     wasmtime_wasi::add_to_linker(&mut linker, |s| s)?;
-    // Instantiate our module with the imports we've created, and run it.
+    // Instantiate WASM module.
+    // TODO: handle module loading errors
     let module = Module::from_binary(&engine, module_bytes)?;
+    // TODO: handle linker errors
     let instance = linker.instantiate(&mut store, &module)?;
+    // TODO: handle case when function not found
     let instance_func =
-        instance.get_typed_func::<(), (), _>(&mut store, function_name)?;
-    instance_func.call(&mut store, ())?;
+        instance.get_typed_func::<(), i32, _>(&mut store, function_name)?;
+    // TODO: handle case when function invocation fails
+    let _exit_code = instance_func.call(&mut store, ())?;
     let mut buffer: Vec<u8> = Vec::new();
     stdout_mutex
         .read()
         .unwrap()
         .iter()
         .for_each(|i| buffer.push(*i));
+    // TODO: handle case when messagepack decoding of output fails
     let result: Value = messagepack_decode(&mut buffer)?;
     Ok(result)
 }
@@ -123,11 +129,9 @@ fn make_scalar_function_wasi_messagepack(
     input_types: Vec<CreateFunctionDataType>,
     return_type: CreateFunctionDataType,
 ) -> Result<ScalarFunctionImplementation> {
-    // This function has to be of type Fn instead of FnMut. The function invocation (func.call)
-    // needs a mutable context, which forces this closure to be FnMut.
-    // This means we have to create a store and load the function inside of this closure, discarding
-    // the store after we're done.
-    // Capture the function name and the module code
+    // TODO: Similar to make_scalar_function_from_wasm, this function should verify
+    // that the module can be loaded and the UDF export is found before
+    // returning a Result.
     let function_name = function_name.to_owned();
     let module_bytes = module_bytes.to_owned();
     let inner = move |args: &[ArrayRef]| {
@@ -175,10 +179,14 @@ fn make_scalar_function_wasi_messagepack(
                             .expect("cast failed")
                             .value(row_ix),
                     ),
+                    // TODO: don't panic on unexpected type, fail with a DataFusionError instead.
                     _ => panic!("unexpected type"),
                 };
                 params.push(messagepack_value);
             }
+            // TODO: invoke_wasi_messagepack loads the WASM module, locates the
+            // exported function, etc. for every single row; this can be done
+            // once and only the invocation needs to happen N times for N rows.
             results.push(
                 invoke_wasi_messagepack(&module_bytes, &function_name, params).map_err(
                     |err| {
@@ -192,9 +200,8 @@ fn make_scalar_function_wasi_messagepack(
         }
 
         // Convert the results back into Arrow (Arc<dyn Array>)
-        // These functions panic on type mismatches, which shouldn't happen because
-        // we pre-validated them above (unless the function returns a different type
-        // than it advertised)
+        // TODO: Don't panic on type mismatches, because the UDF could return
+        // a different type than it advertised.
         let array = match return_type {
             CreateFunctionDataType::I32 => Arc::new(
                 results
