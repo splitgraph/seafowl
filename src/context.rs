@@ -30,6 +30,7 @@ use crate::datafusion::parser::{DFParser, Statement as DFStatement};
 use crate::datafusion::utils::{build_schema, normalize_ident};
 use crate::object_store::http::try_prepare_http_url;
 use crate::object_store::wrapped::InternalObjectStore;
+use crate::remote_tables::RemoteTable;
 use crate::utils::{gc_partitions, group_partitions, hash_file};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
@@ -44,6 +45,7 @@ use sqlparser::ast::{
 
 use arrow_integration_test::field_to_json;
 use std::iter::zip;
+use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -862,7 +864,16 @@ impl DefaultSeafowlContext {
             };
         }
 
-        // TODO: construct the remote table and register it in the context
+        let remote_table = RemoteTable::new(
+            cmd.file_compression_type.clone(),
+            &cmd.location,
+            SchemaRef::from(cmd.schema.deref().clone()),
+        )?;
+
+        self.inner.register_table(
+            TableReference::from(cmd.name.as_str()),
+            Arc::new(remote_table),
+        )?;
         Ok(make_dummy_exec())
     }
 }

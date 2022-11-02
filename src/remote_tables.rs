@@ -1,4 +1,3 @@
-use crate::schema::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use connectorx::prelude::{get_arrow, CXQuery, SourceConn};
@@ -10,18 +9,18 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::{Expr, TableType};
 use std::any::Any;
+use std::ops::Deref;
 use std::sync::Arc;
 
 // Implementation of a remote table, capable of querying Postgres, MySQL, SQLite, etc...
-struct RemoteTable {
+pub struct RemoteTable {
     name: Arc<str>,
-    schema: Arc<Schema>,
-    source_conn: SourceConn,
+    schema: SchemaRef,
+    source_conn: Arc<SourceConn>,
 }
 
 impl RemoteTable {
-    #[allow(dead_code)]
-    fn new(name: String, conn: &str, maybe_schema: Option<Schema>) -> Result<Self> {
+    pub fn new(name: String, conn: &str, mut schema: SchemaRef) -> Result<Self> {
         let source_conn = SourceConn::try_from(conn).map_err(|e| {
             DataFusionError::Execution(format!(
                 "Failed initialising the remote table {:?}",
@@ -29,18 +28,26 @@ impl RemoteTable {
             ))
         })?;
 
-        let schema = match maybe_schema {
-            Some(schema) => schema,
-            None => {
-                // TODO: Introspect schema
-                Schema::from_column_names_types(vec![].into_iter())
-            }
-        };
+        if schema.fields().is_empty() {
+            let one_row = &[CXQuery::from(
+                format!("SELECT * FROM {} LIMIT 1", name).as_str(),
+            )];
+
+            // Introspect the schema
+            schema = get_arrow(&source_conn, None, one_row)
+                .map_err(|e| {
+                    DataFusionError::Execution(format!(
+                        "Failed introspecting the schema {:?}",
+                        e
+                    ))
+                })?
+                .arrow_schema();
+        }
 
         Ok(Self {
             name: Arc::from(name),
-            schema: Arc::new(schema),
-            source_conn,
+            schema,
+            source_conn: Arc::new(source_conn),
         })
     }
 }
@@ -52,7 +59,7 @@ impl TableProvider for RemoteTable {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.schema.arrow_schema.clone()
+        self.schema.clone()
     }
 
     fn table_type(&self) -> TableType {
@@ -76,9 +83,13 @@ impl TableProvider for RemoteTable {
         )];
 
         // TODO: prettify the errors a bit
-        let destination = get_arrow(&self.source_conn, None, queries).map_err(|e| {
-            DataFusionError::Execution(format!("Failed running the remote query {:?}", e))
-        })?;
+        let destination =
+            get_arrow(self.source_conn.deref(), None, queries).map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "Failed running the remote query {:?}",
+                    e
+                ))
+            })?;
         let data = destination.arrow().map_err(|e| {
             DataFusionError::Execution(format!(
                 "Failed fetching the remote table data {:?}",
