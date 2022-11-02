@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.2.5] - 2022-11-02
+
 - Upgrade to DataFusion 13 (784f10bb) / Arrow 25.0.0
   (<https://github.com/splitgraph/seafowl/pull/176>)
 - Use ZSTD compression in Parquet files (<https://github.com/splitgraph/seafowl/pull/182>)
@@ -57,7 +59,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.4...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/splitgraph/seafowl/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/splitgraph/seafowl/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/splitgraph/seafowl/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/splitgraph/seafowl/compare/v0.2.1...v0.2.2
