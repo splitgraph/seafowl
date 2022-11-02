@@ -1412,9 +1412,10 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                             let remote_table = RemoteTable::new(
                                 remote_name.clone(),
-                                conn,
+                                conn.clone(),
                                 SchemaRef::from(schema.deref().clone()),
-                            )?;
+                            )
+                            .await?;
 
                             self.inner.register_table(
                                 resolved_reference,
