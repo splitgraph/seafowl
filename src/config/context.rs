@@ -111,6 +111,11 @@ pub async fn build_context(
         .with_information_schema(true)
         .with_default_catalog_and_schema(DEFAULT_DB, DEFAULT_SCHEMA);
 
+    // Make sure we have at least 2 target partitions even on single-core environments
+    // (issues with PartitionMode::CollectLeft hash joins if a single target partition)
+    let target_partitions = session_config.target_partitions.max(2);
+    let session_config = session_config.with_target_partitions(target_partitions);
+
     let context = SessionContext::with_config_rt(
         session_config,
         Arc::new(RuntimeEnv::new(runtime_config)?),
