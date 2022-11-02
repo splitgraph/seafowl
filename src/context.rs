@@ -70,7 +70,7 @@ use datafusion::{
         EmptyRecordBatchStream, ExecutionPlan, SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
-    sql::{planner::SqlToRel, TableReference},
+    sql::{parser, planner::SqlToRel, TableReference},
 };
 
 use datafusion_expr::logical_plan::{
@@ -86,6 +86,7 @@ use tokio::sync::Semaphore;
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{PhysicalPartitionId, TableId, TableVersionId};
 use crate::datafusion::visit::VisitorMut;
+use crate::nodes::CreateRemoteTable;
 use crate::provider::{
     project_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
     SeafowlTable,
@@ -565,6 +566,29 @@ impl DefaultSeafowlContext {
             .try_for_each(|f| self.register_function(&f.name, &f.details))
     }
 
+    // Check that the TableReference doesn't have a database/schema in it.
+    // We create all external tables in the staging schema (backed by DataFusion's
+    // in-memory schema provider) instead.
+    fn resolve_staging_ref<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> Result<ResolvedTableReference<'a>> {
+        let reference: TableReference = name.into();
+        let resolved_reference = reference.resolve(&self.database, STAGING_SCHEMA);
+
+        if resolved_reference.catalog != self.database
+            || resolved_reference.schema != STAGING_SCHEMA
+        {
+            return Err(DataFusionError::Plan(format!(
+                "Can only create external tables in the staging schema.
+                        Omit the schema/database altogether or use {}.{}.{}",
+                &self.database, STAGING_SCHEMA, resolved_reference.table
+            )));
+        }
+
+        Ok(resolved_reference)
+    }
+
     /// Get a provider for a given table, return Err if it doesn't exist
     fn get_table_provider(
         &self,
@@ -845,36 +869,6 @@ impl DefaultSeafowlContext {
                 cmd.name
             ))),
         }
-    }
-
-    async fn create_remote_table(
-        &self,
-        cmd: &CreateExternalTable,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let table = self.inner.table(cmd.name.as_str());
-
-        if table.is_ok() {
-            return if cmd.if_not_exists {
-                Ok(make_dummy_exec())
-            } else {
-                Err(DataFusionError::Execution(format!(
-                    "Table '{:?}' already exists",
-                    cmd.name
-                )))
-            };
-        }
-
-        let remote_table = RemoteTable::new(
-            cmd.file_compression_type.clone(),
-            &cmd.location,
-            SchemaRef::from(cmd.schema.deref().clone()),
-        )?;
-
-        self.inner.register_table(
-            TableReference::from(cmd.name.as_str()),
-            Arc::new(remote_table),
-        )?;
-        Ok(make_dummy_exec())
     }
 }
 
@@ -1212,6 +1206,35 @@ impl SeafowlContext for DefaultSeafowlContext {
                 ))),
             },
             DFStatement::DescribeTable(s) => query_planner.describe_table_to_plan(s),
+            DFStatement::CreateExternalTable(parser::CreateExternalTable {
+                ref file_type,
+                columns,
+                name,
+                file_compression_type,
+                location,
+                if_not_exists,
+                ..
+            }) if file_type == "TABLE" => {
+                // This is a special case where we need to create a remote table; since we abuse:
+                // 1) file_type to distinguish this case from file-based external table types
+                // 2) file_compression_type to smuggle the remote table name
+                // we can't use the regular CreateExternalTable plan, as DF complains about
+                // compression type being set for non-{CSV, JSON} file types.
+                let schema = build_schema(columns)?.to_dfschema_ref()?;
+
+                Ok(LogicalPlan::Extension(Extension {
+                    node: Arc::new(SeafowlExtensionNode::CreateRemoteTable(
+                        CreateRemoteTable {
+                            schema,
+                            name,
+                            remote_name: file_compression_type,
+                            if_not_exists,
+                            output_schema: Arc::new(DFSchema::empty()),
+                            conn: location,
+                        },
+                    )),
+                }))
+            }
             DFStatement::CreateExternalTable(c) => {
                 query_planner.external_table_to_plan(c)
             }
@@ -1255,22 +1278,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     ..
                 },
             ) => {
-                // Check that the TableReference doesn't have a database/schema in it.
-                // We create all external tables in the staging schema (backed by DataFusion's
-                // in-memory schema provider) instead.
-                let reference: TableReference = name.as_str().into();
-                let resolved_reference =
-                    reference.resolve(&self.database, STAGING_SCHEMA);
-
-                if resolved_reference.catalog != self.database
-                    || resolved_reference.schema != STAGING_SCHEMA
-                {
-                    return Err(DataFusionError::Plan(format!(
-                        "Can only create external tables in the staging schema.
-                        Omit the schema/database altogether or use {}.{}.{}",
-                        &self.database, STAGING_SCHEMA, resolved_reference.table
-                    )));
-                }
+                let resolved_reference = self.resolve_staging_ref(name)?;
 
                 // Replace the table name with the fully qualified one that has our staging schema
                 let mut cmd = cmd.clone();
@@ -1298,10 +1306,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                 cmd.location = location;
 
                 match file_type.as_str() {
-                    "TABLE" => {
-                        // Remote aka foreign table reference
-                        self.create_remote_table(&cmd).await
-                    }
                     "PARQUET" | "CSV" | "JSON" | "AVRO" => {
                         // Change here: if we're using an HTTP object store with a single file,
                         // we don't need to make sure it has the correct extension (since it's a
@@ -1382,6 +1386,40 @@ impl SeafowlContext for DefaultSeafowlContext {
                         }) => {
                             self.exec_create_table(name, schema).await?;
 
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::CreateRemoteTable(CreateRemoteTable {
+                            schema,
+                            name,
+                            remote_name,
+                            if_not_exists,
+                            conn,
+                            ..
+                        }) => {
+                            let resolved_reference = self.resolve_staging_ref(name)?;
+                            let table = self.inner.table(resolved_reference);
+
+                            if table.is_ok() {
+                                return if *if_not_exists {
+                                    Ok(make_dummy_exec())
+                                } else {
+                                    Err(DataFusionError::Execution(format!(
+                                        "Table '{:?}' already exists",
+                                        name
+                                    )))
+                                };
+                            }
+
+                            let remote_table = RemoteTable::new(
+                                remote_name.clone(),
+                                conn,
+                                SchemaRef::from(schema.deref().clone()),
+                            )?;
+
+                            self.inner.register_table(
+                                resolved_reference,
+                                Arc::new(remote_table),
+                            )?;
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::Insert(Insert { table, input, .. }) => {
