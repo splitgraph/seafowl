@@ -6,5 +6,5 @@
 #
 # https://users.rust-lang.org/t/pre-commit-clippy-fix/66584
 
-cargo clippy --all-targets --workspace --fix --allow-dirty --allow-staged
+cargo clippy --all-targets --workspace --fix --allow-dirty --allow-staged --allow-no-vcs
 cargo clippy --all-targets --workspace -- -D warnings
