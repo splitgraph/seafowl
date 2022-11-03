@@ -2082,4 +2082,40 @@ async fn test_remote_table_querying(introspect_schema: bool) {
         "+------------+--------+------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    // Verify column types in information schema
+    let results = list_columns_query(&context).await;
+
+    let expected = if introspect_schema {
+        vec![
+            "+--------------+----------------+------------------+-------------------------+",
+            "| table_schema | table_name     | column_name      | data_type               |",
+            "+--------------+----------------+------------------+-------------------------+",
+            "| staging      | remote_table   | a                | Int64                   |",
+            "| staging      | remote_table   | b                | Float64                 |",
+            "| staging      | remote_table   | c                | Utf8                    |",
+            "| staging      | remote_table   | d                | Date32                  |",
+            "| system       | table_versions | table_schema     | Utf8                    |",
+            "| system       | table_versions | table_name       | Utf8                    |",
+            "| system       | table_versions | table_version_id | Int64                   |",
+            "| system       | table_versions | creation_time    | Timestamp(Second, None) |",
+            "+--------------+----------------+------------------+-------------------------+",
+        ]
+    } else {
+        vec![
+            "+--------------+----------------+------------------+-------------------------+",
+            "| table_schema | table_name     | column_name      | data_type               |",
+            "+--------------+----------------+------------------+-------------------------+",
+            "| staging      | remote_table   | a                | Int32                   |",
+            "| staging      | remote_table   | b                | Float32                 |",
+            "| staging      | remote_table   | c                | Utf8                    |",
+            "| staging      | remote_table   | d                | Date32                  |",
+            "| system       | table_versions | table_schema     | Utf8                    |",
+            "| system       | table_versions | table_name       | Utf8                    |",
+            "| system       | table_versions | table_version_id | Int64                   |",
+            "| system       | table_versions | creation_time    | Timestamp(Second, None) |",
+            "+--------------+----------------+------------------+-------------------------+",
+        ]
+    };
+    assert_batches_eq!(expected, &results);
 }
