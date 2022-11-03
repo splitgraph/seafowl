@@ -5,10 +5,15 @@ use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
+use datafusion::physical_expr::expressions::{cast, col};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::{Expr, TableType};
+use log::debug;
 use std::any::Any;
+use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task;
 
@@ -94,23 +99,66 @@ impl TableProvider for RemoteTable {
         // TODO: try to push down the filters: re-construct the WHERE clause for the remote table
         // source type at hand if possible, and append to query
         // TODO: apply limit
-        // TODO: apply projection to skip fetching redundant columns
-        let queries = vec![CXQuery::from(
-            format!("SELECT * FROM {}", self.name).as_str(),
-        )];
 
-        let data = self.run_queries(queries).await?.arrow().map_err(|e| {
+        // Scope down the schema and query column specifiers if a projection is specified
+        let mut schema = self.schema.deref().clone();
+        let mut columns = "*".to_string();
+        if let Some(indices) = projection {
+            schema = schema.project(indices)?;
+            columns = schema
+                .fields()
+                .iter()
+                .map(|f| f.name().as_str())
+                .collect::<Vec<&str>>()
+                .join(", ")
+        }
+
+        // Construct and run the remote query
+        let queries = vec![CXQuery::from(
+            format!("SELECT {} FROM {}", columns, self.name).as_str(),
+        )];
+        let arrow_data = self.run_queries(queries).await?;
+        let src_schema = arrow_data.arrow_schema().deref().clone();
+        let data = arrow_data.arrow().map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed fetching the remote table data {:?}",
+                "Failed extracting the fetched data {:?}",
                 e
             ))
         })?;
 
-        // TODO: perform type coercion/casting if schema wasn't introspected
-        Ok(Arc::new(MemoryExec::try_new(
+        let mut plan: Arc<dyn ExecutionPlan> = Arc::new(MemoryExec::try_new(
             &[data],
-            self.schema(),
+            Arc::new(src_schema.clone()),
             projection.clone(),
-        )?))
+        )?);
+
+        if src_schema != schema {
+            // Try to cast each referenced column to the data type originally specified by the user
+            let cast_exprs: Result<Vec<(Arc<dyn PhysicalExpr>, String)>> = schema
+                .fields
+                .iter()
+                .zip(src_schema.fields().iter())
+                .map(|(f, src_f)| {
+                    let col_expr = col(f.name(), &schema)?;
+
+                    if src_f != f {
+                        Ok((
+                            cast(col_expr, &schema, f.data_type().clone())?,
+                            f.name().to_string(),
+                        ))
+                    } else {
+                        Ok((col_expr, f.name().to_string()))
+                    }
+                })
+                .collect();
+
+            debug!(
+                "Using cast for projecting remote table {} fields: {:?}",
+                self.name, cast_exprs
+            );
+            plan = Arc::new(ProjectionExec::try_new(cast_exprs?, plan)?)
+        }
+
+        Ok(plan)
     }
 }
