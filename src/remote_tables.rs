@@ -143,7 +143,7 @@ impl TableProvider for RemoteTable {
 
                     if src_f != f {
                         Ok((
-                            cast(col_expr, &schema, f.data_type().clone())?,
+                            cast(col_expr, &src_schema, f.data_type().clone())?,
                             f.name().to_string(),
                         ))
                     } else {

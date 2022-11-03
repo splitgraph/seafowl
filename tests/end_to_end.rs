@@ -1997,10 +1997,12 @@ async fn test_remote_table_querying(introspect_schema: bool) {
     let (context, repo) = make_context_with_pg().await;
 
     // Create a table in our metadata store, and insert some dummy data
+    // TODO: For some reason the TIMESTAMP field fetched by connectorX is a DataType::Date64 instead
+    // of DataType::Timestamp, so that example is omitted for the time being.
     repo.executor
         .execute(
             format!(
-                "CREATE TABLE {}.source_table (a INT, b FLOAT, c VARCHAR, d DATE, e TIMESTAMP)",
+                "CREATE TABLE {}.source_table (a INT, b FLOAT, c VARCHAR, d DATE)",
                 repo.schema_name
             )
             .as_str(),
@@ -2011,10 +2013,10 @@ async fn test_remote_table_querying(introspect_schema: bool) {
         .execute(
             format!(
                 "INSERT INTO {}.source_table VALUES \
-            (1, 1.1, 'one', '2022-11-01', '2022-11-01T22:11:01'),\
-            (2, 2.22, 'two', '2022-11-02', '2022-11-02T22:11:02'),\
-            (3, 3.333, 'three', '2022-11-03', '2022-11-03T22:11:03'),\
-            (4, 4.4444, 'four', '2022-11-04', '2022-11-04T22:11:04')",
+            (1, 1.1, 'one', '2022-11-01'),\
+            (2, 2.22, 'two', '2022-11-02'),\
+            (3, 3.333, 'three', '2022-11-03'),\
+            (4, 4.4444, 'four', '2022-11-04')",
                 repo.schema_name
             )
             .as_str(),
@@ -2025,7 +2027,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
     let table_column_schema = if introspect_schema {
         ""
     } else {
-        "(a INT, b FLOAT, c VARCHAR, d DATE, e TIMESTAMP)"
+        "(a INT, b FLOAT, c VARCHAR, d DATE)"
     };
 
     // Create a remote table (pointed at our metadata store table)
@@ -2052,17 +2054,32 @@ async fn test_remote_table_querying(introspect_schema: bool) {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    // TODO: For some reason the timestamp field fetched by connectorX is a DataType::Date64 instead
-    // of DataType::Timestamp
     let expected = vec![
-        "+---+--------+-------+------------+------------+",
-        "| a | b      | c     | d          | e          |",
-        "+---+--------+-------+------------+------------+",
-        "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01 |",
-        "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02 |",
-        "| 3 | 3.333  | three | 2022-11-03 | 2022-11-03 |",
-        "| 4 | 4.4444 | four  | 2022-11-04 | 2022-11-04 |",
-        "+---+--------+-------+------------+------------+",
+        "+---+--------+-------+------------+",
+        "| a | b      | c     | d          |",
+        "+---+--------+-------+------------+",
+        "| 1 | 1.1    | one   | 2022-11-01 |",
+        "| 2 | 2.22   | two   | 2022-11-02 |",
+        "| 3 | 3.333  | three | 2022-11-03 |",
+        "| 4 | 4.4444 | four  | 2022-11-04 |",
+        "+---+--------+-------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Test that projection and filtering work
+    let plan = context
+        .plan_query("SELECT d, b, c FROM staging.remote_table WHERE a > 3 OR c = 'two'")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+------------+--------+------+",
+        "| d          | b      | c    |",
+        "+------------+--------+------+",
+        "| 2022-11-02 | 2.22   | two  |",
+        "| 2022-11-04 | 4.4444 | four |",
+        "+------------+--------+------+",
     ];
     assert_batches_eq!(expected, &results);
 }
