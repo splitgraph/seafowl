@@ -359,8 +359,10 @@ impl Repository for $repo {
         &self,
     ) -> Result<Vec<String>, Error> {
         let object_storage_ids = sqlx::query(
-            "SELECT object_storage_id FROM physical_partition \
-            WHERE id NOT IN (SELECT physical_partition_id FROM table_partition)"
+            "SELECT DISTINCT object_storage_id FROM physical_partition
+                WHERE object_storage_id NOT IN (SELECT object_storage_id FROM physical_partition
+                    WHERE id IN (SELECT physical_partition_id FROM table_partition)
+            )"
         )
             .fetch(&self.executor)
             .map_ok(|row| row.get("object_storage_id"))
