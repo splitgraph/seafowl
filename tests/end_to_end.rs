@@ -2001,7 +2001,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
     repo.executor
         .execute(
             format!(
-                "CREATE TABLE {}.source_table (a INT, b FLOAT, c VARCHAR, d DATE, e TIMESTAMP)",
+                "CREATE TABLE {}.\"source table\" (a INT, b FLOAT, c VARCHAR, d DATE, e TIMESTAMP)",
                 repo.schema_name
             )
             .as_str(),
@@ -2011,7 +2011,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
     repo.executor
         .execute(
             format!(
-                "INSERT INTO {}.source_table VALUES \
+                "INSERT INTO {}.\"source table\" VALUES \
             (1, 1.1, 'one', '2022-11-01', '2022-11-01 22:11:01'),\
             (2, 2.22, 'two', '2022-11-02', '2022-11-02 22:11:02'),\
             (3, 3.333, 'three', '2022-11-03', '2022-11-03 22:11:03'),\
@@ -2034,7 +2034,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
         .plan_query(
             format!(
                 "CREATE EXTERNAL TABLE remote_table {}
-                STORED AS TABLE '{}.source_table'
+                STORED AS TABLE '{}.\"source table\"'
                 LOCATION '{}'",
                 table_column_schema,
                 repo.schema_name,
