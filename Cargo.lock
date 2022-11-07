@@ -198,6 +198,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "assert_unordered"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c74323b7881323eb351134e08ee5331594826789557afef8e309baf481b2264"
+dependencies = [
+ "ansi_term",
+]
+
+[[package]]
 name = "async-channel"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4032,11 +4041,12 @@ dependencies = [
 
 [[package]]
 name = "seafowl"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "arrow",
  "arrow-integration-test",
+ "assert_unordered",
  "async-trait",
  "base64",
  "bytes",

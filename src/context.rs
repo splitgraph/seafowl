@@ -782,6 +782,11 @@ impl DefaultSeafowlContext {
         )
         .await?;
 
+        debug!(
+            "execute_plan_to_partition completed, metrics: {:?}",
+            physical_plan.metrics()
+        );
+
         // Record partition metadata to the catalog
         self.partition_catalog
             .create_partitions(partitions)
@@ -1629,12 +1634,17 @@ impl SeafowlContext for DefaultSeafowlContext {
                                                 .partition_filter_plan(
                                                     group,
                                                     filter.clone(),
-                                                    &[expr.clone()],
+                                                    &[expr.clone().not()],
                                                     self.internal_object_store
                                                         .inner
                                                         .clone(),
                                                 )
                                                 .await?;
+
+                                            debug!(
+                                                "Prepared delete filter plan: {:?}",
+                                                &filter_plan
+                                            );
 
                                             final_partition_ids.extend(
                                                 self.execute_plan_to_partitions(
@@ -1656,7 +1666,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                             .partition_filter_plan(
                                                 partitions,
                                                 filter.clone(),
-                                                &[expr.clone()],
+                                                &[expr.clone().not()],
                                                 self.internal_object_store.inner.clone(),
                                             )
                                             .await?;

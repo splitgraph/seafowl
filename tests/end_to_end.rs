@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::record_batch::RecordBatch;
+use assert_unordered::assert_eq_unordered_sort;
 use chrono::{TimeZone, Utc};
 use datafusion::{assert_batches_eq, assert_contains};
 use futures::TryStreamExt;
@@ -1249,23 +1250,36 @@ async fn test_create_external_table_http() {
         .contains("No suitable object store found for seafowl://file"));
 }
 
+async fn assert_orphan_partitions(context: Arc<DefaultSeafowlContext>, parts: Vec<&str>) {
+    assert_eq_unordered_sort!(
+        context
+            .partition_catalog
+            .get_orphan_partition_store_ids()
+            .await
+            .unwrap()
+            // Turn Vec<String> -> Vec<&str>
+            .iter()
+            .map(|s| &**s)
+            .collect(),
+        parts
+    );
+}
+
+async fn get_partition_count(
+    context: Arc<DefaultSeafowlContext>,
+    table_version_id: i32,
+) -> usize {
+    context
+        .partition_catalog
+        .load_table_partitions(table_version_id as TableVersionId)
+        .await
+        .unwrap()
+        .len()
+}
+
 #[tokio::test]
 async fn test_vacuum_command() {
     let context = Arc::new(make_context_with_pg().await.0);
-
-    async fn assert_orphan_partitions(
-        context: Arc<DefaultSeafowlContext>,
-        parts: Vec<&str>,
-    ) {
-        assert_eq!(
-            context
-                .partition_catalog
-                .get_orphan_partition_store_ids()
-                .await
-                .unwrap(),
-            parts
-        );
-    }
 
     let get_object_metas = || async {
         context
@@ -1278,18 +1292,6 @@ async fn test_vacuum_command() {
             .await
             .unwrap()
     };
-
-    async fn get_partition_count(
-        context: Arc<DefaultSeafowlContext>,
-        table_version_id: i32,
-    ) -> usize {
-        context
-            .partition_catalog
-            .load_table_partitions(table_version_id as TableVersionId)
-            .await
-            .unwrap()
-            .len()
-    }
 
     //
     // Create two tables with multiple versions
@@ -1360,11 +1362,12 @@ async fn test_vacuum_command() {
         .unwrap();
 
     // Check we have orphan partitions
-    // NB: we have duplicates here which is expected, see: https://github.com/splitgraph/seafowl/issues/5
+    // NB: we deduplicate object storage IDs here to avoid running the DELETE call
+    // twice, but we can have two different partition IDs with same object storage ID
+    // See https://github.com/splitgraph/seafowl/issues/5
     let orphans = vec![
         FILENAME_1,
         "7b4ddceb7b8ac1869de495c355fd957ce94a891a1770c7e540fce4e47cd25a0e.parquet",
-        FILENAME_1,
         "b3e703ac60edd787afcdafc07b8cbb1fd6f5eb6c83e32f4a92ab7c77773bb151.parquet",
     ];
 
@@ -1392,6 +1395,61 @@ async fn test_vacuum_command() {
     assert_orphan_partitions(context.clone(), vec![]).await;
     let object_metas = get_object_metas().await;
     assert_eq!(object_metas.len(), 0);
+}
+
+#[tokio::test]
+async fn test_vacuum_with_reused_file() {
+    let context = Arc::new(make_context_with_pg().await);
+
+    // Creates table_1 (empty v1, v2) and table_2 (empty v3, v4)
+    // V2 and V4 point to a single identical partition
+    create_table_and_insert(&context, "table_1").await;
+    create_table_and_insert(&context, "table_2").await;
+
+    assert_eq!(get_partition_count(context.clone(), 4).await, 1);
+
+    // Delete everything from table_2 (creates a new table version V5 without any partitions)
+    context
+        .collect(context.plan_query("DELETE FROM table_2").await.unwrap())
+        .await
+        .unwrap();
+
+    // Vacuum (deleting table_2's old version V4)
+    context
+        .collect(context.plan_query("VACUUM TABLES").await.unwrap())
+        .await
+        .unwrap();
+
+    // V4 is now deleted (we currently report that as 0 partitions)
+    assert_eq!(get_partition_count(context.clone(), 4).await, 0);
+
+    // But v2 is still pointing to the same partition file, so it's not considered orphaned
+    assert_orphan_partitions(context.clone(), vec![]).await;
+
+    // Make sure vacuuming partitions does nothing
+    context
+        .collect(context.plan_query("VACUUM PARTITIONS").await.unwrap())
+        .await
+        .unwrap();
+
+    // Check the table_1 is still queryable
+    let plan = context
+        .plan_query("SELECT some_value FROM table_1 ORDER BY some_value")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+------------+",
+        "| some_value |",
+        "+------------+",
+        "| 42         |",
+        "| 43         |",
+        "| 44         |",
+        "+------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
 }
 
 #[tokio::test]
@@ -1597,6 +1655,89 @@ async fn test_delete_statement() {
     let results = context.collect(plan).await.unwrap();
 
     assert!(results.is_empty());
+}
+
+#[tokio::test]
+async fn test_delete_with_string_filter_exact_match() {
+    let context = make_context_with_pg().await;
+
+    context
+        .collect(
+            context
+                .plan_query("CREATE TABLE test_table(partition TEXT, value INTEGER)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    context
+        .collect(
+            context
+                .plan_query("INSERT INTO test_table VALUES('one', 1)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    context
+        .collect(
+            context
+                .plan_query("INSERT INTO test_table VALUES('two', 2)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    context
+        .collect(
+            context
+                .plan_query("INSERT INTO test_table VALUES('three', 3)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Filter that exactly matches partition 2
+    context
+        .collect(
+            context
+                .plan_query("DELETE FROM test_table WHERE partition = 'two'")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let partitions = context
+        .partition_catalog
+        .load_table_partitions(5 as TableVersionId)
+        .await
+        .unwrap();
+
+    // For some reason, the initial pruning in a DELETE doesn't discard the two
+    // partitions that definitely don't match (partition != 'two'), so we end up
+    // with a new partition (if we delete where value = 2, this does result in the other
+    // two partitions being kept as-is, so could have something to do with strings)
+    let results =
+        scan_partition(&context, None, partitions[0].clone(), "test_table").await;
+    let expected = vec![
+        "+-----------+-------+",
+        "| partition | value |",
+        "+-----------+-------+",
+        "| one       | 1     |",
+        "| three     | 3     |",
+        "+-----------+-------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    let plan = context
+        .plan_query("SELECT * FROM test_table ORDER BY value ASC")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+    assert_batches_eq!(expected, &results);
 }
 
 #[tokio::test]
