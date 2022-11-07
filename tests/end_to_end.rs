@@ -2001,7 +2001,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
     repo.executor
         .execute(
             format!(
-                "CREATE TABLE {}.\"source table\" (a INT, b FLOAT, c VARCHAR, d DATE, e TIMESTAMP)",
+                "CREATE TABLE {}.\"source table\" (a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP)",
                 repo.schema_name
             )
             .as_str(),
@@ -2026,7 +2026,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
     let table_column_schema = if introspect_schema {
         ""
     } else {
-        "(a INT, b FLOAT, c VARCHAR, d DATE, e TIMESTAMP)"
+        "(a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP)"
     };
 
     // Create a remote table (pointed at our metadata store table)
@@ -2057,7 +2057,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
         // Connector-X coerces the TIMESTAMP field to Date64
         vec![
             "+---+--------+-------+------------+------------+",
-            "| a | b      | c     | d          | e          |",
+            "| a | b      | c     | date field | e          |",
             "+---+--------+-------+------------+------------+",
             "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01 |",
             "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02 |",
@@ -2068,7 +2068,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
     } else {
         vec![
             "+---+--------+-------+------------+---------------------+",
-            "| a | b      | c     | d          | e                   |",
+            "| a | b      | c     | date field | e                   |",
             "+---+--------+-------+------------+---------------------+",
             "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01 22:11:01 |",
             "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02 22:11:02 |",
@@ -2081,14 +2081,14 @@ async fn test_remote_table_querying(introspect_schema: bool) {
 
     // Test that projection and filtering work
     let plan = context
-        .plan_query("SELECT d, b, c FROM staging.remote_table WHERE a > 3 OR c = 'two'")
+        .plan_query("SELECT \"date field\", b, c FROM staging.remote_table WHERE a > 3 OR c = 'two'")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
         "+------------+--------+------+",
-        "| d          | b      | c    |",
+        "| date field | b      | c    |",
         "+------------+--------+------+",
         "| 2022-11-02 | 2.22   | two  |",
         "| 2022-11-04 | 4.4444 | four |",
@@ -2107,7 +2107,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
             "| staging      | remote_table | a           | Int64     |",
             "| staging      | remote_table | b           | Float64   |",
             "| staging      | remote_table | c           | Utf8      |",
-            "| staging      | remote_table | d           | Date32    |",
+            "| staging      | remote_table | date field  | Date32    |",
             "| staging      | remote_table | e           | Date64    |",
             "+--------------+--------------+-------------+-----------+",
         ]
@@ -2119,7 +2119,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
             "| staging      | remote_table | a           | Int32                       |",
             "| staging      | remote_table | b           | Float32                     |",
             "| staging      | remote_table | c           | Utf8                        |",
-            "| staging      | remote_table | d           | Date32                      |",
+            "| staging      | remote_table | date field  | Date32                      |",
             "| staging      | remote_table | e           | Timestamp(Nanosecond, None) |",
             "+--------------+--------------+-------------+-----------------------------+",
         ]

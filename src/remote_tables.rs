@@ -19,6 +19,8 @@ use tokio::task;
 
 // Implementation of a remote table, capable of querying Postgres, MySQL, SQLite, etc...
 pub struct RemoteTable {
+    // We manually escape the field names during scans, but expect the user to escape the table name
+    // appropriately in the remote table definition
     name: Arc<str>,
     schema: SchemaRef,
     conn: String,
@@ -103,13 +105,14 @@ impl TableProvider for RemoteTable {
         // Scope down the schema and query column specifiers if a projection is specified
         let mut schema = self.schema.deref().clone();
         let mut columns = "*".to_string();
+
         if let Some(indices) = projection {
             schema = schema.project(indices)?;
             columns = schema
                 .fields()
                 .iter()
-                .map(|f| f.name().as_str())
-                .collect::<Vec<&str>>()
+                .map(|f| format!("\"{}\"", f.name()))
+                .collect::<Vec<String>>()
                 .join(", ")
         }
 
