@@ -4077,7 +4077,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.6",
- "sqlparser 0.25.0",
+ "sqlparser 0.26.0",
  "sqlx",
  "strum",
  "strum_macros",
@@ -4394,6 +4394,15 @@ name = "sqlparser"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0781f2b6bd03e5adf065c8e772b49eaea9f640d06a1b9130330fe8bd2563f4fd"
+dependencies = [
+ "log",
+]
+
+[[package]]
+name = "sqlparser"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86be66ea0b2b22749cfa157d16e2e84bf793e626a3375f4d378dc289fa03affb"
 dependencies = [
  "log",
 ]
