@@ -1997,12 +1997,10 @@ async fn test_remote_table_querying(introspect_schema: bool) {
     let (context, repo) = make_context_with_pg().await;
 
     // Create a table in our metadata store, and insert some dummy data
-    // TODO: For some reason the TIMESTAMP field fetched by connectorX is a DataType::Date64 instead
-    // of DataType::Timestamp, so that example is omitted for the time being.
     repo.executor
         .execute(
             format!(
-                "CREATE TABLE {}.source_table (a INT, b FLOAT, c VARCHAR, d DATE)",
+                "CREATE TABLE {}.source_table (a INT, b FLOAT, c VARCHAR, d DATE, e TIMESTAMP)",
                 repo.schema_name
             )
             .as_str(),
@@ -2013,10 +2011,10 @@ async fn test_remote_table_querying(introspect_schema: bool) {
         .execute(
             format!(
                 "INSERT INTO {}.source_table VALUES \
-            (1, 1.1, 'one', '2022-11-01'),\
-            (2, 2.22, 'two', '2022-11-02'),\
-            (3, 3.333, 'three', '2022-11-03'),\
-            (4, 4.4444, 'four', '2022-11-04')",
+            (1, 1.1, 'one', '2022-11-01', '2022-11-01 22:11:01'),\
+            (2, 2.22, 'two', '2022-11-02', '2022-11-02 22:11:02'),\
+            (3, 3.333, 'three', '2022-11-03', '2022-11-03 22:11:03'),\
+            (4, 4.4444, 'four', '2022-11-04', '2022-11-04 22:11:04')",
                 repo.schema_name
             )
             .as_str(),
@@ -2027,7 +2025,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
     let table_column_schema = if introspect_schema {
         ""
     } else {
-        "(a INT, b FLOAT, c VARCHAR, d DATE)"
+        "(a INT, b FLOAT, c VARCHAR, d DATE, e TIMESTAMP)"
     };
 
     // Create a remote table (pointed at our metadata store table)
@@ -2054,16 +2052,30 @@ async fn test_remote_table_querying(introspect_schema: bool) {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
-        "+---+--------+-------+------------+",
-        "| a | b      | c     | d          |",
-        "+---+--------+-------+------------+",
-        "| 1 | 1.1    | one   | 2022-11-01 |",
-        "| 2 | 2.22   | two   | 2022-11-02 |",
-        "| 3 | 3.333  | three | 2022-11-03 |",
-        "| 4 | 4.4444 | four  | 2022-11-04 |",
-        "+---+--------+-------+------------+",
-    ];
+    let expected = if introspect_schema {
+        // Connector-X coerces the TIMESTAMP field to Date64
+        vec![
+            "+---+--------+-------+------------+------------+",
+            "| a | b      | c     | d          | e          |",
+            "+---+--------+-------+------------+------------+",
+            "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01 |",
+            "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02 |",
+            "| 3 | 3.333  | three | 2022-11-03 | 2022-11-03 |",
+            "| 4 | 4.4444 | four  | 2022-11-04 | 2022-11-04 |",
+            "+---+--------+-------+------------+------------+",
+        ]
+    } else {
+        vec![
+            "+---+--------+-------+------------+---------------------+",
+            "| a | b      | c     | d          | e                   |",
+            "+---+--------+-------+------------+---------------------+",
+            "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01 22:11:01 |",
+            "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02 22:11:02 |",
+            "| 3 | 3.333  | three | 2022-11-03 | 2022-11-03 22:11:03 |",
+            "| 4 | 4.4444 | four  | 2022-11-04 | 2022-11-04 22:11:04 |",
+            "+---+--------+-------+------------+---------------------+",
+        ]
+    };
     assert_batches_eq!(expected, &results);
 
     // Test that projection and filtering work
@@ -2095,6 +2107,7 @@ async fn test_remote_table_querying(introspect_schema: bool) {
             "| staging      | remote_table   | b                | Float64                 |",
             "| staging      | remote_table   | c                | Utf8                    |",
             "| staging      | remote_table   | d                | Date32                  |",
+            "| staging      | remote_table   | e                | Date64                  |",
             "| system       | table_versions | table_schema     | Utf8                    |",
             "| system       | table_versions | table_name       | Utf8                    |",
             "| system       | table_versions | table_version_id | Int64                   |",
@@ -2103,18 +2116,19 @@ async fn test_remote_table_querying(introspect_schema: bool) {
         ]
     } else {
         vec![
-            "+--------------+----------------+------------------+-------------------------+",
-            "| table_schema | table_name     | column_name      | data_type               |",
-            "+--------------+----------------+------------------+-------------------------+",
-            "| staging      | remote_table   | a                | Int32                   |",
-            "| staging      | remote_table   | b                | Float32                 |",
-            "| staging      | remote_table   | c                | Utf8                    |",
-            "| staging      | remote_table   | d                | Date32                  |",
-            "| system       | table_versions | table_schema     | Utf8                    |",
-            "| system       | table_versions | table_name       | Utf8                    |",
-            "| system       | table_versions | table_version_id | Int64                   |",
-            "| system       | table_versions | creation_time    | Timestamp(Second, None) |",
-            "+--------------+----------------+------------------+-------------------------+",
+            "+--------------+----------------+------------------+-----------------------------+",
+            "| table_schema | table_name     | column_name      | data_type                   |",
+            "+--------------+----------------+------------------+-----------------------------+",
+            "| staging      | remote_table   | a                | Int32                       |",
+            "| staging      | remote_table   | b                | Float32                     |",
+            "| staging      | remote_table   | c                | Utf8                        |",
+            "| staging      | remote_table   | d                | Date32                      |",
+            "| staging      | remote_table   | e                | Timestamp(Nanosecond, None) |",
+            "| system       | table_versions | table_schema     | Utf8                        |",
+            "| system       | table_versions | table_name       | Utf8                        |",
+            "| system       | table_versions | table_version_id | Int64                       |",
+            "| system       | table_versions | creation_time    | Timestamp(Second, None)     |",
+            "+--------------+----------------+------------------+-----------------------------+",
         ]
     };
     assert_batches_eq!(expected, &results);
