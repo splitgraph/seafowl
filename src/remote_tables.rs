@@ -106,12 +106,15 @@ impl TableProvider for RemoteTable {
         let mut schema = self.schema.deref().clone();
         let mut columns = "*".to_string();
 
+        // TODO: Below we escape the double quotes in column names with PG-specific double double
+        // quotes; this will need to be customized according to the specific source type used once
+        // we start supporting more types.
         if let Some(indices) = projection {
             schema = schema.project(indices)?;
             columns = schema
                 .fields()
                 .iter()
-                .map(|f| format!("\"{}\"", f.name()))
+                .map(|f| format!("\"{}\"", f.name().replace('\"', "\"\"")))
                 .collect::<Vec<String>>()
                 .join(", ")
         }

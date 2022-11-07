@@ -1399,7 +1399,7 @@ async fn test_vacuum_command() {
 
 #[tokio::test]
 async fn test_vacuum_with_reused_file() {
-    let context = Arc::new(make_context_with_pg().await);
+    let context = Arc::new(make_context_with_pg().await.0);
 
     // Creates table_1 (empty v1, v2) and table_2 (empty v3, v4)
     // V2 and V4 point to a single identical partition
@@ -1659,7 +1659,7 @@ async fn test_delete_statement() {
 
 #[tokio::test]
 async fn test_delete_with_string_filter_exact_match() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     context
         .collect(
