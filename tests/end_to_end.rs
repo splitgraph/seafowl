@@ -1647,6 +1647,89 @@ async fn test_delete_statement() {
 }
 
 #[tokio::test]
+async fn test_delete_with_string_filter_exact_match() {
+    let context = make_context_with_pg().await;
+
+    context
+        .collect(
+            context
+                .plan_query("CREATE TABLE test_table(partition TEXT, value INTEGER)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    context
+        .collect(
+            context
+                .plan_query("INSERT INTO test_table VALUES('one', 1)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    context
+        .collect(
+            context
+                .plan_query("INSERT INTO test_table VALUES('two', 2)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    context
+        .collect(
+            context
+                .plan_query("INSERT INTO test_table VALUES('three', 3)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Filter that exactly matches partition 2
+    context
+        .collect(
+            context
+                .plan_query("DELETE FROM test_table WHERE partition = 'two'")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let partitions = context
+        .partition_catalog
+        .load_table_partitions(5 as TableVersionId)
+        .await
+        .unwrap();
+
+    // For some reason, the initial pruning in a DELETE doesn't discard the two
+    // partitions that definitely don't match (partition != 'two'), so we end up
+    // with a new partition (if we delete where value = 2, this does result in the other
+    // two partitions being kept as-is, so could have something to do with strings)
+    let results =
+        scan_partition(&context, None, partitions[0].clone(), "test_table").await;
+    let expected = vec![
+        "+-----------+-------+",
+        "| partition | value |",
+        "+-----------+-------+",
+        "| one       | 1     |",
+        "| three     | 3     |",
+        "+-----------+-------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    let plan = context
+        .plan_query("SELECT * FROM test_table ORDER BY value ASC")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+    assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
 async fn test_update_statement() {
     let context = make_context_with_pg().await;
 
