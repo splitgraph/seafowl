@@ -287,7 +287,7 @@ impl ObjectStore for CachingObjectStore {
         //  - range.end == 65 (get bytes 0..64 exclusive) -> final chunk is 64 / 16 = 4 (64..72 exclusive)
         let end_chunk = (range.end - 1) / self.min_fetch_size as usize;
 
-        let mut result = Vec::with_capacity((range.end - range.start) as usize);
+        let mut result = Vec::with_capacity(range.end - range.start);
 
         for chunk_num in start_chunk..(end_chunk + 1) {
             let mut data = self.get_chunk(location, chunk_num as u32).await?;

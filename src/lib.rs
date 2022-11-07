@@ -8,6 +8,7 @@ pub mod frontend;
 pub mod nodes;
 pub mod object_store;
 pub mod provider;
+pub mod remote_tables;
 pub mod repository;
 pub mod schema;
 pub mod system_tables;

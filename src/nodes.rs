@@ -23,6 +23,23 @@ pub struct CreateTable {
 }
 
 #[derive(Debug, Clone)]
+pub struct CreateRemoteTable {
+    /// The table schema
+    pub schema: DFSchemaRef,
+    /// The table name
+    pub name: String,
+    /// Remote table name
+    pub remote_name: String,
+    /// Option to not error if table already exists
+    pub if_not_exists: bool,
+    /// Database connection string
+    pub conn: String,
+
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
+}
+
+#[derive(Debug, Clone)]
 pub struct Insert {
     /// The table to insert into
     pub table: Arc<SeafowlTable>,
@@ -99,6 +116,7 @@ pub struct Vacuum {
 #[derive(Debug, Clone)]
 pub enum SeafowlExtensionNode {
     CreateTable(CreateTable),
+    CreateRemoteTable(CreateRemoteTable),
     Insert(Insert),
     Update(Update),
     Delete(Delete),
@@ -180,6 +198,10 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::CreateTable(CreateTable { output_schema, .. }) => {
                 output_schema
             }
+            SeafowlExtensionNode::CreateRemoteTable(CreateRemoteTable {
+                output_schema,
+                ..
+            }) => output_schema,
             SeafowlExtensionNode::Update(Update { output_schema, .. }) => output_schema,
             SeafowlExtensionNode::Delete(Delete { output_schema, .. }) => output_schema,
             SeafowlExtensionNode::CreateFunction(CreateFunction {
@@ -226,6 +248,11 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             }
             SeafowlExtensionNode::CreateTable(CreateTable { name, .. }) => {
                 write!(f, "Create: {}", name)
+            }
+            SeafowlExtensionNode::CreateRemoteTable(CreateRemoteTable {
+                name, ..
+            }) => {
+                write!(f, "Create remote: {}", name)
             }
             SeafowlExtensionNode::Update(Update {
                 table,

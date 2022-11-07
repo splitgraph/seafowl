@@ -38,6 +38,9 @@ chrono = { version = "0.4", default_features = false }
 clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
+# Remote query execution for a variety of DBs
+connectorx = { git = "https://github.com/splitgraph/connector-x", branch = "bump-arrow-and-datafusion", features = [ "dst_arrow", "src_postgres", "src_mysql" ] }
+
 # PG wire protocol support
 convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-13-upgrade", optional = true }
 convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-13-upgrade", package = "convergence-arrow", optional = true }
@@ -80,6 +83,8 @@ warp = "0.3"
 wasmtime = "0.40.0"
 
 [patch.crates-io]
+arrow = { git = "https://github.com/splitgraph/arrow-rs", branch = "cast-date64-to-timestamp" }
+arrow-integration-test = { git = "https://github.com/splitgraph/arrow-rs", branch = "cast-date64-to-timestamp" }
 datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "784f10bb57f86a4db2e01a6cb51da742af0dd9d9" }
 
 

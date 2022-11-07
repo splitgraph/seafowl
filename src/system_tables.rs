@@ -60,7 +60,7 @@ impl SchemaProvider for SystemSchemaProvider {
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        return matches!(name.to_ascii_lowercase().as_str(), TABLE_VERSIONS);
+        matches!(name.to_ascii_lowercase().as_str(), TABLE_VERSIONS)
     }
 }
 

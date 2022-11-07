@@ -11,6 +11,8 @@ use futures::TryStreamExt;
 use itertools::{sorted, Itertools};
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
+use sqlx::Executor;
+use test_case::test_case;
 use tokio::time::sleep;
 
 use seafowl::config::context::build_context;
@@ -20,6 +22,8 @@ use seafowl::context::SeafowlContext;
 use seafowl::data_types::{TableVersionId, Timestamp};
 use seafowl::provider::SeafowlPartition;
 use seafowl::repository::postgres::testutils::get_random_schema;
+use seafowl::repository::postgres::PostgresRepository;
+use seafowl::system_tables::SYSTEM_SCHEMA;
 
 // Hack because integration tests do not set cfg(test)
 // https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
@@ -36,7 +40,7 @@ const FILENAME_RECHUNKED: &str =
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
-async fn make_context_with_pg() -> DefaultSeafowlContext {
+async fn make_context_with_pg() -> (DefaultSeafowlContext, PostgresRepository) {
     let dsn = env::var("DATABASE_URL").unwrap();
     let schema = get_random_schema();
 
@@ -55,7 +59,10 @@ schema = "{}""#,
     // Ignore the "in-memory object store / persistent catalog" error in e2e tests (we'll discard
     // the PG instance anyway)
     let config = load_config_from_string(&config_text, true, None).unwrap();
-    build_context(&config).await.unwrap()
+    (
+        build_context(&config).await.unwrap(),
+        PostgresRepository::connect(dsn, schema).await.unwrap(),
+    )
 }
 
 /// Get a batch of results with all tables and columns in a database
@@ -64,10 +71,14 @@ async fn list_columns_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch>
         .collect(
             context
                 .plan_query(
-                    "SELECT table_schema, table_name, column_name, data_type
+                    format!(
+                        "SELECT table_schema, table_name, column_name, data_type
         FROM information_schema.columns
-        WHERE table_catalog = 'default'
+        WHERE table_catalog = 'default' AND table_schema != '{}'
         ORDER BY table_name, ordinal_position",
+                        SYSTEM_SCHEMA,
+                    )
+                    .as_str(),
                 )
                 .await
                 .unwrap(),
@@ -82,10 +93,14 @@ async fn list_tables_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch> 
         .collect(
             context
                 .plan_query(
-                    "SELECT table_schema, table_name
+                    format!(
+                        "SELECT table_schema, table_name
         FROM information_schema.tables
-        WHERE table_catalog = 'default'
+        WHERE table_catalog = 'default' AND table_schema != '{}'
         ORDER BY table_schema, table_name",
+                        SYSTEM_SCHEMA,
+                    )
+                    .as_str(),
                 )
                 .await
                 .unwrap(),
@@ -290,7 +305,7 @@ async fn assert_partition_ids(
 
 #[tokio::test]
 async fn test_information_schema() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     let plan = context
         .plan_query(
@@ -313,11 +328,38 @@ async fn test_information_schema() {
     ];
 
     assert_batches_eq!(expected, &results);
+
+    let plan = context
+        .plan_query(
+            format!(
+                "SELECT table_schema, table_name, column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = '{}'
+        ORDER BY table_name, ordinal_position",
+                SYSTEM_SCHEMA,
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+--------------+----------------+------------------+-------------------------+",
+        "| table_schema | table_name     | column_name      | data_type               |",
+        "+--------------+----------------+------------------+-------------------------+",
+        "| system       | table_versions | table_schema     | Utf8                    |",
+        "| system       | table_versions | table_name       | Utf8                    |",
+        "| system       | table_versions | table_version_id | Int64                   |",
+        "| system       | table_versions | creation_time    | Timestamp(Second, None) |",
+        "+--------------+----------------+------------------+-------------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
 }
 
 #[tokio::test]
 async fn test_create_table() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     let plan = context
         .plan_query(
@@ -336,19 +378,15 @@ async fn test_create_table() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+----------------+------------------+-----------------------------+",
-        "| table_schema | table_name     | column_name      | data_type                   |",
-        "+--------------+----------------+------------------+-----------------------------+",
-        "| system       | table_versions | table_schema     | Utf8                        |",
-        "| system       | table_versions | table_name       | Utf8                        |",
-        "| system       | table_versions | table_version_id | Int64                       |",
-        "| system       | table_versions | creation_time    | Timestamp(Second, None)     |",
-        "| public       | test_table     | some_bool_value  | Boolean                     |",
-        "| public       | test_table     | some_int_value   | Int64                       |",
-        "| public       | test_table     | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table     | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table     | some_value       | Float32                     |",
-        "+--------------+----------------+------------------+-----------------------------+",
+        "+--------------+------------+------------------+-----------------------------+",
+        "| table_schema | table_name | column_name      | data_type                   |",
+        "+--------------+------------+------------------+-----------------------------+",
+        "| public       | test_table | some_bool_value  | Boolean                     |",
+        "| public       | test_table | some_int_value   | Int64                       |",
+        "| public       | test_table | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table | some_value       | Float32                     |",
+        "+--------------+------------+------------------+-----------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -356,7 +394,7 @@ async fn test_create_table() {
 
 #[tokio::test]
 async fn test_create_table_and_insert() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     // TODO: insert into nonexistent table outputs a wrong error (schema "public" does not exist)
     create_table_and_insert(&context, "test_table").await;
@@ -416,7 +454,7 @@ async fn test_create_table_and_insert() {
 
 #[tokio::test]
 async fn test_insert_two_different_schemas() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
     create_table_and_insert(&context, "test_table").await;
 
     let plan = context
@@ -453,7 +491,7 @@ async fn test_insert_two_different_schemas() {
 
 #[tokio::test]
 async fn test_table_partitioning_and_rechunking() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     // Make table versions 1 and 2
     create_table_and_insert(&context, "test_table").await;
@@ -578,7 +616,7 @@ async fn test_table_partitioning_and_rechunking() {
 
 #[tokio::test]
 async fn test_create_table_as() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
     create_table_and_insert(&context, "test_table").await;
 
     let plan = context
@@ -619,7 +657,7 @@ async fn test_create_table_as() {
 async fn test_create_table_move_and_drop() {
     // Create two tables, insert some data into them
 
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     for table_name in ["test_table_1", "test_table_2"] {
         create_table_and_insert(&context, table_name).await;
@@ -628,24 +666,20 @@ async fn test_create_table_move_and_drop() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+----------------+------------------+-----------------------------+",
-        "| table_schema | table_name     | column_name      | data_type                   |",
-        "+--------------+----------------+------------------+-----------------------------+",
-        "| system       | table_versions | table_schema     | Utf8                        |",
-        "| system       | table_versions | table_name       | Utf8                        |",
-        "| system       | table_versions | table_version_id | Int64                       |",
-        "| system       | table_versions | creation_time    | Timestamp(Second, None)     |",
-        "| public       | test_table_1   | some_bool_value  | Boolean                     |",
-        "| public       | test_table_1   | some_int_value   | Int64                       |",
-        "| public       | test_table_1   | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_1   | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_1   | some_value       | Float32                     |",
-        "| public       | test_table_2   | some_bool_value  | Boolean                     |",
-        "| public       | test_table_2   | some_int_value   | Int64                       |",
-        "| public       | test_table_2   | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_2   | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_2   | some_value       | Float32                     |",
-        "+--------------+----------------+------------------+-----------------------------+",
+        "+--------------+--------------+------------------+-----------------------------+",
+        "| table_schema | table_name   | column_name      | data_type                   |",
+        "+--------------+--------------+------------------+-----------------------------+",
+        "| public       | test_table_1 | some_bool_value  | Boolean                     |",
+        "| public       | test_table_1 | some_int_value   | Int64                       |",
+        "| public       | test_table_1 | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table_1 | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table_1 | some_value       | Float32                     |",
+        "| public       | test_table_2 | some_bool_value  | Boolean                     |",
+        "| public       | test_table_2 | some_int_value   | Int64                       |",
+        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table_2 | some_value       | Float32                     |",
+        "+--------------+--------------+------------------+-----------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -672,17 +706,16 @@ async fn test_create_table_move_and_drop() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+----------------+",
-        "| table_schema       | table_name     |",
-        "+--------------------+----------------+",
-        "| information_schema | columns        |",
-        "| information_schema | df_settings    |",
-        "| information_schema | tables         |",
-        "| information_schema | views          |",
-        "| public             | test_table_2   |",
-        "| public             | test_table_3   |",
-        "| system             | table_versions |",
-        "+--------------------+----------------+",
+        "+--------------------+--------------+",
+        "| table_schema       | table_name   |",
+        "+--------------------+--------------+",
+        "| information_schema | columns      |",
+        "| information_schema | df_settings  |",
+        "| information_schema | tables       |",
+        "| information_schema | views        |",
+        "| public             | test_table_2 |",
+        "| public             | test_table_3 |",
+        "+--------------------+--------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -718,17 +751,16 @@ async fn test_create_table_move_and_drop() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+----------------+",
-        "| table_schema       | table_name     |",
-        "+--------------------+----------------+",
-        "| information_schema | columns        |",
-        "| information_schema | df_settings    |",
-        "| information_schema | tables         |",
-        "| information_schema | views          |",
-        "| new_schema         | test_table_3   |",
-        "| public             | test_table_2   |",
-        "| system             | table_versions |",
-        "+--------------------+----------------+",
+        "+--------------------+--------------+",
+        "| table_schema       | table_name   |",
+        "+--------------------+--------------+",
+        "| information_schema | columns      |",
+        "| information_schema | df_settings  |",
+        "| information_schema | tables       |",
+        "| information_schema | views        |",
+        "| new_schema         | test_table_3 |",
+        "| public             | test_table_2 |",
+        "+--------------------+--------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -742,19 +774,15 @@ async fn test_create_table_move_and_drop() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+----------------+------------------+-----------------------------+",
-        "| table_schema | table_name     | column_name      | data_type                   |",
-        "+--------------+----------------+------------------+-----------------------------+",
-        "| system       | table_versions | table_schema     | Utf8                        |",
-        "| system       | table_versions | table_name       | Utf8                        |",
-        "| system       | table_versions | table_version_id | Int64                       |",
-        "| system       | table_versions | creation_time    | Timestamp(Second, None)     |",
-        "| public       | test_table_2   | some_bool_value  | Boolean                     |",
-        "| public       | test_table_2   | some_int_value   | Int64                       |",
-        "| public       | test_table_2   | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_2   | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_2   | some_value       | Float32                     |",
-        "+--------------+----------------+------------------+-----------------------------+",
+        "+--------------+--------------+------------------+-----------------------------+",
+        "| table_schema | table_name   | column_name      | data_type                   |",
+        "+--------------+--------------+------------------+-----------------------------+",
+        "| public       | test_table_2 | some_bool_value  | Boolean                     |",
+        "| public       | test_table_2 | some_int_value   | Int64                       |",
+        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table_2 | some_value       | Float32                     |",
+        "+--------------+--------------+------------------+-----------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -765,24 +793,12 @@ async fn test_create_table_move_and_drop() {
     context.collect(plan).await.unwrap();
 
     let results = list_columns_query(&context).await;
-
-    let expected = vec![
-        "+--------------+----------------+------------------+-------------------------+",
-        "| table_schema | table_name     | column_name      | data_type               |",
-        "+--------------+----------------+------------------+-------------------------+",
-        "| system       | table_versions | table_schema     | Utf8                    |",
-        "| system       | table_versions | table_name       | Utf8                    |",
-        "| system       | table_versions | table_version_id | Int64                   |",
-        "| system       | table_versions | creation_time    | Timestamp(Second, None) |",
-        "+--------------+----------------+------------------+-------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
+    assert!(results.is_empty())
 }
 
 #[tokio::test]
 async fn test_create_table_drop_schema() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     for table_name in ["test_table_1", "test_table_2"] {
         create_table_and_insert(&context, table_name).await;
@@ -812,17 +828,16 @@ async fn test_create_table_drop_schema() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+----------------+",
-        "| table_schema       | table_name     |",
-        "+--------------------+----------------+",
-        "| information_schema | columns        |",
-        "| information_schema | df_settings    |",
-        "| information_schema | tables         |",
-        "| information_schema | views          |",
-        "| new_schema         | test_table_2   |",
-        "| public             | test_table_1   |",
-        "| system             | table_versions |",
-        "+--------------------+----------------+",
+        "+--------------------+--------------+",
+        "| table_schema       | table_name   |",
+        "+--------------------+--------------+",
+        "| information_schema | columns      |",
+        "| information_schema | df_settings  |",
+        "| information_schema | tables       |",
+        "| information_schema | views        |",
+        "| new_schema         | test_table_2 |",
+        "| public             | test_table_1 |",
+        "+--------------------+--------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -835,16 +850,15 @@ async fn test_create_table_drop_schema() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+----------------+",
-        "| table_schema       | table_name     |",
-        "+--------------------+----------------+",
-        "| information_schema | columns        |",
-        "| information_schema | df_settings    |",
-        "| information_schema | tables         |",
-        "| information_schema | views          |",
-        "| new_schema         | test_table_2   |",
-        "| system             | table_versions |",
-        "+--------------------+----------------+",
+        "+--------------------+--------------+",
+        "| table_schema       | table_name   |",
+        "+--------------------+--------------+",
+        "| information_schema | columns      |",
+        "| information_schema | df_settings  |",
+        "| information_schema | tables       |",
+        "| information_schema | views        |",
+        "| new_schema         | test_table_2 |",
+        "+--------------------+--------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -857,15 +871,14 @@ async fn test_create_table_drop_schema() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+----------------+",
-        "| table_schema       | table_name     |",
-        "+--------------------+----------------+",
-        "| information_schema | columns        |",
-        "| information_schema | df_settings    |",
-        "| information_schema | tables         |",
-        "| information_schema | views          |",
-        "| system             | table_versions |",
-        "+--------------------+----------------+",
+        "+--------------------+-------------+",
+        "| table_schema       | table_name  |",
+        "+--------------------+-------------+",
+        "| information_schema | columns     |",
+        "| information_schema | df_settings |",
+        "| information_schema | tables      |",
+        "| information_schema | views       |",
+        "+--------------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -888,23 +901,22 @@ async fn test_create_table_drop_schema() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+----------------+",
-        "| table_schema       | table_name     |",
-        "+--------------------+----------------+",
-        "| information_schema | columns        |",
-        "| information_schema | df_settings    |",
-        "| information_schema | tables         |",
-        "| information_schema | views          |",
-        "| public             | test_table_1   |",
-        "| system             | table_versions |",
-        "+--------------------+----------------+",
+        "+--------------------+--------------+",
+        "| table_schema       | table_name   |",
+        "+--------------------+--------------+",
+        "| information_schema | columns      |",
+        "| information_schema | df_settings  |",
+        "| information_schema | tables       |",
+        "| information_schema | views        |",
+        "| public             | test_table_1 |",
+        "+--------------------+--------------+",
     ];
     assert_batches_eq!(expected, &results);
 }
 
 #[tokio::test]
 async fn test_create_table_schema_already_exists() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     context
         .collect(
@@ -936,7 +948,7 @@ async fn test_create_table_schema_already_exists() {
 
 #[tokio::test]
 async fn test_create_table_in_staging_schema() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
     context
         .collect(
             context
@@ -970,7 +982,7 @@ async fn test_create_table_in_staging_schema() {
 
 #[tokio::test]
 async fn test_create_and_run_function() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     let function_query = r#"CREATE FUNCTION sintau AS '
     {
@@ -1023,7 +1035,7 @@ async fn test_create_and_run_function() {
 
 #[tokio::test]
 async fn test_create_and_run_function_legacy_type_names() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     let function_query = r#"CREATE FUNCTION sintau AS '
     {
@@ -1076,7 +1088,7 @@ async fn test_create_and_run_function_legacy_type_names() {
 
 #[tokio::test]
 async fn test_create_and_run_function_uppercase_type_names() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     let function_query = r#"CREATE FUNCTION sintau AS '
     {
@@ -1146,7 +1158,7 @@ async fn test_create_external_table_http() {
         &mock_server.uri()
     );
 
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     // Try creating a table in a non-staging schema
     let err = context
@@ -1184,16 +1196,15 @@ async fn test_create_external_table_http() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+----------------+",
-        "| table_schema       | table_name     |",
-        "+--------------------+----------------+",
-        "| information_schema | columns        |",
-        "| information_schema | df_settings    |",
-        "| information_schema | tables         |",
-        "| information_schema | views          |",
-        "| staging            | file           |",
-        "| system             | table_versions |",
-        "+--------------------+----------------+",
+        "+--------------------+-------------+",
+        "| table_schema       | table_name  |",
+        "+--------------------+-------------+",
+        "| information_schema | columns     |",
+        "| information_schema | df_settings |",
+        "| information_schema | tables      |",
+        "| information_schema | views       |",
+        "| staging            | file        |",
+        "+--------------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -1268,7 +1279,7 @@ async fn get_partition_count(
 
 #[tokio::test]
 async fn test_vacuum_command() {
-    let context = Arc::new(make_context_with_pg().await);
+    let context = Arc::new(make_context_with_pg().await.0);
 
     let get_object_metas = || async {
         context
@@ -1388,7 +1399,7 @@ async fn test_vacuum_command() {
 
 #[tokio::test]
 async fn test_vacuum_with_reused_file() {
-    let context = Arc::new(make_context_with_pg().await);
+    let context = Arc::new(make_context_with_pg().await.0);
 
     // Creates table_1 (empty v1, v2) and table_2 (empty v3, v4)
     // V2 and V4 point to a single identical partition
@@ -1443,7 +1454,7 @@ async fn test_vacuum_with_reused_file() {
 
 #[tokio::test]
 async fn test_delete_statement() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     create_table_and_some_partitions(&context, "test_table", None).await;
 
@@ -1648,7 +1659,7 @@ async fn test_delete_statement() {
 
 #[tokio::test]
 async fn test_delete_with_string_filter_exact_match() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     context
         .collect(
@@ -1731,7 +1742,7 @@ async fn test_delete_with_string_filter_exact_match() {
 
 #[tokio::test]
 async fn test_update_statement() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     create_table_and_some_partitions(&context, "test_table", None).await;
 
@@ -1856,7 +1867,7 @@ async fn test_update_statement() {
 
 #[tokio::test]
 async fn test_update_statement_errors() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
 
     // Creates table with table_versions 1 (empty) and 2
     create_table_and_insert(&context, "test_table").await;
@@ -1895,7 +1906,7 @@ async fn test_update_statement_errors() {
 
 #[tokio::test]
 async fn test_table_time_travel() {
-    let context = make_context_with_pg().await;
+    let (context, _) = make_context_with_pg().await;
     let (version_results, version_timestamps) = create_table_and_some_partitions(
         &context,
         "test_table",
@@ -1909,6 +1920,7 @@ async fn test_table_time_travel() {
     //
     // Verify that the new table versions are shown in the corresponding system table
     //
+
     let plan = context
         .plan_query("SELECT table_schema, table_name, table_version_id FROM system.table_versions")
         .await
@@ -2086,35 +2098,172 @@ async fn test_table_time_travel() {
     let results = list_tables_query(&context).await;
 
     let expected = vec![
-        "+--------------------+----------------+",
-        "| table_schema       | table_name     |",
-        "+--------------------+----------------+",
-        "| information_schema | columns        |",
-        "| information_schema | df_settings    |",
-        "| information_schema | tables         |",
-        "| information_schema | views          |",
-        "| public             | test_table     |",
-        "| system             | table_versions |",
-        "+--------------------+----------------+",
+        "+--------------------+-------------+",
+        "| table_schema       | table_name  |",
+        "+--------------------+-------------+",
+        "| information_schema | columns     |",
+        "| information_schema | df_settings |",
+        "| information_schema | tables      |",
+        "| information_schema | views       |",
+        "| public             | test_table  |",
+        "+--------------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
 
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+----------------+------------------+-----------------------------+",
-        "| table_schema | table_name     | column_name      | data_type                   |",
-        "+--------------+----------------+------------------+-----------------------------+",
-        "| system       | table_versions | table_schema     | Utf8                        |",
-        "| system       | table_versions | table_name       | Utf8                        |",
-        "| system       | table_versions | table_version_id | Int64                       |",
-        "| system       | table_versions | creation_time    | Timestamp(Second, None)     |",
-        "| public       | test_table     | some_bool_value  | Boolean                     |",
-        "| public       | test_table     | some_int_value   | Int64                       |",
-        "| public       | test_table     | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table     | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table     | some_value       | Float32                     |",
-        "+--------------+----------------+------------------+-----------------------------+",
+        "+--------------+------------+------------------+-----------------------------+",
+        "| table_schema | table_name | column_name      | data_type                   |",
+        "+--------------+------------+------------------+-----------------------------+",
+        "| public       | test_table | some_bool_value  | Boolean                     |",
+        "| public       | test_table | some_int_value   | Int64                       |",
+        "| public       | test_table | some_other_value | Decimal128(38, 10)          |",
+        "| public       | test_table | some_time        | Timestamp(Nanosecond, None) |",
+        "| public       | test_table | some_value       | Float32                     |",
+        "+--------------+------------+------------------+-----------------------------+",
     ];
+    assert_batches_eq!(expected, &results);
+}
+
+#[test_case(
+    true;
+    "schema introspected")
+]
+#[test_case(
+    false;
+    "schema declared")
+]
+#[tokio::test]
+async fn test_remote_table_querying(introspect_schema: bool) {
+    let (context, repo) = make_context_with_pg().await;
+
+    // Create a table in our metadata store, and insert some dummy data
+    repo.executor
+        .execute(
+            format!(
+                "CREATE TABLE {}.\"source table\" (a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP)",
+                repo.schema_name
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
+    repo.executor
+        .execute(
+            format!(
+                "INSERT INTO {}.\"source table\" VALUES \
+            (1, 1.1, 'one', '2022-11-01', '2022-11-01 22:11:01'),\
+            (2, 2.22, 'two', '2022-11-02', '2022-11-02 22:11:02'),\
+            (3, 3.333, 'three', '2022-11-03', '2022-11-03 22:11:03'),\
+            (4, 4.4444, 'four', '2022-11-04', '2022-11-04 22:11:04')",
+                repo.schema_name
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
+
+    let table_column_schema = if introspect_schema {
+        ""
+    } else {
+        "(a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP)"
+    };
+
+    // Create a remote table (pointed at our metadata store table)
+    let plan = context
+        .plan_query(
+            format!(
+                "CREATE EXTERNAL TABLE remote_table {}
+                STORED AS TABLE '{}.\"source table\"'
+                LOCATION '{}'",
+                table_column_schema,
+                repo.schema_name,
+                env::var("DATABASE_URL").unwrap()
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // Query remote table
+    let plan = context
+        .plan_query("SELECT * FROM staging.remote_table")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = if introspect_schema {
+        // Connector-X coerces the TIMESTAMP field to Date64
+        vec![
+            "+---+--------+-------+------------+------------+",
+            "| a | b      | c     | date field | e          |",
+            "+---+--------+-------+------------+------------+",
+            "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01 |",
+            "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02 |",
+            "| 3 | 3.333  | three | 2022-11-03 | 2022-11-03 |",
+            "| 4 | 4.4444 | four  | 2022-11-04 | 2022-11-04 |",
+            "+---+--------+-------+------------+------------+",
+        ]
+    } else {
+        vec![
+            "+---+--------+-------+------------+---------------------+",
+            "| a | b      | c     | date field | e                   |",
+            "+---+--------+-------+------------+---------------------+",
+            "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01 22:11:01 |",
+            "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02 22:11:02 |",
+            "| 3 | 3.333  | three | 2022-11-03 | 2022-11-03 22:11:03 |",
+            "| 4 | 4.4444 | four  | 2022-11-04 | 2022-11-04 22:11:04 |",
+            "+---+--------+-------+------------+---------------------+",
+        ]
+    };
+    assert_batches_eq!(expected, &results);
+
+    // Test that projection and filtering work
+    let plan = context
+        .plan_query("SELECT \"date field\", b, c FROM staging.remote_table WHERE a > 3 OR c = 'two'")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+------------+--------+------+",
+        "| date field | b      | c    |",
+        "+------------+--------+------+",
+        "| 2022-11-02 | 2.22   | two  |",
+        "| 2022-11-04 | 4.4444 | four |",
+        "+------------+--------+------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Verify column types in information schema
+    let results = list_columns_query(&context).await;
+
+    let expected = if introspect_schema {
+        vec![
+            "+--------------+--------------+-------------+-----------+",
+            "| table_schema | table_name   | column_name | data_type |",
+            "+--------------+--------------+-------------+-----------+",
+            "| staging      | remote_table | a           | Int64     |",
+            "| staging      | remote_table | b           | Float64   |",
+            "| staging      | remote_table | c           | Utf8      |",
+            "| staging      | remote_table | date field  | Date32    |",
+            "| staging      | remote_table | e           | Date64    |",
+            "+--------------+--------------+-------------+-----------+",
+        ]
+    } else {
+        vec![
+            "+--------------+--------------+-------------+-----------------------------+",
+            "| table_schema | table_name   | column_name | data_type                   |",
+            "+--------------+--------------+-------------+-----------------------------+",
+            "| staging      | remote_table | a           | Int32                       |",
+            "| staging      | remote_table | b           | Float32                     |",
+            "| staging      | remote_table | c           | Utf8                        |",
+            "| staging      | remote_table | date field  | Date32                      |",
+            "| staging      | remote_table | e           | Timestamp(Nanosecond, None) |",
+            "+--------------+--------------+-------------+-----------------------------+",
+        ]
+    };
     assert_batches_eq!(expected, &results);
 }
