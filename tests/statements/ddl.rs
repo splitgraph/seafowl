@@ -312,7 +312,7 @@ async fn test_create_table_drop_schema() {
     context
         .collect(
             context
-                .plan_query("CREATE TABLE test_table_1 (test_int INT)")
+                .plan_query("CREATE TABLE test_table_1 (\"key\" INT)")
                 .await
                 .unwrap(),
         )
@@ -342,14 +342,14 @@ async fn test_create_table_schema_already_exists() {
     context
         .collect(
             context
-                .plan_query("CREATE TABLE some_table(some_int INT)")
+                .plan_query("CREATE TABLE some_table(\"key\" INT)")
                 .await
                 .unwrap(),
         )
         .await
         .unwrap();
     let err = context
-        .plan_query("CREATE TABLE some_table(some_int INT)")
+        .plan_query("CREATE TABLE some_table(\"key\" INT)")
         .await
         .unwrap_err();
     assert_eq!(
@@ -373,7 +373,7 @@ async fn test_create_table_in_staging_schema() {
     context
         .collect(
             context
-                .plan_query("CREATE TABLE some_table(some_int INT)")
+                .plan_query("CREATE TABLE some_table(\"key\" INT)")
                 .await
                 .unwrap(),
         )
@@ -383,7 +383,7 @@ async fn test_create_table_in_staging_schema() {
     let expected_err = "Error during planning: The staging schema can only be referenced via CREATE EXTERNAL TABLE";
 
     let err = context
-        .plan_query("CREATE TABLE staging.some_table(some_int INT)")
+        .plan_query("CREATE TABLE staging.some_table(\"key\" INT)")
         .await
         .unwrap_err();
 

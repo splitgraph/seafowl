@@ -1110,7 +1110,7 @@ mod tests {
 
         let resp = query_uncached_endpoint_token(
             &handler,
-            "DROP TABLE test_table;CREATE TABLE test_table(my_key VARCHAR);
+            "DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
             INSERT INTO test_table VALUES('hey')",
             "somepw",
         )
@@ -1123,7 +1123,7 @@ mod tests {
             "somepw",
         )
         .await;
-        assert_eq!(resp.body(), "{\"my_key\":\"hey\"}\n");
+        assert_eq!(resp.body(), "{\"key\":\"hey\"}\n");
     }
 
     #[tokio::test]
@@ -1138,13 +1138,13 @@ mod tests {
 
         let resp = query_uncached_endpoint_token(
             &handler,
-            "DROP TABLE test_table;CREATE TABLE test_table(my_key VARCHAR);
+            "DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
             INSERT INTO test_table VALUES('hey');SELECT * FROM test_table;",
             "somepw",
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "{\"my_key\":\"hey\"}\n");
+        assert_eq!(resp.body(), "{\"key\":\"hey\"}\n");
     }
 
     #[tokio::test]
@@ -1158,7 +1158,7 @@ mod tests {
         );
 
         let resp =
-            query_uncached_endpoint_token(&handler, "SELECT * FROM test_table;DROP TABLE test_table;CREATE TABLE test_table(my_key VARCHAR);
+            query_uncached_endpoint_token(&handler, "SELECT * FROM test_table;DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
             INSERT INTO test_table VALUES('hey')", "somepw")
                 .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1178,7 +1178,7 @@ mod tests {
         );
 
         let resp =
-            query_uncached_endpoint_token(&handler, "DROP TABLE test_table;CREATE TABLE test_table(my_key VARCHAR);
+            query_uncached_endpoint_token(&handler, "DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
             INSERT INTO test_table VALUES('hey');SELECT * FROM test_table;SELECT * FROM test_table;", "somepw")
                 .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);

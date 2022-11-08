@@ -2380,7 +2380,7 @@ mod tests {
             .collect(
                 context
                     .plan_query(
-                        "CREATE TABLE test_table (my_key INTEGER, my_val STRING);",
+                        "CREATE TABLE test_table (\"key\" INTEGER, value STRING);",
                     )
                     .await?,
             )
@@ -2397,7 +2397,7 @@ mod tests {
         context
         .collect(
             context
-                .plan_query("INSERT INTO test_table(my_key, my_val) SELECT * FROM test_table WHERE my_val = 'two'")
+                .plan_query("INSERT INTO test_table(key, value) SELECT * FROM test_table WHERE value = 'two'")
                 .await?,
         )
         .await?;
@@ -2405,19 +2405,19 @@ mod tests {
         let results = context
             .collect(
                 context
-                    .plan_query("SELECT * FROM test_table ORDER BY my_key ASC")
+                    .plan_query("SELECT * FROM test_table ORDER BY key ASC")
                     .await?,
             )
             .await?;
 
         let expected = vec![
-            "+--------+--------+",
-            "| my_key | my_val |",
-            "+--------+--------+",
-            "| 1      | one    |",
-            "| 2      | two    |",
-            "| 2      | two    |",
-            "+--------+--------+",
+            "+-----+-------+",
+            "| key | value |",
+            "+-----+-------+",
+            "| 1   | one   |",
+            "| 2   | two   |",
+            "| 2   | two   |",
+            "+-----+-------+",
         ];
         assert_batches_eq!(expected, &results);
 
@@ -2431,7 +2431,7 @@ mod tests {
             .collect(
                 context
                     .plan_query(
-                        "CREATE TABLE test_table (my_key INTEGER, my_val STRING);",
+                        "CREATE TABLE test_table (\"key\" INTEGER, value STRING);",
                     )
                     .await?,
             )
@@ -2450,7 +2450,7 @@ mod tests {
         context
         .collect(
             context
-                .plan_query("INSERT INTO test_table(my_key, my_val) SELECT * FROM public.test_table WHERE my_val = 'two'")
+                .plan_query("INSERT INTO test_table(key, value) SELECT * FROM public.test_table WHERE value = 'two'")
                 .await?,
         )
         .await?;
@@ -2458,19 +2458,19 @@ mod tests {
         let results = context
             .collect(
                 context
-                    .plan_query("SELECT * FROM test_table ORDER BY my_key ASC")
+                    .plan_query("SELECT * FROM test_table ORDER BY key ASC")
                     .await?,
             )
             .await?;
 
         let expected = vec![
-            "+--------+--------+",
-            "| my_key | my_val |",
-            "+--------+--------+",
-            "| 1      | one    |",
-            "| 2      | two    |",
-            "| 2      | two    |",
-            "+--------+--------+",
+            "+-----+-------+",
+            "| key | value |",
+            "+-----+-------+",
+            "| 1   | one   |",
+            "| 2   | two   |",
+            "| 2   | two   |",
+            "+-----+-------+",
         ];
         assert_batches_eq!(expected, &results);
 
