@@ -6,6 +6,7 @@
 
 ## [0.2.6] - 2022-11-08
 
+- Update to DataFusion 14 / Arrow 26 (<https://github.com/splitgraph/seafowl/pull/198>)
 - Bugfix: `VACUUM` with shared partitions (<https://github.com/splitgraph/seafowl/pull/191>)
 - Bugfix: `DELETE` with certain filters that cover a whole partition
   (<https://github.com/splitgraph/seafowl/pull/192>)
