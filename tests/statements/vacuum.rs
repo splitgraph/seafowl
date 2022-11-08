@@ -89,9 +89,8 @@ async fn test_vacuum_command() {
     // twice, but we can have two different partition IDs with same object storage ID
     // See https://github.com/splitgraph/seafowl/issues/5
     let orphans = vec![
-        // TODO: Why is the first one not FILENAME_1?
+        FILENAME_1,
         "4d2e6f43a0dc42cedd89fe3510f477654c12a305d171c6213d2aa854682e4ee4.parquet",
-        "84ba4647437c6dcdcc565e655ea1f6ea50aa957e498731088856a60dd0696f51.parquet",
         "e0e13b9f480fd3f0ccb5753235075cdccd766eaad2299a99173bc4f99f5adb07.parquet",
     ];
 
