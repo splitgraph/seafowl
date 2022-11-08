@@ -12,7 +12,6 @@ use itertools::{sorted, Itertools};
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
 use sqlx::Executor;
-use test_case::test_case;
 use tokio::time::sleep;
 
 use seafowl::config::context::build_context;
@@ -27,8 +26,13 @@ use seafowl::system_tables::SYSTEM_SCHEMA;
 
 // Hack because integration tests do not set cfg(test)
 // https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
-#[path = "../src/object_store/testutils.rs"]
+mod ddl;
+mod dml;
+mod function;
+#[path = "../../src/object_store/testutils.rs"]
 mod http_testutils;
+mod query;
+mod vacuum;
 
 // Object store IDs for frequently-used test data
 const FILENAME_1: &str =

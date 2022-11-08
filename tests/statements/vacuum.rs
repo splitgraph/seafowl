@@ -1,3 +1,5 @@
+use crate::statements::*;
+
 #[tokio::test]
 async fn test_vacuum_command() {
     let context = Arc::new(make_context_with_pg().await.0);

@@ -1,3 +1,6 @@
+use crate::statements::*;
+use test_case::test_case;
+
 #[tokio::test]
 async fn test_information_schema() {
     let (context, _) = make_context_with_pg().await;

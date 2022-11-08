@@ -1,3 +1,5 @@
+use crate::http::*;
+
 #[tokio::test]
 async fn test_http_server_reader_writer() {
     // It's questionable how much value this testing adds on top of the tests in http.rs, but we do:

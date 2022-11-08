@@ -1,3 +1,5 @@
+use crate::statements::*;
+
 #[tokio::test]
 async fn test_create_and_run_function() {
     let (context, _) = make_context_with_pg().await;

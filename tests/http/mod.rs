@@ -1,3 +1,6 @@
+mod query;
+mod upload;
+
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -29,7 +32,6 @@ use itertools::Itertools;
 use seafowl::context::SeafowlContext;
 use std::net::SocketAddr;
 use tempfile::Builder;
-use test_case::test_case;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Sender;
 

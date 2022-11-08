@@ -1,3 +1,5 @@
+use crate::statements::*;
+
 #[tokio::test]
 async fn test_insert_two_different_schemas() {
     let (context, _) = make_context_with_pg().await;
