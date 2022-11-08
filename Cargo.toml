@@ -27,11 +27,11 @@ object-store-s3 = ["object_store/aws"]
 [dependencies]
 arrow = "26.0.0"
 arrow-buffer = "26.0.0"
-arrow-schema = "26.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
 arrow-integration-test = "26.0.0"
+arrow-schema = "26.0.0"
 async-trait = "0.1.41"
 base64 = "0.13.0"
 
@@ -87,8 +87,8 @@ wasmtime = "0.40.0"
 # Arrow 26 that picks up Date64 -> Timestamp cast needed for remote tables
 arrow = { git = "https://github.com/apache/arrow-rs", rev = "951caed784876d15a9e712a5981de31cee4e3085" }
 arrow-buffer = { git = "https://github.com/apache/arrow-rs", rev = "951caed784876d15a9e712a5981de31cee4e3085" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs", rev = "951caed784876d15a9e712a5981de31cee4e3085" }
 arrow-integration-test = { git = "https://github.com/apache/arrow-rs", rev = "951caed784876d15a9e712a5981de31cee4e3085" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs", rev = "951caed784876d15a9e712a5981de31cee4e3085" }
 
 [dev-dependencies]
 assert_unordered = "0.3"
