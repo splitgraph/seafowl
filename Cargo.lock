@@ -711,7 +711,7 @@ dependencies = [
 [[package]]
 name = "connectorx"
 version = "0.3.1"
-source = "git+https://github.com/splitgraph/connector-x?branch=bump-arrow-and-datafusion#a143dfeeec56d60b9b8bcb5a8e2bfe87b871665f"
+source = "git+https://github.com/splitgraph/connector-x?branch=bump-arrow-and-datafusion#9c7ef314e52c82ce17c352a6a073929b1d8c81b8"
 dependencies = [
  "anyhow",
  "arrow",
@@ -5080,7 +5080,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.8.5",
+ "rand 0.7.3",
  "static_assertions",
 ]
 
