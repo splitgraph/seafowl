@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.2.6] - 2022-11-08
+
 - Bugfix: `VACUUM` with shared partitions (<https://github.com/splitgraph/seafowl/pull/191>)
 - Bugfix: `DELETE` with certain filters that cover a whole partition
   (<https://github.com/splitgraph/seafowl/pull/192>)
@@ -67,7 +69,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.5...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/splitgraph/seafowl/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/splitgraph/seafowl/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/splitgraph/seafowl/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/splitgraph/seafowl/compare/v0.2.2...v0.2.3
