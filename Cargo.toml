@@ -81,7 +81,7 @@ url = "2.2"
 warp = "0.3"
 
 # For WASM user-defined functions
-wasmtime = "0.40.0"
+wasmtime = "2.0.1"
 
 [patch.crates-io]
 # Arrow 26 that picks up Date64 -> Timestamp cast needed for remote tables
