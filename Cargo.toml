@@ -25,6 +25,7 @@ frontend-postgres = ["convergence", "convergence-arrow"]
 object-store-s3 = ["object_store/aws"]
 
 [dependencies]
+anyhow = "1.0.63"
 arrow = "26.0.0"
 arrow-buffer = "26.0.0"
 # For the JSON format support

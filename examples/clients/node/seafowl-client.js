@@ -128,7 +128,7 @@ const writeQuery = (endpoint, query, password) =>
     req.write(data);
 
     req.on("error", (error) => {
-      reject({error, res});
+      reject({error, res: undefined});
     });
 
     req.end();
