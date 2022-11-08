@@ -958,7 +958,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     if_exists: _,
                     names,
                     cascade: _,
-                    purge: _, } => {
+                    purge: _, .. } => {
                         let name = names.first().unwrap().to_string();
 
                         Ok(LogicalPlan::Extension(Extension {
@@ -2065,12 +2065,12 @@ mod tests {
     use super::test_utils::{in_memory_context, mock_context};
 
     const PARTITION_1_FILE_NAME: &str =
-        "19ac37377b6477297ed620d6fed5bd5baeb13bcbdcd21da47865dad9ea7bd691.parquet";
+        "f11e13fd26f376f1df4ea82cd634e4f3f51afe046b73c5b0110529c14febfbd7.parquet";
     const PARTITION_2_FILE_NAME: &str =
-        "b7903885103721b7e36e7645e808da0beac6fa3f69b858201aac42c17de504bf.parquet";
+        "020dc010396517f2a104d468f5f2199185b177f63f0a216501ebdcc779432900.parquet";
 
     const EXPECTED_INSERT_FILE_NAME: &str =
-        "fa319dc4b3544bc5b427216e8cb6954f331284699e5c6032a03f5f2a8cc9a27b.parquet";
+        "82b6ac4d1a189e4af5a755058857ff1d1fbadfaced74c2788c609dc9985e827f.parquet";
 
     fn to_min_max_value(value: ScalarValue) -> Arc<Option<Vec<u8>>> {
         Arc::from(scalar_value_to_bytes(&value))
@@ -2379,7 +2379,9 @@ mod tests {
         context
             .collect(
                 context
-                    .plan_query("CREATE TABLE test_table (key INTEGER, value STRING);")
+                    .plan_query(
+                        "CREATE TABLE test_table (my_key INTEGER, my_val STRING);",
+                    )
                     .await?,
             )
             .await?;
@@ -2395,7 +2397,7 @@ mod tests {
         context
         .collect(
             context
-                .plan_query("INSERT INTO test_table(key, value) SELECT * FROM test_table WHERE value = 'two'")
+                .plan_query("INSERT INTO test_table(my_key, my_val) SELECT * FROM test_table WHERE my_val = 'two'")
                 .await?,
         )
         .await?;
@@ -2403,19 +2405,19 @@ mod tests {
         let results = context
             .collect(
                 context
-                    .plan_query("SELECT * FROM test_table ORDER BY key ASC")
+                    .plan_query("SELECT * FROM test_table ORDER BY my_key ASC")
                     .await?,
             )
             .await?;
 
         let expected = vec![
-            "+-----+-------+",
-            "| key | value |",
-            "+-----+-------+",
-            "| 1   | one   |",
-            "| 2   | two   |",
-            "| 2   | two   |",
-            "+-----+-------+",
+            "+--------+--------+",
+            "| my_key | my_val |",
+            "+--------+--------+",
+            "| 1      | one    |",
+            "| 2      | two    |",
+            "| 2      | two    |",
+            "+--------+--------+",
         ];
         assert_batches_eq!(expected, &results);
 
@@ -2428,7 +2430,9 @@ mod tests {
         context
             .collect(
                 context
-                    .plan_query("CREATE TABLE test_table (key INTEGER, value STRING);")
+                    .plan_query(
+                        "CREATE TABLE test_table (my_key INTEGER, my_val STRING);",
+                    )
                     .await?,
             )
             .await?;
@@ -2446,7 +2450,7 @@ mod tests {
         context
         .collect(
             context
-                .plan_query("INSERT INTO test_table(key, value) SELECT * FROM public.test_table WHERE value = 'two'")
+                .plan_query("INSERT INTO test_table(my_key, my_val) SELECT * FROM public.test_table WHERE my_val = 'two'")
                 .await?,
         )
         .await?;
@@ -2454,19 +2458,19 @@ mod tests {
         let results = context
             .collect(
                 context
-                    .plan_query("SELECT * FROM test_table ORDER BY key ASC")
+                    .plan_query("SELECT * FROM test_table ORDER BY my_key ASC")
                     .await?,
             )
             .await?;
 
         let expected = vec![
-            "+-----+-------+",
-            "| key | value |",
-            "+-----+-------+",
-            "| 1   | one   |",
-            "| 2   | two   |",
-            "| 2   | two   |",
-            "+-----+-------+",
+            "+--------+--------+",
+            "| my_key | my_val |",
+            "+--------+--------+",
+            "| 1      | one    |",
+            "| 2      | two    |",
+            "| 2      | two    |",
+            "+--------+--------+",
         ];
         assert_batches_eq!(expected, &results);
 

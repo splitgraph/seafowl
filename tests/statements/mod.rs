@@ -6,7 +6,8 @@ use std::time::Duration;
 use arrow::record_batch::RecordBatch;
 use assert_unordered::assert_eq_unordered_sort;
 use chrono::{TimeZone, Utc};
-use datafusion::{assert_batches_eq, assert_contains};
+use datafusion::assert_batches_eq;
+use datafusion_common::assert_contains;
 use futures::TryStreamExt;
 use itertools::{sorted, Itertools};
 use object_store::path::Path;
@@ -36,11 +37,11 @@ mod vacuum;
 
 // Object store IDs for frequently-used test data
 const FILENAME_1: &str =
-    "1476361e3c8491d32fa9410f53a04a9509e8380d36e4acd4ed9ccc917b7f3736.parquet";
+    "84ba4647437c6dcdcc565e655ea1f6ea50aa957e498731088856a60dd0696f51.parquet";
 const FILENAME_2: &str =
-    "b6efca8f331fb03a4c86c062445c3bf51bf22f09db07d18f0c04d6d82a83d85f.parquet";
+    "458a9c7e6b1b9637c7ce0c20b560c2645c7c8ec7d670bb90eb3481ec677762c1.parquet";
 const FILENAME_RECHUNKED: &str =
-    "a9ceb6cfdc8fcd364d8b30bfde11e90503423052d32b0a655846368ba1f5b366.parquet";
+    "13fe51ef3d3d21be9a1d7a95cdd449d8175b25732a12cfe5e54449f904901bd6.parquet";
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
