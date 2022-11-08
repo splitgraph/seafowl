@@ -4,6 +4,14 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Bugfix: `VACUUM` with shared partitions (<https://github.com/splitgraph/seafowl/pull/191>)
+- Bugfix: `DELETE` with certain filters that cover a whole partition
+  (<https://github.com/splitgraph/seafowl/pull/192>)
+- Initial support for other databases in `CREATE EXTERNAL TABLE`
+  (<https://github.com/splitgraph/seafowl/pull/190>)
+  - More documentation pending. Example:
+    `CREATE EXTERNAL TABLE t STORED AS TABLE 'public.t' LOCATION 'postgresql://uname:pw@host:port/dbname'`
+
 ## [0.2.5] - 2022-11-02
 
 - Upgrade to DataFusion 13 (784f10bb) / Arrow 25.0.0
