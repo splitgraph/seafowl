@@ -23,15 +23,22 @@ pub struct RemoteTable {
     // appropriately in the remote table definition
     name: Arc<str>,
     schema: SchemaRef,
-    conn: String,
+    source_conn: SourceConn,
 }
 
 impl RemoteTable {
     pub async fn new(name: String, conn: String, schema: SchemaRef) -> Result<Self> {
+        let source_conn = SourceConn::try_from(conn.as_str()).map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Failed initialising the remote table connection {:?}",
+                e
+            ))
+        })?;
+
         let mut remote_table = Self {
             name: Arc::from(name.clone()),
             schema: schema.clone(),
-            conn,
+            source_conn,
         };
 
         if schema.fields().is_empty() {
@@ -51,12 +58,7 @@ impl RemoteTable {
         queries: Vec<CXQuery<String>>,
     ) -> Result<ArrowDestination> {
         // TODO: prettify the errors a bit
-        let source_conn = SourceConn::try_from(self.conn.as_str()).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed initialising the remote table connection {:?}",
-                e
-            ))
-        })?;
+        let source_conn = self.source_conn.clone();
 
         task::spawn_blocking(move || {
             get_arrow(&source_conn, None, queries.as_slice()).map_err(|e| {

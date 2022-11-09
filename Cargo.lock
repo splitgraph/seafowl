@@ -589,9 +589,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.0.74"
+version = "1.0.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "581f5dba903aac52ea3feb5ec4810848460ee833876f1f9b0fdeab1f19091574"
+checksum = "76a284da2e6fe2092f2353e51713435363112dfd60030e22add80be333fb928f"
 dependencies = [
  "jobserver",
 ]
@@ -753,7 +753,7 @@ dependencies = [
 [[package]]
 name = "connectorx"
 version = "0.3.1"
-source = "git+https://github.com/splitgraph/connector-x?branch=datafusion-14-arrow-26-upgrade#dc47e1f7682bf41ab24afd88232e5fe8a5cd877c"
+source = "git+https://github.com/sfu-db/connector-x?rev=1c4e578f9d4cf6e963be67f96828b8709bd67022#1c4e578f9d4cf6e963be67f96828b8709bd67022"
 dependencies = [
  "anyhow",
  "arrow",
@@ -766,6 +766,7 @@ dependencies = [
  "native-tls",
  "num-traits",
  "openssl",
+ "owning_ref",
  "postgres",
  "postgres-native-tls",
  "postgres-openssl",
@@ -2470,9 +2471,9 @@ dependencies = [
 
 [[package]]
 name = "libm"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "292a948cd991e376cf75541fe5b97a1081d713c618b4f1b9500f8844e49eb565"
+checksum = "348108ab3fba42ec82ff6e9564fc4ca0247bdccdc68dd8af9764bbc79c3c8ffb"
 
 [[package]]
 name = "libsqlite3-sys"
@@ -3113,6 +3114,15 @@ name = "os_str_bytes"
 version = "6.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3baf96e39c5359d2eb0dd6ccb42c62b91d9678aa68160d261b9e0ccbf9e9dea9"
+
+[[package]]
+name = "owning_ref"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ff55baddef9e4ad00f88b6c743a2a8062d4c6ade126c2a528644b8e444d52ce"
+dependencies = [
+ "stable_deref_trait",
+]
 
 [[package]]
 name = "parking"
