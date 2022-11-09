@@ -3,7 +3,7 @@ use test_case::test_case;
 
 #[tokio::test]
 async fn test_information_schema() {
-    let (context, _) = make_context_with_pg().await;
+    let context = make_context_with_pg().await;
 
     let plan = context
         .plan_query(
@@ -57,7 +57,7 @@ async fn test_information_schema() {
 
 #[tokio::test]
 async fn test_create_table_and_insert() {
-    let (context, _) = make_context_with_pg().await;
+    let context = make_context_with_pg().await;
 
     // TODO: insert into nonexistent table outputs a wrong error (schema "public" does not exist)
     create_table_and_insert(&context, "test_table").await;
@@ -117,7 +117,7 @@ async fn test_create_table_and_insert() {
 
 #[tokio::test]
 async fn test_table_time_travel() {
-    let (context, _) = make_context_with_pg().await;
+    let context = make_context_with_pg().await;
     let (version_results, version_timestamps) = create_table_and_some_partitions(
         &context,
         "test_table",
@@ -338,42 +338,75 @@ async fn test_table_time_travel() {
 }
 
 #[test_case(
+    "Postgres",
     true;
-    "schema introspected")
+    "Postgres schema introspected")
 ]
 #[test_case(
+    "Postgres",
     false;
-    "schema declared")
+    "Postgres schema declared")
+]
+#[test_case(
+    "SQLite",
+    true;
+    "SQLite schema introspected")
+]
+#[test_case(
+    "SQLite",
+    false;
+    "SQLite schema declared")
 ]
 #[tokio::test]
-async fn test_remote_table_querying(introspect_schema: bool) {
-    let (context, repo) = make_context_with_pg().await;
+async fn test_remote_table_querying(db_type: &str, introspect_schema: bool) {
+    let context = make_context_with_pg().await;
+
+    let schema = get_random_schema();
+    let _temp_path: TempPath;
+    let (dsn, table_name) = if db_type == "Postgres" {
+        (
+            env::var("DATABASE_URL").unwrap(),
+            format!("{}.\"source table\"", schema),
+        )
+    } else {
+        // SQLite
+        let temp_file = NamedTempFile::new().unwrap();
+        let dsn = temp_file.path().to_string_lossy().to_string();
+        // We need the temp file to outlive this scope, so we must open a path ref to it
+        _temp_path = temp_file.into_temp_path();
+        (format!("sqlite://{}", dsn), "\"source table\"".to_string())
+    };
+    let pool = AnyPool::connect(dsn.as_str()).await.unwrap();
+
+    if db_type == "Postgres" {
+        pool.execute(format!("CREATE SCHEMA {}", schema).as_str())
+            .await
+            .unwrap();
+    }
 
     // Create a table in our metadata store, and insert some dummy data
-    repo.executor
-        .execute(
+    pool.execute(
             format!(
-                "CREATE TABLE {}.\"source table\" (a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP)",
-                repo.schema_name
+                "CREATE TABLE {} (a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP)",
+                table_name
             )
             .as_str(),
         )
         .await
         .unwrap();
-    repo.executor
-        .execute(
-            format!(
-                "INSERT INTO {}.\"source table\" VALUES \
+    pool.execute(
+        format!(
+            "INSERT INTO {} VALUES \
             (1, 1.1, 'one', '2022-11-01', '2022-11-01 22:11:01'),\
             (2, 2.22, 'two', '2022-11-02', '2022-11-02 22:11:02'),\
             (3, 3.333, 'three', '2022-11-03', '2022-11-03 22:11:03'),\
             (4, 4.4444, 'four', '2022-11-04', '2022-11-04 22:11:04')",
-                repo.schema_name
-            )
-            .as_str(),
+            table_name
         )
-        .await
-        .unwrap();
+        .as_str(),
+    )
+    .await
+    .unwrap();
 
     let table_column_schema = if introspect_schema {
         ""
@@ -386,11 +419,9 @@ async fn test_remote_table_querying(introspect_schema: bool) {
         .plan_query(
             format!(
                 "CREATE EXTERNAL TABLE remote_table {}
-                STORED AS TABLE '{}.\"source table\"'
+                STORED AS TABLE '{}'
                 LOCATION '{}'",
-                table_column_schema,
-                repo.schema_name,
-                env::var("DATABASE_URL").unwrap()
+                table_column_schema, table_name, dsn
             )
             .as_str(),
         )

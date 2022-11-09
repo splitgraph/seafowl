@@ -41,7 +41,7 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
 # Remote query execution for a variety of DBs
-connectorx = { git = "https://github.com/sfu-db/connector-x", rev = "1c4e578f9d4cf6e963be67f96828b8709bd67022", features = [ "dst_arrow", "src_postgres", "src_mysql" ] }
+connectorx = { git = "https://github.com/splitgraph/connector-x", rev = "ee8d459e8a7e5f524ce4f3059459a71e2def3a27", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
 
 # PG wire protocol support
 convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-14-upgrade", optional = true }
@@ -72,7 +72,7 @@ serde = "1.0.138"
 serde_json = "1.0.81"
 sha2 = ">=0.10.1"
 sqlparser = "0.26.0"
-sqlx = { version = "0.6.2", features = [ "runtime-tokio-rustls", "sqlite" ] }
+sqlx = { version = "0.6.2", features = [ "runtime-tokio-rustls", "sqlite", "any" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
 tempfile = "3"
