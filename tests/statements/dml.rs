@@ -2,7 +2,7 @@ use crate::statements::*;
 
 #[tokio::test]
 async fn test_insert_two_different_schemas() {
-    let (context, _) = make_context_with_pg().await;
+    let context = make_context_with_pg().await;
     create_table_and_insert(&context, "test_table").await;
 
     let plan = context
@@ -39,7 +39,7 @@ async fn test_insert_two_different_schemas() {
 
 #[tokio::test]
 async fn test_table_partitioning_and_rechunking() {
-    let (context, _) = make_context_with_pg().await;
+    let context = make_context_with_pg().await;
 
     // Make table versions 1 and 2
     create_table_and_insert(&context, "test_table").await;
@@ -164,7 +164,7 @@ async fn test_table_partitioning_and_rechunking() {
 
 #[tokio::test]
 async fn test_delete_statement() {
-    let (context, _) = make_context_with_pg().await;
+    let context = make_context_with_pg().await;
 
     create_table_and_some_partitions(&context, "test_table", None).await;
 
@@ -369,7 +369,7 @@ async fn test_delete_statement() {
 
 #[tokio::test]
 async fn test_delete_with_string_filter_exact_match() {
-    let (context, _) = make_context_with_pg().await;
+    let context = make_context_with_pg().await;
 
     context
         .collect(
@@ -452,7 +452,7 @@ async fn test_delete_with_string_filter_exact_match() {
 
 #[tokio::test]
 async fn test_update_statement() {
-    let (context, _) = make_context_with_pg().await;
+    let context = make_context_with_pg().await;
 
     create_table_and_some_partitions(&context, "test_table", None).await;
 
@@ -577,7 +577,7 @@ async fn test_update_statement() {
 
 #[tokio::test]
 async fn test_update_statement_errors() {
-    let (context, _) = make_context_with_pg().await;
+    let context = make_context_with_pg().await;
 
     // Creates table with table_versions 1 (empty) and 2
     create_table_and_insert(&context, "test_table").await;

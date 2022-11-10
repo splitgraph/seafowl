@@ -12,7 +12,8 @@ use futures::TryStreamExt;
 use itertools::{sorted, Itertools};
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
-use sqlx::Executor;
+use sqlx::{AnyPool, Executor};
+use tempfile::{NamedTempFile, TempPath};
 use tokio::time::sleep;
 
 use seafowl::config::context::build_context;
@@ -22,7 +23,6 @@ use seafowl::context::SeafowlContext;
 use seafowl::data_types::{TableVersionId, Timestamp};
 use seafowl::provider::SeafowlPartition;
 use seafowl::repository::postgres::testutils::get_random_schema;
-use seafowl::repository::postgres::PostgresRepository;
 use seafowl::system_tables::SYSTEM_SCHEMA;
 
 // Hack because integration tests do not set cfg(test)
@@ -45,7 +45,7 @@ const FILENAME_RECHUNKED: &str =
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
-async fn make_context_with_pg() -> (DefaultSeafowlContext, PostgresRepository) {
+async fn make_context_with_pg() -> DefaultSeafowlContext {
     let dsn = env::var("DATABASE_URL").unwrap();
     let schema = get_random_schema();
 
@@ -64,10 +64,7 @@ schema = "{}""#,
     // Ignore the "in-memory object store / persistent catalog" error in e2e tests (we'll discard
     // the PG instance anyway)
     let config = load_config_from_string(&config_text, true, None).unwrap();
-    (
-        build_context(&config).await.unwrap(),
-        PostgresRepository::connect(dsn, schema).await.unwrap(),
-    )
+    build_context(&config).await.unwrap()
 }
 
 /// Get a batch of results with all tables and columns in a database

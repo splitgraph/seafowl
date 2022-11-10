@@ -2,7 +2,7 @@ use crate::statements::*;
 
 #[tokio::test]
 async fn test_vacuum_command() {
-    let context = Arc::new(make_context_with_pg().await.0);
+    let context = Arc::new(make_context_with_pg().await);
 
     let get_object_metas = || async {
         context
@@ -122,7 +122,7 @@ async fn test_vacuum_command() {
 
 #[tokio::test]
 async fn test_vacuum_with_reused_file() {
-    let context = Arc::new(make_context_with_pg().await.0);
+    let context = Arc::new(make_context_with_pg().await);
 
     // Creates table_1 (empty v1, v2) and table_2 (empty v3, v4)
     // V2 and V4 point to a single identical partition
