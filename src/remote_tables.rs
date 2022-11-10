@@ -137,7 +137,7 @@ impl TableProvider for RemoteTable {
         let mut plan: Arc<dyn ExecutionPlan> = Arc::new(MemoryExec::try_new(
             &[data],
             Arc::new(src_schema.clone()),
-            projection.clone(),
+            None,
         )?);
 
         if src_schema != schema {
