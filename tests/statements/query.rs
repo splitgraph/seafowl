@@ -464,18 +464,20 @@ async fn test_remote_table_querying(db_type: &str, introspect_schema: bool) {
 
     // Test that projection and filtering work
     let plan = context
-        .plan_query("SELECT \"date field\", b, c FROM staging.remote_table WHERE a > 3 OR c = 'two'")
+        .plan_query(
+            "SELECT \"date field\", c FROM staging.remote_table WHERE a > 3 OR c = 'two'",
+        )
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+------------+--------+------+",
-        "| date field | b      | c    |",
-        "+------------+--------+------+",
-        "| 2022-11-02 | 2.22   | two  |",
-        "| 2022-11-04 | 4.4444 | four |",
-        "+------------+--------+------+",
+        "+------------+------+",
+        "| date field | c    |",
+        "+------------+------+",
+        "| 2022-11-02 | two  |",
+        "| 2022-11-04 | four |",
+        "+------------+------+",
     ];
     assert_batches_eq!(expected, &results);
 
