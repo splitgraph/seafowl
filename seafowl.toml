@@ -13,3 +13,4 @@ bind_port = 6432
 
 [frontend.http]
 bind_host = "0.0.0.0"
+write_access = "8c0754add53c7ef2781fba551fa8427bbedb251d03ea9685402ba3126c746ac5"

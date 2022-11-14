@@ -28,12 +28,16 @@ pub struct RemoteTable {
 
 impl RemoteTable {
     pub async fn new(name: String, conn: String, schema: SchemaRef) -> Result<Self> {
-        let source_conn = SourceConn::try_from(conn.as_str()).map_err(|e| {
+        let mut source_conn = SourceConn::try_from(conn.as_str()).map_err(|e| {
             DataFusionError::Execution(format!(
                 "Failed initialising the remote table connection {:?}",
                 e
             ))
         })?;
+        if conn.contains("/ddn") {
+            // Splitgraph DDN disallows COPY statements that are used in the default binary protocol
+            source_conn.set_protocol("cursor");
+        }
 
         let mut remote_table = Self {
             name: Arc::from(name.clone()),
