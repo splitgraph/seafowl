@@ -41,7 +41,7 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
 # Remote query execution for a variety of DBs
-connectorx = { git = "https://github.com/splitgraph/connector-x", rev = "ee8d459e8a7e5f524ce4f3059459a71e2def3a27", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
+connectorx = { git = "https://github.com/splitgraph/connector-x", rev = "eb4ad33171712b120ed7e66ed6c8c91c53ff0de4", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
 
 # PG wire protocol support
 convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-14-upgrade", optional = true }

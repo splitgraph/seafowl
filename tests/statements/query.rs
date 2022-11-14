@@ -387,7 +387,7 @@ async fn test_remote_table_querying(db_type: &str, introspect_schema: bool) {
     // Create a table in our metadata store, and insert some dummy data
     pool.execute(
             format!(
-                "CREATE TABLE {} (a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP)",
+                "CREATE TABLE {} (a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP, f JSON)",
                 table_name
             )
             .as_str(),
@@ -397,10 +397,10 @@ async fn test_remote_table_querying(db_type: &str, introspect_schema: bool) {
     pool.execute(
         format!(
             "INSERT INTO {} VALUES \
-            (1, 1.1, 'one', '2022-11-01', '2022-11-01 22:11:01'),\
-            (2, 2.22, 'two', '2022-11-02', '2022-11-02 22:11:02'),\
-            (3, 3.333, 'three', '2022-11-03', '2022-11-03 22:11:03'),\
-            (4, 4.4444, 'four', '2022-11-04', '2022-11-04 22:11:04')",
+            (1, 1.1, 'one', '2022-11-01', '2022-11-01 22:11:01', '{{\"rows\":[1]}}'),\
+            (2, 2.22, 'two', '2022-11-02', '2022-11-02 22:11:02', '{{\"rows\":[1,2]}}'),\
+            (3, 3.333, 'three', '2022-11-03', '2022-11-03 22:11:03', '{{\"rows\":[1,2,3]}}'),\
+            (4, 4.4444, 'four', '2022-11-04', '2022-11-04 22:11:04', '{{\"rows\":[1,2,3,4]}}')",
             table_name
         )
         .as_str(),
@@ -411,7 +411,7 @@ async fn test_remote_table_querying(db_type: &str, introspect_schema: bool) {
     let table_column_schema = if introspect_schema {
         ""
     } else {
-        "(a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP)"
+        "(a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP, f TEXT)"
     };
 
     // Create a remote table (pointed at our metadata store table)
@@ -437,27 +437,28 @@ async fn test_remote_table_querying(db_type: &str, introspect_schema: bool) {
     let results = context.collect(plan).await.unwrap();
 
     let expected = if introspect_schema {
-        // Connector-X coerces the TIMESTAMP field to Date64
+        // Connector-X coerces the TIMESTAMP field to Date64, but that data type still has
+        // millisecond resolution so why isn't it being shown?
         vec![
-            "+---+--------+-------+------------+------------+",
-            "| a | b      | c     | date field | e          |",
-            "+---+--------+-------+------------+------------+",
-            "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01 |",
-            "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02 |",
-            "| 3 | 3.333  | three | 2022-11-03 | 2022-11-03 |",
-            "| 4 | 4.4444 | four  | 2022-11-04 | 2022-11-04 |",
-            "+---+--------+-------+------------+------------+",
+            "+---+--------+-------+------------+------------+--------------------+",
+            "| a | b      | c     | date field | e          | f                  |",
+            "+---+--------+-------+------------+------------+--------------------+",
+            "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01 | {\"rows\":[1]}       |",
+            "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02 | {\"rows\":[1,2]}     |",
+            "| 3 | 3.333  | three | 2022-11-03 | 2022-11-03 | {\"rows\":[1,2,3]}   |",
+            "| 4 | 4.4444 | four  | 2022-11-04 | 2022-11-04 | {\"rows\":[1,2,3,4]} |",
+            "+---+--------+-------+------------+------------+--------------------+",
         ]
     } else {
         vec![
-            "+---+--------+-------+------------+---------------------+",
-            "| a | b      | c     | date field | e                   |",
-            "+---+--------+-------+------------+---------------------+",
-            "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01T22:11:01 |",
-            "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02T22:11:02 |",
-            "| 3 | 3.333  | three | 2022-11-03 | 2022-11-03T22:11:03 |",
-            "| 4 | 4.4444 | four  | 2022-11-04 | 2022-11-04T22:11:04 |",
-            "+---+--------+-------+------------+---------------------+",
+            "+---+--------+-------+------------+---------------------+--------------------+",
+            "| a | b      | c     | date field | e                   | f                  |",
+            "+---+--------+-------+------------+---------------------+--------------------+",
+            "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01T22:11:01 | {\"rows\":[1]}       |",
+            "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02T22:11:02 | {\"rows\":[1,2]}     |",
+            "| 3 | 3.333  | three | 2022-11-03 | 2022-11-03T22:11:03 | {\"rows\":[1,2,3]}   |",
+            "| 4 | 4.4444 | four  | 2022-11-04 | 2022-11-04T22:11:04 | {\"rows\":[1,2,3,4]} |",
+            "+---+--------+-------+------------+---------------------+--------------------+",
         ]
     };
     assert_batches_eq!(expected, &results);
@@ -494,6 +495,7 @@ async fn test_remote_table_querying(db_type: &str, introspect_schema: bool) {
             "| staging      | remote_table | c           | Utf8      |",
             "| staging      | remote_table | date field  | Date32    |",
             "| staging      | remote_table | e           | Date64    |",
+            "| staging      | remote_table | f           | Utf8      |",
             "+--------------+--------------+-------------+-----------+",
         ]
     } else {
@@ -506,6 +508,7 @@ async fn test_remote_table_querying(db_type: &str, introspect_schema: bool) {
             "| staging      | remote_table | c           | Utf8                        |",
             "| staging      | remote_table | date field  | Date32                      |",
             "| staging      | remote_table | e           | Timestamp(Nanosecond, None) |",
+            "| staging      | remote_table | f           | Utf8                        |",
             "+--------------+--------------+-------------+-----------------------------+",
         ]
     };
