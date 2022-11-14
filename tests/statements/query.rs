@@ -431,7 +431,7 @@ async fn test_remote_table_querying(db_type: &str, introspect_schema: bool) {
 
     // Query remote table
     let plan = context
-        .plan_query("SELECT * FROM staging.remote_table LIMIT 5")
+        .plan_query("SELECT * FROM staging.remote_table")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
