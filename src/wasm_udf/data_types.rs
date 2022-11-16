@@ -78,7 +78,7 @@ impl Default for CreateFunctionVolatility {
 #[serde(rename_all = "camelCase")]
 pub enum CreateFunctionLanguage {
     Wasm,
-    WasiMessagePack,
+    WasmMessagePack,
 }
 impl Default for CreateFunctionLanguage {
     fn default() -> Self {
