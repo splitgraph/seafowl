@@ -32,7 +32,18 @@ pub struct TableVersionsResult {
 }
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
-pub struct AllTablePartitionsResult {
+pub struct TablePartitionsResult {
+    pub database_name: String,
+    pub collection_name: String,
+    pub table_name: String,
+    pub table_version_id: TableVersionId,
+    pub table_partition_id: Option<i64>,
+    pub object_storage_id: Option<String>,
+    pub row_count: Option<i32>,
+}
+
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
+pub struct AllTablePartitionColumnsResult {
     pub table_partition_id: i64,
     pub object_storage_id: String,
     pub column_name: String,
@@ -82,10 +93,10 @@ pub trait Repository: Send + Sync + Debug {
         table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
-    async fn get_all_partitions_in_table(
+    async fn get_all_table_partition_columns(
         &self,
         table_version_id: TableVersionId,
-    ) -> Result<Vec<AllTablePartitionsResult>, Error>;
+    ) -> Result<Vec<AllTablePartitionColumnsResult>, Error>;
 
     async fn get_collection_id_by_name(
         &self,
@@ -147,6 +158,11 @@ pub trait Repository: Send + Sync + Debug {
         database_name: &str,
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>>;
+
+    async fn get_all_table_partitions(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<TablePartitionsResult>>;
 
     async fn move_table(
         &self,
@@ -380,10 +396,10 @@ pub mod tests {
 
         // Test loading all table partitions when the partition is not yet attached
         let all_partitions = repository
-            .get_all_partitions_in_table(table_version_id)
+            .get_all_table_partition_columns(table_version_id)
             .await
             .unwrap();
-        assert_eq!(all_partitions, Vec::<AllTablePartitionsResult>::new());
+        assert_eq!(all_partitions, Vec::<AllTablePartitionColumnsResult>::new());
 
         // Attach the partition to the table
         repository
@@ -393,12 +409,12 @@ pub mod tests {
 
         // Load again
         let all_partitions = repository
-            .get_all_partitions_in_table(table_version_id)
+            .get_all_table_partition_columns(table_version_id)
             .await
             .unwrap();
 
         let expected_partitions = vec![
-            AllTablePartitionsResult {
+            AllTablePartitionColumnsResult {
                 table_partition_id: *partition_id,
                 object_storage_id: EXPECTED_FILE_NAME.to_string(),
                 column_name: "timestamp".to_string(),
@@ -408,7 +424,7 @@ pub mod tests {
                 max_value: None,
                 null_count: Some(1),
             },
-            AllTablePartitionsResult {
+            AllTablePartitionColumnsResult {
                 table_partition_id: *partition_id,
                 object_storage_id: EXPECTED_FILE_NAME.to_string(),
                 column_name: "integer".to_string(),
@@ -419,7 +435,7 @@ pub mod tests {
                 max_value: Some([52, 50].to_vec()),
                 null_count: Some(0),
             },
-            AllTablePartitionsResult {
+            AllTablePartitionColumnsResult {
                 table_partition_id: *partition_id,
                 object_storage_id: EXPECTED_FILE_NAME.to_string(),
                 column_name: "varchar".to_string(),
@@ -439,7 +455,7 @@ pub mod tests {
             .unwrap();
 
         let all_partitions = repository
-            .get_all_partitions_in_table(new_version_id)
+            .get_all_table_partition_columns(new_version_id)
             .await
             .unwrap();
 

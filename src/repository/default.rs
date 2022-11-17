@@ -136,10 +136,10 @@ impl Repository for $repo {
         Ok(columns)
     }
 
-    async fn get_all_partitions_in_table(
+    async fn get_all_table_partition_columns(
         &self,
         table_version_id: TableVersionId,
-    ) -> Result<Vec<AllTablePartitionsResult>, Error> {
+    ) -> Result<Vec<AllTablePartitionColumnsResult>, Error> {
         let partitions = sqlx::query_as(
             r#"SELECT
             physical_partition.id AS table_partition_id,
@@ -460,6 +460,35 @@ impl Repository for $repo {
             .map_err($repo::interpret_error)?;
 
         Ok(table_versions)
+    }
+
+    async fn get_all_table_partitions(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<TablePartitionsResult>> {
+        let table_partitions = sqlx::query_as(
+            r#"
+            SELECT
+                database.name AS database_name,
+                collection.name AS collection_name,
+                "table".name AS table_name,
+                table_version.id AS table_version_id,
+                physical_partition.id AS table_partition_id,
+                physical_partition.object_storage_id,
+                physical_partition.row_count
+            FROM table_version
+            INNER JOIN "table" ON "table".id = table_version.table_id
+            INNER JOIN collection ON collection.id = "table".collection_id
+            INNER JOIN database ON database.id = collection.database_id
+            LEFT JOIN table_partition ON table_partition.table_version_id = table_version.id
+            LEFT JOIN physical_partition ON physical_partition.id = table_partition.physical_partition_id
+            WHERE database.name = $1;
+        "#)
+        .bind(database_name)
+        .fetch_all(&self.executor)
+        .await.map_err($repo::interpret_error)?;
+
+        Ok(table_partitions)
     }
 
     async fn move_table(

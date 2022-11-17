@@ -15,7 +15,7 @@ use crate::{
         TableVersionId,
     },
     provider::{PartitionColumn, SeafowlPartition},
-    repository::interface::AllTablePartitionsResult,
+    repository::interface::AllTablePartitionColumnsResult,
     schema::Schema,
     wasm_udf::data_types::CreateFunctionDetails,
 };
@@ -26,7 +26,7 @@ use super::{
     default::RepositoryQueries,
     interface::{
         AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Error, Repository, Result,
-        TableVersionsResult,
+        TablePartitionsResult, TableVersionsResult,
     },
 };
 
