@@ -4,6 +4,11 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Import JSON values as strings in `CREATE EXTERNAL TABLE`
+  (<https://github.com/splitgraph/seafowl/pull/208>)
+- Add support for SQLite in `CREATE EXTERNAL TABLE`
+  (<https://github.com/splitgraph/seafowl/pull/200>)
+
 ## [0.2.6] - 2022-11-08
 
 - Update to DataFusion 14 / Arrow 26 (<https://github.com/splitgraph/seafowl/pull/198>)
