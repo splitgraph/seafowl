@@ -6,7 +6,7 @@ use arrow::{
 use datafusion::{
     arrow::{
         array::{ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array},
-        datatypes::DataType,
+        datatypes::{DataType, TimeUnit},
     },
     common::DataFusionError,
     logical_expr::{ScalarFunctionImplementation, ScalarUDF, Volatility},
@@ -41,12 +41,23 @@ fn sql_type_to_arrow_type(t: &CreateFunctionDataType) -> Result<DataType> {
         CreateFunctionDataType::F32 => Ok(DataType::Float32),
         CreateFunctionDataType::F64 => Ok(DataType::Float64),
         // DDL type names
+        CreateFunctionDataType::SMALLINT => Ok(DataType::Int16),
         CreateFunctionDataType::INT => Ok(DataType::Int32),
         CreateFunctionDataType::BIGINT => Ok(DataType::Int64),
+        CreateFunctionDataType::CHAR => Ok(DataType::Utf8),
+        CreateFunctionDataType::VARCHAR => Ok(DataType::Utf8),
+        CreateFunctionDataType::TEXT => Ok(DataType::Utf8),
+        CreateFunctionDataType::DECIMAL { precision, scale } => {
+            Ok(DataType::Decimal128(*precision, *scale))
+        }
         CreateFunctionDataType::FLOAT => Ok(DataType::Float32),
         CreateFunctionDataType::REAL => Ok(DataType::Float32),
         CreateFunctionDataType::DOUBLE => Ok(DataType::Float64),
-        CreateFunctionDataType::TEXT => Ok(DataType::Utf8),
+        CreateFunctionDataType::BOOLEAN => Ok(DataType::Boolean),
+        CreateFunctionDataType::DATE => Ok(DataType::Date32),
+        CreateFunctionDataType::TIMESTAMP => {
+            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+        }
     }
 }
 
@@ -198,16 +209,270 @@ impl WasmMessagePackUDFInstance {
     }
 }
 
-fn get_arrow_value<T>(args: &[ArrayRef], row_ix: usize, col_ix: usize) -> T::Native
+fn get_arrow_value<T>(
+    args: &[ArrayRef],
+    row_ix: usize,
+    col_ix: usize,
+) -> Result<T::Native>
 where
     T: ArrowPrimitiveType,
 {
-    args.get(col_ix)
+    match args
+        .get(col_ix)
         .unwrap()
         .as_any()
         .downcast_ref::<PrimitiveArray<T>>()
-        .expect("cast failed")
-        .value(row_ix)
+    {
+        Some(arr) => Ok(arr.value(row_ix)),
+        None => Err(DataFusionError::Internal(format!(
+            "Error casting column {:?} to array of primitive values",
+            col_ix
+        ))),
+    }
+}
+
+fn messagepack_encode_input_value(
+    value_type: &CreateFunctionDataType,
+    args: &[ArrayRef],
+    row_ix: usize,
+    col_ix: usize,
+) -> Result<Value> {
+    match value_type {
+        CreateFunctionDataType::SMALLINT => {
+            get_arrow_value::<arrow::datatypes::Int16Type>(args, row_ix, col_ix)
+                .map(Value::from)
+        }
+        CreateFunctionDataType::I32 | CreateFunctionDataType::INT => {
+            get_arrow_value::<arrow::datatypes::Int32Type>(args, row_ix, col_ix)
+                .map(Value::from)
+        }
+        CreateFunctionDataType::I64 | CreateFunctionDataType::BIGINT => {
+            get_arrow_value::<arrow::datatypes::Int64Type>(args, row_ix, col_ix)
+                .map(Value::from)
+        }
+        CreateFunctionDataType::F32
+        | CreateFunctionDataType::FLOAT
+        | CreateFunctionDataType::REAL => {
+            get_arrow_value::<arrow::datatypes::Float32Type>(args, row_ix, col_ix)
+                .map(|val| Value::from(val.to_bits()))
+        }
+        CreateFunctionDataType::F64 | CreateFunctionDataType::DOUBLE => {
+            get_arrow_value::<arrow::datatypes::Float64Type>(args, row_ix, col_ix)
+                .map(|val| Value::from(val.to_bits()))
+        }
+        CreateFunctionDataType::TEXT
+        | CreateFunctionDataType::CHAR
+        | CreateFunctionDataType::VARCHAR => match args
+            .get(col_ix)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>(
+        ) {
+            Some(arr) => Ok(Value::from(arr.value(row_ix))),
+            None => Err(DataFusionError::Internal(format!(
+                "Error casting column {:?} to string array",
+                col_ix
+            ))),
+        },
+        CreateFunctionDataType::BOOLEAN => match args
+            .get(col_ix)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::BooleanArray>(
+        ) {
+            Some(arr) => Ok(Value::from(arr.value(row_ix))),
+            None => Err(DataFusionError::Internal(format!(
+                "Error casting column {:?} to boolean array",
+                col_ix
+            ))),
+        },
+        // serialize decimal as string
+        CreateFunctionDataType::DECIMAL {
+            precision: _,
+            scale: _,
+        } => get_arrow_value::<arrow::datatypes::Decimal128Type>(args, row_ix, col_ix)
+            .map(|val| Value::from(val.to_string())),
+        // dates are represented as i32 integer internally, serialize them as such.
+        CreateFunctionDataType::DATE => {
+            get_arrow_value::<arrow::datatypes::Date32Type>(args, row_ix, col_ix)
+                .map(|val| Value::from(val.to_string()))
+        }
+        // timestamps are represented as i64 integers internally, serialize them as such.
+        CreateFunctionDataType::TIMESTAMP => get_arrow_value::<
+            arrow::datatypes::TimestampNanosecondType,
+        >(args, row_ix, col_ix)
+        .map(|val| Value::from(val.to_string())),
+    }
+}
+
+fn decode_udf_result_primitive_array<T>(
+    encoded_results: &Vec<Value>,
+    decoder: &dyn Fn(&Value) -> Result<T::Native>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: ArrowPrimitiveType,
+{
+    let mut decoded_results = Vec::with_capacity(encoded_results.len());
+    for i in encoded_results {
+        decoded_results.push(Some(decoder(i)?));
+    }
+    Ok(decoded_results.iter().collect::<PrimitiveArray<T>>())
+}
+
+fn messagepack_decode_results(
+    return_type: &CreateFunctionDataType,
+    encoded_results: &Vec<Value>,
+) -> Result<ArrayRef> {
+    match return_type {
+        CreateFunctionDataType::SMALLINT => decode_udf_result_primitive_array::<
+            arrow::datatypes::Int16Type,
+        >(encoded_results, &|v| match v
+            .as_i64()
+            .ok_or(DataFusionError::Internal(format!(
+                "Expected to find i64 value, but received {:?} instead",
+                v
+            ))) {
+            Err(e) => Err(e),
+            Ok(v_i64) => i16::try_from(v_i64).map_err(|e| {
+                DataFusionError::Internal(format!("Error converting i64 to i16: {:?}", e))
+            }),
+        })
+        .map(|a| Arc::new(a) as ArrayRef),
+        CreateFunctionDataType::I32 | CreateFunctionDataType::INT => {
+            decode_udf_result_primitive_array::<arrow::datatypes::Int32Type>(
+                encoded_results,
+                &|v| match v.as_i64().ok_or(DataFusionError::Internal(format!(
+                    "Expected to find i64 value, but received {:?} instead",
+                    v
+                ))) {
+                    Err(e) => Err(e),
+                    Ok(v_i64) => i32::try_from(v_i64).map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "Error converting i64 to i32: {:?}",
+                            e
+                        ))
+                    }),
+                },
+            )
+            .map(|a| Arc::new(a) as ArrayRef)
+        }
+        CreateFunctionDataType::I64 | CreateFunctionDataType::BIGINT => {
+            decode_udf_result_primitive_array::<arrow::datatypes::Int64Type>(
+                encoded_results,
+                &|v| {
+                    v.as_i64().ok_or(DataFusionError::Internal(format!(
+                        "Expected to find i64 value, but received {:?} instead",
+                        v
+                    )))
+                },
+            )
+            .map(|a| Arc::new(a) as ArrayRef)
+        }
+        CreateFunctionDataType::CHAR
+        | CreateFunctionDataType::VARCHAR
+        | CreateFunctionDataType::TEXT => {
+            let mut decoded_results = Vec::with_capacity(encoded_results.len());
+            for i in encoded_results {
+                decoded_results.push(Some(i.as_str().ok_or(
+                    DataFusionError::Internal(format!(
+                        "Expected to find string value, received {:?} instead",
+                        &i
+                    )),
+                )?));
+            }
+            Ok(Arc::new(decoded_results.iter().collect::<StringArray>()) as ArrayRef)
+        }
+        CreateFunctionDataType::DATE => decode_udf_result_primitive_array::<
+            arrow::datatypes::Date32Type,
+        >(encoded_results, &|v| match v
+            .as_i64()
+            .ok_or(DataFusionError::Internal(format!(
+                "Expected to find i64 value, but received {:?} instead",
+                v
+            ))) {
+            Err(e) => Err(e),
+            Ok(v_i64) => i32::try_from(v_i64).map_err(|e| {
+                DataFusionError::Internal(format!(
+                    "Error converting i64 to i32 (for date): {:?}",
+                    e
+                ))
+            }),
+        })
+        .map(|a| Arc::new(a) as ArrayRef),
+        CreateFunctionDataType::TIMESTAMP => decode_udf_result_primitive_array::<
+            arrow::datatypes::TimestampNanosecondType,
+        >(encoded_results, &|v| {
+            v.as_i64().ok_or(DataFusionError::Internal(format!(
+                "Expected to find i64 value, but received {:?} instead",
+                v
+            )))
+        })
+        .map(|a| Arc::new(a) as ArrayRef),
+        CreateFunctionDataType::BOOLEAN => {
+            let mut decoded_results = Vec::with_capacity(encoded_results.len());
+            for i in encoded_results {
+                decoded_results.push(Some(i.as_bool().ok_or(
+                    DataFusionError::Internal(format!(
+                        "Expected to find bool value, received {:?} instead",
+                        &i
+                    )),
+                )?));
+            }
+            Ok(Arc::new(
+                decoded_results
+                    .iter()
+                    .collect::<arrow::array::BooleanArray>(),
+            ) as ArrayRef)
+        }
+
+        CreateFunctionDataType::F64 | CreateFunctionDataType::DOUBLE => {
+            decode_udf_result_primitive_array::<arrow::datatypes::Float64Type>(
+                encoded_results,
+                &|v| {
+                    v.as_f64().ok_or(DataFusionError::Internal(format!(
+                        "Expected to find f64 value, but received {:?} instead",
+                        v
+                    )))
+                },
+            )
+            .map(|a| Arc::new(a) as ArrayRef)
+        }
+        CreateFunctionDataType::F32
+        | CreateFunctionDataType::REAL
+        | CreateFunctionDataType::FLOAT => decode_udf_result_primitive_array::<
+            arrow::datatypes::Float32Type,
+        >(encoded_results, &|v| match v {
+            Value::F32(n) => Ok(*n),
+            _ => Err(DataFusionError::Internal(format!(
+                "Expected to find f64 value, but received {:?} instead",
+                v
+            ))),
+        })
+        .map(|a| Arc::new(a) as ArrayRef),
+        CreateFunctionDataType::DECIMAL {
+            precision: _,
+            scale: _,
+        } => {
+            let mut decoded_results = Vec::with_capacity(encoded_results.len());
+            for i in encoded_results {
+                let s = i.as_str().ok_or(DataFusionError::Internal(format!(
+                    "Expected to find str value, received {:?} instead",
+                    &i
+                )))?;
+                decoded_results.push(Some(s.parse::<i128>().map_err(|e| {
+                    DataFusionError::Internal(format!(
+                        "Error parsing string to i128: {:?}",
+                        e
+                    ))
+                })?));
+            }
+            Ok(Arc::new(
+                decoded_results
+                    .iter()
+                    .collect::<arrow::array::Decimal128Array>(),
+            ) as ArrayRef)
+        }
+    }
 }
 
 fn make_scalar_function_wasm_messagepack(
@@ -216,11 +481,18 @@ fn make_scalar_function_wasm_messagepack(
     input_types: Vec<CreateFunctionDataType>,
     return_type: CreateFunctionDataType,
 ) -> Result<ScalarFunctionImplementation> {
-    // TODO: Similar to make_scalar_function_from_wasm, this function should verify
+    // Similar to make_scalar_function_from_wasm, this function should verify
     // that the module can be loaded and the UDF export is found before
     // returning a Result.
     let function_name = function_name.to_owned();
     let module_bytes = module_bytes.to_owned();
+    let _outer_instance = WasmMessagePackUDFInstance::new(&module_bytes, &function_name)
+        .map_err(|err| {
+            DataFusionError::Internal(format!(
+                "Error initializing WASM + MessagePack UDF {:?}: {:?}",
+                function_name, err
+            ))
+        })?;
     let inner = move |args: &[ArrayRef]| {
         let mut instance = WasmMessagePackUDFInstance::new(&module_bytes, &function_name)
             .map_err(|err| {
@@ -236,50 +508,22 @@ fn make_scalar_function_wasm_messagepack(
         let array_len = args.get(0).unwrap().len();
 
         // Buffer for the results
-        let mut results: Vec<Value> = Vec::with_capacity(array_len);
+        let mut encoded_results: Vec<Value> = Vec::with_capacity(array_len);
 
         for row_ix in 0..array_len {
             let mut params: Vec<Value> = Vec::with_capacity(args.len());
-            // Build a slice of WASM Val values to pass to the function
+            // Build a slice of MessagePack Values which will be serialized
+            // as an array.
             for col_ix in 0..args.len() {
-                let messagepack_value = match input_types.get(col_ix).unwrap() {
-                    CreateFunctionDataType::I32 => {
-                        Value::from(get_arrow_value::<arrow::datatypes::Int32Type>(
-                            args, row_ix, col_ix,
-                        ))
-                    }
-                    CreateFunctionDataType::I64 => {
-                        Value::from(get_arrow_value::<arrow::datatypes::Int64Type>(
-                            args, row_ix, col_ix,
-                        ))
-                    }
-                    CreateFunctionDataType::F32 => Value::from(
-                        get_arrow_value::<arrow::datatypes::Float32Type>(
-                            args, row_ix, col_ix,
-                        )
-                        .to_bits(),
-                    ),
-                    CreateFunctionDataType::F64 => Value::from(
-                        get_arrow_value::<arrow::datatypes::Float64Type>(
-                            args, row_ix, col_ix,
-                        )
-                        .to_bits(),
-                    ),
-                    CreateFunctionDataType::TEXT => Value::from(
-                        args.get(col_ix)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<arrow::array::StringArray>()
-                            .expect("cast failed")
-                            .value(row_ix),
-                    ),
-                    // TODO: don't panic on unexpected type, fail with a DataFusionError instead.
-                    _ => panic!("unexpected type"),
-                };
-                params.push(messagepack_value);
+                params.push(messagepack_encode_input_value(
+                    input_types.get(col_ix).unwrap(),
+                    args,
+                    row_ix,
+                    col_ix,
+                )?);
             }
 
-            results.push(instance.call(params).map_err(|err| {
+            encoded_results.push(instance.call(params).map_err(|err| {
                 DataFusionError::Internal(format!(
                     "Error invoking function {:?}: {:?}",
                     function_name, err
@@ -287,49 +531,7 @@ fn make_scalar_function_wasm_messagepack(
             })?);
         }
 
-        // Convert the results back into Arrow (Arc<dyn Array>)
-        // TODO: Don't panic on type mismatches, because the UDF could return
-        // a different type than it advertised.
-        let array = match return_type {
-            CreateFunctionDataType::I32 => Arc::new(
-                results
-                    .iter()
-                    .map(|v| i32::try_from(v.as_i64().unwrap()).ok())
-                    .collect::<Int32Array>(),
-            ) as ArrayRef,
-            CreateFunctionDataType::I64 => Arc::new(
-                results
-                    .iter()
-                    .map(|v| v.as_i64().unwrap())
-                    .collect::<Int64Array>(),
-            ) as ArrayRef,
-            CreateFunctionDataType::F32 => Arc::new(
-                results
-                    .iter()
-                    .map(|v| {
-                        match v {
-                            Value::F32(n) => Ok(*n),
-                            _ => Err(DataFusionError::Internal(
-                                "error unwrapping f32 value".to_string(),
-                            )),
-                        }
-                        .unwrap()
-                    })
-                    .collect::<Float32Array>(),
-            ) as ArrayRef,
-            CreateFunctionDataType::F64 => Arc::new(
-                results
-                    .iter()
-                    .map(|v| v.as_f64().unwrap())
-                    .collect::<Float64Array>(),
-            ) as ArrayRef,
-            CreateFunctionDataType::TEXT => {
-                Arc::new(results.iter().map(|v| v.as_str()).collect::<StringArray>())
-                    as ArrayRef
-            }
-            _ => panic!("unexpected type"),
-        };
-        Ok(array)
+        messagepack_decode_results(&return_type, &encoded_results)
     };
 
     Ok(make_scalar_function(inner))
@@ -409,20 +611,20 @@ fn make_scalar_function_from_wasm(
                 let wasm_val = match input_types.get(col_ix).unwrap() {
                     ValType::I32 => Val::I32(get_arrow_value::<
                         arrow::datatypes::Int32Type,
-                    >(args, row_ix, col_ix)),
+                    >(args, row_ix, col_ix)?),
                     ValType::I64 => Val::I64(get_arrow_value::<
                         arrow::datatypes::Int64Type,
-                    >(args, row_ix, col_ix)),
+                    >(args, row_ix, col_ix)?),
                     ValType::F32 => Val::F32(
                         get_arrow_value::<arrow::datatypes::Float32Type>(
                             args, row_ix, col_ix,
-                        )
+                        )?
                         .to_bits(),
                     ),
                     ValType::F64 => Val::F64(
                         get_arrow_value::<arrow::datatypes::Float64Type>(
                             args, row_ix, col_ix,
-                        )
+                        )?
                         .to_bits(),
                     ),
                     _ => panic!("unexpected type"),

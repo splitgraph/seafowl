@@ -45,20 +45,20 @@ pub enum CreateFunctionDataType {
     I64,
     F32,
     F64,
-    // Supported DDL type names
-    //SMALLINT
+    // Supported DDL type names from https://seafowl.io/docs/reference/types
+    SMALLINT,
     INT,
     BIGINT,
-    //CHAR
-    //VARCHAR
+    CHAR,
+    VARCHAR,
     TEXT,
-    //DECIMAL(p,s)
+    DECIMAL { precision: u8, scale: u8 },
     FLOAT,
     REAL,
     DOUBLE,
-    //BOOLEAN
-    //DATE
-    //TIMESTAMP
+    BOOLEAN,
+    DATE,
+    TIMESTAMP,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, EnumString, Display, Clone)]
