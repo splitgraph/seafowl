@@ -1,5 +1,5 @@
 use arrow::{
-    array::{PrimitiveArray, StringArray},
+    array::{BooleanArray, PrimitiveArray, StringArray},
     datatypes::ArrowPrimitiveType,
 };
 /// Creating DataFusion UDFs from WASM bytecode
@@ -345,22 +345,22 @@ fn messagepack_encode_input_value(
 }
 
 fn decode_udf_result_primitive_array<T>(
-    encoded_results: &Vec<Value>,
+    encoded_results: &[Value],
     decoder: &dyn Fn(&Value) -> Result<T::Native>,
-) -> Result<PrimitiveArray<T>>
+) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,
 {
-    let mut decoded_results = Vec::with_capacity(encoded_results.len());
-    for i in encoded_results {
-        decoded_results.push(Some(decoder(i)?));
-    }
-    Ok(decoded_results.iter().collect::<PrimitiveArray<T>>())
+    encoded_results
+        .iter()
+        .map(|i| Some(decoder(i)).transpose())
+        .collect::<Result<PrimitiveArray<T>>>()
+        .map(|a| Arc::new(a) as ArrayRef)
 }
 
 fn messagepack_decode_results(
     return_type: &CreateFunctionDataType,
-    encoded_results: &Vec<Value>,
+    encoded_results: &[Value],
 ) -> Result<ArrayRef> {
     match return_type {
         CreateFunctionDataType::SMALLINT => decode_udf_result_primitive_array::<
@@ -379,8 +379,7 @@ fn messagepack_decode_results(
                         ))
                     })
                 })
-        })
-        .map(|a| Arc::new(a) as ArrayRef),
+        }),
         CreateFunctionDataType::I32 | CreateFunctionDataType::INT => {
             decode_udf_result_primitive_array::<arrow::datatypes::Int32Type>(
                 encoded_results,
@@ -400,7 +399,6 @@ fn messagepack_decode_results(
                         })
                 },
             )
-            .map(|a| Arc::new(a) as ArrayRef)
         }
         CreateFunctionDataType::I64 | CreateFunctionDataType::BIGINT => {
             decode_udf_result_primitive_array::<arrow::datatypes::Int64Type>(
@@ -412,22 +410,20 @@ fn messagepack_decode_results(
                     )))
                 },
             )
-            .map(|a| Arc::new(a) as ArrayRef)
         }
         CreateFunctionDataType::CHAR
         | CreateFunctionDataType::VARCHAR
-        | CreateFunctionDataType::TEXT => {
-            let mut decoded_results = Vec::with_capacity(encoded_results.len());
-            for i in encoded_results {
-                decoded_results.push(Some(i.as_str().ok_or(
-                    DataFusionError::Internal(format!(
-                        "Expected to find string value, received {:?} instead",
-                        &i
-                    )),
-                )?));
-            }
-            Ok(Arc::new(decoded_results.iter().collect::<StringArray>()) as ArrayRef)
-        }
+        | CreateFunctionDataType::TEXT => encoded_results
+            .iter()
+            .map(|i| {
+                Some(i.as_str().ok_or(DataFusionError::Internal(format!(
+                    "Expected to find string value, received {:?} instead",
+                    &i
+                ))))
+                .transpose()
+            })
+            .collect::<Result<StringArray>>()
+            .map(|a| Arc::new(a) as ArrayRef),
         CreateFunctionDataType::DATE => decode_udf_result_primitive_array::<
             arrow::datatypes::Date32Type,
         >(encoded_results, &|v| {
@@ -444,8 +440,7 @@ fn messagepack_decode_results(
                         ))
                     })
                 })
-        })
-        .map(|a| Arc::new(a) as ArrayRef),
+        }),
         CreateFunctionDataType::TIMESTAMP => decode_udf_result_primitive_array::<
             arrow::datatypes::TimestampNanosecondType,
         >(encoded_results, &|v| {
@@ -453,24 +448,18 @@ fn messagepack_decode_results(
                 "Expected to find i64 value, but received {:?} instead",
                 v
             )))
-        })
-        .map(|a| Arc::new(a) as ArrayRef),
-        CreateFunctionDataType::BOOLEAN => {
-            let mut decoded_results = Vec::with_capacity(encoded_results.len());
-            for i in encoded_results {
-                decoded_results.push(Some(i.as_bool().ok_or(
-                    DataFusionError::Internal(format!(
-                        "Expected to find bool value, received {:?} instead",
-                        &i
-                    )),
-                )?));
-            }
-            Ok(Arc::new(
-                decoded_results
-                    .iter()
-                    .collect::<arrow::array::BooleanArray>(),
-            ) as ArrayRef)
-        }
+        }),
+        CreateFunctionDataType::BOOLEAN => encoded_results
+            .iter()
+            .map(|i| {
+                Some(i.as_bool().ok_or(DataFusionError::Internal(format!(
+                    "Expected to find string value, received {:?} instead",
+                    i
+                ))))
+                .transpose()
+            })
+            .collect::<Result<BooleanArray>>()
+            .map(|a| Arc::new(a) as ArrayRef),
 
         CreateFunctionDataType::F64 | CreateFunctionDataType::DOUBLE => {
             decode_udf_result_primitive_array::<arrow::datatypes::Float64Type>(
@@ -482,8 +471,8 @@ fn messagepack_decode_results(
                     )))
                 },
             )
-            .map(|a| Arc::new(a) as ArrayRef)
         }
+
         CreateFunctionDataType::F32
         | CreateFunctionDataType::REAL
         | CreateFunctionDataType::FLOAT => decode_udf_result_primitive_array::<
@@ -499,26 +488,28 @@ fn messagepack_decode_results(
         CreateFunctionDataType::DECIMAL {
             precision: _,
             scale: _,
-        } => {
-            let mut decoded_results = Vec::with_capacity(encoded_results.len());
-            for i in encoded_results {
-                let s = i.as_str().ok_or(DataFusionError::Internal(format!(
-                    "Expected to find str value, received {:?} instead",
-                    &i
-                )))?;
-                decoded_results.push(Some(s.parse::<i128>().map_err(|e| {
-                    DataFusionError::Internal(format!(
-                        "Error parsing string to i128: {:?}",
-                        e
-                    ))
-                })?));
-            }
-            Ok(Arc::new(
-                decoded_results
-                    .iter()
-                    .collect::<arrow::array::Decimal128Array>(),
-            ) as ArrayRef)
-        }
+        } => encoded_results
+            .iter()
+            .map(|i| {
+                Some(
+                    i.as_str()
+                        .ok_or(DataFusionError::Internal(format!(
+                            "Expected to find string value, received {:?} instead",
+                            i
+                        )))
+                        .and_then(|s| {
+                            s.parse::<i128>().map_err(|e| {
+                                DataFusionError::Internal(format!(
+                                    "Error parsing string to i128: {:?}",
+                                    e
+                                ))
+                            })
+                        }),
+                )
+                .transpose()
+            })
+            .collect::<Result<arrow::array::Decimal128Array>>()
+            .map(|a| Arc::new(a) as ArrayRef),
     }
 }
 
