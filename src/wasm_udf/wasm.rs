@@ -25,13 +25,15 @@ use wasmtime_wasi::sync::WasiCtxBuilder;
 use std::sync::Arc;
 use std::vec;
 
-extern crate rmp_serde;
-extern crate serde;
+use rmp_serde;
 use rmp_serde::Serializer;
+use serde;
 
 use serde::Serialize;
 
 use rmpv::Value;
+
+const SIZE_BYTE_COUNT: usize = std::mem::size_of::<i32>();
 
 fn sql_type_to_arrow_type(t: &CreateFunctionDataType) -> Result<DataType> {
     match t {
@@ -65,7 +67,7 @@ fn get_wasm_module_exported_fn<Params, Results>(
     instance: &Instance,
     store: &mut Store<WasiCtx>,
     export_name: &str,
-) -> anyhow::Result<TypedFunc<Params, Results>>
+) -> Result<TypedFunc<Params, Results>>
 where
     Params: wasmtime::WasmParams,
     Results: wasmtime::WasmResults,
@@ -73,10 +75,8 @@ where
     instance
         .get_typed_func::<Params, Results, _>(store, export_name)
         .map_err(|err| {
-            anyhow::anyhow!(format!(
-                "Error getting export `{:?}`: {:?}",
-                export_name, err
-            ))
+            DataFusionError::Internal(
+                format!("Required export '{:?}' could not be located in WASM module exports: {:?}", export_name, err))
         })
 }
 
@@ -89,7 +89,7 @@ struct WasmMessagePackUDFInstance {
 }
 
 impl WasmMessagePackUDFInstance {
-    pub fn new(module_bytes: &[u8], function_name: &str) -> anyhow::Result<Self> {
+    pub fn new(module_bytes: &[u8], function_name: &str) -> Result<Self> {
         let engine = Engine::default();
         let mut linker = wasmtime::Linker::new(&engine);
         // Create a WASI context and put it in a Store; all instances in the store
@@ -98,20 +98,25 @@ impl WasmMessagePackUDFInstance {
         let wasi = WasiCtxBuilder::new().inherit_stderr().build();
         let mut store = Store::new(&engine, wasi);
         // Add both wasi_unstable and wasi_snapshot_preview1 WASI modules
-        wasmtime_wasi::add_to_linker(&mut linker, |s| s)?;
+        wasmtime_wasi::add_to_linker(&mut linker, |s| s).map_err(|e| {
+            DataFusionError::Internal(format!("Error linking to WASI modules: {:?}", e))
+        })?;
         // Instantiate WASM module.
-        // TODO: handle module loading errors
-        let module = Module::from_binary(&engine, module_bytes)?;
-        // TODO: handle linker errors
-        let instance = linker.instantiate(&mut store, &module)?;
+        let module = Module::from_binary(&engine, module_bytes).map_err(|e| {
+            DataFusionError::Internal(format!("Error loading WASM module: {:?}", e))
+        })?;
+        let instance = linker.instantiate(&mut store, &module).map_err(|e| {
+            DataFusionError::Internal(format!("Error instantiating WASM modules {:?}", e))
+        })?;
 
         let alloc = get_wasm_module_exported_fn(&instance, &mut store, "alloc")?;
         let dealloc = get_wasm_module_exported_fn(&instance, &mut store, "dealloc")?;
         let udf = get_wasm_module_exported_fn(&instance, &mut store, function_name)?;
-        let memory = match instance.get_memory(&mut store, "memory") {
-            Some(mem) => Ok(mem),
-            None => Err(anyhow::anyhow!("could not find module's exportd memory")),
-        }?;
+        let memory = instance.get_memory(&mut store, "memory").ok_or(
+            DataFusionError::Internal(
+                "could not find module's exported memory".to_string(),
+            ),
+        )?;
         Ok(Self {
             store,
             alloc,
@@ -121,16 +126,23 @@ impl WasmMessagePackUDFInstance {
         })
     }
 
-    fn read_udf_output(&mut self, udf_output_ptr: i32) -> anyhow::Result<(Value, i32)> {
+    fn read_udf_output(&mut self, udf_output_ptr: i32) -> Result<(Value, i32)> {
         let ptr: usize = udf_output_ptr.try_into().unwrap();
-        const SIZE_BYTE_COUNT: usize = std::mem::size_of::<i32>();
         let mut size_buffer = [0u8; SIZE_BYTE_COUNT];
         self.memory
             .read(&self.store, ptr, &mut size_buffer)
             .map_err(|err| {
-                anyhow::anyhow!(format!("error reading output buf size: {:?}", err))
+                DataFusionError::Internal(format!(
+                    "Error reading UDF output buffer size: {:?}",
+                    err
+                ))
             })?;
-        let size: usize = i32::from_ne_bytes(size_buffer).try_into().unwrap();
+        let size: usize = i32::from_ne_bytes(size_buffer).try_into().map_err(|e| {
+            DataFusionError::Internal(format!(
+                "Error interpreting output buffer size as i32: {:?}",
+                e
+            ))
+        })?;
         let mut output_buffer = vec![0_u8; size];
         self.memory
             .read(
@@ -139,62 +151,97 @@ impl WasmMessagePackUDFInstance {
                 output_buffer.as_mut_slice(),
             )
             .map_err(|err| {
-                anyhow::anyhow!(format!("error reading output buf size: {:?}", err))
+                DataFusionError::Internal(format!(
+                    "Error reading output buf ({:?} bytes): {:?}",
+                    size, err
+                ))
             })?;
         let output: Value =
             rmp_serde::from_slice(output_buffer.as_ref()).map_err(|err| {
-                anyhow::anyhow!(format!("error decoding output buf: {:?}", err))
+                DataFusionError::Internal(format!(
+                    "Error messagepack decoding output buffer: {:?}",
+                    err
+                ))
             })?;
         // return the entire size of the output buffer (including i32 size prefix) so it can be passed to dealloc() later
         let result: (Value, i32) = (output, (size + SIZE_BYTE_COUNT).try_into().unwrap());
         Ok(result)
     }
 
-    fn write_udf_input(&mut self, input: &Value) -> anyhow::Result<(i32, i32)> {
+    fn write_udf_input(&mut self, input: &Value) -> Result<(i32, i32)> {
         // serialize input using MessagePack
         let mut udf_input_buf: Vec<u8> = vec![];
         input
             .serialize(&mut Serializer::new(&mut udf_input_buf))
             .map_err(|err| {
-                anyhow::anyhow!(format!("Error serializing input {:?}", err))
+                DataFusionError::Internal(format!(
+                    "Error messagepack serializing input {:?}",
+                    err
+                ))
             })?;
         // Total input size will be serialized messagepack bytes prepended by the
         // size of the serialized input (one i32 == 4 bytes)
         let size_len = std::mem::size_of::<i32>();
         let udf_input_size: usize = udf_input_buf.len() + size_len;
         // allocate WASM memory for input buffer
-        // TODO: handle case when allocation fails
         let udf_input_ptr = self
             .alloc
-            .call(&mut self.store, udf_input_size.try_into().unwrap())?;
+            .call(&mut self.store, udf_input_size.try_into().unwrap())
+            .map_err(|e| {
+                DataFusionError::Internal(format!(
+                    "Error allocating input buffer in WASM memory: {:?}",
+                    e
+                ))
+            })?;
         let ptr: usize = udf_input_ptr.try_into().unwrap();
         // write size of input buffer first
         self.memory
             .write(&mut self.store, ptr, &udf_input_buf.len().to_ne_bytes())
             .map_err(|err| {
-                anyhow::anyhow!(format!("Error copying UDF input: {:?}", err))
+                DataFusionError::Internal(format!(
+                    "Error copying input buffer size to WASM memory: {:?}",
+                    err
+                ))
             })?;
         // copy input buffer
         self.memory
             .write(&mut self.store, ptr + size_len, udf_input_buf.as_ref())
             .map_err(|err| {
-                anyhow::anyhow!(format!("Error copying UDF input: {:?}", err))
+                DataFusionError::Internal(format!(
+                    "Error copying input buffer to WASM memory: {:?}",
+                    err
+                ))
             })?;
         // return the entire size of the output buffer (including i32 size prefix) so it can be passed to dealloc() later
         Ok((udf_input_ptr, udf_input_size.try_into().unwrap()))
     }
 
-    pub fn call(&mut self, input: Vec<Value>) -> anyhow::Result<Value> {
+    pub fn call(&mut self, input: Vec<Value>) -> Result<Value> {
         let args_array = Value::Array(input);
         let (udf_input_ptr, input_size) = self.write_udf_input(&args_array)?;
         // invoke UDF
-        let udf_output_ptr = self.udf.call(&mut self.store, udf_input_ptr)?;
+        let udf_output_ptr =
+            self.udf.call(&mut self.store, udf_input_ptr).map_err(|e| {
+                DataFusionError::Internal(format!("Error invoking WASM UDF: {:?}", e))
+            })?;
         let (output, output_size) = self.read_udf_output(udf_output_ptr)?;
         // deallocate both input and output buffers
         self.dealloc
-            .call(&mut self.store, (udf_input_ptr, input_size))?;
+            .call(&mut self.store, (udf_input_ptr, input_size))
+            .map_err(|e| {
+                DataFusionError::Internal(format!(
+                    "Error deallocating input buffer: {:?}",
+                    e
+                ))
+            })?;
         self.dealloc
-            .call(&mut self.store, (udf_output_ptr, output_size))?;
+            .call(&mut self.store, (udf_output_ptr, output_size))
+            .map_err(|e| {
+                DataFusionError::Internal(format!(
+                    "Error deallocating output buffer: {:?}",
+                    e
+                ))
+            })?;
         Ok(output)
     }
 }
