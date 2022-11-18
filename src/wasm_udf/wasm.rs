@@ -131,7 +131,6 @@ impl WasmMessagePackUDFInstance {
                 anyhow::anyhow!(format!("error reading output buf size: {:?}", err))
             })?;
         let size: usize = i32::from_ne_bytes(size_buffer).try_into().unwrap();
-        //eprintln!("read_udf_output(): output buffers size: {:?} bytes", size);
         let mut output_buffer = vec![0_u8; size];
         self.memory
             .read(
@@ -142,7 +141,6 @@ impl WasmMessagePackUDFInstance {
             .map_err(|err| {
                 anyhow::anyhow!(format!("error reading output buf size: {:?}", err))
             })?;
-        //eprintln!("read_udf_output(): read udf output from WASM memory to host memory, buffer size: {:?}", output_buffer.len());
         let output: Value =
             rmp_serde::from_slice(output_buffer.as_ref()).map_err(|err| {
                 anyhow::anyhow!(format!("error decoding output buf: {:?}", err))
@@ -188,19 +186,11 @@ impl WasmMessagePackUDFInstance {
 
     pub fn call(&mut self, input: Vec<Value>) -> anyhow::Result<Value> {
         let args_array = Value::Array(input);
-        //eprintln!("call(): about to write UDF input");
         let (udf_input_ptr, input_size) = self.write_udf_input(&args_array)?;
-        //eprintln!("call(): wrote UDF input, {:?} ({:?} bytes)", args_array, input_size);
         // invoke UDF
-        // TODO: handle case when UDF invocation unsucessful
-        //eprintln!("call(): about to invoke UDF function");
         let udf_output_ptr = self.udf.call(&mut self.store, udf_input_ptr)?;
-        //eprintln!("call(): called UDF function");
-        //eprintln!("call(): about to read UDF output");
         let (output, output_size) = self.read_udf_output(udf_output_ptr)?;
-        //eprintln!("call(): read UDF output {:?} bytes", output_size);
         // deallocate both input and output buffers
-        //eprintln!("call(): deallocating udf input and output buffers");
         self.dealloc
             .call(&mut self.store, (udf_input_ptr, input_size))?;
         self.dealloc
