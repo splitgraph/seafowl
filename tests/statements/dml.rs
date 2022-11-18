@@ -77,6 +77,28 @@ async fn test_table_partitioning_and_rechunking() {
     assert_eq!(partitions[1].row_count, 3);
     assert_eq!(partitions[1].columns.len(), 2);
 
+    // Test table_partitions system table shows correct state
+    let plan = context
+        .plan_query("SELECT * FROM system.table_partitions")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected_row_2 = format!("| public       | test_table | 2                | 1                  | {} | 3         |", FILENAME_1);
+    let expected_row_3 = format!("| public       | test_table | 3                | 1                  | {} | 3         |", FILENAME_1);
+    let expected_row_4 = format!("| public       | test_table | 3                | 2                  | {} | 3         |", FILENAME_2);
+    let expected = vec![
+        "+--------------+------------+------------------+--------------------+--------------------------------------------------------------------------+-----------+",
+        "| table_schema | table_name | table_version_id | table_partition_id | object_storage_id                                                        | row_count |",
+        "+--------------+------------+------------------+--------------------+--------------------------------------------------------------------------+-----------+",
+        "| public       | test_table | 1                |                    |                                                                          |           |",
+        expected_row_2.as_str(),
+        expected_row_3.as_str(),
+        expected_row_4.as_str(),
+        "+--------------+------------+------------------+--------------------+--------------------------------------------------------------------------+-----------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
     //
     // Test partition pruning during scans works
     //
@@ -139,6 +161,28 @@ async fn test_table_partitioning_and_rechunking() {
     );
     assert_eq!(partitions[0].row_count, 6);
     assert_eq!(partitions[0].columns.len(), 5);
+
+    // Test table_partitions system table shows correct state with filtering
+    let plan = context
+        .plan_query(
+            r#"
+            SELECT object_storage_id FROM system.table_partitions
+            WHERE table_version_id = 4 AND table_partition_id = 3 AND row_count = 6
+        "#,
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected_row = format!("| {} |", FILENAME_RECHUNKED);
+    let expected = vec![
+        "+--------------------------------------------------------------------------+",
+        "| object_storage_id                                                        |",
+        "+--------------------------------------------------------------------------+",
+        expected_row.as_str(),
+        "+--------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
 
     // Ensure table contents
     let plan = context

@@ -14,15 +14,16 @@ async fn test_information_schema() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+----------------+------------+",
-        "| table_catalog | table_schema       | table_name     | table_type |",
-        "+---------------+--------------------+----------------+------------+",
-        "| default       | information_schema | columns        | VIEW       |",
-        "| default       | information_schema | df_settings    | VIEW       |",
-        "| default       | system             | table_versions | VIEW       |",
-        "| default       | information_schema | tables         | VIEW       |",
-        "| default       | information_schema | views          | VIEW       |",
-        "+---------------+--------------------+----------------+------------+",
+        "+---------------+--------------------+------------------+------------+",
+        "| table_catalog | table_schema       | table_name       | table_type |",
+        "+---------------+--------------------+------------------+------------+",
+        "| default       | information_schema | columns          | VIEW       |",
+        "| default       | information_schema | df_settings      | VIEW       |",
+        "| default       | system             | table_partitions | VIEW       |",
+        "| default       | system             | table_versions   | VIEW       |",
+        "| default       | information_schema | tables           | VIEW       |",
+        "| default       | information_schema | views            | VIEW       |",
+        "+---------------+--------------------+------------------+------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -30,7 +31,7 @@ async fn test_information_schema() {
     let plan = context
         .plan_query(
             format!(
-                "SELECT table_schema, table_name, column_name, data_type
+                "SELECT table_schema, table_name, column_name, data_type, is_nullable
         FROM information_schema.columns
         WHERE table_schema = '{}'
         ORDER BY table_name, ordinal_position",
@@ -43,14 +44,20 @@ async fn test_information_schema() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+--------------+----------------+------------------+-------------------------+",
-        "| table_schema | table_name     | column_name      | data_type               |",
-        "+--------------+----------------+------------------+-------------------------+",
-        "| system       | table_versions | table_schema     | Utf8                    |",
-        "| system       | table_versions | table_name       | Utf8                    |",
-        "| system       | table_versions | table_version_id | Int64                   |",
-        "| system       | table_versions | creation_time    | Timestamp(Second, None) |",
-        "+--------------+----------------+------------------+-------------------------+",
+        "+--------------+------------------+--------------------+-------------------------+-------------+",
+        "| table_schema | table_name       | column_name        | data_type               | is_nullable |",
+        "+--------------+------------------+--------------------+-------------------------+-------------+",
+        "| system       | table_partitions | table_schema       | Utf8                    | NO          |",
+        "| system       | table_partitions | table_name         | Utf8                    | NO          |",
+        "| system       | table_partitions | table_version_id   | Int64                   | NO          |",
+        "| system       | table_partitions | table_partition_id | Int64                   | YES         |",
+        "| system       | table_partitions | object_storage_id  | Utf8                    | YES         |",
+        "| system       | table_partitions | row_count          | Int32                   | YES         |",
+        "| system       | table_versions   | table_schema       | Utf8                    | NO          |",
+        "| system       | table_versions   | table_name         | Utf8                    | NO          |",
+        "| system       | table_versions   | table_version_id   | Int64                   | NO          |",
+        "| system       | table_versions   | creation_time      | Timestamp(Second, None) | NO          |",
+        "+--------------+------------------+--------------------+-------------------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
 }
@@ -177,6 +184,35 @@ async fn test_table_time_travel() {
         "| 3                |",
         "| 4                |",
         "+------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    //
+    // Verify that the new table partitions for all versions are shown in the corresponding system table
+    //
+
+    let plan = context
+        .plan_query("SELECT table_schema, table_name, table_version_id, table_partition_id, row_count FROM system.table_partitions")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+--------------+------------+------------------+--------------------+-----------+",
+        "| table_schema | table_name | table_version_id | table_partition_id | row_count |",
+        "+--------------+------------+------------------+--------------------+-----------+",
+        "| public       | test_table | 1                |                    |           |",
+        "| public       | test_table | 2                | 1                  | 3         |",
+        "| public       | test_table | 3                | 1                  | 3         |",
+        "| public       | test_table | 3                | 2                  | 3         |",
+        "| public       | test_table | 4                | 1                  | 3         |",
+        "| public       | test_table | 4                | 2                  | 3         |",
+        "| public       | test_table | 4                | 3                  | 3         |",
+        "| public       | test_table | 5                | 1                  | 3         |",
+        "| public       | test_table | 5                | 2                  | 3         |",
+        "| public       | test_table | 5                | 3                  | 3         |",
+        "| public       | test_table | 5                | 4                  | 3         |",
+        "+--------------+------------+------------------+--------------------+-----------+",
     ];
     assert_batches_eq!(expected, &results);
 

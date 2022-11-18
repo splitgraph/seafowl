@@ -10,6 +10,7 @@ use mockall::automock;
 use parking_lot::RwLock;
 
 use crate::provider::SeafowlFunction;
+use crate::repository::interface::TablePartitionsResult;
 use crate::system_tables::SystemSchemaProvider;
 use crate::wasm_udf::data_types::{
     CreateFunctionDataType, CreateFunctionDetails, CreateFunctionLanguage,
@@ -25,8 +26,9 @@ use crate::{
         SeafowlTable,
     },
     repository::interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, AllTablePartitionsResult,
-        Error as RepositoryError, Repository, TableVersionsResult,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult,
+        AllTablePartitionColumnsResult, Error as RepositoryError, Repository,
+        TableVersionsResult,
     },
     schema::Schema,
 };
@@ -205,6 +207,11 @@ pub trait TableCatalog: Sync + Send {
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>>;
 
+    async fn get_all_table_partitions(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<TablePartitionsResult>>;
+
     async fn move_table(
         &self,
         table_id: TableId,
@@ -291,7 +298,7 @@ impl DefaultCatalog {
 
     fn build_partition<'a, I>(&self, partition_columns: I) -> SeafowlPartition
     where
-        I: Iterator<Item = &'a AllTablePartitionsResult>,
+        I: Iterator<Item = &'a AllTablePartitionColumnsResult>,
     {
         let mut iter = partition_columns.peekable();
 
@@ -558,6 +565,16 @@ impl TableCatalog for DefaultCatalog {
             .map_err(Self::to_sqlx_error)
     }
 
+    async fn get_all_table_partitions(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<TablePartitionsResult>> {
+        self.repository
+            .get_all_table_partitions(database_name)
+            .await
+            .map_err(Self::to_sqlx_error)
+    }
+
     async fn move_table(
         &self,
         table_id: TableId,
@@ -643,7 +660,7 @@ impl PartitionCatalog for DefaultCatalog {
         // and an empty table version
         let all_partitions = self
             .repository
-            .get_all_partitions_in_table(table_version_id)
+            .get_all_table_partition_columns(table_version_id)
             .await
             .map_err(Self::to_sqlx_error)?;
 
