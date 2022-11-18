@@ -1,6 +1,6 @@
 use crate::catalog::TableCatalog;
 use crate::data_types::{TableVersionId, Timestamp};
-use chrono::DateTime;
+use chrono::{DateTime, NaiveDateTime};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::sql::TableReference;
 use itertools::Itertools;
@@ -53,22 +53,22 @@ impl TableVersionProcessor {
     // Try to parse the specified version timestamp into a Unix epoch
     pub fn version_to_epoch(version: &String) -> Result<Timestamp> {
         // TODO: Further extend the supported formats for specifying the datetime
-        let dt = if let Ok(dt_rfc3339) = DateTime::parse_from_rfc3339(version) {
-            dt_rfc3339
-        } else if let Ok(dt_str_1) =
-            DateTime::parse_from_str(version, "%Y-%m-%d %H:%M:%S %z")
+        if let Ok(dt_rfc3339) = DateTime::parse_from_rfc3339(version) {
+            Ok(dt_rfc3339.timestamp())
+        } else if let Ok(dt) = DateTime::parse_from_str(version, "%Y-%m-%d %H:%M:%S %z") {
+            Ok(dt.timestamp())
+        } else if let Ok(dt_naive) =
+            NaiveDateTime::parse_from_str(version, "%Y-%m-%d %H:%M:%S")
         {
-            dt_str_1
+            Ok(dt_naive.timestamp())
         } else if let Ok(dt_rfc2822) = DateTime::parse_from_rfc2822(version) {
-            dt_rfc2822
+            Ok(dt_rfc2822.timestamp())
         } else {
             return Err(DataFusionError::Execution(format!(
                 "Failed to parse version {} as timestamp",
                 version
             )));
-        };
-
-        Ok(dt.timestamp() as Timestamp)
+        }
     }
 
     fn resolve_version_id(
@@ -297,7 +297,11 @@ mod tests {
     ]
     #[test_case(
         "2017-07-14 02:40:00 +00:00";
-        "Format 1")
+        "Custom Format with TZ")
+    ]
+    #[test_case(
+        "2017-07-14 02:40:00";
+        "Naive datetime")
     ]
     #[test_case(
         "Fri, 14 Jul 2017 02:40:00 +0000";
