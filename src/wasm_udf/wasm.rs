@@ -181,8 +181,7 @@ impl WasmMessagePackUDFInstance {
             })?;
         // Total input size will be serialized messagepack bytes prepended by the
         // size of the serialized input (one i32 == 4 bytes)
-        let size_len = std::mem::size_of::<i32>();
-        let udf_input_size: usize = udf_input_buf.len() + size_len;
+        let udf_input_size: usize = udf_input_buf.len() + SIZE_BYTE_COUNT;
         // allocate WASM memory for input buffer
         let udf_input_ptr = self
             .alloc
@@ -205,7 +204,11 @@ impl WasmMessagePackUDFInstance {
             })?;
         // copy input buffer
         self.memory
-            .write(&mut self.store, ptr + size_len, udf_input_buf.as_ref())
+            .write(
+                &mut self.store,
+                ptr + SIZE_BYTE_COUNT,
+                udf_input_buf.as_ref(),
+            )
             .map_err(|err| {
                 DataFusionError::Internal(format!(
                     "Error copying input buffer to WASM memory: {:?}",
@@ -254,18 +257,17 @@ fn get_arrow_value<T>(
 where
     T: ArrowPrimitiveType,
 {
-    match args
-        .get(col_ix)
+    args.get(col_ix)
         .unwrap()
         .as_any()
         .downcast_ref::<PrimitiveArray<T>>()
-    {
-        Some(arr) => Ok(arr.value(row_ix)),
-        None => Err(DataFusionError::Internal(format!(
-            "Error casting column {:?} to array of primitive values",
-            col_ix
-        ))),
-    }
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Error casting column {:?} to array of primitive values",
+                col_ix
+            ))
+        })
+        .map(|arr| arr.value(row_ix))
 }
 
 fn messagepack_encode_input_value(
@@ -363,32 +365,39 @@ fn messagepack_decode_results(
     match return_type {
         CreateFunctionDataType::SMALLINT => decode_udf_result_primitive_array::<
             arrow::datatypes::Int16Type,
-        >(encoded_results, &|v| match v
-            .as_i64()
-            .ok_or(DataFusionError::Internal(format!(
-                "Expected to find i64 value, but received {:?} instead",
-                v
-            ))) {
-            Err(e) => Err(e),
-            Ok(v_i64) => i16::try_from(v_i64).map_err(|e| {
-                DataFusionError::Internal(format!("Error converting i64 to i16: {:?}", e))
-            }),
+        >(encoded_results, &|v| {
+            v.as_i64()
+                .ok_or(DataFusionError::Internal(format!(
+                    "Expected to find i64 value, but received {:?} instead",
+                    v
+                )))
+                .and_then(|v_i64| {
+                    i16::try_from(v_i64).map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "Error converting i64 to i16: {:?}",
+                            e
+                        ))
+                    })
+                })
         })
         .map(|a| Arc::new(a) as ArrayRef),
         CreateFunctionDataType::I32 | CreateFunctionDataType::INT => {
             decode_udf_result_primitive_array::<arrow::datatypes::Int32Type>(
                 encoded_results,
-                &|v| match v.as_i64().ok_or(DataFusionError::Internal(format!(
-                    "Expected to find i64 value, but received {:?} instead",
-                    v
-                ))) {
-                    Err(e) => Err(e),
-                    Ok(v_i64) => i32::try_from(v_i64).map_err(|e| {
-                        DataFusionError::Internal(format!(
-                            "Error converting i64 to i32: {:?}",
-                            e
-                        ))
-                    }),
+                &|v| {
+                    v.as_i64()
+                        .ok_or(DataFusionError::Internal(format!(
+                            "Expected to find i64 value, but received {:?} instead",
+                            v
+                        )))
+                        .and_then(|v_i64| {
+                            i32::try_from(v_i64).map_err(|e| {
+                                DataFusionError::Internal(format!(
+                                    "Error converting i64 to i32: {:?}",
+                                    e
+                                ))
+                            })
+                        })
                 },
             )
             .map(|a| Arc::new(a) as ArrayRef)
@@ -421,19 +430,20 @@ fn messagepack_decode_results(
         }
         CreateFunctionDataType::DATE => decode_udf_result_primitive_array::<
             arrow::datatypes::Date32Type,
-        >(encoded_results, &|v| match v
-            .as_i64()
-            .ok_or(DataFusionError::Internal(format!(
-                "Expected to find i64 value, but received {:?} instead",
-                v
-            ))) {
-            Err(e) => Err(e),
-            Ok(v_i64) => i32::try_from(v_i64).map_err(|e| {
-                DataFusionError::Internal(format!(
-                    "Error converting i64 to i32 (for date): {:?}",
-                    e
-                ))
-            }),
+        >(encoded_results, &|v| {
+            v.as_i64()
+                .ok_or(DataFusionError::Internal(format!(
+                    "Expected to find i64 value, but received {:?} instead",
+                    v
+                )))
+                .and_then(|v_i64| {
+                    i32::try_from(v_i64).map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "Error converting i64 to i32 (for date): {:?}",
+                            e
+                        ))
+                    })
+                })
         })
         .map(|a| Arc::new(a) as ArrayRef),
         CreateFunctionDataType::TIMESTAMP => decode_udf_result_primitive_array::<
@@ -481,7 +491,7 @@ fn messagepack_decode_results(
         >(encoded_results, &|v| match v {
             Value::F32(n) => Ok(*n),
             _ => Err(DataFusionError::Internal(format!(
-                "Expected to find f64 value, but received {:?} instead",
+                "Expected to find f32 value, but received {:?} instead",
                 v
             ))),
         })
