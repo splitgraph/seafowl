@@ -1,8 +1,12 @@
+use arrow::{
+    array::{BooleanArray, PrimitiveArray, StringArray},
+    datatypes::ArrowPrimitiveType,
+};
 /// Creating DataFusion UDFs from WASM bytecode
 use datafusion::{
     arrow::{
         array::{ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array},
-        datatypes::DataType,
+        datatypes::{DataType, TimeUnit},
     },
     common::DataFusionError,
     logical_expr::{ScalarFunctionImplementation, ScalarUDF, Volatility},
@@ -11,20 +15,564 @@ use datafusion::{
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 
-use std::sync::Arc;
-use wasmtime::{Instance, Module, Store, Val, ValType};
+use wasmtime::{Engine, Instance, Memory, Module, Store, TypedFunc, Val, ValType};
 
-fn wasm_type_to_arrow_type(t: &ValType) -> Result<DataType> {
+use super::data_types::{get_wasm_type, CreateFunctionDataType, CreateFunctionLanguage};
+
+use wasi_common::WasiCtx;
+use wasmtime_wasi::sync::WasiCtxBuilder;
+
+use std::sync::Arc;
+use std::vec;
+
+use rmp_serde;
+use rmp_serde::Serializer;
+use serde;
+
+use serde::Serialize;
+
+use rmpv::Value;
+
+const SIZE_BYTE_COUNT: usize = std::mem::size_of::<i32>();
+
+fn sql_type_to_arrow_type(t: &CreateFunctionDataType) -> Result<DataType> {
     match t {
-        ValType::I32 => Ok(DataType::Int32),
-        ValType::I64 => Ok(DataType::Int64),
-        ValType::F32 => Ok(DataType::Float32),
-        ValType::F64 => Ok(DataType::Float64),
-        _ => Err(DataFusionError::Internal(format!(
-            "Unsupported WASM type: {:?}",
-            t
-        ))),
+        // legacy WASM-native type names
+        CreateFunctionDataType::I32 => Ok(DataType::Int32),
+        CreateFunctionDataType::I64 => Ok(DataType::Int64),
+        CreateFunctionDataType::F32 => Ok(DataType::Float32),
+        CreateFunctionDataType::F64 => Ok(DataType::Float64),
+        // DDL type names
+        CreateFunctionDataType::SMALLINT => Ok(DataType::Int16),
+        CreateFunctionDataType::INT => Ok(DataType::Int32),
+        CreateFunctionDataType::BIGINT => Ok(DataType::Int64),
+        CreateFunctionDataType::CHAR => Ok(DataType::Utf8),
+        CreateFunctionDataType::VARCHAR => Ok(DataType::Utf8),
+        CreateFunctionDataType::TEXT => Ok(DataType::Utf8),
+        CreateFunctionDataType::DECIMAL { precision, scale } => {
+            Ok(DataType::Decimal128(*precision, *scale))
+        }
+        CreateFunctionDataType::FLOAT => Ok(DataType::Float32),
+        CreateFunctionDataType::REAL => Ok(DataType::Float32),
+        CreateFunctionDataType::DOUBLE => Ok(DataType::Float64),
+        CreateFunctionDataType::BOOLEAN => Ok(DataType::Boolean),
+        CreateFunctionDataType::DATE => Ok(DataType::Date32),
+        CreateFunctionDataType::TIMESTAMP => {
+            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+        }
     }
+}
+
+fn get_wasm_module_exported_fn<Params, Results>(
+    instance: &Instance,
+    store: &mut Store<WasiCtx>,
+    export_name: &str,
+) -> Result<TypedFunc<Params, Results>>
+where
+    Params: wasmtime::WasmParams,
+    Results: wasmtime::WasmResults,
+{
+    instance
+        .get_typed_func::<Params, Results, _>(store, export_name)
+        .map_err(|err| {
+            DataFusionError::Internal(
+                format!("Required export '{:?}' could not be located in WASM module exports: {:?}", export_name, err))
+        })
+}
+
+struct WasmMessagePackUDFInstance {
+    store: Store<WasiCtx>,
+    alloc: TypedFunc<i32, i32>,
+    dealloc: TypedFunc<(i32, i32), ()>,
+    udf: TypedFunc<i32, i32>,
+    memory: Memory,
+}
+
+impl WasmMessagePackUDFInstance {
+    pub fn new(module_bytes: &[u8], function_name: &str) -> Result<Self> {
+        let engine = Engine::default();
+        let mut linker = wasmtime::Linker::new(&engine);
+        // Create a WASI context and put it in a Store; all instances in the store
+        // share this context. `WasiCtxBuilder` provides a number of ways to
+        // configure what the target program will have access to.
+        let wasi = WasiCtxBuilder::new().inherit_stderr().build();
+        let mut store = Store::new(&engine, wasi);
+        // Add both wasi_unstable and wasi_snapshot_preview1 WASI modules
+        wasmtime_wasi::add_to_linker(&mut linker, |s| s).map_err(|e| {
+            DataFusionError::Internal(format!("Error linking to WASI modules: {:?}", e))
+        })?;
+        // Instantiate WASM module.
+        let module = Module::from_binary(&engine, module_bytes).map_err(|e| {
+            DataFusionError::Internal(format!("Error loading WASM module: {:?}", e))
+        })?;
+        let instance = linker.instantiate(&mut store, &module).map_err(|e| {
+            DataFusionError::Internal(format!("Error instantiating WASM modules {:?}", e))
+        })?;
+
+        let alloc = get_wasm_module_exported_fn(&instance, &mut store, "alloc")?;
+        let dealloc = get_wasm_module_exported_fn(&instance, &mut store, "dealloc")?;
+        let udf = get_wasm_module_exported_fn(&instance, &mut store, function_name)?;
+        let memory = instance.get_memory(&mut store, "memory").ok_or(
+            DataFusionError::Internal(
+                "could not find module's exported memory".to_string(),
+            ),
+        )?;
+        Ok(Self {
+            store,
+            alloc,
+            dealloc,
+            udf,
+            memory,
+        })
+    }
+
+    fn read_udf_output(&mut self, udf_output_ptr: i32) -> Result<(Value, i32)> {
+        let ptr: usize = udf_output_ptr.try_into().unwrap();
+        let mut size_buffer = [0u8; SIZE_BYTE_COUNT];
+        self.memory
+            .read(&self.store, ptr, &mut size_buffer)
+            .map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "Error reading UDF output buffer size: {:?}",
+                    err
+                ))
+            })?;
+        let size: usize = i32::from_ne_bytes(size_buffer).try_into().map_err(|e| {
+            DataFusionError::Internal(format!(
+                "Error interpreting output buffer size as i32: {:?}",
+                e
+            ))
+        })?;
+        let mut output_buffer = vec![0_u8; size];
+        self.memory
+            .read(
+                &self.store,
+                ptr + SIZE_BYTE_COUNT,
+                output_buffer.as_mut_slice(),
+            )
+            .map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "Error reading output buf ({:?} bytes): {:?}",
+                    size, err
+                ))
+            })?;
+        let output: Value =
+            rmp_serde::from_slice(output_buffer.as_ref()).map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "Error messagepack decoding output buffer: {:?}",
+                    err
+                ))
+            })?;
+        // return the entire size of the output buffer (including i32 size prefix) so it can be passed to dealloc() later
+        let result: (Value, i32) = (output, (size + SIZE_BYTE_COUNT).try_into().unwrap());
+        Ok(result)
+    }
+
+    fn write_udf_input(&mut self, input: &Value) -> Result<(i32, i32)> {
+        // serialize input using MessagePack
+        let mut udf_input_buf: Vec<u8> = vec![];
+        input
+            .serialize(&mut Serializer::new(&mut udf_input_buf))
+            .map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "Error messagepack serializing input {:?}",
+                    err
+                ))
+            })?;
+        // Total input size will be serialized messagepack bytes prepended by the
+        // size of the serialized input (one i32 == 4 bytes)
+        let udf_input_size: usize = udf_input_buf.len() + SIZE_BYTE_COUNT;
+        // allocate WASM memory for input buffer
+        let udf_input_ptr = self
+            .alloc
+            .call(&mut self.store, udf_input_size.try_into().unwrap())
+            .map_err(|e| {
+                DataFusionError::Internal(format!(
+                    "Error allocating input buffer in WASM memory: {:?}",
+                    e
+                ))
+            })?;
+        let ptr: usize = udf_input_ptr.try_into().unwrap();
+        // write size of input buffer first
+        self.memory
+            .write(&mut self.store, ptr, &udf_input_buf.len().to_ne_bytes())
+            .map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "Error copying input buffer size to WASM memory: {:?}",
+                    err
+                ))
+            })?;
+        // copy input buffer
+        self.memory
+            .write(
+                &mut self.store,
+                ptr + SIZE_BYTE_COUNT,
+                udf_input_buf.as_ref(),
+            )
+            .map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "Error copying input buffer to WASM memory: {:?}",
+                    err
+                ))
+            })?;
+        // return the entire size of the output buffer (including i32 size prefix) so it can be passed to dealloc() later
+        Ok((udf_input_ptr, udf_input_size.try_into().unwrap()))
+    }
+
+    pub fn call(&mut self, input: Vec<Value>) -> Result<Value> {
+        let args_array = Value::Array(input);
+        let (udf_input_ptr, input_size) = self.write_udf_input(&args_array)?;
+        // invoke UDF
+        let udf_output_ptr =
+            self.udf.call(&mut self.store, udf_input_ptr).map_err(|e| {
+                DataFusionError::Internal(format!("Error invoking WASM UDF: {:?}", e))
+            })?;
+        let (output, output_size) = self.read_udf_output(udf_output_ptr)?;
+        // deallocate both input and output buffers
+        self.dealloc
+            .call(&mut self.store, (udf_input_ptr, input_size))
+            .map_err(|e| {
+                DataFusionError::Internal(format!(
+                    "Error deallocating input buffer: {:?}",
+                    e
+                ))
+            })?;
+        self.dealloc
+            .call(&mut self.store, (udf_output_ptr, output_size))
+            .map_err(|e| {
+                DataFusionError::Internal(format!(
+                    "Error deallocating output buffer: {:?}",
+                    e
+                ))
+            })?;
+        Ok(output)
+    }
+}
+
+fn get_arrow_value<T>(
+    args: &[ArrayRef],
+    row_ix: usize,
+    col_ix: usize,
+) -> Result<T::Native>
+where
+    T: ArrowPrimitiveType,
+{
+    args.get(col_ix)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Error casting column {:?} to array of primitive values",
+                col_ix
+            ))
+        })
+        .map(|arr| arr.value(row_ix))
+}
+
+fn messagepack_encode_input_value(
+    value_type: &CreateFunctionDataType,
+    args: &[ArrayRef],
+    row_ix: usize,
+    col_ix: usize,
+) -> Result<Value> {
+    match value_type {
+        CreateFunctionDataType::SMALLINT => {
+            get_arrow_value::<arrow::datatypes::Int16Type>(args, row_ix, col_ix)
+                .map(Value::from)
+        }
+        CreateFunctionDataType::I32 | CreateFunctionDataType::INT => {
+            get_arrow_value::<arrow::datatypes::Int32Type>(args, row_ix, col_ix)
+                .map(Value::from)
+        }
+        CreateFunctionDataType::I64 | CreateFunctionDataType::BIGINT => {
+            get_arrow_value::<arrow::datatypes::Int64Type>(args, row_ix, col_ix)
+                .map(Value::from)
+        }
+        CreateFunctionDataType::F32
+        | CreateFunctionDataType::FLOAT
+        | CreateFunctionDataType::REAL => {
+            get_arrow_value::<arrow::datatypes::Float32Type>(args, row_ix, col_ix)
+                .map(|val| Value::from(val.to_bits()))
+        }
+        CreateFunctionDataType::F64 | CreateFunctionDataType::DOUBLE => {
+            get_arrow_value::<arrow::datatypes::Float64Type>(args, row_ix, col_ix)
+                .map(|val| Value::from(val.to_bits()))
+        }
+        CreateFunctionDataType::TEXT
+        | CreateFunctionDataType::CHAR
+        | CreateFunctionDataType::VARCHAR => match args
+            .get(col_ix)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>(
+        ) {
+            Some(arr) => Ok(Value::from(arr.value(row_ix))),
+            None => Err(DataFusionError::Internal(format!(
+                "Error casting column {:?} to string array",
+                col_ix
+            ))),
+        },
+        CreateFunctionDataType::BOOLEAN => match args
+            .get(col_ix)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::BooleanArray>(
+        ) {
+            Some(arr) => Ok(Value::from(arr.value(row_ix))),
+            None => Err(DataFusionError::Internal(format!(
+                "Error casting column {:?} to boolean array",
+                col_ix
+            ))),
+        },
+        // serialize decimal as string
+        CreateFunctionDataType::DECIMAL {
+            precision: _,
+            scale: _,
+        } => get_arrow_value::<arrow::datatypes::Decimal128Type>(args, row_ix, col_ix)
+            .map(|val| Value::from(val.to_string())),
+        // dates are represented as i32 integer internally, serialize them as such.
+        CreateFunctionDataType::DATE => {
+            get_arrow_value::<arrow::datatypes::Date32Type>(args, row_ix, col_ix)
+                .map(|val| Value::from(val.to_string()))
+        }
+        // timestamps are represented as i64 integers internally, serialize them as such.
+        CreateFunctionDataType::TIMESTAMP => get_arrow_value::<
+            arrow::datatypes::TimestampNanosecondType,
+        >(args, row_ix, col_ix)
+        .map(|val| Value::from(val.to_string())),
+    }
+}
+
+fn decode_udf_result_primitive_array<T>(
+    encoded_results: &[Value],
+    decoder: &dyn Fn(&Value) -> Result<T::Native>,
+) -> Result<ArrayRef>
+where
+    T: ArrowPrimitiveType,
+{
+    encoded_results
+        .iter()
+        .map(|i| Some(decoder(i)).transpose())
+        .collect::<Result<PrimitiveArray<T>>>()
+        .map(|a| Arc::new(a) as ArrayRef)
+}
+
+fn messagepack_decode_results(
+    return_type: &CreateFunctionDataType,
+    encoded_results: &[Value],
+) -> Result<ArrayRef> {
+    match return_type {
+        CreateFunctionDataType::SMALLINT => decode_udf_result_primitive_array::<
+            arrow::datatypes::Int16Type,
+        >(encoded_results, &|v| {
+            v.as_i64()
+                .ok_or(DataFusionError::Internal(format!(
+                    "Expected to find i64 value, but received {:?} instead",
+                    v
+                )))
+                .and_then(|v_i64| {
+                    i16::try_from(v_i64).map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "Error converting i64 to i16: {:?}",
+                            e
+                        ))
+                    })
+                })
+        }),
+        CreateFunctionDataType::I32 | CreateFunctionDataType::INT => {
+            decode_udf_result_primitive_array::<arrow::datatypes::Int32Type>(
+                encoded_results,
+                &|v| {
+                    v.as_i64()
+                        .ok_or(DataFusionError::Internal(format!(
+                            "Expected to find i64 value, but received {:?} instead",
+                            v
+                        )))
+                        .and_then(|v_i64| {
+                            i32::try_from(v_i64).map_err(|e| {
+                                DataFusionError::Internal(format!(
+                                    "Error converting i64 to i32: {:?}",
+                                    e
+                                ))
+                            })
+                        })
+                },
+            )
+        }
+        CreateFunctionDataType::I64 | CreateFunctionDataType::BIGINT => {
+            decode_udf_result_primitive_array::<arrow::datatypes::Int64Type>(
+                encoded_results,
+                &|v| {
+                    v.as_i64().ok_or(DataFusionError::Internal(format!(
+                        "Expected to find i64 value, but received {:?} instead",
+                        v
+                    )))
+                },
+            )
+        }
+        CreateFunctionDataType::CHAR
+        | CreateFunctionDataType::VARCHAR
+        | CreateFunctionDataType::TEXT => encoded_results
+            .iter()
+            .map(|i| {
+                Some(i.as_str().ok_or(DataFusionError::Internal(format!(
+                    "Expected to find string value, received {:?} instead",
+                    &i
+                ))))
+                .transpose()
+            })
+            .collect::<Result<StringArray>>()
+            .map(|a| Arc::new(a) as ArrayRef),
+        CreateFunctionDataType::DATE => decode_udf_result_primitive_array::<
+            arrow::datatypes::Date32Type,
+        >(encoded_results, &|v| {
+            v.as_i64()
+                .ok_or(DataFusionError::Internal(format!(
+                    "Expected to find i64 value, but received {:?} instead",
+                    v
+                )))
+                .and_then(|v_i64| {
+                    i32::try_from(v_i64).map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "Error converting i64 to i32 (for date): {:?}",
+                            e
+                        ))
+                    })
+                })
+        }),
+        CreateFunctionDataType::TIMESTAMP => decode_udf_result_primitive_array::<
+            arrow::datatypes::TimestampNanosecondType,
+        >(encoded_results, &|v| {
+            v.as_i64().ok_or(DataFusionError::Internal(format!(
+                "Expected to find i64 value, but received {:?} instead",
+                v
+            )))
+        }),
+        CreateFunctionDataType::BOOLEAN => encoded_results
+            .iter()
+            .map(|i| {
+                Some(i.as_bool().ok_or(DataFusionError::Internal(format!(
+                    "Expected to find string value, received {:?} instead",
+                    i
+                ))))
+                .transpose()
+            })
+            .collect::<Result<BooleanArray>>()
+            .map(|a| Arc::new(a) as ArrayRef),
+
+        CreateFunctionDataType::F64 | CreateFunctionDataType::DOUBLE => {
+            decode_udf_result_primitive_array::<arrow::datatypes::Float64Type>(
+                encoded_results,
+                &|v| {
+                    v.as_f64().ok_or(DataFusionError::Internal(format!(
+                        "Expected to find f64 value, but received {:?} instead",
+                        v
+                    )))
+                },
+            )
+        }
+
+        CreateFunctionDataType::F32
+        | CreateFunctionDataType::REAL
+        | CreateFunctionDataType::FLOAT => decode_udf_result_primitive_array::<
+            arrow::datatypes::Float32Type,
+        >(encoded_results, &|v| match v {
+            Value::F32(n) => Ok(*n),
+            _ => Err(DataFusionError::Internal(format!(
+                "Expected to find f32 value, but received {:?} instead",
+                v
+            ))),
+        })
+        .map(|a| Arc::new(a) as ArrayRef),
+        CreateFunctionDataType::DECIMAL {
+            precision: _,
+            scale: _,
+        } => encoded_results
+            .iter()
+            .map(|i| {
+                Some(
+                    i.as_str()
+                        .ok_or(DataFusionError::Internal(format!(
+                            "Expected to find string value, received {:?} instead",
+                            i
+                        )))
+                        .and_then(|s| {
+                            s.parse::<i128>().map_err(|e| {
+                                DataFusionError::Internal(format!(
+                                    "Error parsing string to i128: {:?}",
+                                    e
+                                ))
+                            })
+                        }),
+                )
+                .transpose()
+            })
+            .collect::<Result<arrow::array::Decimal128Array>>()
+            .map(|a| Arc::new(a) as ArrayRef),
+    }
+}
+
+fn make_scalar_function_wasm_messagepack(
+    module_bytes: &[u8],
+    function_name: &str,
+    input_types: Vec<CreateFunctionDataType>,
+    return_type: CreateFunctionDataType,
+) -> Result<ScalarFunctionImplementation> {
+    // Similar to make_scalar_function_from_wasm, this function should verify
+    // that the module can be loaded and the UDF export is found before
+    // returning a Result.
+    let function_name = function_name.to_owned();
+    let module_bytes = module_bytes.to_owned();
+    let _outer_instance = WasmMessagePackUDFInstance::new(&module_bytes, &function_name)
+        .map_err(|err| {
+            DataFusionError::Internal(format!(
+                "Error initializing WASM + MessagePack UDF {:?}: {:?}",
+                function_name, err
+            ))
+        })?;
+    let inner = move |args: &[ArrayRef]| {
+        let mut instance = WasmMessagePackUDFInstance::new(&module_bytes, &function_name)
+            .map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "Error initializing WASM + MessagePack UDF {:?}: {:?}",
+                    function_name, err
+                ))
+            })?;
+        // this is guaranteed by DataFusion based on the function's signature.
+        assert_eq!(args.len(), input_types.len());
+
+        // Length of the vectorized array
+        let array_len = args.get(0).unwrap().len();
+
+        // Buffer for the results
+        let mut encoded_results: Vec<Value> = Vec::with_capacity(array_len);
+
+        for row_ix in 0..array_len {
+            let mut params: Vec<Value> = Vec::with_capacity(args.len());
+            // Build a slice of MessagePack Values which will be serialized
+            // as an array.
+            for col_ix in 0..args.len() {
+                params.push(messagepack_encode_input_value(
+                    input_types.get(col_ix).unwrap(),
+                    args,
+                    row_ix,
+                    col_ix,
+                )?);
+            }
+
+            encoded_results.push(instance.call(params).map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "Error invoking function {:?}: {:?}",
+                    function_name, err
+                ))
+            })?);
+        }
+
+        messagepack_decode_results(&return_type, &encoded_results)
+    };
+
+    Ok(make_scalar_function(inner))
 }
 
 /// Build a DataFusion scalar function from WASM module bytecode.
@@ -94,44 +642,28 @@ fn make_scalar_function_from_wasm(
         let mut results: Vec<Val> = Vec::new();
         results.resize(array_len, Val::null());
 
-        for i in 0..array_len {
+        for row_ix in 0..array_len {
             let mut params: Vec<Val> = Vec::with_capacity(args.len());
             // Build a slice of WASM Val values to pass to the function
-            for j in 0..args.len() {
-                let wasm_val = match input_types.get(j).unwrap() {
-                    ValType::I32 => Val::I32(
-                        args.get(j)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .expect("cast failed")
-                            .value(i),
-                    ),
-                    ValType::I64 => Val::I64(
-                        args.get(j)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Int64Array>()
-                            .expect("cast failed")
-                            .value(i),
-                    ),
+            for col_ix in 0..args.len() {
+                let wasm_val = match input_types.get(col_ix).unwrap() {
+                    ValType::I32 => Val::I32(get_arrow_value::<
+                        arrow::datatypes::Int32Type,
+                    >(args, row_ix, col_ix)?),
+                    ValType::I64 => Val::I64(get_arrow_value::<
+                        arrow::datatypes::Int64Type,
+                    >(args, row_ix, col_ix)?),
                     ValType::F32 => Val::F32(
-                        args.get(j)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Float32Array>()
-                            .expect("cast failed")
-                            .value(i)
-                            .to_bits(),
+                        get_arrow_value::<arrow::datatypes::Float32Type>(
+                            args, row_ix, col_ix,
+                        )?
+                        .to_bits(),
                     ),
                     ValType::F64 => Val::F64(
-                        args.get(j)
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Float64Array>()
-                            .expect("cast failed")
-                            .value(i)
-                            .to_bits(),
+                        get_arrow_value::<arrow::datatypes::Float64Type>(
+                            args, row_ix, col_ix,
+                        )?
+                        .to_bits(),
                     ),
                     _ => panic!("unexpected type"),
                 };
@@ -139,7 +671,7 @@ fn make_scalar_function_from_wasm(
             }
 
             // Get the function to write its output to a slice of the results' buffer
-            func.call(&mut store, &params, &mut results[i..i + 1])
+            func.call(&mut store, &params, &mut results[row_ix..row_ix + 1])
                 .map_err(|e| {
                     DataFusionError::Execution(format!(
                         "Error executing function {:?}: {:?}",
@@ -186,26 +718,41 @@ fn make_scalar_function_from_wasm(
 }
 
 pub fn create_udf_from_wasm(
+    language: &CreateFunctionLanguage,
     name: &str,
     module_bytes: &[u8],
     function_name: &str,
-    input_types: Vec<ValType>,
-    return_type: ValType,
+    input_types: &Vec<CreateFunctionDataType>,
+    return_type: &CreateFunctionDataType,
     volatility: Volatility,
 ) -> Result<ScalarUDF> {
-    // Convert input/output types. We only support the basic {I,F}{32,64} and not function references / V128
     let df_input_types = input_types
         .iter()
-        .map(wasm_type_to_arrow_type)
+        .map(sql_type_to_arrow_type)
         .collect::<Result<_>>()?;
-    let df_return_type = Arc::new(wasm_type_to_arrow_type(&return_type)?);
+    let df_return_type = Arc::new(sql_type_to_arrow_type(return_type)?);
 
-    let function = make_scalar_function_from_wasm(
-        module_bytes,
-        function_name,
-        input_types,
-        return_type,
-    )?;
+    let function = match language {
+        CreateFunctionLanguage::Wasm => {
+            let converted_input_types = input_types
+                .iter()
+                .map(|t| get_wasm_type(t).unwrap())
+                .collect();
+            make_scalar_function_from_wasm(
+                module_bytes,
+                function_name,
+                // Convert input/output types. We only support the basic {I,F}{32,64} and not function references / V128
+                converted_input_types,
+                get_wasm_type(return_type)?,
+            )?
+        }
+        CreateFunctionLanguage::WasmMessagePack => make_scalar_function_wasm_messagepack(
+            module_bytes,
+            function_name,
+            input_types.to_owned(),
+            return_type.to_owned(),
+        )?,
+    };
 
     Ok(create_udf(
         name,
@@ -224,7 +771,7 @@ mod tests {
     use datafusion::assert_batches_eq;
 
     #[tokio::test]
-    async fn test_wasi_math() {
+    async fn test_wasm_math() {
         // Source: https://gist.github.com/going-digital/02e46c44d89237c07bc99cd440ebfa43
         let bytes = decode(
             "\
@@ -258,33 +805,36 @@ f95f3c90f2533d2267773eac66313f1d00803ff725303d03fd3fbe17a6d1\
 
         // sin(2*pi*x)
         let sintau = create_udf_from_wasm(
+            &CreateFunctionLanguage::Wasm,
             "sintau",
             &bytes,
             "sintau",
-            vec![ValType::F32],
-            ValType::F32,
+            &vec![CreateFunctionDataType::F32],
+            &CreateFunctionDataType::F32,
             Volatility::Immutable,
         )
         .unwrap();
 
         // 2^x
         let exp2 = create_udf_from_wasm(
+            &CreateFunctionLanguage::Wasm,
             "exp2",
             &bytes,
             "exp2",
-            vec![ValType::F32],
-            ValType::F32,
+            &vec![CreateFunctionDataType::F32],
+            &CreateFunctionDataType::F32,
             Volatility::Immutable,
         )
         .unwrap();
 
         // log2(x)
         let log2 = create_udf_from_wasm(
+            &CreateFunctionLanguage::Wasm,
             "log2",
             &bytes,
             "log2",
-            vec![ValType::F32],
-            ValType::F32,
+            &vec![CreateFunctionDataType::F32],
+            &CreateFunctionDataType::F32,
             Volatility::Immutable,
         )
         .unwrap();
@@ -330,7 +880,7 @@ f95f3c90f2533d2267773eac66313f1d00803ff725303d03fd3fbe17a6d1\
     }
 
     #[tokio::test]
-    async fn test_wasi_encryption() {
+    async fn test_wasm_encryption() {
         // Speck64/128 block cipher
         // Original from https://github.com/madmo/speck/; adapted for WASM
         // in github.com/mildbyte/speck-wasm
@@ -380,22 +930,32 @@ c40201087f230041206b2203240020032002370318200320013703102003\
 
         // speck_encrypt_block(plaintext_block, key_msb, key_lsb)
         let speck_encrypt_block = create_udf_from_wasm(
+            &CreateFunctionLanguage::Wasm,
             "speck_encrypt_block",
             &speck,
             "speck_encrypt_block",
-            vec![ValType::I64, ValType::I64, ValType::I64],
-            ValType::I64,
+            &vec![
+                CreateFunctionDataType::I64,
+                CreateFunctionDataType::I64,
+                CreateFunctionDataType::I64,
+            ],
+            &CreateFunctionDataType::I64,
             Volatility::Immutable,
         )
         .unwrap();
 
         // speck_decrypt_block(ciphertext_block, key_msb, key_lsb)
         let speck_decrypt_block = create_udf_from_wasm(
+            &CreateFunctionLanguage::Wasm,
             "speck_decrypt_block",
             &speck,
             "speck_decrypt_block",
-            vec![ValType::I64, ValType::I64, ValType::I64],
-            ValType::I64,
+            &vec![
+                CreateFunctionDataType::I64,
+                CreateFunctionDataType::I64,
+                CreateFunctionDataType::I64,
+            ],
+            &CreateFunctionDataType::I64,
             Volatility::Immutable,
         )
         .unwrap();
@@ -428,6 +988,134 @@ c40201087f230041206b2203240020032002370318200320013703102003\
             "| 16171819  | 8992269262659013344 | 16171819  |",
             "| -20212223 | 5068206001593455086 | -20212223 |",
             "+-----------+---------------------+-----------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+    }
+
+    use std::io::Read;
+
+    // from: https://www.reddit.com/r/rust/comments/dekpl5/how_to_read_binary_data_from_a_file_into_a_vecu8/
+    #[allow(clippy::all)]
+    fn get_file_as_byte_vec(filename: &String) -> Vec<u8> {
+        let mut f = std::fs::File::open(&filename).expect("no file found");
+        let metadata = std::fs::metadata(&filename).expect("unable to read metadata");
+        let mut buffer = vec![0; metadata.len() as usize];
+        f.read(&mut buffer).expect("buffer overflow");
+        buffer
+    }
+
+    #[tokio::test]
+    async fn test_wasm_messagepack_adder() {
+        let mut wasm_filename = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        wasm_filename.push_str("/resources/test/wasm_messagepack_as.wasm");
+        // adder function: (i64, i64) -> i64
+        let wasm_module = get_file_as_byte_vec(&wasm_filename);
+
+        let mut ctx = SessionContext::new();
+        ctx.sql(
+            "CREATE TABLE int64_values AS
+            SELECT CAST(v1 AS BIGINT) AS v1, CAST(v2 AS BIGINT) AS v2
+            FROM (VALUES (1, 2), (3, 4), (5, 6), (7, 8), (9, 10)) d (v1, v2)",
+        )
+        .await
+        .unwrap();
+
+        // speck_encrypt_block(plaintext_block, key_msb, key_lsb)
+        let adder_udf = create_udf_from_wasm(
+            &CreateFunctionLanguage::WasmMessagePack,
+            "adder",
+            &wasm_module,
+            "adder",
+            &vec![CreateFunctionDataType::I64, CreateFunctionDataType::I64],
+            &CreateFunctionDataType::I64,
+            Volatility::Immutable,
+        )
+        .unwrap();
+
+        ctx.register_udf(adder_udf);
+
+        let results = ctx
+            .sql(
+                "SELECT
+                    v1,
+                    v2,
+                    CAST(adder(v1, v2) AS BIGINT) AS sum
+            FROM int64_values;",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+----+-----+",
+            "| v1 | v2 | sum |",
+            "+----+----+-----+",
+            "| 1  | 2  | 3   |",
+            "| 3  | 4  | 7   |",
+            "| 5  | 6  | 11  |",
+            "| 7  | 8  | 15  |",
+            "| 9  | 10 | 19  |",
+            "+----+----+-----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn test_wasm_messagepack_concat() {
+        let mut wasm_filename = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        wasm_filename.push_str("/resources/test/wasm_messagepack_as.wasm");
+        // adder function: (i64, i64) -> i64
+        let wasm_module = get_file_as_byte_vec(&wasm_filename);
+
+        let mut ctx = SessionContext::new();
+        ctx.sql(
+            "CREATE TABLE text_values AS
+            SELECT CAST(s1 AS TEXT) AS s1, CAST(s2 AS TEXT) AS s2
+            FROM (VALUES ('foo', 'bar'), ('big', 'int'), ('con', 'gress')) d (s1, s2)",
+        )
+        .await
+        .unwrap();
+
+        // speck_encrypt_block(plaintext_block, key_msb, key_lsb)
+        let concat_udf = create_udf_from_wasm(
+            &CreateFunctionLanguage::WasmMessagePack,
+            "concat2",
+            &wasm_module,
+            "concat2",
+            &vec![CreateFunctionDataType::TEXT, CreateFunctionDataType::TEXT],
+            &CreateFunctionDataType::TEXT,
+            Volatility::Immutable,
+        )
+        .unwrap();
+
+        ctx.register_udf(concat_udf);
+
+        let results = ctx
+            .sql(
+                "SELECT
+                s1,
+                s2,
+                CAST(concat2(s1, s2) AS TEXT) AS concat_result
+            FROM text_values;",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+-----+-------+---------------+",
+            "| s1  | s2    | concat_result |",
+            "+-----+-------+---------------+",
+            "| foo | bar   | foobar        |",
+            "| big | int   | bigint        |",
+            "| con | gress | congress      |",
+            "+-----+-------+---------------+",
         ];
 
         assert_batches_eq!(expected, &results);

@@ -1,4 +1,5 @@
 use core::fmt;
+use datafusion::error::DataFusionError;
 use datafusion::logical_expr::Volatility;
 use serde::de::{Deserializer, Error, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -7,19 +8,24 @@ use strum_macros::{Display, EnumString};
 use wasmtime::ValType;
 
 // WASM to DataFusion conversions
-pub fn get_wasm_type(t: &CreateFunctionDataType) -> ValType {
+pub fn get_wasm_type(t: &CreateFunctionDataType) -> Result<ValType, DataFusionError> {
     match t {
         // temporary support for legacy WASM-native names:
-        CreateFunctionDataType::I32 => ValType::I32,
-        CreateFunctionDataType::I64 => ValType::I32,
-        CreateFunctionDataType::F32 => ValType::F32,
-        CreateFunctionDataType::F64 => ValType::F32,
+        CreateFunctionDataType::I32 => Ok(ValType::I32),
+        CreateFunctionDataType::I64 => Ok(ValType::I64),
+        CreateFunctionDataType::F32 => Ok(ValType::F32),
+        CreateFunctionDataType::F64 => Ok(ValType::F64),
         // Supported DDL type names
-        CreateFunctionDataType::INT => ValType::I32,
-        CreateFunctionDataType::BIGINT => ValType::I64,
-        CreateFunctionDataType::FLOAT => ValType::F32,
-        CreateFunctionDataType::REAL => ValType::F32,
-        CreateFunctionDataType::DOUBLE => ValType::F64,
+        CreateFunctionDataType::INT => Ok(ValType::I32),
+        CreateFunctionDataType::BIGINT => Ok(ValType::I64),
+        CreateFunctionDataType::FLOAT => Ok(ValType::F32),
+        CreateFunctionDataType::REAL => Ok(ValType::F32),
+        CreateFunctionDataType::DOUBLE => Ok(ValType::F64),
+
+        e => Err(DataFusionError::Internal(format!(
+            "UDFs with language 'wasm' do not support data type {}",
+            e
+        ))),
     }
 }
 
@@ -39,20 +45,20 @@ pub enum CreateFunctionDataType {
     I64,
     F32,
     F64,
-    // Supported DDL type names
-    //SMALLINT
+    // Supported DDL type names from https://seafowl.io/docs/reference/types
+    SMALLINT,
     INT,
     BIGINT,
-    //CHAR
-    //VARCHAR
-    //TEXT
-    //DECIMAL(p,s)
+    CHAR,
+    VARCHAR,
+    TEXT,
+    DECIMAL { precision: u8, scale: u8 },
     FLOAT,
     REAL,
     DOUBLE,
-    //BOOLEAN
-    //DATE
-    //TIMESTAMP
+    BOOLEAN,
+    DATE,
+    TIMESTAMP,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, EnumString, Display, Clone)]
@@ -72,6 +78,7 @@ impl Default for CreateFunctionVolatility {
 #[serde(rename_all = "camelCase")]
 pub enum CreateFunctionLanguage {
     Wasm,
+    WasmMessagePack,
 }
 impl Default for CreateFunctionLanguage {
     fn default() -> Self {

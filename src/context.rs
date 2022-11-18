@@ -91,7 +91,7 @@ use crate::provider::{
     project_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
     SeafowlTable,
 };
-use crate::wasm_udf::data_types::{get_volatility, get_wasm_type, CreateFunctionDetails};
+use crate::wasm_udf::data_types::{get_volatility, CreateFunctionDetails};
 use crate::{
     catalog::{FunctionCatalog, TableCatalog},
     data_types::DatabaseId,
@@ -677,11 +677,12 @@ impl DefaultSeafowlContext {
             .map_err(|e| Error::Execution(format!("Error decoding the UDF: {:?}", e)))?;
 
         let function = create_udf_from_wasm(
+            &details.language,
             name,
             &function_code,
             &details.entrypoint,
-            details.input_types.iter().map(get_wasm_type).collect(),
-            get_wasm_type(&details.return_type),
+            &details.input_types,
+            &details.return_type,
             get_volatility(&details.volatility),
         )?;
         let mut mut_session_ctx = self.inner.clone();
