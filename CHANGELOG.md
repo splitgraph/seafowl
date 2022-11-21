@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Implement `table_partitions` system table (<https://github.com/splitgraph/seafowl/pull/214>)
+
 ## [0.2.7] - 2022-11-17
 
 - Import JSON values as strings in `CREATE EXTERNAL TABLE`
