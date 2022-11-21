@@ -5,6 +5,7 @@
 ## [Unreleased] - ReleaseDate
 
 - Implement `table_partitions` system table (<https://github.com/splitgraph/seafowl/pull/214>)
+- Add WASI + MessagePack UDF language variant (<https://github.com/splitgraph/seafowl/pull/149>)
 
 ## [0.2.7] - 2022-11-17
 
