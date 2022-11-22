@@ -101,12 +101,11 @@ impl TableProvider for RemoteTable {
         _ctx: &SessionState,
         projection: &Option<Vec<usize>>,
         _filters: &[Expr],
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // TODO: partition query by some column to utilize concurrent fetching
         // TODO: try to push down the filters: re-construct the WHERE clause for the remote table
         // source type at hand if possible, and append to query
-        // TODO: apply limit
 
         // Scope down the schema and query column specifiers if a projection is specified
         let mut schema = self.schema.deref().clone();
@@ -125,9 +124,12 @@ impl TableProvider for RemoteTable {
                 .join(", ")
         }
 
+        // Apply LIMIT if any
+        let limit_clause = limit.map_or("".to_string(), |size| format!(" LIMIT {size}"));
+
         // Construct and run the remote query
         let queries = vec![CXQuery::from(
-            format!("SELECT {} FROM {}", columns, self.name).as_str(),
+            format!("SELECT {} FROM {}{}", columns, self.name, limit_clause).as_str(),
         )];
         let arrow_data = self.run_queries(queries).await?;
         let src_schema = arrow_data.arrow_schema().deref().clone();
