@@ -50,7 +50,7 @@ jobs:
 
       # selecting a toolchain either by action or manual `rustup` calls should happen
       # before the plugin, as the cache uses the current rustc version as its cache key
-      - run: rustup toolchain install nightly --profile minimal
+      - run: rustup toolchain install nightly-2022-11-15 --profile minimal
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -65,8 +65,8 @@ jobs:
       # Setup the rest of the toolchain
       - name: Setup toolchain
         run: |
-          rustup toolchain install nightly
-          rustup default nightly
+          rustup toolchain install nightly-2022-11-15
+          rustup default nightly-2022-11-15
           rustup component add rustfmt clippy
 
       - name: Check pre-commit hooks (formatting and Clippy)
