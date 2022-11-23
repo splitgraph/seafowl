@@ -293,11 +293,11 @@ fn messagepack_encode_input_value(
         | CreateFunctionDataType::FLOAT
         | CreateFunctionDataType::REAL => {
             get_arrow_value::<arrow::datatypes::Float32Type>(args, row_ix, col_ix)
-                .map(|val| Value::from(val.to_bits()))
+                .map(Value::from)
         }
         CreateFunctionDataType::F64 | CreateFunctionDataType::DOUBLE => {
             get_arrow_value::<arrow::datatypes::Float64Type>(args, row_ix, col_ix)
-                .map(|val| Value::from(val.to_bits()))
+                .map(Value::from)
         }
         CreateFunctionDataType::TEXT
         | CreateFunctionDataType::CHAR
@@ -325,22 +325,44 @@ fn messagepack_encode_input_value(
                 col_ix
             ))),
         },
-        // serialize decimal as string
+        // from: https://github.com/apache/arrow/blob/02c8598d264c839a5b5cf3109bfd406f3b8a6ba5/cpp/src/arrow/type.h#L824
+        // Arrow decimals are fixed-point decimal numbers encoded as a scaled
+        // integer.  The precision is the number of significant digits that the
+        // decimal type can represent; the scale is the number of digits after
+        // the decimal point (note the scale can be negative).
+        //
+        // As an example, `Decimal128Type(7, 3)` can exactly represent the numbers
+        // 1234.567 and -1234.567 (encoded internally as the 128-bit integers
+        // 1234567 and -1234567, respectively), but neither 12345.67 nor 123.4567.
+        //
+        // Decimal128Type has a maximum precision of 38 significant digits
+        // (also available as Decimal128Type::kMaxPrecision).
+        // If higher precision is needed, consider using Decimal256Type.
         CreateFunctionDataType::DECIMAL {
-            precision: _,
-            scale: _,
+            precision: p,
+            scale: s,
         } => get_arrow_value::<arrow::datatypes::Decimal128Type>(args, row_ix, col_ix)
-            .map(|val| Value::from(val.to_string())),
+            .map(|val| {
+                let low: i64 = val as i64;
+                let high: i64 = (val >> 64) as i64;
+
+                Value::Array(vec![
+                    Value::from(*p),
+                    Value::from(*s),
+                    Value::from(high),
+                    Value::from(low),
+                ])
+            }),
         // dates are represented as i32 integer internally, serialize them as such.
         CreateFunctionDataType::DATE => {
             get_arrow_value::<arrow::datatypes::Date32Type>(args, row_ix, col_ix)
-                .map(|val| Value::from(val.to_string()))
+                .map(Value::from)
         }
         // timestamps are represented as i64 integers internally, serialize them as such.
         CreateFunctionDataType::TIMESTAMP => get_arrow_value::<
             arrow::datatypes::TimestampNanosecondType,
         >(args, row_ix, col_ix)
-        .map(|val| Value::from(val.to_string())),
+        .map(Value::from),
     }
 }
 
@@ -486,30 +508,56 @@ fn messagepack_decode_results(
         })
         .map(|a| Arc::new(a) as ArrayRef),
         CreateFunctionDataType::DECIMAL {
-            precision: _,
-            scale: _,
+            precision: p,
+            scale: s,
         } => encoded_results
             .iter()
             .map(|i| {
                 Some(
-                    i.as_str()
+                    i.as_array()
                         .ok_or(DataFusionError::Internal(format!(
-                            "Expected to find string value, received {:?} instead",
+                            "Expected to find array containing decimal parts, received {:?} instead",
                             i
                         )))
-                        .and_then(|s| {
-                            s.parse::<i128>().map_err(|e| {
-                                DataFusionError::Internal(format!(
-                                    "Error parsing string to i128: {:?}",
-                                    e
-                                ))
-                            })
+                        .and_then(|decimal_array| {
+                            if decimal_array.len() != 4 {
+                                return Err(DataFusionError::Internal(format!("DECIMAL UDF result array should have 4 elements, found {:?} instead.", decimal_array.len())));
+                            }
+                            decimal_array[0].as_u64()
+                                .ok_or(DataFusionError::Internal(format!("Decimal precision expected to be integer, found {:?} instead", decimal_array[0])))
+                                .and_then(|p_u64| {
+                                    let p_u8:u8 = p_u64.try_into().map_err(|err| DataFusionError::Internal(format!("Couldn't convert 64-bit precision value {:?} to u8 {:?}", p_u64, err)))?;
+                                    if p_u8 != *p {
+                                        return Err(DataFusionError::Internal(format!("Expected to receive a decimal with precision {:?}, got {:?} instead.", *p, p_u8)))
+                                    }
+                                    Ok(p_u8)
+                                })?;
+                            decimal_array[1].as_u64()
+                                .ok_or(DataFusionError::Internal(format!("Decimal scale expected to be integer, found {:?} instead", decimal_array[1])))
+                                .and_then(|s_u64| {
+                                    let s_u8:u8 = s_u64.try_into().map_err(|err| DataFusionError::Internal(format!("Couldn't convert 64-bit scale value {:?} to u8 {:?}", s_u64, err)))?;
+                                    if s_u8 != *s {
+                                        return Err(DataFusionError::Internal(format!("Expected to receive a decimal with scale {:?}, got {:?} instead.", *s, s_u8)))
+                                    }
+                                    Ok(s_u8)
+                                })?;
+                            let high = decimal_array[2].as_i64()
+                                .ok_or(DataFusionError::Internal(format!("Decimal value high half expected to be integer, found {:?} instead", decimal_array[2])))?;
+                            let low = decimal_array[3].as_i64()
+                                .ok_or(DataFusionError::Internal(format!("Decimal value low half expected to be integer, found {:?} instead", decimal_array[3])))?;
+                            let value:i128 = (low as i128) + ((high as i128) << 64);
+                            Ok(value)
                         }),
                 )
                 .transpose()
             })
             .collect::<Result<arrow::array::Decimal128Array>>()
-            .map(|a| Arc::new(a) as ArrayRef),
+            .and_then(|a| {
+                let arr = (a as arrow::array::Decimal128Array)
+                    .with_precision_and_scale(*p, *s)
+                    .map_err(|e| DataFusionError::Internal(format!("Error setting precision {:?} scale {:?} for decimal result: {:?}", *p, *s, e)))?;
+                Ok(Arc::new(arr) as ArrayRef)
+            }),
     }
 }
 
@@ -769,6 +817,7 @@ mod tests {
 
     use super::*;
     use datafusion::assert_batches_eq;
+    use test_case::test_case;
 
     #[tokio::test]
     async fn test_wasm_math() {
@@ -1005,43 +1054,74 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         buffer
     }
 
-    #[tokio::test]
-    async fn test_wasm_messagepack_adder() {
+    async fn register_wasm_messagepack_udf(
+        name: &str,
+        input_types: &Vec<CreateFunctionDataType>,
+        return_type: &CreateFunctionDataType,
+    ) -> Result<SessionContext> {
         let mut wasm_filename = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        wasm_filename.push_str("/resources/test/wasm_messagepack_as.wasm");
-        // adder function: (i64, i64) -> i64
+        wasm_filename.push_str("/resources/test/messagepack_rust.wasm");
         let wasm_module = get_file_as_byte_vec(&wasm_filename);
-
         let mut ctx = SessionContext::new();
-        ctx.sql(
-            "CREATE TABLE int64_values AS
-            SELECT CAST(v1 AS BIGINT) AS v1, CAST(v2 AS BIGINT) AS v2
-            FROM (VALUES (1, 2), (3, 4), (5, 6), (7, 8), (9, 10)) d (v1, v2)",
+
+        create_udf_from_wasm(
+            &CreateFunctionLanguage::WasmMessagePack,
+            name,
+            &wasm_module,
+            name,
+            input_types,
+            return_type,
+            Volatility::Immutable,
+        )
+        .map(|udf| {
+            ctx.register_udf(udf);
+            ctx
+        })
+    }
+
+    #[test_case("add_i64", CreateFunctionDataType::BIGINT ; "BIGINT")]
+    #[test_case("add_i32", CreateFunctionDataType::INT ; "INT")]
+    #[test_case("add_i16", CreateFunctionDataType::SMALLINT ; "SMALLINT")]
+    #[tokio::test]
+    async fn test_wasm_messagepack_add_integers(
+        udf_name: &str,
+        int_type: CreateFunctionDataType,
+    ) {
+        let type_name = int_type.to_string();
+        let ctx = register_wasm_messagepack_udf(
+            udf_name,
+            &vec![int_type.to_owned(), int_type.to_owned()],
+            &int_type,
         )
         .await
         .unwrap();
 
-        // speck_encrypt_block(plaintext_block, key_msb, key_lsb)
-        let adder_udf = create_udf_from_wasm(
-            &CreateFunctionLanguage::WasmMessagePack,
-            "adder",
-            &wasm_module,
-            "adder",
-            &vec![CreateFunctionDataType::I64, CreateFunctionDataType::I64],
-            &CreateFunctionDataType::I64,
-            Volatility::Immutable,
+        ctx.sql(
+            format!(
+                "CREATE TABLE {}_values AS
+            SELECT CAST(v1 AS {}) AS v1, CAST(v2 AS {}) AS v2
+            FROM (VALUES (1, 2), (3, 4), (5, 6), (7, 8), (9, 10)) d (v1, v2)
+            ",
+                type_name.to_lowercase(),
+                type_name,
+                type_name
+            )
+            .as_str(),
         )
+        .await
         .unwrap();
-
-        ctx.register_udf(adder_udf);
 
         let results = ctx
             .sql(
-                "SELECT
+                format!(
+                    "SELECT
                     v1,
                     v2,
-                    CAST(adder(v1, v2) AS BIGINT) AS sum
-            FROM int64_values;",
+                    CAST({}(v1, v2) AS {}) AS sum
+            FROM {}_values;",
+                    udf_name, type_name, type_name
+                )
+                .as_str(),
             )
             .await
             .unwrap()
@@ -1064,14 +1144,269 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         assert_batches_eq!(expected, &results);
     }
 
+    #[test_case("mul_f32", CreateFunctionDataType::FLOAT ; "FLOAT")]
+    #[test_case("mul_f64", CreateFunctionDataType::DOUBLE ; "DOUBLE")]
+    #[tokio::test]
+    async fn test_wasm_messagepack_mul_floating_point(
+        udf_name: &str,
+        float_type: CreateFunctionDataType,
+    ) {
+        let type_name = float_type.to_string();
+        let ctx = register_wasm_messagepack_udf(
+            udf_name,
+            &vec![float_type.to_owned(), float_type.to_owned()],
+            &float_type,
+        )
+        .await
+        .unwrap();
+
+        ctx.sql(
+            format!("CREATE TABLE {}_values AS
+            SELECT CAST(v1 AS {}) AS v1, CAST(v2 AS {}) AS v2
+            FROM (VALUES (0.5, 2.0), (3.5, 4.1), (5.4, 6.2), (7.0, 8.9), (9.1, 10.2)) d (v1, v2)",
+            type_name.to_lowercase(), type_name, type_name).as_str(),
+        )
+        .await
+        .unwrap();
+
+        let results = ctx
+            .sql(
+                format!(
+                    "SELECT
+                v1,
+                v2,
+                ROUND({}(v1, v2)) AS product
+        FROM {}_values;",
+                    udf_name,
+                    type_name.to_lowercase()
+                )
+                .as_str(),
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+-----+------+---------+",
+            "| v1  | v2   | product |",
+            "+-----+------+---------+",
+            "| 0.5 | 2    | 1       |",
+            "| 3.5 | 4.1  | 14      |",
+            "| 5.4 | 6.2  | 33      |",
+            "| 7   | 8.9  | 62      |",
+            "| 9.1 | 10.2 | 93      |",
+            "+-----+------+---------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn test_wasm_messagepack_timestamp() {
+        let ctx = register_wasm_messagepack_udf(
+            "add_hours",
+            &vec![
+                CreateFunctionDataType::TIMESTAMP,
+                CreateFunctionDataType::INT,
+            ],
+            &CreateFunctionDataType::TIMESTAMP,
+        )
+        .await
+        .unwrap();
+
+        ctx.sql(
+            "CREATE TABLE timestamp_values AS
+            SELECT CAST(v1 AS TIMESTAMP) AS v1, CAST(v2 AS INT) AS v2
+            FROM (VALUES (1669127920543717000, 2), (1669127920543717000, 4), (0, 6)) d (v1, v2)",
+        )
+        .await
+        .unwrap();
+
+        let results = ctx
+            .sql(
+                "SELECT
+                    v1,
+                    v2,
+                    add_hours(v1, v2) AS new_ts
+            FROM timestamp_values;",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----------------------------+----+----------------------------+",
+            "| v1                         | v2 | new_ts                     |",
+            "+----------------------------+----+----------------------------+",
+            "| 2022-11-22T14:38:40.543717 | 2  | 2022-11-22T16:38:40.543717 |",
+            "| 2022-11-22T14:38:40.543717 | 4  | 2022-11-22T18:38:40.543717 |",
+            "| 1970-01-01T00:00:00        | 6  | 1970-01-01T06:00:00        |",
+            "+----------------------------+----+----------------------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn test_wasm_messagepack_date() {
+        let ctx = register_wasm_messagepack_udf(
+            "add_days",
+            &vec![CreateFunctionDataType::DATE, CreateFunctionDataType::INT],
+            &CreateFunctionDataType::DATE,
+        )
+        .await
+        .unwrap();
+
+        ctx.sql(
+            "CREATE TABLE date_values AS
+            SELECT CAST(v1 AS DATE) AS v1, CAST(v2 AS INT) AS v2
+            FROM (VALUES (0, 2), (19318, 0), (19318, 1)) d (v1, v2)",
+        )
+        .await
+        .unwrap();
+
+        let results = ctx
+            .sql(
+                "SELECT
+                    v1,
+                    v2,
+                    add_days(v1, v2) AS new_days
+            FROM date_values;",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+------------+----+------------+",
+            "| v1         | v2 | new_days   |",
+            "+------------+----+------------+",
+            "| 1970-01-01 | 2  | 1970-01-03 |",
+            "| 2022-11-22 | 0  | 2022-11-22 |",
+            "| 2022-11-22 | 1  | 2022-11-23 |",
+            "+------------+----+------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn test_wasm_messagepack_bool() {
+        let ctx = register_wasm_messagepack_udf(
+            "xor2",
+            &vec![
+                CreateFunctionDataType::BOOLEAN,
+                CreateFunctionDataType::BOOLEAN,
+            ],
+            &CreateFunctionDataType::BOOLEAN,
+        )
+        .await
+        .unwrap();
+
+        ctx.sql(
+            "CREATE TABLE bool_values AS
+            SELECT CAST(v1 AS BOOLEAN) AS v1, CAST(v2 AS BOOLEAN) AS v2
+            FROM (VALUES (TRUE, TRUE), (TRUE, FALSE), (FALSE, TRUE), (FALSE, FALSE)) d (v1, v2)",
+        )
+        .await
+        .unwrap();
+
+        let results = ctx
+            .sql(
+                "SELECT
+                    v1,
+                    v2,
+                    xor2(v1, v2) AS xor_result
+            FROM bool_values;",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+-------+-------+------------+",
+            "| v1    | v2    | xor_result |",
+            "+-------+-------+------------+",
+            "| true  | true  | false      |",
+            "| true  | false | true       |",
+            "| false | true  | true       |",
+            "| false | false | false      |",
+            "+-------+-------+------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn test_wasm_messagepack_increment_decimal() {
+        let ctx = register_wasm_messagepack_udf(
+            "increment_decimal",
+            &vec![CreateFunctionDataType::DECIMAL {
+                precision: 20,
+                scale: 2,
+            }],
+            &CreateFunctionDataType::DECIMAL {
+                precision: 20,
+                scale: 2,
+            },
+        )
+        .await
+        .unwrap();
+
+        ctx.sql(
+            "CREATE TABLE decimal_values AS
+            SELECT
+                CAST(v1 AS DECIMAL(20,2)) AS v1
+            FROM (
+                VALUES (CAST(0.01 AS DECIMAL(20,2))), (CAST(16691927.02 AS DECIMAL(20,2)))
+            ) d (v1)",
+        )
+        .await
+        .unwrap();
+
+        let results = ctx
+            .sql(
+                "SELECT
+                    v1,
+                    increment_decimal(v1) AS new_decimal
+            FROM decimal_values;",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+-------------+-------------+",
+            "| v1          | new_decimal |",
+            "+-------------+-------------+",
+            "| 0.01        | 1.01        |",
+            "| 16691927.02 | 16691928.02 |",
+            "+-------------+-------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+    }
+
     #[tokio::test]
     async fn test_wasm_messagepack_concat() {
-        let mut wasm_filename = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        wasm_filename.push_str("/resources/test/wasm_messagepack_as.wasm");
-        // adder function: (i64, i64) -> i64
-        let wasm_module = get_file_as_byte_vec(&wasm_filename);
+        let ctx = register_wasm_messagepack_udf(
+            "concat2",
+            &vec![CreateFunctionDataType::TEXT, CreateFunctionDataType::TEXT],
+            &CreateFunctionDataType::TEXT,
+        )
+        .await
+        .unwrap();
 
-        let mut ctx = SessionContext::new();
         ctx.sql(
             "CREATE TABLE text_values AS
             SELECT CAST(s1 AS TEXT) AS s1, CAST(s2 AS TEXT) AS s2
@@ -1079,20 +1414,6 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         )
         .await
         .unwrap();
-
-        // speck_encrypt_block(plaintext_block, key_msb, key_lsb)
-        let concat_udf = create_udf_from_wasm(
-            &CreateFunctionLanguage::WasmMessagePack,
-            "concat2",
-            &wasm_module,
-            "concat2",
-            &vec![CreateFunctionDataType::TEXT, CreateFunctionDataType::TEXT],
-            &CreateFunctionDataType::TEXT,
-            Volatility::Immutable,
-        )
-        .unwrap();
-
-        ctx.register_udf(concat_udf);
 
         let results = ctx
             .sql(
