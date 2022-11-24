@@ -1079,6 +1079,87 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         })
     }
 
+    #[tokio::test]
+    async fn test_wasm_module_missing_export() -> Result<()> {
+        let err = register_wasm_messagepack_udf(
+            "404_this_function_is_not_exported_by_the_wasm_module",
+            &vec![
+                CreateFunctionDataType::INT.to_owned(),
+                CreateFunctionDataType::INT.to_owned(),
+            ],
+            &CreateFunctionDataType::INT,
+        )
+        .await;
+        assert!(err.is_err());
+        assert!(
+            err.err().unwrap().to_string().starts_with(
+                "Internal error: Error initializing WASM + MessagePack UDF \"404_this_function_is_not_exported_by_the_wasm_module\": Internal(\"Required export '\\\"404_this_function_is_not_exported_by_the_wasm_module\\\"' could not be located in WASM module exports: failed to find function export"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_wasm_messagepack_udf_wasm_trap() {
+        let ctx = register_wasm_messagepack_udf(
+            "panic_if_negative",
+            &vec![CreateFunctionDataType::INT],
+            &CreateFunctionDataType::INT,
+        )
+        .await
+        .unwrap();
+
+        let results = ctx
+            .sql("select panic_if_negative(CAST(-1 AS INT))")
+            .await
+            .unwrap()
+            .collect()
+            .await;
+        assert!(results.is_err());
+        assert!(results.err().unwrap().to_string().starts_with("Arrow error: External error: Internal error: Error invoking function \"panic_if_negative\": Internal(\"Error invoking WASM UDF: Trap"));
+    }
+
+    #[tokio::test]
+    async fn test_wasm_messagepack_unparseable_output() {
+        let ctx = register_wasm_messagepack_udf(
+            "write_garbage_output",
+            &vec![CreateFunctionDataType::INT],
+            &CreateFunctionDataType::INT,
+        )
+        .await
+        .unwrap();
+
+        let results = ctx
+            .sql("select write_garbage_output(CAST(1 AS INT))")
+            .await
+            .unwrap()
+            .collect()
+            .await;
+        assert!(results.is_err());
+        assert!(results.err().unwrap().to_string().starts_with("Arrow error: External error: Internal error: Error invoking function \"write_garbage_output\": Internal(\"Error messagepack decoding output buffer"));
+    }
+
+    #[tokio::test]
+    async fn test_wasm_messagepack_unexpected_response_type() {
+        let ctx = register_wasm_messagepack_udf(
+            "add_i64",
+            &vec![
+                CreateFunctionDataType::BIGINT,
+                CreateFunctionDataType::BIGINT,
+            ],
+            &CreateFunctionDataType::TEXT,
+        )
+        .await
+        .unwrap();
+
+        let results = ctx
+            .sql("select add_i64(1,2)")
+            .await
+            .unwrap()
+            .collect()
+            .await;
+        assert!(results.is_err());
+        assert!(results.err().unwrap().to_string().starts_with("Arrow error: External error: Internal error: Expected to find string value, received Integer(PosInt(3)) instead"));
+    }
+
     #[test_case("add_i64", CreateFunctionDataType::BIGINT ; "BIGINT")]
     #[test_case("add_i32", CreateFunctionDataType::INT ; "INT")]
     #[test_case("add_i16", CreateFunctionDataType::SMALLINT ; "SMALLINT")]
