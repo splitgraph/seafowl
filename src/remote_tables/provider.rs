@@ -1,5 +1,5 @@
 use crate::remote_tables::pushdown_visitor::{
-    FilterPushdown, FilterPushdownVisitor, PostgresFilterPushdown, SQLiteFilterPushdown,
+    filter_expr_to_sql, MySQLFilterPushdown, PostgresFilterPushdown, SQLiteFilterPushdown,
 };
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
@@ -13,7 +13,6 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_expr::expr_visitor::ExprVisitable;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use log::debug;
 use std::any::Any;
@@ -85,43 +84,22 @@ impl RemoteTable {
         })?
     }
 
-    fn filter_expr_to_sql<T: FilterPushdownVisitor>(
-        &self,
-        filter: &Expr,
-        source_pushdown: T,
-    ) -> Option<String> {
-        // Construct the initial visitor state
-        let visitor = FilterPushdown {
-            source: source_pushdown,
-            pushdown_supported: true,
-            sql_exprs: vec![],
-        };
-
-        // Perform the walk through the expr AST trying to construct the equivalent SQL for the
-        // particular source type at hand.
-        match filter.accept(visitor) {
-            Ok(FilterPushdown {
-                pushdown_supported,
-                sql_exprs,
-                ..
-            }) => {
-                if pushdown_supported && sql_exprs.len() != 1 {
-                    return Some(
-                        sql_exprs
-                            .first()
-                            .expect("Exactly 1 SQL expression expected")
-                            .clone(),
-                    );
-                }
+    fn filter_expr_to_sql(&self, filter: &Expr) -> Option<String> {
+        match self.source_conn.ty {
+            SourceType::Postgres => {
+                let postgres_pushdown = PostgresFilterPushdown {};
+                filter_expr_to_sql(filter, postgres_pushdown).ok()
             }
-            Err(e) => debug!(
-                "Unsupported pushdown of filter expression {}, error: {}",
-                filter,
-                e.to_string()
-            ),
+            SourceType::SQLite => {
+                let sqlite_pushdown = SQLiteFilterPushdown {};
+                filter_expr_to_sql(filter, sqlite_pushdown).ok()
+            }
+            SourceType::MySQL => {
+                let mysql_pushdown = MySQLFilterPushdown {};
+                filter_expr_to_sql(filter, mysql_pushdown).ok()
+            }
+            _ => None,
         }
-
-        None
     }
 }
 
@@ -143,7 +121,7 @@ impl TableProvider for RemoteTable {
         &self,
         _ctx: &SessionState,
         projection: &Option<Vec<usize>>,
-        _filters: &[Expr],
+        filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // TODO: partition query by some column to utilize concurrent fetching
@@ -168,9 +146,27 @@ impl TableProvider for RemoteTable {
         // Apply LIMIT if any
         let limit_clause = limit.map_or("".to_string(), |size| format!(" LIMIT {size}"));
 
+        // Try to construct the WHERE clause: all passed filters should be eligible for pushdown as
+        // they've past the checks in `supports_filter_pushdown`
+        let where_clause = if filters.is_empty() {
+            "".to_string()
+        } else {
+            let filters_sql = filters
+                .iter()
+                .filter_map(|expr| self.filter_expr_to_sql(expr))
+                .collect::<Vec<String>>()
+                .join(" AND ");
+
+            format!("WHERE {}", filters_sql)
+        };
+
         // Construct and run the remote query
         let queries = vec![CXQuery::from(
-            format!("SELECT {} FROM {}{}", columns, self.name, limit_clause).as_str(),
+            format!(
+                "SELECT {} FROM {}{}{}",
+                columns, self.name, where_clause, limit_clause
+            )
+            .as_str(),
         )];
         let arrow_data = self.run_queries(queries).await?;
         let src_schema = arrow_data.arrow_schema().deref().clone();
@@ -222,19 +218,7 @@ impl TableProvider for RemoteTable {
         filter: &Expr,
     ) -> Result<TableProviderFilterPushDown> {
         // TODO: add caching of filter to expr mapping (here and in scan)?
-        let maybe_filter = match self.source_conn.ty {
-            SourceType::Postgres => {
-                let postgres_pushdown = PostgresFilterPushdown {};
-                self.filter_expr_to_sql(filter, postgres_pushdown)
-            }
-            SourceType::SQLite => {
-                let sqlite_pushdown = SQLiteFilterPushdown {};
-                self.filter_expr_to_sql(filter, sqlite_pushdown)
-            }
-            _ => return Ok(TableProviderFilterPushDown::Unsupported),
-        };
-
-        if maybe_filter.is_none() {
+        if self.filter_expr_to_sql(filter).is_none() {
             return Ok(TableProviderFilterPushDown::Unsupported);
         }
         Ok(TableProviderFilterPushDown::Exact)

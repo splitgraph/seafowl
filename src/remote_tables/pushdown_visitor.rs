@@ -1,7 +1,7 @@
 use datafusion::common::DataFusionError;
 use datafusion::error::Result;
 use datafusion::scalar::ScalarValue;
-use datafusion_expr::expr_visitor::{ExpressionVisitor, Recursion};
+use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use datafusion_expr::{BinaryExpr, Expr, Operator};
 
 pub struct FilterPushdown<T: FilterPushdownVisitor> {
@@ -15,9 +15,12 @@ pub struct FilterPushdown<T: FilterPushdownVisitor> {
 
 pub struct PostgresFilterPushdown {}
 pub struct SQLiteFilterPushdown {}
+pub struct MySQLFilterPushdown {}
 
+// TODO: customize the pushdown logic according to the remote source
 impl FilterPushdownVisitor for PostgresFilterPushdown {}
 impl FilterPushdownVisitor for SQLiteFilterPushdown {}
+impl FilterPushdownVisitor for MySQLFilterPushdown {}
 
 pub trait FilterPushdownVisitor {
     fn scalar_value_to_sql(&self, value: &ScalarValue) -> Option<String> {
@@ -105,4 +108,36 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
         };
         Ok(self)
     }
+}
+
+pub fn filter_expr_to_sql<T: FilterPushdownVisitor>(
+    filter: &Expr,
+    source_pushdown: T,
+) -> Result<String> {
+    // Construct the initial visitor state
+    let visitor = FilterPushdown {
+        source: source_pushdown,
+        pushdown_supported: true,
+        sql_exprs: vec![],
+    };
+
+    // Perform the walk through the expr AST trying to construct the equivalent SQL for the
+    // particular source type at hand.
+    let FilterPushdown {
+        pushdown_supported,
+        sql_exprs,
+        ..
+    } = filter.accept(visitor)?;
+
+    if !pushdown_supported || sql_exprs.len() != 1 {
+        return Err(DataFusionError::Execution(format!(
+            "Pushdown not supported for expression {}",
+            filter
+        )));
+    }
+
+    Ok(sql_exprs
+        .first()
+        .expect("Exactly 1 SQL expression expected")
+        .clone())
 }
