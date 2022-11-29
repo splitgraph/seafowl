@@ -171,7 +171,8 @@ pub fn filter_expr_to_sql<T: FilterPushdownVisitor>(
 #[cfg(test)]
 mod tests {
     use crate::remote_tables::pushdown_visitor::{
-        filter_expr_to_sql, PostgresFilterPushdown,
+        filter_expr_to_sql, MySQLFilterPushdown, PostgresFilterPushdown,
+        SQLiteFilterPushdown,
     };
     use datafusion::logical_expr::{and, col, lit, or, Expr};
     use rstest::rstest;
@@ -185,9 +186,19 @@ mod tests {
         or(and(or(col("a").eq(lit(1)), col("b").gt(lit(10))), col("c").lt_eq(lit(15.0))), col("d").not_eq(lit("some_string"))),
         "(a = 1 OR b > 10) AND c <= 15 OR d != 'some_string'")
     ]
-    fn test_filter_expr_to_sql(#[case] expr: Expr, #[case] expr_sql: &str) {
-        let pushdown = PostgresFilterPushdown {};
+    fn test_filter_expr_to_sql(
+        #[case] expr: Expr,
+        #[case] expr_sql: &str,
+        #[values("postgres", "sqlite", "mysql")] source_type: &str,
+    ) {
+        let sql_result = if source_type == "postgres" {
+            filter_expr_to_sql(&expr, PostgresFilterPushdown {}).unwrap()
+        } else if source_type == "sqlite" {
+            filter_expr_to_sql(&expr, SQLiteFilterPushdown {}).unwrap()
+        } else {
+            filter_expr_to_sql(&expr, MySQLFilterPushdown {}).unwrap()
+        };
 
-        assert_eq!(filter_expr_to_sql(&expr, pushdown).unwrap(), expr_sql)
+        assert_eq!(sql_result, expr_sql)
     }
 }
