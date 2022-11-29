@@ -2649,4 +2649,27 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_register_invalid_udf() -> Result<()> {
+        let sf_context = mock_context().await;
+
+        // Source: https://gist.github.com/going-digital/02e46c44d89237c07bc99cd440ebfa43
+        let plan = sf_context
+            .plan_query(
+                r#"CREATE FUNCTION invalidfn AS '
+            {
+                "entrypoint": "invalidfn",
+                "language": "wasmMessagePack",
+                "input_types": ["float"],
+                "return_type": "float",
+                "data": ""
+            }';"#,
+            )
+            .await;
+        assert!(plan.is_err());
+        assert!(plan.err().unwrap().to_string().starts_with(
+            "Internal error: Error initializing WASM + MessagePack UDF \"invalidfn\": Internal(\"Error loading WASM module: failed to parse WebAssembly module"));
+        Ok(())
+    }
 }
