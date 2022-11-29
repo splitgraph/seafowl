@@ -37,7 +37,7 @@ base64 = "0.13.0"
 
 bytes = "1.1.0"
 chrono = { version = "0.4", default_features = false }
-clap = { version = "3.2.19", features = [ "derive" ] }
+clap = { version = "4.0.28", features = [ "derive" ] }
 config = "0.13.1"
 
 # Remote query execution for a variety of DBs
