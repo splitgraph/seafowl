@@ -159,7 +159,7 @@ impl TableProvider for RemoteTable {
                 .collect::<Vec<String>>()
                 .join(" AND ");
 
-            format!("WHERE {}", filters_sql)
+            format!(" WHERE {}", filters_sql)
         };
 
         // Construct and run the remote query
@@ -170,6 +170,7 @@ impl TableProvider for RemoteTable {
             )
             .as_str(),
         )];
+
         let arrow_data = self.run_queries(queries).await?;
         let src_schema = arrow_data.arrow_schema().deref().clone();
         let data = arrow_data.arrow().map_err(|e| {

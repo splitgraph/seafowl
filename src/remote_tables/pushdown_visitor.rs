@@ -6,7 +6,6 @@ use datafusion_expr::{BinaryExpr, Expr, Operator};
 
 pub struct FilterPushdown<T: FilterPushdownVisitor> {
     pub source: T,
-    pub pushdown_supported: bool,
     // LIFO stack for keeping the intermediate SQL expression results to be used in interpolation
     // of the parent nodes. After a successful visit, it should contain exactly one element, which
     // represents the complete SQL statement corresponding to the given expression.
@@ -20,7 +19,7 @@ pub struct MySQLFilterPushdown {}
 impl FilterPushdownVisitor for PostgresFilterPushdown {}
 
 impl FilterPushdownVisitor for SQLiteFilterPushdown {
-    fn op_to_sql(&self, op: Operator) -> Option<String> {
+    fn op_to_sql(&self, op: &Operator) -> Option<String> {
         match op {
             Operator::RegexMatch
             | Operator::RegexIMatch
@@ -33,7 +32,7 @@ impl FilterPushdownVisitor for SQLiteFilterPushdown {
 }
 
 impl FilterPushdownVisitor for MySQLFilterPushdown {
-    fn op_to_sql(&self, op: Operator) -> Option<String> {
+    fn op_to_sql(&self, op: &Operator) -> Option<String> {
         match op {
             // TODO: see if there's a way to convert the non-case sensitive match
             Operator::RegexIMatch | Operator::RegexNotIMatch => None,
@@ -48,31 +47,38 @@ impl FilterPushdownVisitor for MySQLFilterPushdown {
 pub trait FilterPushdownVisitor {
     fn scalar_value_to_sql(&self, value: &ScalarValue) -> Option<String> {
         match value {
-            ScalarValue::Utf8(Some(val)) => Some(format!("'{}'", val)),
+            ScalarValue::Utf8(Some(val)) | ScalarValue::LargeUtf8(Some(val)) => {
+                Some(format!("'{}'", val.replace('\'', "''")))
+            }
             _ => Some(format!("{}", value)),
         }
     }
 
-    fn op_to_sql(&self, op: Operator) -> Option<String> {
+    fn op_to_sql(&self, op: &Operator) -> Option<String> {
         Some(op.to_string())
     }
 }
 
 impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
-    fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>> {
+    fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
         match expr {
             Expr::Column(_) | Expr::Literal(_) => {}
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 // Check if operator pushdown supported; left and right expressions will be checked
                 // through further recursion.
-                if self.source.op_to_sql(*op).is_none() {
-                    return Ok(Recursion::Stop(self));
+                if self.source.op_to_sql(op).is_none() {
+                    return Err(DataFusionError::Execution(format!(
+                        "Operator {} not shipable",
+                        op,
+                    )));
                 }
             }
             _ => {
-                // Expression is not supported, no need to visit any remaining nodes
-                self.pushdown_supported = false;
-                return Ok(Recursion::Stop(self));
+                // Expression is not supported, no need to visit any remaining child or parent nodes
+                return Err(DataFusionError::Execution(format!(
+                    "Expression {:?} not shipable",
+                    expr,
+                )));
             }
         };
         Ok(Recursion::Continue(self))
@@ -117,7 +123,7 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
                     }
                 }
 
-                let op = self.source.op_to_sql(be.op).ok_or_else(|| {
+                let op_sql = self.source.op_to_sql(&be.op).ok_or_else(|| {
                     DataFusionError::Execution(format!(
                         "Couldn't convert operator {:?} to a compatible one for the remote system",
                         be.op,
@@ -125,7 +131,7 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
                 })?;
 
                 self.sql_exprs
-                    .push(format!("{} {} {}", left_sql, op, right_sql))
+                    .push(format!("{} {} {}", left_sql, op_sql, right_sql))
             }
             _ => {}
         };
@@ -143,21 +149,16 @@ pub fn filter_expr_to_sql<T: FilterPushdownVisitor>(
     // Construct the initial visitor state
     let visitor = FilterPushdown {
         source: source_pushdown,
-        pushdown_supported: true,
         sql_exprs: vec![],
     };
 
     // Perform the walk through the expr AST trying to construct the equivalent SQL for the
     // particular source type at hand.
-    let FilterPushdown {
-        pushdown_supported,
-        sql_exprs,
-        ..
-    } = filter.accept(visitor)?;
+    let FilterPushdown { sql_exprs, .. } = filter.accept(visitor)?;
 
-    if !pushdown_supported || sql_exprs.len() != 1 {
+    if sql_exprs.len() != 1 {
         return Err(DataFusionError::Execution(format!(
-            "Pushdown not supported for expression {}",
+            "Failed constructing SQL for expression {}",
             filter
         )));
     }
@@ -170,12 +171,13 @@ pub fn filter_expr_to_sql<T: FilterPushdownVisitor>(
 
 #[cfg(test)]
 mod tests {
+    use datafusion::logical_expr::{and, col, lit, or, Expr};
+    use rstest::rstest;
+
     use crate::remote_tables::pushdown_visitor::{
         filter_expr_to_sql, MySQLFilterPushdown, PostgresFilterPushdown,
         SQLiteFilterPushdown,
     };
-    use datafusion::logical_expr::{and, col, lit, or, Expr};
-    use rstest::rstest;
 
     #[rstest]
     #[case::simple_binary_expression(
