@@ -167,3 +167,28 @@ pub fn filter_expr_to_sql<T: FilterPushdownVisitor>(
         .expect("Exactly 1 SQL expression expected")
         .clone())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::remote_tables::pushdown_visitor::{
+        filter_expr_to_sql, PostgresFilterPushdown,
+    };
+    use datafusion::logical_expr::{and, col, lit, or, Expr};
+    use test_case::test_case;
+
+    #[test_case(
+        col("a").gt_eq(lit(25)),
+        "a >= 25";
+        "Simple binary expression")
+    ]
+    #[test_case(
+        or(and(or(col("a").eq(lit(1)), col("b").gt(lit(10))), col("c").lt_eq(lit(15.0))), col("d").not_eq(lit("some_string"))),
+        "(a = 1 OR b > 10) AND c <= 15 OR d != 'some_string'";
+        "Complex binary expression")
+    ]
+    fn test_filter_expr_to_sql(expr: Expr, expr_sql: &str) {
+        let pushdown = PostgresFilterPushdown {};
+
+        assert_eq!(filter_expr_to_sql(&expr, pushdown).unwrap(), expr_sql)
+    }
+}
