@@ -1,5 +1,5 @@
 use crate::statements::*;
-use test_case::test_case;
+use rstest::rstest;
 
 #[tokio::test]
 async fn test_information_schema() {
@@ -373,28 +373,16 @@ async fn test_table_time_travel() {
     assert_batches_eq!(expected, &results);
 }
 
-#[test_case(
-    "Postgres",
-    true;
-    "Postgres schema introspected")
-]
-#[test_case(
-    "Postgres",
-    false;
-    "Postgres schema declared")
-]
-#[test_case(
-    "SQLite",
-    true;
-    "SQLite schema introspected")
-]
-#[test_case(
-    "SQLite",
-    false;
-    "SQLite schema declared")
-]
+#[rstest]
+#[case::postgres_schema_introspected("Postgres", true)]
+#[case::postgres_schema_declared("Postgres", false)]
+#[case::sqlite_schema_introspected("SQLite", true)]
+#[case::sqlite_schema_declared("SQLite", false)]
 #[tokio::test]
-async fn test_remote_table_querying(db_type: &str, introspect_schema: bool) {
+async fn test_remote_table_querying(
+    #[case] db_type: &str,
+    #[case] introspect_schema: bool,
+) {
     let context = make_context_with_pg().await;
 
     let schema = get_random_schema();

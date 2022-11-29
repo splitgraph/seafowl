@@ -174,19 +174,18 @@ mod tests {
         filter_expr_to_sql, PostgresFilterPushdown,
     };
     use datafusion::logical_expr::{and, col, lit, or, Expr};
-    use test_case::test_case;
+    use rstest::rstest;
 
-    #[test_case(
+    #[rstest]
+    #[case::simple_binary_expression(
         col("a").gt_eq(lit(25)),
-        "a >= 25";
-        "Simple binary expression")
+        "a >= 25")
     ]
-    #[test_case(
+    #[case::complex_binary_expression(
         or(and(or(col("a").eq(lit(1)), col("b").gt(lit(10))), col("c").lt_eq(lit(15.0))), col("d").not_eq(lit("some_string"))),
-        "(a = 1 OR b > 10) AND c <= 15 OR d != 'some_string'";
-        "Complex binary expression")
+        "(a = 1 OR b > 10) AND c <= 15 OR d != 'some_string'")
     ]
-    fn test_filter_expr_to_sql(expr: Expr, expr_sql: &str) {
+    fn test_filter_expr_to_sql(#[case] expr: Expr, #[case] expr_sql: &str) {
         let pushdown = PostgresFilterPushdown {};
 
         assert_eq!(filter_expr_to_sql(&expr, pushdown).unwrap(), expr_sql)

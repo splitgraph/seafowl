@@ -2050,7 +2050,7 @@ mod tests {
     use datafusion::execution::disk_manager::DiskManagerConfig;
     use mockall::predicate;
     use object_store::memory::InMemory;
-    use test_case::test_case;
+    use rstest::rstest;
 
     use crate::context::test_utils::mock_context_with_catalog_assertions;
 
@@ -2094,14 +2094,11 @@ mod tests {
         assert_eq!(expected.into_iter().sorted().collect_vec(), actual);
     }
 
-    #[test_case(
-    false; "In-memory object store (standard)"
-    )]
-    #[test_case(
-    true; "Local object store (test renames)"
-    )]
+    #[rstest]
+    #[case::in_memory_object_store_standard(false)]
+    #[case::local_object_store_test_renames(true)]
     #[tokio::test]
-    async fn test_plan_to_object_storage(is_local: bool) {
+    async fn test_plan_to_object_storage(#[case] is_local: bool) {
         let sf_context = mock_context().await;
 
         // Make a SELECT VALUES(...) query
@@ -2239,35 +2236,32 @@ mod tests {
         .await;
     }
 
-    #[test_case(
+    #[rstest]
+    #[case::record_batches_smaller_than_partitions(
         5,
         vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
-        vec![vec![0, 1, 2, 3, 4], vec![5, 6, 7, 8, 9], vec![10, 11]];
-        "record batches smaller than partitions")
+        vec![vec![0, 1, 2, 3, 4], vec![5, 6, 7, 8, 9], vec![10, 11]])
     ]
-    #[test_case(
+    #[case::record_batches_same_size_as_partitions(
         3,
         vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
-        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]];
-        "record batches same size as partitions")
+        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]])
     ]
-    #[test_case(
+    #[case::record_batches_larer_than_partitions(
         2,
         vec![vec![vec![0, 1, 2], vec![3, 4, 5]], vec![vec![6, 7, 8], vec![9, 10, 11]]],
-        vec![vec![0, 1], vec![2, 3], vec![4, 5], vec![6, 7], vec![8, 9], vec![10, 11]];
-        "record batches larger than partitions")
+        vec![vec![0, 1], vec![2, 3], vec![4, 5], vec![6, 7], vec![8, 9], vec![10, 11]])
     ]
-    #[test_case(
+    #[case::record_batches_of_irregular_size(
         3,
         vec![vec![vec![0, 1], vec![2, 3, 4]], vec![vec![5]], vec![vec![6, 7, 8, 9], vec![10, 11]]],
-        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]];
-        "record batches irregular size")
+        vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8], vec![9, 10, 11]])
     ]
     #[tokio::test]
     async fn test_plan_to_object_storage_partition_chunking(
-        max_partition_size: u32,
-        input_partitions: Vec<Vec<Vec<i32>>>,
-        output_partitions: Vec<Vec<i32>>,
+        #[case] max_partition_size: u32,
+        #[case] input_partitions: Vec<Vec<Vec<i32>>>,
+        #[case] output_partitions: Vec<Vec<i32>>,
     ) {
         let sf_context = mock_context().await;
 

@@ -630,7 +630,7 @@ mod tests {
     };
     use mockall::predicate;
     use object_store::{memory::InMemory, path::Path, ObjectStore};
-    use test_case::test_case;
+    use rstest::rstest;
 
     use crate::data_types::PhysicalPartitionId;
     use crate::provider::{PartitionColumn, SeafowlPruningStatistics};
@@ -751,47 +751,42 @@ mod tests {
         assert_batches_eq!(expected, &results);
     }
 
-    #[test_case(
+    #[rstest]
+    #[case::partition_with_missing_max(
         vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(0)), (Some(30), Some(40), None)],
         vec![col("some_int").gt_eq(lit(25))],
-        vec![1, 2];
-        "Partition with missing max")
+        vec![1, 2])
     ]
-    #[test_case(
+    #[case::multiple_expressions(
         vec![(Some(10), Some(20), None), (Some(20), Some(30), Some(0)), (Some(30), Some(40), Some(1))],
         vec![col("some_int").gt(lit(15)), col("some_int").lt(lit(25))],
-        vec![0, 1];
-        "Multiple expressions")
+        vec![0, 1])
     ]
-    #[test_case(
+    #[case::disjunction_plus_and(
         vec![(Some(10), Some(20), None), (Some(20), Some(30), Some(0)), (Some(30), Some(40), Some(1))],
         vec![or(col("some_int").eq(lit(15)), col("some_int").eq(lit(25))), col("some_int").gt(lit(20))],
-        vec![1];
-        "Disjunction + AND")
+        vec![1])
     ]
-    #[test_case(
+    #[case::null_check_zero_nulls(
         vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(0))],
         vec![col("some_int").is_null()],
-        vec![];
-        "Null check zero nulls")
+        vec![])
     ]
-    #[test_case(
+    #[case::null_check_one_null(
         vec![(Some(10), Some(20), Some(0)), (Some(20), None, Some(1))],
         vec![col("some_int").is_null()],
-        vec![1];
-        "Null check one null")
+        vec![1])
     ]
-    #[test_case(
+    #[case::null_check_unknown_nulls(
         vec![(Some(10), Some(20), Some(0)), (Some(20), None, None)],
         vec![col("some_int").is_null()],
-        vec![1];
-        "Null check unknown nulls")
+        vec![1])
     ]
     #[tokio::test]
     async fn test_partition_pruning(
-        part_stats: Vec<(Option<i32>, Option<i32>, Option<i32>)>,
-        filters: Vec<Expr>,
-        expected: Vec<usize>,
+        #[case] part_stats: Vec<(Option<i32>, Option<i32>, Option<i32>)>,
+        #[case] filters: Vec<Expr>,
+        #[case] expected: Vec<usize>,
     ) {
         // Dummy schema for the tests
         let schema = Arc::new(Schema::new(vec![Field::new(

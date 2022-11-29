@@ -1,41 +1,17 @@
 use crate::http::*;
-use test_case::test_case;
+use rstest::rstest;
 
-#[test_case(
-    "csv",
-    true,
-    Some(true);
-    "CSV file schema supplied w/ headers")
-]
-#[test_case(
-    "csv",
-    true,
-    Some(false);
-    "CSV file schema supplied w/o headers")
-]
-#[test_case(
-    "csv",
-    false,
-    Some(true);
-    "CSV file schema inferred w/ headers")
-]
-#[test_case(
-    "csv",
-    false,
-    Some(false);
-    "CSV file schema inferred w/o headers")
-]
-#[test_case(
-    "parquet",
-    false,
-    None;
-    "Parquet file")
-]
+#[rstest]
+#[case::csv_schema_supplied_with_headers("csv", true, Some(true))]
+#[case::csv_schema_supplied_no_headers("csv", true, Some(false))]
+#[case::csv_schema_inferred_with_headers("csv", false, Some(true))]
+#[case::csv_schema_inferred_no_headers("csv", false, Some(false))]
+#[case::parquet("parquet", false, None)]
 #[tokio::test]
 async fn test_upload_base(
-    file_format: &str,
-    include_schema: bool,
-    add_headers: Option<bool>,
+    #[case] file_format: &str,
+    #[case] include_schema: bool,
+    #[case] add_headers: Option<bool>,
 ) {
     let (addr, server, terminate, context) = make_read_only_http_server().await;
 
