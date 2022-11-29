@@ -17,10 +17,33 @@ pub struct PostgresFilterPushdown {}
 pub struct SQLiteFilterPushdown {}
 pub struct MySQLFilterPushdown {}
 
-// TODO: customize the pushdown logic according to the remote source
 impl FilterPushdownVisitor for PostgresFilterPushdown {}
-impl FilterPushdownVisitor for SQLiteFilterPushdown {}
-impl FilterPushdownVisitor for MySQLFilterPushdown {}
+
+impl FilterPushdownVisitor for SQLiteFilterPushdown {
+    fn op_to_sql(&self, op: Operator) -> Option<String> {
+        match op {
+            Operator::RegexMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexNotIMatch
+            | Operator::BitwiseXor => None,
+            _ => Some(op.to_string()),
+        }
+    }
+}
+
+impl FilterPushdownVisitor for MySQLFilterPushdown {
+    fn op_to_sql(&self, op: Operator) -> Option<String> {
+        match op {
+            // TODO: see if there's a way to convert the non-case sensitive match
+            Operator::RegexIMatch | Operator::RegexNotIMatch => None,
+            Operator::RegexMatch => Some("RLIKE".to_string()),
+            Operator::RegexNotMatch => Some("NOT RLIKE".to_string()),
+            Operator::BitwiseXor => Some("^".to_string()),
+            _ => Some(op.to_string()),
+        }
+    }
+}
 
 pub trait FilterPushdownVisitor {
     fn scalar_value_to_sql(&self, value: &ScalarValue) -> Option<String> {
@@ -110,6 +133,9 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
     }
 }
 
+// Walk the filter expression AST for a particular remote source type and see if the expression is
+// ship-able, at the same time converting elements (e.g. operators) to the native representation if
+// needed.
 pub fn filter_expr_to_sql<T: FilterPushdownVisitor>(
     filter: &Expr,
     source_pushdown: T,

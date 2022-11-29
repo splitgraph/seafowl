@@ -84,6 +84,8 @@ impl RemoteTable {
         })?
     }
 
+    // Convert the DataFusion expression representing a filter to an equivalent SQL string for the
+    // remote data source if the entire filter can be pushed down.
     fn filter_expr_to_sql(&self, filter: &Expr) -> Option<String> {
         match self.source_conn.ty {
             SourceType::Postgres => {
@@ -221,6 +223,8 @@ impl TableProvider for RemoteTable {
         if self.filter_expr_to_sql(filter).is_none() {
             return Ok(TableProviderFilterPushDown::Unsupported);
         }
+        // TODO: make this Inexact just to be on the safe side? The downside is that DF won't pushdown
+        // any LIMIT clause to the `scan` then, since it and WHERE are not commutable
         Ok(TableProviderFilterPushDown::Exact)
     }
 }
