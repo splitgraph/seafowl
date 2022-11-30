@@ -87,21 +87,22 @@ impl RemoteTable {
     // Convert the DataFusion expression representing a filter to an equivalent SQL string for the
     // remote data source if the entire filter can be pushed down.
     fn filter_expr_to_sql(&self, filter: &Expr) -> Option<String> {
-        match self.source_conn.ty {
-            SourceType::Postgres => {
-                let postgres_pushdown = PostgresFilterPushdown {};
-                filter_expr_to_sql(filter, postgres_pushdown).ok()
+        let result = match self.source_conn.ty {
+            SourceType::Postgres => filter_expr_to_sql(filter, PostgresFilterPushdown {}),
+            SourceType::SQLite => filter_expr_to_sql(filter, SQLiteFilterPushdown {}),
+            SourceType::MySQL => filter_expr_to_sql(filter, MySQLFilterPushdown {}),
+            _ => {
+                debug!(
+                    "Filter not shipable due to unsupported source type {:?}",
+                    self.source_conn.ty
+                );
+                return None;
             }
-            SourceType::SQLite => {
-                let sqlite_pushdown = SQLiteFilterPushdown {};
-                filter_expr_to_sql(filter, sqlite_pushdown).ok()
-            }
-            SourceType::MySQL => {
-                let mysql_pushdown = MySQLFilterPushdown {};
-                filter_expr_to_sql(filter, mysql_pushdown).ok()
-            }
-            _ => None,
-        }
+        };
+
+        result
+            .map_err(|err| debug!("Failed constructing SQL for filter {filter}: {err}"))
+            .ok()
     }
 }
 
@@ -220,12 +221,14 @@ impl TableProvider for RemoteTable {
         &self,
         filter: &Expr,
     ) -> Result<TableProviderFilterPushDown> {
-        // TODO: add caching of filter to expr mapping (here and in scan)?
         if self.filter_expr_to_sql(filter).is_none() {
             return Ok(TableProviderFilterPushDown::Unsupported);
         }
-        // TODO: make this Inexact just to be on the safe side? The downside is that DF won't pushdown
-        // any LIMIT clause to the `scan` then, since it and WHERE are not commutable
+
+        // NB: We can keep this Exact since DF will optimize the plan by preserving the un-shipable
+        // filter nodes for itself, and pass only shipable ones to the scan function.
+        // On the other hand when all filter expressions are (exactly) shipable any limit clause
+        // will also get pushed down, providing additional optimization.
         Ok(TableProviderFilterPushDown::Exact)
     }
 }

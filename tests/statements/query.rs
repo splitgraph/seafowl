@@ -490,7 +490,7 @@ async fn test_remote_table_querying(
     // Test that projection and filtering work
     let plan = context
         .plan_query(
-            "SELECT \"date field\", c FROM staging.remote_table WHERE a > 2 OR c = 'two' LIMIT 2",
+            "SELECT \"date field\", c FROM staging.remote_table WHERE (a > 2 OR c = 'two') AND (a < 5) LIMIT 2",
         )
         .await
         .unwrap();

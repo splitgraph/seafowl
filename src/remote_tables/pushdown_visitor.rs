@@ -90,7 +90,7 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
             Expr::Literal(val) => {
                 let sql_val = self.source.scalar_value_to_sql(val).ok_or_else(|| {
                     DataFusionError::Execution(format!(
-                        "Couldn't convert ScalarValue {:?} to a compatible one for the remote system",
+                        "ScalarValue {:?} not shipable",
                         val,
                     ))
                 })?;
@@ -158,8 +158,8 @@ pub fn filter_expr_to_sql<T: FilterPushdownVisitor>(
 
     if sql_exprs.len() != 1 {
         return Err(DataFusionError::Execution(format!(
-            "Failed constructing SQL for expression {}",
-            filter
+            "Expected exactly one SQL expression for filter {}, found: {:?}",
+            filter, sql_exprs,
         )));
     }
 
@@ -185,7 +185,7 @@ mod tests {
         "a >= 25")
     ]
     #[case::complex_binary_expression(
-        or(and(or(col("a").eq(lit(1)), col("b").gt(lit(10))), col("c").lt_eq(lit(15.0))), col("d").not_eq(lit("some_string"))),
+        or(and(or(col("a").eq(lit(1)), col("b").gt(lit(10))), col("c").lt_eq(lit(15))), col("d").not_eq(lit("some_string"))),
         "(a = 1 OR b > 10) AND c <= 15 OR d != 'some_string'")
     ]
     fn test_filter_expr_to_sql(
