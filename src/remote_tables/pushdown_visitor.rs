@@ -1,3 +1,4 @@
+use arrow::temporal_conversions::{date32_to_datetime, timestamp_ns_to_datetime};
 use datafusion::common::{Column, DataFusionError};
 use datafusion::error::Result;
 use datafusion::scalar::ScalarValue;
@@ -58,6 +59,19 @@ pub trait FilterPushdownVisitor {
             ScalarValue::Utf8(Some(val)) | ScalarValue::LargeUtf8(Some(val)) => {
                 Some(format!("'{}'", val.replace('\'', "''")))
             }
+            ScalarValue::Date32(Some(days)) => {
+                let date = date32_to_datetime(*days)?.date();
+                Some(format!("'{}'", date.format("%Y-%m-%d")))
+            }
+            ScalarValue::TimestampNanosecond(Some(ns), None) => {
+                let timestamp = timestamp_ns_to_datetime(*ns)?;
+                Some(format!("'{}'", timestamp))
+            }
+            // TODO: See which of these makes sense to implement
+            ScalarValue::Date64(_)
+            | ScalarValue::TimestampSecond(_, _)
+            | ScalarValue::TimestampMillisecond(_, _)
+            | ScalarValue::TimestampMicrosecond(_, _) => None,
             _ => Some(format!("{}", value)),
         }
     }

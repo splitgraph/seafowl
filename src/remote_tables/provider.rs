@@ -9,6 +9,7 @@ use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
+use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::expressions::{cast, col};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::memory::MemoryExec;
@@ -134,9 +135,6 @@ impl TableProvider for RemoteTable {
         let mut schema = self.schema.deref().clone();
         let mut columns = "*".to_string();
 
-        // TODO: Below we escape the double quotes in column names with PG-specific double double
-        // quotes; this will need to be customized according to the specific source type used once
-        // we start supporting more types.
         if let Some(indices) = projection {
             schema = schema.project(indices)?;
             columns = schema
@@ -158,12 +156,21 @@ impl TableProvider for RemoteTable {
         let where_clause = if filters.is_empty() {
             "".to_string()
         } else {
-            let filters_sql = filters
-                .iter()
-                .filter_map(|expr| self.filter_expr_to_sql(expr))
-                .collect::<Vec<String>>()
-                .join(" AND ");
-
+            // NB: Given that all supplied filters have passed the shipabilty check individually,
+            // there should be no harm in merging them together and converting that to equivalent SQL
+            let merged_filter = conjunction(filters.to_vec()).ok_or_else(|| {
+                DataFusionError::Execution(format!(
+                    "Failed merging received filters into one {:?}",
+                    filters
+                ))
+            })?;
+            let filters_sql =
+                self.filter_expr_to_sql(&merged_filter).ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Failed converting filter to SQL {}",
+                        merged_filter
+                    ))
+                })?;
             format!(" WHERE {}", filters_sql)
         };
 
