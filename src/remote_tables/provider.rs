@@ -1,5 +1,6 @@
 use crate::remote_tables::pushdown_visitor::{
-    filter_expr_to_sql, MySQLFilterPushdown, PostgresFilterPushdown, SQLiteFilterPushdown,
+    filter_expr_to_sql, quote_identifier_backticks, quote_identifier_double_quotes,
+    MySQLFilterPushdown, PostgresFilterPushdown, SQLiteFilterPushdown,
 };
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
@@ -141,7 +142,10 @@ impl TableProvider for RemoteTable {
             columns = schema
                 .fields()
                 .iter()
-                .map(|f| format!("\"{}\"", f.name().replace('\"', "\"\"")))
+                .map(|f| match self.source_conn.ty {
+                    SourceType::MySQL => quote_identifier_backticks(f.name()),
+                    _ => quote_identifier_double_quotes(f.name()),
+                })
                 .collect::<Vec<String>>()
                 .join(", ")
         }

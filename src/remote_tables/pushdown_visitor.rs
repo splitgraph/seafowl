@@ -1,4 +1,4 @@
-use datafusion::common::DataFusionError;
+use datafusion::common::{Column, DataFusionError};
 use datafusion::error::Result;
 use datafusion::scalar::ScalarValue;
 use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
@@ -32,6 +32,10 @@ impl FilterPushdownVisitor for SQLiteFilterPushdown {
 }
 
 impl FilterPushdownVisitor for MySQLFilterPushdown {
+    fn col_to_sql(&self, col: &Column) -> String {
+        quote_identifier_backticks(&col.name)
+    }
+
     fn op_to_sql(&self, op: &Operator) -> Option<String> {
         match op {
             // TODO: see if there's a way to convert the non-case sensitive match
@@ -45,6 +49,10 @@ impl FilterPushdownVisitor for MySQLFilterPushdown {
 }
 
 pub trait FilterPushdownVisitor {
+    fn col_to_sql(&self, col: &Column) -> String {
+        quote_identifier_double_quotes(&col.name)
+    }
+
     fn scalar_value_to_sql(&self, value: &ScalarValue) -> Option<String> {
         match value {
             ScalarValue::Utf8(Some(val)) | ScalarValue::LargeUtf8(Some(val)) => {
@@ -86,7 +94,7 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
 
     fn post_visit(mut self, expr: &Expr) -> Result<Self> {
         match expr {
-            Expr::Column(col) => self.sql_exprs.push(col.name.clone()),
+            Expr::Column(col) => self.sql_exprs.push(self.source.col_to_sql(col)),
             Expr::Literal(val) => {
                 let sql_val = self.source.scalar_value_to_sql(val).ok_or_else(|| {
                     DataFusionError::Execution(format!(
@@ -139,6 +147,14 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
     }
 }
 
+pub fn quote_identifier_double_quotes(name: &str) -> String {
+    format!("\"{}\"", name.replace('\"', "\"\""))
+}
+
+pub fn quote_identifier_backticks(name: &str) -> String {
+    format!("`{}`", name.replace('`', "``"))
+}
+
 // Walk the filter expression AST for a particular remote source type and see if the expression is
 // ship-able, at the same time converting elements (e.g. operators) to the native representation if
 // needed.
@@ -182,18 +198,18 @@ mod tests {
     #[rstest]
     #[case::simple_binary_expression(
         col("a").gt_eq(lit(25)),
-        "a >= 25")
+        r#""a" >= 25"#)
     ]
     #[case::complex_binary_expression(
         or(and(or(col("a").eq(lit(1)), col("b").gt(lit(10))), col("c").lt_eq(lit(15))), col("d").not_eq(lit("some_string"))),
-        "(a = 1 OR b > 10) AND c <= 15 OR d != 'some_string'")
+        r#"("a" = 1 OR "b" > 10) AND "c" <= 15 OR "d" != 'some_string'"#)
     ]
     fn test_filter_expr_to_sql(
         #[case] expr: Expr,
         #[case] expr_sql: &str,
         #[values("postgres", "sqlite", "mysql")] source_type: &str,
     ) {
-        let sql_result = if source_type == "postgres" {
+        let result_sql = if source_type == "postgres" {
             filter_expr_to_sql(&expr, PostgresFilterPushdown {}).unwrap()
         } else if source_type == "sqlite" {
             filter_expr_to_sql(&expr, SQLiteFilterPushdown {}).unwrap()
@@ -201,6 +217,12 @@ mod tests {
             filter_expr_to_sql(&expr, MySQLFilterPushdown {}).unwrap()
         };
 
-        assert_eq!(sql_result, expr_sql)
+        let expected_sql = if source_type == "mysql" {
+            expr_sql.replace('"', "`")
+        } else {
+            expr_sql.to_string()
+        };
+
+        assert_eq!(result_sql, expected_sql)
     }
 }
