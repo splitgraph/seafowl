@@ -95,7 +95,7 @@ impl RemoteTable {
             SourceType::MySQL => filter_expr_to_sql(filter, MySQLFilterPushdown {}),
             _ => {
                 debug!(
-                    "Filter not shipable due to unsupported source type {:?}",
+                    "Filter not shippable due to unsupported source type {:?}",
                     self.source_conn.ty
                 );
                 return None;
@@ -236,9 +236,9 @@ impl TableProvider for RemoteTable {
             return Ok(TableProviderFilterPushDown::Unsupported);
         }
 
-        // NB: We can keep this Exact since DF will optimize the plan by preserving the un-shipable
-        // filter nodes for itself, and pass only shipable ones to the scan function.
-        // On the other hand when all filter expressions are (exactly) shipable any limit clause
+        // NB: We can keep this Exact since DF will optimize the plan by preserving the un-shippable
+        // filter nodes for itself, and pass only shippable ones to the scan function.
+        // On the other hand when all filter expressions are (exactly) shippable any limit clause
         // will also get pushed down, providing additional optimization.
         Ok(TableProviderFilterPushDown::Exact)
     }

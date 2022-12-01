@@ -90,7 +90,7 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
                 // through further recursion.
                 if self.source.op_to_sql(op).is_none() {
                     return Err(DataFusionError::Execution(format!(
-                        "Operator {} not shipable",
+                        "Operator {} not shippable",
                         op,
                     )));
                 }
@@ -98,7 +98,7 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
             _ => {
                 // Expression is not supported, no need to visit any remaining child or parent nodes
                 return Err(DataFusionError::Execution(format!(
-                    "Expression {:?} not shipable",
+                    "Expression {:?} not shippable",
                     expr,
                 )));
             }
@@ -112,7 +112,7 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
             Expr::Literal(val) => {
                 let sql_val = self.source.scalar_value_to_sql(val).ok_or_else(|| {
                     DataFusionError::Execution(format!(
-                        "ScalarValue {:?} not shipable",
+                        "ScalarValue {:?} not shippable",
                         val,
                     ))
                 })?;
@@ -238,5 +238,30 @@ mod tests {
         };
 
         assert_eq!(result_sql, expected_sql)
+    }
+
+    #[rstest]
+    fn test_filter_expr_to_sql_special_column_names(
+        #[values("postgres", "sqlite", "mysql")] source_type: &str,
+    ) {
+        let expr = if source_type == "mysql" {
+            col("a quoted `column name` with spaces").lt(lit(42))
+        } else {
+            col(r#"a quoted "column name" with spaces"#).lt(lit(42))
+        };
+
+        let result_sql = if source_type == "postgres" {
+            filter_expr_to_sql(&expr, PostgresFilterPushdown {}).unwrap()
+        } else if source_type == "sqlite" {
+            filter_expr_to_sql(&expr, SQLiteFilterPushdown {}).unwrap()
+        } else {
+            filter_expr_to_sql(&expr, MySQLFilterPushdown {}).unwrap()
+        };
+
+        if source_type == "mysql" {
+            assert_eq!(result_sql, "`a quoted ``column name`` with spaces` < 42")
+        } else {
+            assert_eq!(result_sql, r#""a quoted ""column name"" with spaces" < 42"#);
+        };
     }
 }
