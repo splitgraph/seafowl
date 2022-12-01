@@ -201,13 +201,25 @@ pub fn filter_expr_to_sql<T: FilterPushdownVisitor>(
 
 #[cfg(test)]
 mod tests {
+    use datafusion::error::Result;
     use datafusion::logical_expr::{and, col, lit, or, Expr};
+    use datafusion::scalar::ScalarValue;
     use rstest::rstest;
 
     use crate::remote_tables::pushdown_visitor::{
         filter_expr_to_sql, MySQLFilterPushdown, PostgresFilterPushdown,
         SQLiteFilterPushdown,
     };
+
+    fn get_result_for_source_type(expr: &Expr, source_type: &str) -> Result<String> {
+        if source_type == "postgres" {
+            filter_expr_to_sql(expr, PostgresFilterPushdown {})
+        } else if source_type == "sqlite" {
+            filter_expr_to_sql(expr, SQLiteFilterPushdown {})
+        } else {
+            filter_expr_to_sql(expr, MySQLFilterPushdown {})
+        }
+    }
 
     #[rstest]
     #[case::simple_binary_expression(
@@ -223,13 +235,7 @@ mod tests {
         #[case] expr_sql: &str,
         #[values("postgres", "sqlite", "mysql")] source_type: &str,
     ) {
-        let result_sql = if source_type == "postgres" {
-            filter_expr_to_sql(&expr, PostgresFilterPushdown {}).unwrap()
-        } else if source_type == "sqlite" {
-            filter_expr_to_sql(&expr, SQLiteFilterPushdown {}).unwrap()
-        } else {
-            filter_expr_to_sql(&expr, MySQLFilterPushdown {}).unwrap()
-        };
+        let result_sql = get_result_for_source_type(&expr, source_type).unwrap();
 
         let expected_sql = if source_type == "mysql" {
             expr_sql.replace('"', "`")
@@ -250,18 +256,32 @@ mod tests {
             col(r#"a quoted "column name" with spaces"#).lt(lit(42))
         };
 
-        let result_sql = if source_type == "postgres" {
-            filter_expr_to_sql(&expr, PostgresFilterPushdown {}).unwrap()
-        } else if source_type == "sqlite" {
-            filter_expr_to_sql(&expr, SQLiteFilterPushdown {}).unwrap()
-        } else {
-            filter_expr_to_sql(&expr, MySQLFilterPushdown {}).unwrap()
-        };
+        let result_sql = get_result_for_source_type(&expr, source_type).unwrap();
 
         if source_type == "mysql" {
             assert_eq!(result_sql, "`a quoted ``column name`` with spaces` < 42")
         } else {
             assert_eq!(result_sql, r#""a quoted ""column name"" with spaces" < 42"#);
         };
+    }
+
+    #[rstest]
+    #[should_panic(expected = r#"ScalarValue Date64(\"1000\") not shippable"#)]
+    #[case(col("a").gt(lit(ScalarValue::Date64(Some(1000)))))]
+    #[should_panic(expected = "ScalarValue TimestampSecond(1000, None) not shippable")]
+    #[case(col("a").gt(lit(ScalarValue::TimestampSecond(Some(1000), None))))]
+    #[should_panic(
+        expected = "ScalarValue TimestampMillisecond(1000, None) not shippable"
+    )]
+    #[case(col("a").gt(lit(ScalarValue::TimestampMillisecond(Some(1000), None))))]
+    #[should_panic(
+        expected = "ScalarValue TimestampMicrosecond(1000, None) not shippable"
+    )]
+    #[case(col("a").gt(lit(ScalarValue::TimestampMicrosecond(Some(1000), None))))]
+    fn test_filter_expr_to_sql_unsupported_datetime_formats(
+        #[case] expr: Expr,
+        #[values("postgres", "sqlite", "mysql")] source_type: &str,
+    ) {
+        get_result_for_source_type(&expr, source_type).unwrap();
     }
 }
