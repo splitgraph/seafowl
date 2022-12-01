@@ -817,7 +817,7 @@ mod tests {
 
     use super::*;
     use datafusion::assert_batches_eq;
-    use test_case::test_case;
+    use rstest::rstest;
 
     #[tokio::test]
     async fn test_wasm_math() {
@@ -1160,13 +1160,14 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         assert!(results.err().unwrap().to_string().starts_with("Arrow error: External error: Internal error: Expected to find string value, received Integer(PosInt(3)) instead"));
     }
 
-    #[test_case("add_i64", CreateFunctionDataType::BIGINT ; "BIGINT")]
-    #[test_case("add_i32", CreateFunctionDataType::INT ; "INT")]
-    #[test_case("add_i16", CreateFunctionDataType::SMALLINT ; "SMALLINT")]
+    #[rstest]
+    #[case("add_i64", CreateFunctionDataType::BIGINT)]
+    #[case("add_i32", CreateFunctionDataType::INT)]
+    #[case("add_i16", CreateFunctionDataType::SMALLINT)]
     #[tokio::test]
     async fn test_wasm_messagepack_add_integers(
-        udf_name: &str,
-        int_type: CreateFunctionDataType,
+        #[case] udf_name: &str,
+        #[case] int_type: CreateFunctionDataType,
     ) {
         let type_name = int_type.to_string();
         let ctx = register_wasm_messagepack_udf(
@@ -1225,12 +1226,13 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         assert_batches_eq!(expected, &results);
     }
 
-    #[test_case("mul_f32", CreateFunctionDataType::FLOAT ; "FLOAT")]
-    #[test_case("mul_f64", CreateFunctionDataType::DOUBLE ; "DOUBLE")]
+    #[rstest]
+    #[case("mul_f32", CreateFunctionDataType::FLOAT)]
+    #[case("mul_f64", CreateFunctionDataType::DOUBLE)]
     #[tokio::test]
     async fn test_wasm_messagepack_mul_floating_point(
-        udf_name: &str,
-        float_type: CreateFunctionDataType,
+        #[case] udf_name: &str,
+        #[case] float_type: CreateFunctionDataType,
     ) {
         let type_name = float_type.to_string();
         let ctx = register_wasm_messagepack_udf(

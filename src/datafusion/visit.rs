@@ -903,11 +903,11 @@ pub fn visit_values_row<'ast, V: VisitorMut<'ast> + ?Sized>(
 #[cfg(test)]
 mod tests {
     use datafusion::sql::parser::Statement;
+    use rstest::rstest;
     use sqlparser::ast::{
         Expr, FunctionArg, ObjectName, Statement as SQLStatement, TableAlias,
     };
     use std::ops::Deref;
-    use test_case::test_case;
 
     use crate::datafusion::parser::DFParser;
     use crate::datafusion::visit::{visit_table_table_factor, VisitorMut};
@@ -935,19 +935,13 @@ mod tests {
         }
     }
 
-    #[test_case(
-        "SELECT * FROM test_table";
-        "Basic select with bare table name")
-    ]
-    #[test_case(
-        "SELECT * FROM some_schema.test_table";
-        "Basic select with schema and table name")
-    ]
-    #[test_case(
-        "SELECT * FROM some_db.some_schema.test_table";
-        "Basic select with fully qualified table name")
-    ]
-    fn test_table_name_rewrite(query: &str) {
+    #[rstest]
+    #[case::basic_select_bare_table_name("SELECT * FROM test_table")]
+    #[case::basic_select_schema_and_table_name("SELECT * FROM some_schema.test_table")]
+    #[case::basic_select_fully_qualified_table_name(
+        "SELECT * FROM some_db.some_schema.test_table"
+    )]
+    fn test_table_name_rewrite(#[case] query: &str) {
         let stmts = DFParser::parse_sql(query).unwrap();
 
         let mut q = if let Statement::Statement(stmt) = &stmts[0] {

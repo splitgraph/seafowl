@@ -41,7 +41,7 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
 # Remote query execution for a variety of DBs
-connectorx = { git = "https://github.com/splitgraph/connector-x", rev = "eb4ad33171712b120ed7e66ed6c8c91c53ff0de4", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
+connectorx = { git = "https://github.com/sfu-db/connector-x", rev = "9714c54dc7f6fb7ac3dd6f944e0a43913bd1c2d9", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
 
 # PG wire protocol support
 convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-14-upgrade", optional = true }
@@ -99,7 +99,7 @@ arrow-schema = { git = "https://github.com/apache/arrow-rs", rev = "951caed78487
 assert_unordered = "0.3"
 datafusion-common = "14.0.0"
 mockall = "0.11.1"
-test-case = "*"
+rstest = "*"
 wiremock = "0.5"
 
 [build-dependencies]

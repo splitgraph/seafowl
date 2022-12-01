@@ -228,35 +228,33 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
 mod tests {
     use crate::data_types::TableVersionId;
     use datafusion::sql::parser::Statement;
+    use rstest::rstest;
     use sqlparser::ast::Statement as SQLStatement;
     use std::ops::Deref;
-    use test_case::test_case;
 
     use crate::datafusion::parser::DFParser;
     use crate::datafusion::visit::VisitorMut;
     use crate::version::TableVersionProcessor;
 
-    #[test_case(
-        "SELECT * FROM test_table('test_version')";
-        "Basic select with bare table name")
-    ]
-    #[test_case(
-        "SELECT * FROM some_schema.test_table('test_version')";
-        "Basic select with schema and table name")
-    ]
-    #[test_case(
-        "SELECT * FROM some_db.some_schema.test_table('test_version')";
-        "Basic select with fully qualified table name")
-    ]
-    #[test_case(
-        "WITH some_cte AS (SELECT 1 AS k) SELECT t.*, k.* FROM some_schema.test_table('test_version') AS t JOIN some_cte AS c ON t.k = c.k";
-        "CTE without a version reference")
-    ]
-    #[test_case(
-        "WITH some_cte AS (SELECT * FROM other_table('test_version') AS k) SELECT t.*, k.* FROM some_schema.test_table('test_version') AS t JOIN some_cte AS c ON t.k = c.k";
-        "CTE with a version reference")
-    ]
-    fn test_table_version_rewrite(query: &str) {
+    #[rstest]
+    #[case::basic_select_bare_table_name("SELECT * FROM test_table('test_version')")]
+    #[case::basic_select_schema_and_table_name(
+        "SELECT * FROM some_schema.test_table('test_version')"
+    )]
+    #[case::basic_select_fully_qualified_table_name(
+        "SELECT * FROM some_db.some_schema.test_table('test_version')"
+    )]
+    #[case::cte_without_a_version_reference(
+        "WITH some_cte AS (SELECT 1 AS k) \
+        SELECT t.*, k.* FROM some_schema.test_table('test_version') AS t \
+        JOIN some_cte AS c ON t.k = c.k"
+    )]
+    #[case::cte_with_a_version_reference(
+        "WITH some_cte AS (SELECT * FROM other_table('test_version') AS k) \
+        SELECT t.*, k.* FROM some_schema.test_table('test_version') AS t \
+        JOIN some_cte AS c ON t.k = c.k"
+    )]
+    fn test_table_version_rewrite(#[case] query: &str) {
         let stmts = DFParser::parse_sql(query).unwrap();
 
         let mut q = if let Statement::Statement(stmt) = &stmts[0] {
@@ -291,23 +289,12 @@ mod tests {
         )
     }
 
-    #[test_case(
-        "2017-07-14T02:40:00+00:00";
-        "RFC 3339")
-    ]
-    #[test_case(
-        "2017-07-14 02:40:00 +00:00";
-        "Custom Format with TZ")
-    ]
-    #[test_case(
-        "2017-07-14 02:40:00";
-        "Naive datetime")
-    ]
-    #[test_case(
-        "Fri, 14 Jul 2017 02:40:00 +0000";
-        "RFC 2822")
-    ]
-    fn test_version_timestamp_parsing(version: &str) {
+    #[rstest]
+    #[case::rfc_3339("2017-07-14T02:40:00+00:00")]
+    #[case::custom_with_tz("2017-07-14 02:40:00 +00:00")]
+    #[case::naive_datetime("2017-07-14 02:40:00")]
+    #[case::rfc_2822("Fri, 14 Jul 2017 02:40:00 +0000")]
+    fn test_version_timestamp_parsing(#[case] version: &str) {
         assert_eq!(
             TableVersionProcessor::version_to_epoch(&version.to_string()).unwrap(),
             1_500_000_000,

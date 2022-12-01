@@ -383,9 +383,9 @@ mod tests {
     use std::path::Path as FSPath;
     use std::sync::Arc;
 
+    use rstest::rstest;
     use std::{cmp::min, fs, ops::Range};
     use tempfile::TempDir;
-    use test_case::test_case;
 
     use crate::object_store::testutils::make_mock_parquet_server;
 
@@ -413,18 +413,19 @@ mod tests {
         )
     }
 
-    #[test_case(25..64; "Skip 0, partial 1, full 2, 3")]
-    #[test_case(1..2; "Part of chunk 0")]
-    #[test_case(16..16; "Fetch nothing at the chunk boundary")]
-    #[test_case(16..17; "Fetch one byte at the chunk boundary")]
-    #[test_case(10..20; "Part of chunk 0, part of chunk 1")]
-    #[test_case(10..500; "Reaches the end of the body")]
-    #[test_case(400..505; "Goes beyond the end of the body")]
+    #[rstest]
+    #[case::skip_0_partial_1_full_2_3(25..64)]
+    #[case::part_of_chunk_0(1..2)]
+    #[case::fetch_nothing_at_the_chunk_boundary(16..16)]
+    #[case::fetch_one_byte_at_the_chunk_boundary(16..17)]
+    #[case::part_of_chunk_0_part_of_chunk_1(10..20)]
+    #[case::reaches_the_end_of_the_body(10..500)]
+    #[case::goes_beyond_the_end_of_the_body(400..505)]
     // NB: going more than one chunk beyond the end of the body still makes it make
     // a Range request for e.g. 512 -- 527, which breaks the mock and also is a waste,
     // but we don't know that since we don't get Content-Length on this code path.
     #[tokio::test]
-    async fn test_range_coalescing(range: Range<usize>) {
+    async fn test_range_coalescing(#[case] range: Range<usize>) {
         let store = make_cached_object_store_small_fetch();
         let (server, body) = make_mock_parquet_server(true, true).await;
         let server_uri = server.uri();

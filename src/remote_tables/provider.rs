@@ -1,16 +1,21 @@
+use crate::remote_tables::pushdown_visitor::{
+    filter_expr_to_sql, quote_identifier_backticks, quote_identifier_double_quotes,
+    MySQLFilterPushdown, PostgresFilterPushdown, SQLiteFilterPushdown,
+};
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use connectorx::prelude::{get_arrow, ArrowDestination, CXQuery, SourceConn};
+use connectorx::prelude::{get_arrow, ArrowDestination, CXQuery, SourceConn, SourceType};
 use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
+use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::expressions::{cast, col};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_expr::{Expr, TableType};
+use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use log::debug;
 use std::any::Any;
 use std::ops::Deref;
@@ -80,6 +85,27 @@ impl RemoteTable {
             ))
         })?
     }
+
+    // Convert the DataFusion expression representing a filter to an equivalent SQL string for the
+    // remote data source if the entire filter can be pushed down.
+    fn filter_expr_to_sql(&self, filter: &Expr) -> Option<String> {
+        let result = match self.source_conn.ty {
+            SourceType::Postgres => filter_expr_to_sql(filter, PostgresFilterPushdown {}),
+            SourceType::SQLite => filter_expr_to_sql(filter, SQLiteFilterPushdown {}),
+            SourceType::MySQL => filter_expr_to_sql(filter, MySQLFilterPushdown {}),
+            _ => {
+                debug!(
+                    "Filter not shippable due to unsupported source type {:?}",
+                    self.source_conn.ty
+                );
+                return None;
+            }
+        };
+
+        result
+            .map_err(|err| debug!("Failed constructing SQL for filter {filter}: {err}"))
+            .ok()
+    }
 }
 
 #[async_trait]
@@ -100,26 +126,24 @@ impl TableProvider for RemoteTable {
         &self,
         _ctx: &SessionState,
         projection: &Option<Vec<usize>>,
-        _filters: &[Expr],
+        filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // TODO: partition query by some column to utilize concurrent fetching
-        // TODO: try to push down the filters: re-construct the WHERE clause for the remote table
-        // source type at hand if possible, and append to query
 
         // Scope down the schema and query column specifiers if a projection is specified
         let mut schema = self.schema.deref().clone();
         let mut columns = "*".to_string();
 
-        // TODO: Below we escape the double quotes in column names with PG-specific double double
-        // quotes; this will need to be customized according to the specific source type used once
-        // we start supporting more types.
         if let Some(indices) = projection {
             schema = schema.project(indices)?;
             columns = schema
                 .fields()
                 .iter()
-                .map(|f| format!("\"{}\"", f.name().replace('\"', "\"\"")))
+                .map(|f| match self.source_conn.ty {
+                    SourceType::MySQL => quote_identifier_backticks(f.name()),
+                    _ => quote_identifier_double_quotes(f.name()),
+                })
                 .collect::<Vec<String>>()
                 .join(", ")
         }
@@ -127,10 +151,38 @@ impl TableProvider for RemoteTable {
         // Apply LIMIT if any
         let limit_clause = limit.map_or("".to_string(), |size| format!(" LIMIT {size}"));
 
+        // Try to construct the WHERE clause: all passed filters should be eligible for pushdown as
+        // they've past the checks in `supports_filter_pushdown`
+        let where_clause = if filters.is_empty() {
+            "".to_string()
+        } else {
+            // NB: Given that all supplied filters have passed the shipabilty check individually,
+            // there should be no harm in merging them together and converting that to equivalent SQL
+            let merged_filter = conjunction(filters.to_vec()).ok_or_else(|| {
+                DataFusionError::Execution(format!(
+                    "Failed merging received filters into one {:?}",
+                    filters
+                ))
+            })?;
+            let filters_sql =
+                self.filter_expr_to_sql(&merged_filter).ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Failed converting filter to SQL {}",
+                        merged_filter
+                    ))
+                })?;
+            format!(" WHERE {}", filters_sql)
+        };
+
         // Construct and run the remote query
         let queries = vec![CXQuery::from(
-            format!("SELECT {} FROM {}{}", columns, self.name, limit_clause).as_str(),
+            format!(
+                "SELECT {} FROM {}{}{}",
+                columns, self.name, where_clause, limit_clause
+            )
+            .as_str(),
         )];
+
         let arrow_data = self.run_queries(queries).await?;
         let src_schema = arrow_data.arrow_schema().deref().clone();
         let data = arrow_data.arrow().map_err(|e| {
@@ -174,5 +226,20 @@ impl TableProvider for RemoteTable {
         }
 
         Ok(plan)
+    }
+
+    fn supports_filter_pushdown(
+        &self,
+        filter: &Expr,
+    ) -> Result<TableProviderFilterPushDown> {
+        if self.filter_expr_to_sql(filter).is_none() {
+            return Ok(TableProviderFilterPushDown::Unsupported);
+        }
+
+        // NB: We can keep this Exact since DF will optimize the plan by preserving the un-shippable
+        // filter nodes for itself, and pass only shippable ones to the scan function.
+        // On the other hand when all filter expressions are (exactly) shippable any limit clause
+        // will also get pushed down, providing additional optimization.
+        Ok(TableProviderFilterPushDown::Exact)
     }
 }
