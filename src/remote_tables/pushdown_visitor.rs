@@ -20,7 +20,7 @@ impl<T: FilterPushdownVisitor> FilterPushdown<T> {
     fn pop_sql_expr(&mut self) -> String {
         self.sql_exprs
             .pop()
-            .unwrap_or_else(|| panic!("No SQL expression in the stack"))
+            .expect("No SQL expression in the stack")
     }
 }
 
