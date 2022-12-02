@@ -4,6 +4,7 @@ use datafusion::error::Result;
 use datafusion::scalar::ScalarValue;
 use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use datafusion_expr::{BinaryExpr, Expr, Operator};
+use itertools::Itertools;
 
 pub struct FilterPushdown<T: FilterPushdownVisitor> {
     pub source: T,
@@ -103,7 +104,8 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
             | Expr::IsTrue(_)
             | Expr::IsFalse(_)
             | Expr::IsNotTrue(_)
-            | Expr::IsNotFalse(_) => {}
+            | Expr::IsNotFalse(_)
+            | Expr::InList { .. } => {}
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 // Check if operator pushdown supported; left and right expressions will be checked
                 // through further recursion.
@@ -202,6 +204,19 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
             Expr::IsNotFalse(_) => {
                 let inner_sql = self.pop_sql_expr();
                 self.sql_exprs.push(format!("{inner_sql} IS NOT FALSE"));
+            }
+            Expr::InList { list, negated, .. } => {
+                // The N elements of the list are on the top of the stack, we need to pop them first
+                let index = self.sql_exprs.len() - list.len();
+                let list_sql = self.sql_exprs.split_off(index).iter().join(", ");
+                // Now consume the expression
+                let expr_sql = self.pop_sql_expr();
+                if *negated {
+                    self.sql_exprs
+                        .push(format!("{expr_sql} NOT IN ({})", list_sql));
+                } else {
+                    self.sql_exprs.push(format!("{expr_sql} IN ({})", list_sql));
+                }
             }
             _ => {}
         };
@@ -302,6 +317,14 @@ mod tests {
     #[case::simple_is_not_true(
         col("a").is_not_true(),
         r#""a" IS NOT TRUE"#)
+    ]
+    #[case::simple_in_list(
+        col("a").in_list(vec![lit(1), lit(2), lit(3)], false),
+        r#""a" IN (1, 2, 3)"#)
+    ]
+    #[case::simple_negated_in_list(
+        col("a").in_list(vec![lit(1), lit(2), lit(3)], true),
+        r#""a" NOT IN (1, 2, 3)"#)
     ]
     fn test_filter_expr_to_sql(
         #[case] expr: Expr,
