@@ -4,6 +4,7 @@ use datafusion::error::Result;
 use datafusion::scalar::ScalarValue;
 use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use datafusion_expr::{BinaryExpr, Expr, Operator};
+use itertools::Itertools;
 
 pub struct FilterPushdown<T: FilterPushdownVisitor> {
     pub source: T,
@@ -11,6 +12,16 @@ pub struct FilterPushdown<T: FilterPushdownVisitor> {
     // of the parent nodes. After a successful visit, it should contain exactly one element, which
     // represents the complete SQL statement corresponding to the given expression.
     pub sql_exprs: Vec<String>,
+}
+
+impl<T: FilterPushdownVisitor> FilterPushdown<T> {
+    // Intended to be used in the node post-visit phase, ensuring that SQL representation of inner
+    // nodes is on the stack.
+    fn pop_sql_expr(&mut self) -> String {
+        self.sql_exprs
+            .pop()
+            .expect("No SQL expression in the stack")
+    }
 }
 
 pub struct PostgresFilterPushdown {}
@@ -84,7 +95,17 @@ pub trait FilterPushdownVisitor {
 impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
     fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
         match expr {
-            Expr::Column(_) | Expr::Literal(_) => {}
+            Expr::Column(_)
+            | Expr::Literal(_)
+            | Expr::Not(_)
+            | Expr::Negative(_)
+            | Expr::IsNull(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::InList { .. } => {}
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 // Check if operator pushdown supported; left and right expressions will be checked
                 // through further recursion.
@@ -108,6 +129,8 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
 
     fn post_visit(mut self, expr: &Expr) -> Result<Self> {
         match expr {
+            // Column and Literal are the only two leaf nodes atm - they don't depend on any SQL
+            // expression being on the stack.
             Expr::Column(col) => self.sql_exprs.push(self.source.col_to_sql(col)),
             Expr::Literal(val) => {
                 let sql_val = self.source.scalar_value_to_sql(val).ok_or_else(|| {
@@ -121,13 +144,8 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
             Expr::BinaryExpr(be @ BinaryExpr { .. }) => {
                 // The visitor has been through left and right sides in that order, so the topmost
                 // item on the SQL expression stack is the right expression
-                let mut right_sql = self.sql_exprs.pop().unwrap_or_else(|| {
-                    panic!("Missing right sub-expression of {}", expr)
-                });
-                let mut left_sql = self
-                    .sql_exprs
-                    .pop()
-                    .unwrap_or_else(|| panic!("Missing left sub-expression of {}", expr));
+                let mut right_sql = self.pop_sql_expr();
+                let mut left_sql = self.pop_sql_expr();
 
                 // Similar as in Display impl for BinaryExpr: since the Expr has an implicit operator
                 // precedence we need to convert it to an explicit one using extra parenthesis if the
@@ -154,6 +172,51 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
 
                 self.sql_exprs
                     .push(format!("{} {} {}", left_sql, op_sql, right_sql))
+            }
+            Expr::Not(_) => {
+                let inner_sql = self.pop_sql_expr();
+                self.sql_exprs.push(format!("NOT {inner_sql}"));
+            }
+            Expr::Negative(_) => {
+                let inner_sql = self.pop_sql_expr();
+                self.sql_exprs.push(format!("(- {inner_sql})"));
+            }
+            Expr::IsNull(_) => {
+                let inner_sql = self.pop_sql_expr();
+                self.sql_exprs.push(format!("{inner_sql} IS NULL"));
+            }
+            Expr::IsNotNull(_) => {
+                let inner_sql = self.pop_sql_expr();
+                self.sql_exprs.push(format!("{inner_sql} IS NOT NULL"));
+            }
+            Expr::IsTrue(_) => {
+                let inner_sql = self.pop_sql_expr();
+                self.sql_exprs.push(format!("{inner_sql} IS TRUE"));
+            }
+            Expr::IsFalse(_) => {
+                let inner_sql = self.pop_sql_expr();
+                self.sql_exprs.push(format!("{inner_sql} IS FALSE"));
+            }
+            Expr::IsNotTrue(_) => {
+                let inner_sql = self.pop_sql_expr();
+                self.sql_exprs.push(format!("{inner_sql} IS NOT TRUE"));
+            }
+            Expr::IsNotFalse(_) => {
+                let inner_sql = self.pop_sql_expr();
+                self.sql_exprs.push(format!("{inner_sql} IS NOT FALSE"));
+            }
+            Expr::InList { list, negated, .. } => {
+                // The N elements of the list are on the top of the stack, we need to pop them first
+                let index = self.sql_exprs.len() - list.len();
+                let list_sql = self.sql_exprs.split_off(index).iter().join(", ");
+                // Now consume the expression
+                let expr_sql = self.pop_sql_expr();
+                if *negated {
+                    self.sql_exprs
+                        .push(format!("{expr_sql} NOT IN ({})", list_sql));
+                } else {
+                    self.sql_exprs.push(format!("{expr_sql} IN ({})", list_sql));
+                }
             }
             _ => {}
         };
@@ -229,6 +292,39 @@ mod tests {
     #[case::complex_binary_expression(
         or(and(or(col("a").eq(lit(1)), col("b").gt(lit(10))), col("c").lt_eq(lit(15))), col("d").not_eq(lit("some_string"))),
         r#"("a" = 1 OR "b" > 10) AND "c" <= 15 OR "d" != 'some_string'"#)
+    ]
+    #[case::simple_not(Expr::Not(Box::new(col("a"))), r#"NOT "a""#)]
+    #[case::simple_negative(
+        Expr::Negative(Box::new(col("a"))).lt(lit(0)),
+        r#"(- "a") < 0"#)
+    ]
+    #[case::simple_is_null(
+        col("a").is_null(),
+        r#""a" IS NULL"#)
+    ]
+    #[case::simple_is_not_null(
+        col("a").is_not_null(),
+        r#""a" IS NOT NULL"#)
+    ]
+    #[case::simple_is_true(
+        col("a").is_true(),
+        r#""a" IS TRUE"#)
+    ]
+    #[case::simple_is_false(
+        col("a").is_false(),
+        r#""a" IS FALSE"#)
+    ]
+    #[case::simple_is_not_true(
+        col("a").is_not_true(),
+        r#""a" IS NOT TRUE"#)
+    ]
+    #[case::simple_in_list(
+        col("a").in_list(vec![lit(1), lit(2), lit(3)], false),
+        r#""a" IN (1, 2, 3)"#)
+    ]
+    #[case::simple_negated_in_list(
+        col("a").in_list(vec![lit(1), lit(2), lit(3)], true),
+        r#""a" NOT IN (1, 2, 3)"#)
     ]
     fn test_filter_expr_to_sql(
         #[case] expr: Expr,
