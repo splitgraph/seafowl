@@ -1,4 +1,7 @@
-use arrow::temporal_conversions::{date32_to_datetime, timestamp_ns_to_datetime};
+use arrow::temporal_conversions::{
+    date32_to_datetime, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
+    timestamp_s_to_datetime, timestamp_us_to_datetime,
+};
 use datafusion::common::{Column, DataFusionError};
 use datafusion::error::Result;
 use datafusion::scalar::ScalarValue;
@@ -72,17 +75,29 @@ pub trait FilterPushdownVisitor {
             }
             ScalarValue::Date32(Some(days)) => {
                 let date = date32_to_datetime(*days)?.date();
-                Some(format!("'{}'", date.format("%Y-%m-%d")))
+                Some(format!("'{}'", date))
             }
-            ScalarValue::TimestampNanosecond(Some(ns), None) => {
-                let timestamp = timestamp_ns_to_datetime(*ns)?;
+            ScalarValue::Date64(Some(t_ms))
+            | ScalarValue::TimestampMillisecond(Some(t_ms), None) => {
+                let timestamp = timestamp_ms_to_datetime(*t_ms)?;
                 Some(format!("'{}'", timestamp))
             }
-            // TODO: See which of these makes sense to implement
-            ScalarValue::Date64(_)
-            | ScalarValue::TimestampSecond(_, _)
-            | ScalarValue::TimestampMillisecond(_, _)
-            | ScalarValue::TimestampMicrosecond(_, _) => None,
+            ScalarValue::TimestampSecond(Some(t_s), None) => {
+                let timestamp = timestamp_s_to_datetime(*t_s)?;
+                Some(format!("'{}'", timestamp))
+            }
+            ScalarValue::TimestampMicrosecond(Some(t_us), None) => {
+                let timestamp = timestamp_us_to_datetime(*t_us)?;
+                Some(format!("'{}'", timestamp))
+            }
+            ScalarValue::TimestampNanosecond(Some(t_ns), None) => {
+                let timestamp = timestamp_ns_to_datetime(*t_ns)?;
+                Some(format!("'{}'", timestamp))
+            }
+            ScalarValue::TimestampSecond(_, Some(_))
+            | ScalarValue::TimestampMillisecond(_, Some(_))
+            | ScalarValue::TimestampMicrosecond(_, Some(_))
+            | ScalarValue::TimestampNanosecond(_, Some(_)) => None,
             _ => Some(format!("{}", value)),
         }
     }
@@ -326,6 +341,26 @@ mod tests {
         col("a").in_list(vec![lit(1), lit(2), lit(3)], true),
         r#""a" NOT IN (1, 2, 3)"#)
     ]
+    #[case::simple_date64(
+        col("a").gt(lit(ScalarValue::Date64(Some(1000)))),
+        r#""a" > '1970-01-01 00:00:01'"#)
+    ]
+    #[case::simple_timestamp_s(
+        col("a").gt(lit(ScalarValue::TimestampSecond(Some(1000), None))),
+        r#""a" > '1970-01-01 00:16:40'"#)
+    ]
+    #[case::simple_timestamp_ms(
+        col("a").gt(lit(ScalarValue::TimestampMillisecond(Some(1000), None))),
+        r#""a" > '1970-01-01 00:00:01'"#)
+    ]
+    #[case::simple_timestamp_us(
+        col("a").gt(lit(ScalarValue::TimestampMicrosecond(Some(1000), None))),
+        r#""a" > '1970-01-01 00:00:00.001'"#)
+    ]
+    #[case::simple_timestamp_ns(
+        col("a").gt(lit(ScalarValue::TimestampNanosecond(Some(1000), None))),
+        r#""a" > '1970-01-01 00:00:00.000001'"#)
+    ]
     fn test_filter_expr_to_sql(
         #[case] expr: Expr,
         #[case] expr_sql: &str,
@@ -362,18 +397,22 @@ mod tests {
     }
 
     #[rstest]
-    #[should_panic(expected = r#"ScalarValue Date64(\"1000\") not shippable"#)]
-    #[case(col("a").gt(lit(ScalarValue::Date64(Some(1000)))))]
-    #[should_panic(expected = "ScalarValue TimestampSecond(1000, None) not shippable")]
-    #[case(col("a").gt(lit(ScalarValue::TimestampSecond(Some(1000), None))))]
     #[should_panic(
-        expected = "ScalarValue TimestampMillisecond(1000, None) not shippable"
+        expected = r#"ScalarValue TimestampSecond(1000, Some(\"UTC\")) not shippable"#
     )]
-    #[case(col("a").gt(lit(ScalarValue::TimestampMillisecond(Some(1000), None))))]
+    #[case(col("a").gt(lit(ScalarValue::TimestampSecond(Some(1000), Some("UTC".to_string())))))]
     #[should_panic(
-        expected = "ScalarValue TimestampMicrosecond(1000, None) not shippable"
+        expected = r#"ScalarValue TimestampMillisecond(1000, Some(\"UTC\")) not shippable"#
     )]
-    #[case(col("a").gt(lit(ScalarValue::TimestampMicrosecond(Some(1000), None))))]
+    #[case(col("a").gt(lit(ScalarValue::TimestampMillisecond(Some(1000), Some("UTC".to_string())))))]
+    #[should_panic(
+        expected = r#"ScalarValue TimestampMicrosecond(1000, Some(\"UTC\")) not shippable"#
+    )]
+    #[case(col("a").gt(lit(ScalarValue::TimestampMicrosecond(Some(1000), Some("UTC".to_string())))))]
+    #[should_panic(
+        expected = r#"ScalarValue TimestampNanosecond(1000, Some(\"UTC\")) not shippable"#
+    )]
+    #[case(col("a").gt(lit(ScalarValue::TimestampNanosecond(Some(1000), Some("UTC".to_string())))))]
     fn test_filter_expr_to_sql_unsupported_datetime_formats(
         #[case] expr: Expr,
         #[values("postgres", "sqlite", "mysql")] source_type: &str,
