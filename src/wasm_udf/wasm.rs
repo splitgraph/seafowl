@@ -588,7 +588,12 @@ fn make_scalar_function_wasm_messagepack(
                 ))
             })?;
         // this is guaranteed by DataFusion based on the function's signature.
-        assert_eq!(args.len(), input_types.len());
+        if args.len() != input_types.len() {
+            return Err(DataFusionError::Internal(format!(
+                "Wrong number of arguments for function {:?}: expected {:?}, received {:?}",
+                function_name, input_types.len(), args.len()
+            )));
+        }
 
         // Length of the vectorized array
         let array_len = args.get(0).unwrap().len();
@@ -1158,6 +1163,29 @@ c40201087f230041206b2203240020032002370318200320013703102003\
             .await;
         assert!(results.is_err());
         assert!(results.err().unwrap().to_string().starts_with("Arrow error: External error: Internal error: Expected to find string value, received Integer(PosInt(3)) instead"));
+    }
+
+    #[tokio::test]
+    async fn test_wasm_messagepack_unexpected_arity() {
+        let ctx = register_wasm_messagepack_udf(
+            "add_i64",
+            &vec![
+                CreateFunctionDataType::BIGINT,
+                CreateFunctionDataType::BIGINT,
+            ],
+            &CreateFunctionDataType::TEXT,
+        )
+        .await
+        .unwrap();
+
+        let results = ctx
+            .sql("select add_i64(1,2,3)")
+            .await
+            .unwrap()
+            .collect()
+            .await;
+        assert!(results.is_err());
+        assert!(results.err().unwrap().to_string().starts_with("Arrow error: External error: Internal error: Wrong number of arguments for function \"add_i64\": expected 2, received 3."));
     }
 
     #[rstest]
