@@ -18,7 +18,7 @@ arrow-schema = "26.0.0"
 async-trait = "0.1.41"
 
 # Remote query execution for a variety of DBs
-connectorx = { git = "https://github.com/sfu-db/connector-x", rev = "9714c54dc7f6fb7ac3dd6f944e0a43913bd1c2d9", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
+connectorx = { version = "0.3.1", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
 
 datafusion = "14.0.0"
 datafusion-expr = "14.0.0"

@@ -95,6 +95,7 @@ arrow = { git = "https://github.com/apache/arrow-rs", rev = "951caed784876d15a9e
 arrow-buffer = { git = "https://github.com/apache/arrow-rs", rev = "951caed784876d15a9e712a5981de31cee4e3085" }
 arrow-integration-test = { git = "https://github.com/apache/arrow-rs", rev = "951caed784876d15a9e712a5981de31cee4e3085" }
 arrow-schema = { git = "https://github.com/apache/arrow-rs", rev = "951caed784876d15a9e712a5981de31cee4e3085" }
+connectorx = { git = "https://github.com/sfu-db/connector-x", rev = "9714c54dc7f6fb7ac3dd6f944e0a43913bd1c2d9", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
 
 [dev-dependencies]
 assert_unordered = "0.3"
