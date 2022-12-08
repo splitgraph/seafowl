@@ -84,7 +84,7 @@ jobs:
       # TODO split tests into unit and integration (one requires postgres?)
       - name: Run tests
         run: |
-          cargo test
+          cargo test --workspace
         env:
           # database URL for end-to-end + postgres repository tests
           DATABASE_URL: "postgres://postgres:postgres@postgres:5432/db_test"

@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "seafowl"
 build = "build.rs"
@@ -40,9 +42,6 @@ chrono = { version = "0.4", default_features = false }
 clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
-# Remote query execution for a variety of DBs
-connectorx = { git = "https://github.com/sfu-db/connector-x", rev = "9714c54dc7f6fb7ac3dd6f944e0a43913bd1c2d9", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
-
 # PG wire protocol support
 convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-14-upgrade", optional = true }
 convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-14-upgrade", package = "convergence-arrow", optional = true }
@@ -50,6 +49,8 @@ convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch 
 datafusion = "14.0.0"
 datafusion-expr = "14.0.0"
 datafusion-proto = "14.0.0"
+
+datafusion-remote-tables = { path = "./datafusion_remote_tables" }
 
 futures = "0.3"
 hex = ">=0.4.0"

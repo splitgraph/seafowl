@@ -1412,6 +1412,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-remote-tables"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-buffer",
+ "arrow-schema",
+ "async-trait",
+ "connectorx",
+ "datafusion",
+ "datafusion-expr",
+ "itertools",
+ "log",
+ "rstest",
+ "tokio",
+]
+
+[[package]]
 name = "datafusion-row"
 version = "14.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4497,13 +4514,13 @@ dependencies = [
  "chrono",
  "clap 3.2.23",
  "config",
- "connectorx",
  "convergence",
  "convergence-arrow",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
  "datafusion-proto",
+ "datafusion-remote-tables",
  "futures",
  "hex",
  "itertools",

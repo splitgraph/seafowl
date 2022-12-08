@@ -1,0 +1,30 @@
+[package]
+name = "datafusion-remote-tables"
+version = "0.1.0"
+edition = "2021"
+
+description = "TableProvider implementation able to query various remote data sources"
+authors = ["Splitgraph, Inc. <support@splitgraph.com>"]
+keywords = ["DataFusion", "remote", "table"]
+homepage = "https://github.com/splitgraph/seafowl"
+license = "Apache-2.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+arrow = "26.0.0"
+arrow-buffer = "26.0.0"
+arrow-schema = "26.0.0"
+async-trait = "0.1.41"
+
+# Remote query execution for a variety of DBs
+connectorx = { git = "https://github.com/sfu-db/connector-x", rev = "9714c54dc7f6fb7ac3dd6f944e0a43913bd1c2d9", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
+
+datafusion = "14.0.0"
+datafusion-expr = "14.0.0"
+itertools = ">=0.10.0"
+log = "0.4"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
+
+[dev-dependencies]
+rstest = "*"
