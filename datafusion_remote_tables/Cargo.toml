@@ -2,11 +2,12 @@
 name = "datafusion-remote-tables"
 version = "0.1.0"
 edition = "2021"
-
+readme = "README.md"
 description = "TableProvider implementation able to query various remote data sources"
 authors = ["Splitgraph, Inc. <support@splitgraph.com>"]
-keywords = ["DataFusion", "remote", "table"]
+keywords = ["datafusion", "remote", "tables"]
 homepage = "https://github.com/splitgraph/seafowl"
+repository = "https://github.com/splitgraph/seafowl"
 license = "Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
