@@ -23,6 +23,7 @@ use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
+use datafusion_remote_tables::provider::RemoteTable;
 
 use datafusion_proto::protobuf;
 
@@ -30,7 +31,6 @@ use crate::datafusion::parser::{DFParser, Statement as DFStatement};
 use crate::datafusion::utils::{build_schema, normalize_ident};
 use crate::object_store::http::try_prepare_http_url;
 use crate::object_store::wrapped::InternalObjectStore;
-use crate::remote_tables::provider::RemoteTable;
 use crate::utils::{gc_partitions, group_partitions, hash_file};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};

@@ -1,4 +1,4 @@
-use crate::remote_tables::pushdown_visitor::{
+use crate::filter_pushdown::{
     filter_expr_to_sql, quote_identifier_backticks, quote_identifier_double_quotes,
     MySQLFilterPushdown, PostgresFilterPushdown, SQLiteFilterPushdown,
 };

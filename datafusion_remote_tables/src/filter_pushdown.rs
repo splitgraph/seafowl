@@ -284,7 +284,7 @@ mod tests {
     use datafusion::scalar::ScalarValue;
     use rstest::rstest;
 
-    use crate::remote_tables::pushdown_visitor::{
+    use crate::filter_pushdown::{
         filter_expr_to_sql, MySQLFilterPushdown, PostgresFilterPushdown,
         SQLiteFilterPushdown,
     };
