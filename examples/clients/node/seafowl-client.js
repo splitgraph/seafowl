@@ -49,8 +49,6 @@ const trimQuery = (sql) => sql.trim().replace(/(?:\r\n|\r|\n)/g, " ");
 
 const hash = (sql) => crypto.createHash("sha256").update(sql).digest("hex");
 
-const inspect = require("util").inspect;
-
 const request = (endpoint, options = {}, cb) => {
   let { protocol, hostname, port, pathname } = new URL(endpoint);
   const mod = protocol === "https:" ? "https" : "http";
@@ -152,7 +150,7 @@ if (require.main === module) {
     await result.then(
       ({ response, statusCode }) => {
         if (response) {
-          console.log(`code: ${statusCode}\n${inspect(parseNDJSON(response))}`);
+          console.log(`code: ${statusCode}\n${JSON.stringify(parseNDJSON(response), null, 4)}`);
         } else {
           console.log(`code: ${statusCode}`);
         }
