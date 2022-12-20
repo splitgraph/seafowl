@@ -9,7 +9,7 @@ use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion}
 use datafusion_expr::{BinaryExpr, Expr, Operator};
 use itertools::Itertools;
 
-pub struct FilterPushdown<T: FilterPushdownVisitor> {
+pub struct FilterPushdownVisitor<T: FilterPushdownConverter> {
     pub source: T,
     // LIFO stack for keeping the intermediate SQL expression results to be used in interpolation
     // of the parent nodes. After a successful visit, it should contain exactly one element, which
@@ -17,7 +17,7 @@ pub struct FilterPushdown<T: FilterPushdownVisitor> {
     pub sql_exprs: Vec<String>,
 }
 
-impl<T: FilterPushdownVisitor> FilterPushdown<T> {
+impl<T: FilterPushdownConverter> FilterPushdownVisitor<T> {
     // Intended to be used in the node post-visit phase, ensuring that SQL representation of inner
     // nodes is on the stack.
     fn pop_sql_expr(&mut self) -> String {
@@ -31,9 +31,9 @@ pub struct PostgresFilterPushdown {}
 pub struct SQLiteFilterPushdown {}
 pub struct MySQLFilterPushdown {}
 
-impl FilterPushdownVisitor for PostgresFilterPushdown {}
+impl FilterPushdownConverter for PostgresFilterPushdown {}
 
-impl FilterPushdownVisitor for SQLiteFilterPushdown {
+impl FilterPushdownConverter for SQLiteFilterPushdown {
     fn op_to_sql(&self, op: &Operator) -> Option<String> {
         match op {
             Operator::RegexMatch
@@ -46,7 +46,7 @@ impl FilterPushdownVisitor for SQLiteFilterPushdown {
     }
 }
 
-impl FilterPushdownVisitor for MySQLFilterPushdown {
+impl FilterPushdownConverter for MySQLFilterPushdown {
     fn col_to_sql(&self, col: &Column) -> String {
         quote_identifier_backticks(&col.name)
     }
@@ -63,7 +63,7 @@ impl FilterPushdownVisitor for MySQLFilterPushdown {
     }
 }
 
-pub trait FilterPushdownVisitor {
+pub trait FilterPushdownConverter {
     fn col_to_sql(&self, col: &Column) -> String {
         quote_identifier_double_quotes(&col.name)
     }
@@ -107,7 +107,7 @@ pub trait FilterPushdownVisitor {
     }
 }
 
-impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
+impl<T: FilterPushdownConverter> ExpressionVisitor for FilterPushdownVisitor<T> {
     fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
         match expr {
             Expr::Column(_)
@@ -250,19 +250,19 @@ pub fn quote_identifier_backticks(name: &str) -> String {
 // Walk the filter expression AST for a particular remote source type and see if the expression is
 // ship-able, at the same time converting elements (e.g. operators) to the native representation if
 // needed.
-pub fn filter_expr_to_sql<T: FilterPushdownVisitor>(
+pub fn filter_expr_to_sql<T: FilterPushdownConverter>(
     filter: &Expr,
-    source_pushdown: T,
+    source: T,
 ) -> Result<String> {
     // Construct the initial visitor state
-    let visitor = FilterPushdown {
-        source: source_pushdown,
+    let visitor = FilterPushdownVisitor {
+        source,
         sql_exprs: vec![],
     };
 
     // Perform the walk through the expr AST trying to construct the equivalent SQL for the
     // particular source type at hand.
-    let FilterPushdown { sql_exprs, .. } = filter.accept(visitor)?;
+    let FilterPushdownVisitor { sql_exprs, .. } = filter.accept(visitor)?;
 
     if sql_exprs.len() != 1 {
         return Err(DataFusionError::Execution(format!(
