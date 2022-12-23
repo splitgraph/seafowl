@@ -115,14 +115,14 @@ where
     async fn scan(
         &self,
         _ctx: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(MemoryExec::try_new(
             &[vec![self.table.load_record_batch().await?]],
             self.table.schema(),
-            projection.clone(),
+            projection.cloned(),
         )?))
     }
 }
@@ -197,7 +197,7 @@ impl SeafowlSystemTable for TableVersionsTable {
 
         let struct_array = builder.finish();
 
-        RecordBatch::try_new(self.schema.clone(), struct_array.columns_ref())
+        RecordBatch::try_new(self.schema.clone(), struct_array.columns().to_vec())
             .map_err(DataFusionError::from)
     }
 }
@@ -277,7 +277,7 @@ impl SeafowlSystemTable for TablePartitionsTable {
 
         let struct_array = builder.finish();
 
-        RecordBatch::try_new(self.schema.clone(), struct_array.columns_ref())
+        RecordBatch::try_new(self.schema.clone(), struct_array.columns().to_vec())
             .map_err(DataFusionError::from)
     }
 }

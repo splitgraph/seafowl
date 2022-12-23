@@ -179,11 +179,7 @@ impl<'a> DFParser<'a> {
 
     pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
         let table_name = self.parser.parse_object_name()?;
-
-        let des = DescribeTable {
-            table_name: table_name.to_string(),
-        };
-        Ok(Statement::DescribeTable(des))
+        Ok(Statement::DescribeTable(DescribeTable { table_name }))
     }
 
     pub fn parse_vacuum(&mut self) -> Result<Statement, ParserError> {
@@ -380,6 +376,7 @@ impl<'a> DFParser<'a> {
             table_partition_cols,
             if_not_exists,
             file_compression_type,
+            options: Default::default(),
         };
         Ok(Statement::CreateExternalTable(create))
     }

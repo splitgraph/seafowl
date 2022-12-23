@@ -535,11 +535,11 @@ fn messagepack_decode_results(
                             decimal_array[1].as_u64()
                                 .ok_or(DataFusionError::Internal(format!("Decimal scale expected to be integer, found {:?} instead", decimal_array[1])))
                                 .and_then(|s_u64| {
-                                    let s_u8:u8 = s_u64.try_into().map_err(|err| DataFusionError::Internal(format!("Couldn't convert 64-bit scale value {:?} to u8 {:?}", s_u64, err)))?;
-                                    if s_u8 != *s {
-                                        return Err(DataFusionError::Internal(format!("Expected to receive a decimal with scale {:?}, got {:?} instead.", *s, s_u8)))
+                                    let s_i8: i8 = s_u64.try_into().map_err(|err| DataFusionError::Internal(format!("Couldn't convert 64-bit scale value {:?} to i8 {:?}", s_u64, err)))?;
+                                    if s_i8 != *s {
+                                        return Err(DataFusionError::Internal(format!("Expected to receive a decimal with scale {:?}, got {:?} instead.", *s, s_i8)))
                                     }
-                                    Ok(s_u8)
+                                    Ok(s_i8)
                                 })?;
                             let high = decimal_array[2].as_i64()
                                 .ok_or(DataFusionError::Internal(format!("Decimal value high half expected to be integer, found {:?} instead", decimal_array[2])))?;

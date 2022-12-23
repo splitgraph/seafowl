@@ -7,6 +7,7 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 
 use datafusion::common::{Column, ToDFSchema};
+use datafusion::config::ConfigOptions;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_expr::expressions::{case, cast, col};
@@ -192,7 +193,7 @@ impl SeafowlTable {
     // list of Parquet URLs rather than all files in a given directory.
     pub async fn partition_scan_plan(
         &self,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         partitions: Vec<SeafowlPartition>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -217,13 +218,14 @@ impl SeafowlTable {
             file_schema: self.schema(),
             file_groups: partitioned_file_lists,
             statistics: Statistics::default(),
-            projection: projection.clone(),
+            projection: projection.cloned(),
             limit,
             table_partition_cols: vec![],
+            output_ordering: None,
             config_options: Arc::new(Default::default()),
         };
 
-        let format = ParquetFormat::default();
+        let format = ParquetFormat::new(Arc::new(RwLock::new(ConfigOptions::new())));
         format.create_physical_plan(config, filters).await
     }
 
@@ -236,7 +238,7 @@ impl SeafowlTable {
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let base_scan = self
-            .partition_scan_plan(&None, partitions, scan_filters, None, object_store)
+            .partition_scan_plan(None, partitions, scan_filters, None, object_store)
             .await?;
 
         Ok(Arc::new(FilterExec::try_new(filter, base_scan)?))
@@ -260,7 +262,7 @@ impl TableProvider for SeafowlTable {
     async fn scan(
         &self,
         ctx: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
@@ -711,7 +713,7 @@ mod tests {
         let state = context.state.read().clone();
 
         let plan = table
-            .scan(&state, &None, &[], None)
+            .scan(&state, None, &[], None)
             .await
             .expect("error creating plan");
         let results = collect(plan, context.task_ctx())
@@ -736,7 +738,7 @@ mod tests {
         let state = context.state.read().clone();
 
         let plan = table
-            .scan(&state, &Some(vec![1]), &[], None)
+            .scan(&state, Some(&vec![1]), &[], None)
             .await
             .expect("error creating plan");
         let results = collect(plan, context.task_ctx())

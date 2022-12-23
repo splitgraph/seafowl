@@ -52,7 +52,7 @@ pub enum CreateFunctionDataType {
     CHAR,
     VARCHAR,
     TEXT,
-    DECIMAL { precision: u8, scale: u8 },
+    DECIMAL { precision: u8, scale: i8 },
     FLOAT,
     REAL,
     DOUBLE,

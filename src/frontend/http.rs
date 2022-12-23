@@ -893,7 +893,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
-            "Error during planning: 'default.public.missing_table' not found"
+            "Error during planning: table 'default.public.missing_table' not found"
         );
     }
 

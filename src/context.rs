@@ -15,11 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use std::fs::File;
 
-use datafusion::datasource::file_format::avro::AvroFormat;
-use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::file_format::json::JsonFormat;
-
-use datafusion::datasource::listing::ListingOptions;
+use datafusion::datasource::listing::ListingTable;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
@@ -50,6 +46,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::common::{DFField, DFSchema, ToDFSchema};
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_type::{FileCompressionType, FileType};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::physical_expr::create_physical_expr;
@@ -79,6 +76,7 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::{cast, Expr, LogicalPlanBuilder};
 use log::{debug, info, warn};
+use parking_lot::RwLock;
 use prost::Message;
 use tempfile::TempPath;
 use tokio::sync::Semaphore;
@@ -169,7 +167,7 @@ async fn get_parquet_file_statistics_bytes(
         Arc::from(LocalFileSystem::new_with_prefix(tmp_dir)?);
     let dummy_path = Path::from(file_name.to_string());
 
-    let parquet = ParquetFormat::default();
+    let parquet = ParquetFormat::new(Arc::new(RwLock::new(ConfigOptions::new())));
     let meta = dummy_object_store
         .head(&dummy_path)
         .await
@@ -255,7 +253,8 @@ fn temp_partition_file_writer(
     disk_manager: Arc<DiskManager>,
     arrow_schema: SchemaRef,
 ) -> Result<(TempPath, ArrowWriter<File>)> {
-    let partition_file = disk_manager.create_tmp_file()?;
+    let partition_file =
+        disk_manager.create_tmp_file("Open a temporary file to write partition")?;
 
     // Hold on to the path of the file, in case we need to just move it instead of
     // uploading the data to the object store. This can be a consistency/security issue, but the
@@ -801,7 +800,7 @@ impl DefaultSeafowlContext {
     }
 
     // Copied from DataFusion's source code (private functions)
-    async fn create_listing_table(
+    async fn create_external_table(
         &self,
         cmd: &CreateExternalTable,
         filter_suffix: bool,
@@ -828,20 +827,6 @@ impl DefaultSeafowlContext {
             "".to_string()
         };
 
-        let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::CSV => Arc::new(
-                CsvFormat::default()
-                    .with_has_header(cmd.has_header)
-                    .with_delimiter(cmd.delimiter as u8)
-                    .with_file_compression_type(file_compression_type),
-            ),
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
-            FileType::AVRO => Arc::new(AvroFormat::default()),
-            FileType::JSON => Arc::new(
-                JsonFormat::default().with_file_compression_type(file_compression_type),
-            ),
-        };
-
         let table = self.inner.table(cmd.name.as_str());
         match (cmd.if_not_exists, table) {
             (true, Ok(_)) => Ok(make_dummy_exec()),
@@ -852,18 +837,31 @@ impl DefaultSeafowlContext {
                 } else {
                     Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
                 };
-                let options = ListingOptions {
-                    format: file_format,
-                    collect_stat: self.inner.copied_config().collect_statistics,
-                    file_extension: file_extension.to_owned(),
-                    target_partitions: self.inner.copied_config().target_partitions,
-                    table_partition_cols: cmd.table_partition_cols.clone(),
-                };
+
+                // This is quite unfortunate, as the DataFusion creates everything we need here, apart from
+                // the override of the `file_extension` above. There's no way to override the ListingOptions
+                // in the created ListingTable, so we just grab the one created and create a new ListingTable
+                // with our own `file_extension`.
+                let table_provider: Arc<dyn TableProvider> =
+                    self.create_custom_table(cmd).await?;
+
+                let options = table_provider
+                    .as_any()
+                    .downcast_ref::<ListingTable>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution(format!(
+                            "Couldn't cast table {:?} to ListingTable",
+                            table_provider.schema(),
+                        ))
+                    })?
+                    .options()
+                    .clone();
+
                 self.inner
                     .register_listing_table(
                         cmd.name.as_str(),
                         cmd.location.clone(),
-                        options,
+                        options.with_file_extension(file_extension),
                         provided_schema,
                         cmd.definition.clone(),
                     )
@@ -875,6 +873,27 @@ impl DefaultSeafowlContext {
                 cmd.name
             ))),
         }
+    }
+
+    // Copied from DataFusion's source code (private functions)
+    async fn create_custom_table(
+        &self,
+        cmd: &CreateExternalTable,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let state = self.inner.state.read().clone();
+        let file_type = cmd.file_type.to_uppercase();
+        let factory = &state
+            .runtime_env
+            .table_factories
+            .get(file_type.as_str())
+            .ok_or_else(|| {
+                DataFusionError::Execution(format!(
+                    "Unable to find factory for {}",
+                    cmd.file_type
+                ))
+            })?;
+        let table = (*factory).create(&state, cmd).await?;
+        Ok(table)
     }
 }
 
@@ -1070,7 +1089,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                         }).collect(),
                         input: Arc::new(plan),
                         schema: Arc::new(target_schema),
-                        alias: None,
                     });
 
                     Ok(LogicalPlan::Extension(Extension {
@@ -1088,6 +1106,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     assignments,
                     from: None,
                     selection,
+                    ..
                 }
                 // We only support the most basic form of UPDATE (no aliases or FROM or joins)
                     if with_hints.is_empty() && joins.is_empty()
@@ -1280,7 +1299,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                 cmd @ CreateExternalTable {
                     ref name,
                     ref location,
-                    ref file_type,
                     ..
                 },
             ) => {
@@ -1311,23 +1329,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // so inject it into the CreateExternalTable command as well.
                 cmd.location = location;
 
-                match file_type.as_str() {
-                    "PARQUET" | "CSV" | "JSON" | "AVRO" => {
-                        // Change here: if we're using an HTTP object store with a single file,
-                        // we don't need to make sure it has the correct extension (since it's a
-                        // single file and not a directory where we need to filter for the required
-                        // file type)
-                        self.create_listing_table(&cmd, !is_http).await
-                    }
-                    // Disallow custom formats (only useful if we're registering a table
-                    // factory provider here)
-                    _ => {
-                        return Err(DataFusionError::Plan(format!(
-                            "Invalid external table file format {:?}",
-                            file_type
-                        )))
-                    }
-                }
+                self.create_external_table(&cmd, !is_http).await
             }
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
                 schema_name,
@@ -1526,7 +1528,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                                 let scan_plan = table
                                     .partition_scan_plan(
-                                        &None,
+                                        None,
                                         group,
                                         &[],
                                         None,
@@ -2066,12 +2068,12 @@ mod tests {
     use super::test_utils::{in_memory_context, mock_context};
 
     const PARTITION_1_FILE_NAME: &str =
-        "f11e13fd26f376f1df4ea82cd634e4f3f51afe046b73c5b0110529c14febfbd7.parquet";
+        "90e86b04eb8fd3b0feaa7156282fc45a26932ce1cec905a8f3905eba97532f94.parquet";
     const PARTITION_2_FILE_NAME: &str =
-        "020dc010396517f2a104d468f5f2199185b177f63f0a216501ebdcc779432900.parquet";
+        "0572290deae3900339ce1638395a3b89ca981831bbf9a2c28fbed890139f1a0d.parquet";
 
     const EXPECTED_INSERT_FILE_NAME: &str =
-        "82b6ac4d1a189e4af5a755058857ff1d1fbadfaced74c2788c609dc9985e827f.parquet";
+        "6302ae550c00b5cda9add7eb99071b188d0bfd2835b405447be06f8865d159cc.parquet";
 
     fn to_min_max_value(value: ScalarValue) -> Arc<Option<Vec<u8>>> {
         Arc::from(scalar_value_to_bytes(&value))

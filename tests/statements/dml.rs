@@ -242,9 +242,13 @@ async fn test_delete_statement() {
         .unwrap();
 
     // Assert result of the new partition with id 5
-    let results =
-        scan_partition(&context, Some(vec![4]), partitions[2].clone(), "test_table")
-            .await;
+    let results = scan_partition(
+        &context,
+        Some(&vec![4]),
+        partitions[2].clone(),
+        "test_table",
+    )
+    .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
@@ -321,9 +325,13 @@ async fn test_delete_statement() {
         .await
         .unwrap();
 
-    let results =
-        scan_partition(&context, Some(vec![4]), partitions[1].clone(), "test_table")
-            .await;
+    let results = scan_partition(
+        &context,
+        Some(&vec![4]),
+        partitions[1].clone(),
+        "test_table",
+    )
+    .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
@@ -334,9 +342,13 @@ async fn test_delete_statement() {
     ];
     assert_batches_eq!(expected, &results);
 
-    let results =
-        scan_partition(&context, Some(vec![4]), partitions[2].clone(), "test_table")
-            .await;
+    let results = scan_partition(
+        &context,
+        Some(&vec![4]),
+        partitions[2].clone(),
+        "test_table",
+    )
+    .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
@@ -367,9 +379,13 @@ async fn test_delete_statement() {
         .await
         .unwrap();
 
-    let results =
-        scan_partition(&context, Some(vec![4]), partitions[1].clone(), "test_table")
-            .await;
+    let results = scan_partition(
+        &context,
+        Some(&vec![4]),
+        partitions[1].clone(),
+        "test_table",
+    )
+    .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
@@ -380,9 +396,13 @@ async fn test_delete_statement() {
     ];
     assert_batches_eq!(expected, &results);
 
-    let results =
-        scan_partition(&context, Some(vec![4]), partitions[2].clone(), "test_table")
-            .await;
+    let results = scan_partition(
+        &context,
+        Some(&vec![4]),
+        partitions[2].clone(),
+        "test_table",
+    )
+    .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
