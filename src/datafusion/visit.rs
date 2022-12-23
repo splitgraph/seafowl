@@ -108,9 +108,8 @@ pub trait VisitorMut<'ast> {
         left: &'ast mut SetExpr,
         op: &'ast mut SetOperator,
         right: &'ast mut SetExpr,
-        all: bool,
     ) {
-        visit_set_operation(self, left, op, right, all)
+        visit_set_operation(self, left, op, right)
     }
 
     fn visit_set_operator(&mut self, _operator: &'ast mut SetOperator) {}
@@ -527,11 +526,8 @@ pub fn visit_set_expr<'ast, V: VisitorMut<'ast> + ?Sized>(
         SetExpr::Query(query) => visitor.visit_query(query),
         SetExpr::Values(values) => visitor.visit_values(values),
         SetExpr::SetOperation {
-            left,
-            op,
-            right,
-            all,
-        } => visitor.visit_set_operation(left, op, right, *all),
+            left, op, right, ..
+        } => visitor.visit_set_operation(left, op, right),
         // TODO: There is also a new enum option, INSERT, which is actually a top level sqlparser
         // STATEMENT; we may need to enforce no table version specification there but that would
         // entail adding the visit_statement function and thus a bunch of unused code
@@ -544,7 +540,6 @@ pub fn visit_set_operation<'ast, V: VisitorMut<'ast> + ?Sized>(
     left: &'ast mut SetExpr,
     op: &'ast mut SetOperator,
     right: &'ast mut SetExpr,
-    _all: bool,
 ) {
     visitor.visit_set_expr(left);
     visitor.visit_set_operator(op);
@@ -965,6 +960,6 @@ mod tests {
         rewriter.visit_query(&mut q);
 
         // Ensure table name in the original query has been replaced
-        assert_eq!(format!("{}", q), query.replace("test_table", "aaaa"),)
+        assert_eq!(format!("{q}"), query.replace("test_table", "aaaa"),)
     }
 }

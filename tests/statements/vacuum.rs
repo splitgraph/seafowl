@@ -90,8 +90,8 @@ async fn test_vacuum_command() {
     // See https://github.com/splitgraph/seafowl/issues/5
     let orphans = vec![
         FILENAME_1,
-        "4d2e6f43a0dc42cedd89fe3510f477654c12a305d171c6213d2aa854682e4ee4.parquet",
-        "e0e13b9f480fd3f0ccb5753235075cdccd766eaad2299a99173bc4f99f5adb07.parquet",
+        "18ad256c690717e526ec4c72b009de5d09d6e024347806ba8666eea6c2bcc1db.parquet",
+        "3d175173a7d7caa0e55c6ce70ea4ad1b95124e5646c6d3d2ea62d6deda52d02a.parquet",
     ];
 
     assert_orphan_partitions(context.clone(), orphans.clone()).await;

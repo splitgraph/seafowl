@@ -33,9 +33,8 @@ async fn test_information_schema() {
             format!(
                 "SELECT table_schema, table_name, column_name, data_type, is_nullable
         FROM information_schema.columns
-        WHERE table_schema = '{}'
+        WHERE table_schema = '{SYSTEM_SCHEMA}'
         ORDER BY table_name, ordinal_position",
-                SYSTEM_SCHEMA,
             )
             .as_str(),
         )
@@ -132,8 +131,9 @@ async fn test_table_time_travel() {
     )
     .await;
 
-    let timestamp_to_rfc3339 =
-        |timestamp: Timestamp| -> String { Utc.timestamp(timestamp, 0).to_rfc3339() };
+    let timestamp_to_rfc3339 = |timestamp: Timestamp| -> String {
+        Utc.timestamp_opt(timestamp, 0).unwrap().to_rfc3339()
+    };
 
     //
     // Verify that the new table versions are shown in the corresponding system table
@@ -390,7 +390,7 @@ async fn test_remote_table_querying(
     let (dsn, table_name) = if db_type == "Postgres" {
         (
             env::var("DATABASE_URL").unwrap(),
-            format!("{}.\"source table\"", schema),
+            format!("{schema}.\"source table\""),
         )
     } else {
         // SQLite
@@ -398,12 +398,12 @@ async fn test_remote_table_querying(
         let dsn = temp_file.path().to_string_lossy().to_string();
         // We need the temp file to outlive this scope, so we must open a path ref to it
         _temp_path = temp_file.into_temp_path();
-        (format!("sqlite://{}", dsn), "\"source table\"".to_string())
+        (format!("sqlite://{dsn}"), "\"source table\"".to_string())
     };
     let pool = AnyPool::connect(dsn.as_str()).await.unwrap();
 
     if db_type == "Postgres" {
-        pool.execute(format!("CREATE SCHEMA {}", schema).as_str())
+        pool.execute(format!("CREATE SCHEMA {schema}").as_str())
             .await
             .unwrap();
     }
@@ -413,8 +413,7 @@ async fn test_remote_table_querying(
     //
     pool.execute(
             format!(
-                "CREATE TABLE {} (a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP, f JSON)",
-                table_name
+                "CREATE TABLE {table_name} (a INT, b FLOAT, c VARCHAR, \"date field\" DATE, e TIMESTAMP, f JSON)"
             )
             .as_str(),
         )
@@ -422,12 +421,11 @@ async fn test_remote_table_querying(
         .unwrap();
     pool.execute(
         format!(
-            "INSERT INTO {} VALUES \
+            "INSERT INTO {table_name} VALUES \
             (1, 1.1, 'one', '2022-11-01', '2022-11-01 22:11:01', '{{\"rows\":[1]}}'),\
             (2, 2.22, 'two', '2022-11-02', '2022-11-02 22:11:02', '{{\"rows\":[1,2]}}'),\
             (3, 3.333, 'three', '2022-11-03', '2022-11-03 22:11:03', '{{\"rows\":[1,2,3]}}'),\
-            (4, 4.4444, 'four', '2022-11-04', '2022-11-04 22:11:04', '{{\"rows\":[1,2,3,4]}}')",
-            table_name
+            (4, 4.4444, 'four', '2022-11-04', '2022-11-04 22:11:04', '{{\"rows\":[1,2,3,4]}}')"
         )
         .as_str(),
     )
@@ -446,10 +444,9 @@ async fn test_remote_table_querying(
     let plan = context
         .plan_query(
             format!(
-                "CREATE EXTERNAL TABLE remote_table {}
-                STORED AS TABLE '{}'
-                LOCATION '{}'",
-                table_column_schema, table_name, dsn
+                "CREATE EXTERNAL TABLE remote_table {table_column_schema}
+                STORED AS TABLE '{table_name}'
+                LOCATION '{dsn}'"
             )
             .as_str(),
         )
@@ -564,11 +561,11 @@ async fn test_remote_table_querying(
             "+---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
             "| plan_type     | plan                                                                                                                                                                                                                                                                                               |",
             "+---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-            "| logical_plan  | Limit: skip=0, fetch=2                                                                                                                                                                                                                                                                             |",
-            "|               |   Projection: staging.remote_table.date field, staging.remote_table.c                                                                                                                                                                                                                              |",
+            "| logical_plan  | Projection: staging.remote_table.date field, staging.remote_table.c                                                                                                                                                                                                                                |",
+            "|               |   Limit: skip=0, fetch=2                                                                                                                                                                                                                                                                           |",
             "|               |     TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Utf8(\"2022-11-01\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int64(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2 |",
-            "| physical_plan | GlobalLimitExec: skip=0, fetch=2                                                                                                                                                                                                                                                                   |",
-            "|               |   ProjectionExec: expr=[date field@1 as date field, c@0 as c]                                                                                                                                                                                                                                      |",
+            "| physical_plan | ProjectionExec: expr=[date field@1 as date field, c@0 as c]                                                                                                                                                                                                                                        |",
+            "|               |   GlobalLimitExec: skip=0, fetch=2                                                                                                                                                                                                                                                                 |",
             "|               |     MemoryExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                                  |",
             "|               |                                                                                                                                                                                                                                                                                                    |",
             "+---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
@@ -578,11 +575,11 @@ async fn test_remote_table_querying(
             "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
             "| plan_type     | plan                                                                                                                                                                                                                                                                                            |",
             "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-            "| logical_plan  | Limit: skip=0, fetch=2                                                                                                                                                                                                                                                                          |",
-            "|               |   Projection: staging.remote_table.date field, staging.remote_table.c                                                                                                                                                                                                                           |",
+            "| logical_plan  | Projection: staging.remote_table.date field, staging.remote_table.c                                                                                                                                                                                                                             |",
+            "|               |   Limit: skip=0, fetch=2                                                                                                                                                                                                                                                                        |",
             "|               |     TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Date32(\"19297\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int32(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2 |",
-            "| physical_plan | GlobalLimitExec: skip=0, fetch=2                                                                                                                                                                                                                                                                |",
-            "|               |   ProjectionExec: expr=[date field@1 as date field, c@0 as c]                                                                                                                                                                                                                                   |",
+            "| physical_plan | ProjectionExec: expr=[date field@1 as date field, c@0 as c]                                                                                                                                                                                                                                     |",
+            "|               |   GlobalLimitExec: skip=0, fetch=2                                                                                                                                                                                                                                                              |",
             "|               |     MemoryExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                               |",
             "|               |                                                                                                                                                                                                                                                                                                 |",
             "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",

@@ -7,6 +7,7 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 
 use datafusion::common::{Column, ToDFSchema};
+use datafusion::config::ConfigOptions;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_expr::expressions::{case, cast, col};
@@ -119,8 +120,7 @@ impl SchemaProvider for SeafowlCollection {
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         if self.table_exist(name.as_str()) {
             return Err(DataFusionError::Execution(format!(
-                "The table {} already exists",
-                name
+                "The table {name} already exists"
             )));
         }
         let mut tables = self.tables.write();
@@ -192,7 +192,7 @@ impl SeafowlTable {
     // list of Parquet URLs rather than all files in a given directory.
     pub async fn partition_scan_plan(
         &self,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         partitions: Vec<SeafowlPartition>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -217,13 +217,14 @@ impl SeafowlTable {
             file_schema: self.schema(),
             file_groups: partitioned_file_lists,
             statistics: Statistics::default(),
-            projection: projection.clone(),
+            projection: projection.cloned(),
             limit,
             table_partition_cols: vec![],
+            output_ordering: None,
             config_options: Arc::new(Default::default()),
         };
 
-        let format = ParquetFormat::default();
+        let format = ParquetFormat::new(Arc::new(RwLock::new(ConfigOptions::new())));
         format.create_physical_plan(config, filters).await
     }
 
@@ -236,7 +237,7 @@ impl SeafowlTable {
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let base_scan = self
-            .partition_scan_plan(&None, partitions, scan_filters, None, object_store)
+            .partition_scan_plan(None, partitions, scan_filters, None, object_store)
             .await?;
 
         Ok(Arc::new(FilterExec::try_new(filter, base_scan)?))
@@ -260,7 +261,7 @@ impl TableProvider for SeafowlTable {
     async fn scan(
         &self,
         ctx: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
@@ -403,14 +404,12 @@ impl SeafowlPruningStatistics {
                     ) {
                         Ok(value) => Ok(value),
                         Err(error) => Err(DataFusionError::Internal(format!(
-                            "Failed to deserialize min/max value: {}",
-                            error
+                            "Failed to deserialize min/max value: {error}"
                         ))),
                     }
                 }
                 Err(error) => Err(DataFusionError::Internal(format!(
-                    "Failed to decode min/max value: {}",
-                    error
+                    "Failed to decode min/max value: {error}"
                 ))),
             },
             None => {
@@ -711,7 +710,7 @@ mod tests {
         let state = context.state.read().clone();
 
         let plan = table
-            .scan(&state, &None, &[], None)
+            .scan(&state, None, &[], None)
             .await
             .expect("error creating plan");
         let results = collect(plan, context.task_ctx())
@@ -736,7 +735,7 @@ mod tests {
         let state = context.state.read().clone();
 
         let plan = table
-            .scan(&state, &Some(vec![1]), &[], None)
+            .scan(&state, Some(&vec![1]), &[], None)
             .await
             .expect("error creating plan");
         let results = collect(plan, context.task_ctx())
@@ -807,7 +806,7 @@ mod tests {
 
             partitions.push(SeafowlPartition {
                 partition_id: Some(ind as PhysicalPartitionId),
-                object_storage_id: Arc::from(format!("par{}.parquet", ind)),
+                object_storage_id: Arc::from(format!("par{ind}.parquet")),
                 row_count: 3,
                 columns: Arc::new(vec![PartitionColumn {
                     name: Arc::from("some_int".to_string()),

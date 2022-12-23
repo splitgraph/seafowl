@@ -35,8 +35,7 @@ impl RemoteTable {
     pub async fn new(name: String, conn: String, schema: SchemaRef) -> Result<Self> {
         let mut source_conn = SourceConn::try_from(conn.as_str()).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed initialising the remote table connection {:?}",
-                e
+                "Failed initialising the remote table connection {e:?}"
             ))
         })?;
         if conn.contains("/ddn") {
@@ -52,7 +51,7 @@ impl RemoteTable {
 
         if schema.fields().is_empty() {
             let one_row = vec![CXQuery::from(
-                format!("SELECT * FROM {} LIMIT 1", name).as_str(),
+                format!("SELECT * FROM {name} LIMIT 1").as_str(),
             )];
 
             // Introspect the schema
@@ -72,17 +71,13 @@ impl RemoteTable {
         task::spawn_blocking(move || {
             get_arrow(&source_conn, None, queries.as_slice()).map_err(|e| {
                 DataFusionError::Execution(format!(
-                    "Failed running the remote query {:?}",
-                    e
+                    "Failed running the remote query {e:?}"
                 ))
             })
         })
         .await
         .map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed executing the remote query {:?}",
-                e
-            ))
+            DataFusionError::Execution(format!("Failed executing the remote query {e:?}"))
         })?
     }
 
@@ -125,7 +120,7 @@ impl TableProvider for RemoteTable {
     async fn scan(
         &self,
         _ctx: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -160,18 +155,16 @@ impl TableProvider for RemoteTable {
             // there should be no harm in merging them together and converting that to equivalent SQL
             let merged_filter = conjunction(filters.to_vec()).ok_or_else(|| {
                 DataFusionError::Execution(format!(
-                    "Failed merging received filters into one {:?}",
-                    filters
+                    "Failed merging received filters into one {filters:?}"
                 ))
             })?;
             let filters_sql =
                 self.filter_expr_to_sql(&merged_filter).ok_or_else(|| {
                     DataFusionError::Execution(format!(
-                        "Failed converting filter to SQL {}",
-                        merged_filter
+                        "Failed converting filter to SQL {merged_filter}"
                     ))
                 })?;
-            format!(" WHERE {}", filters_sql)
+            format!(" WHERE {filters_sql}")
         };
 
         // Construct and run the remote query
@@ -187,8 +180,7 @@ impl TableProvider for RemoteTable {
         let src_schema = arrow_data.arrow_schema().deref().clone();
         let data = arrow_data.arrow().map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed extracting the fetched data {:?}",
-                e
+                "Failed extracting the fetched data {e:?}"
             ))
         })?;
 

@@ -428,8 +428,7 @@ async fn test_create_external_table_http() {
             format!(
                 "CREATE EXTERNAL TABLE public.file
         STORED AS PARQUET
-        LOCATION '{}'",
-                url
+        LOCATION '{url}'"
             )
             .as_str(),
         )
@@ -445,8 +444,7 @@ async fn test_create_external_table_http() {
             format!(
                 "CREATE EXTERNAL TABLE file
         STORED AS PARQUET
-        LOCATION '{}'",
-                url
+        LOCATION '{url}'"
             )
             .as_str(),
         )

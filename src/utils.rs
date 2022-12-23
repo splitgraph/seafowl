@@ -58,7 +58,7 @@ pub async fn gc_partitions(context: &DefaultSeafowlContext) {
                     .inner
                     .delete(&Path::from(object_storage_id.clone()))
                     .await
-                    .map_err(|e| if format!("{:?}", e).contains("NotFound") {
+                    .map_err(|e| if format!("{e:?}").contains("NotFound") {
                         // This is the way we match both object_store::Error::NotFound and the
                         // corresponding local FS error (which doesn't get coerced into the above one):
                         // Generic { store: "LocalFileSystem", source: UnableToDeleteFile { source: Os { code: 2, kind: NotFound, message: "No such file or directory" }, path: "/path/to/.parquet" } }

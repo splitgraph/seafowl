@@ -66,7 +66,7 @@ impl PostgresRepository {
         let repo = PostgresRepository::connect(dsn, schema_name.clone()).await?;
 
         repo.executor
-            .execute(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str())
+            .execute(format!("CREATE SCHEMA IF NOT EXISTS {schema_name};").as_str())
             .await?;
 
         // Setup the schema
@@ -88,7 +88,7 @@ impl PostgresRepository {
             .after_connect(move |c, _m| {
                 let schema_name = schema_name.to_owned();
                 Box::pin(async move {
-                    let query = format!("SET search_path TO {},public;", schema_name);
+                    let query = format!("SET search_path TO {schema_name},public;");
                     c.execute(sqlx::query(&query)).await?;
                     Ok(())
                 })

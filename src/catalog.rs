@@ -102,27 +102,25 @@ impl From<Error> for DataFusionError {
             // These errors are raised by routines that already take an ID instead of
             // a database/schema/table name and so the ID is supposed to be valid. An error
             // in this case is an internal consistency issue.
-            Error::DatabaseDoesNotExist { id } => DataFusionError::Internal(format!(
-                "Database with ID {} doesn't exist",
-                id
-            )),
+            Error::DatabaseDoesNotExist { id } => {
+                DataFusionError::Internal(format!("Database with ID {id} doesn't exist"))
+            }
             Error::CollectionDoesNotExist { id } => {
-                DataFusionError::Internal(format!("Schema with ID {} doesn't exist", id))
+                DataFusionError::Internal(format!("Schema with ID {id} doesn't exist"))
             }
             Error::TableDoesNotExist { id } => {
-                DataFusionError::Internal(format!("Table with ID {} doesn't exist", id))
+                DataFusionError::Internal(format!("Table with ID {id} doesn't exist"))
             }
             // Raised by append_partitions_to_table and create_new_table_version (non-existent version), also internal issue
             Error::TableVersionDoesNotExist { id } => DataFusionError::Internal(format!(
-                "Table version with ID {} doesn't exist",
-                id
+                "Table version with ID {id} doesn't exist"
             )),
             // Raised by append_partitions_to_table (partition not created before appending it)
             Error::PartitionDoesNotExist => DataFusionError::Internal(
                 "Error linking partitions: unknown partition ID".to_string(),
             ),
             Error::FunctionDeserializationError { reason } => DataFusionError::Internal(
-                format!("Error deserializing function: {:?}", reason),
+                format!("Error deserializing function: {reason:?}"),
             ),
 
             // Errors that are the user's fault.
@@ -131,16 +129,16 @@ impl From<Error> for DataFusionError {
             // where we manipulate data in the catalog because that's the only chance we get at
             // being async, so we follow DataFusion's convention and return these as Plan errors.
             Error::TableAlreadyExists { name } => {
-                DataFusionError::Plan(format!("Table {:?} already exists", name))
+                DataFusionError::Plan(format!("Table {name:?} already exists"))
             }
             Error::DatabaseAlreadyExists { name } => {
-                DataFusionError::Plan(format!("Database {:?} already exists", name))
+                DataFusionError::Plan(format!("Database {name:?} already exists"))
             }
             Error::CollectionAlreadyExists { name } => {
-                DataFusionError::Plan(format!("Schema {:?} already exists", name))
+                DataFusionError::Plan(format!("Schema {name:?} already exists"))
             }
             Error::FunctionAlreadyExists { name } => {
-                DataFusionError::Plan(format!("Function {:?} already exists", name))
+                DataFusionError::Plan(format!("Function {name:?} already exists"))
             }
             Error::UsedStagingSchema => DataFusionError::Plan(
                 "The staging schema can only be referenced via CREATE EXTERNAL TABLE"

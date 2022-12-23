@@ -76,7 +76,7 @@ where
         .get_typed_func::<Params, Results, _>(store, export_name)
         .map_err(|err| {
             DataFusionError::Internal(
-                format!("Required export '{:?}' could not be located in WASM module exports: {:?}", export_name, err))
+                format!("Required export '{export_name:?}' could not be located in WASM module exports: {err:?}"))
         })
 }
 
@@ -99,14 +99,14 @@ impl WasmMessagePackUDFInstance {
         let mut store = Store::new(&engine, wasi);
         // Add both wasi_unstable and wasi_snapshot_preview1 WASI modules
         wasmtime_wasi::add_to_linker(&mut linker, |s| s).map_err(|e| {
-            DataFusionError::Internal(format!("Error linking to WASI modules: {:?}", e))
+            DataFusionError::Internal(format!("Error linking to WASI modules: {e:?}"))
         })?;
         // Instantiate WASM module.
         let module = Module::from_binary(&engine, module_bytes).map_err(|e| {
-            DataFusionError::Internal(format!("Error loading WASM module: {:?}", e))
+            DataFusionError::Internal(format!("Error loading WASM module: {e:?}"))
         })?;
         let instance = linker.instantiate(&mut store, &module).map_err(|e| {
-            DataFusionError::Internal(format!("Error instantiating WASM modules {:?}", e))
+            DataFusionError::Internal(format!("Error instantiating WASM modules {e:?}"))
         })?;
 
         let alloc = get_wasm_module_exported_fn(&instance, &mut store, "alloc")?;
@@ -133,14 +133,12 @@ impl WasmMessagePackUDFInstance {
             .read(&self.store, ptr, &mut size_buffer)
             .map_err(|err| {
                 DataFusionError::Internal(format!(
-                    "Error reading UDF output buffer size: {:?}",
-                    err
+                    "Error reading UDF output buffer size: {err:?}"
                 ))
             })?;
         let size: usize = i32::from_ne_bytes(size_buffer).try_into().map_err(|e| {
             DataFusionError::Internal(format!(
-                "Error interpreting output buffer size as i32: {:?}",
-                e
+                "Error interpreting output buffer size as i32: {e:?}"
             ))
         })?;
         let mut output_buffer = vec![0_u8; size];
@@ -152,15 +150,13 @@ impl WasmMessagePackUDFInstance {
             )
             .map_err(|err| {
                 DataFusionError::Internal(format!(
-                    "Error reading output buf ({:?} bytes): {:?}",
-                    size, err
+                    "Error reading output buf ({size:?} bytes): {err:?}"
                 ))
             })?;
         let output: Value =
             rmp_serde::from_slice(output_buffer.as_ref()).map_err(|err| {
                 DataFusionError::Internal(format!(
-                    "Error messagepack decoding output buffer: {:?}",
-                    err
+                    "Error messagepack decoding output buffer: {err:?}"
                 ))
             })?;
         // return the entire size of the output buffer (including i32 size prefix) so it can be passed to dealloc() later
@@ -175,8 +171,7 @@ impl WasmMessagePackUDFInstance {
             .serialize(&mut Serializer::new(&mut udf_input_buf))
             .map_err(|err| {
                 DataFusionError::Internal(format!(
-                    "Error messagepack serializing input {:?}",
-                    err
+                    "Error messagepack serializing input {err:?}"
                 ))
             })?;
         // Total input size will be serialized messagepack bytes prepended by the
@@ -188,8 +183,7 @@ impl WasmMessagePackUDFInstance {
             .call(&mut self.store, udf_input_size.try_into().unwrap())
             .map_err(|e| {
                 DataFusionError::Internal(format!(
-                    "Error allocating input buffer in WASM memory: {:?}",
-                    e
+                    "Error allocating input buffer in WASM memory: {e:?}"
                 ))
             })?;
         let ptr: usize = udf_input_ptr.try_into().unwrap();
@@ -198,8 +192,7 @@ impl WasmMessagePackUDFInstance {
             .write(&mut self.store, ptr, &udf_input_buf.len().to_ne_bytes())
             .map_err(|err| {
                 DataFusionError::Internal(format!(
-                    "Error copying input buffer size to WASM memory: {:?}",
-                    err
+                    "Error copying input buffer size to WASM memory: {err:?}"
                 ))
             })?;
         // copy input buffer
@@ -211,8 +204,7 @@ impl WasmMessagePackUDFInstance {
             )
             .map_err(|err| {
                 DataFusionError::Internal(format!(
-                    "Error copying input buffer to WASM memory: {:?}",
-                    err
+                    "Error copying input buffer to WASM memory: {err:?}"
                 ))
             })?;
         // return the entire size of the output buffer (including i32 size prefix) so it can be passed to dealloc() later
@@ -225,7 +217,7 @@ impl WasmMessagePackUDFInstance {
         // invoke UDF
         let udf_output_ptr =
             self.udf.call(&mut self.store, udf_input_ptr).map_err(|e| {
-                DataFusionError::Internal(format!("Error invoking WASM UDF: {:?}", e))
+                DataFusionError::Internal(format!("Error invoking WASM UDF: {e:?}"))
             })?;
         let (output, output_size) = self.read_udf_output(udf_output_ptr)?;
         // deallocate both input and output buffers
@@ -233,16 +225,14 @@ impl WasmMessagePackUDFInstance {
             .call(&mut self.store, (udf_input_ptr, input_size))
             .map_err(|e| {
                 DataFusionError::Internal(format!(
-                    "Error deallocating input buffer: {:?}",
-                    e
+                    "Error deallocating input buffer: {e:?}"
                 ))
             })?;
         self.dealloc
             .call(&mut self.store, (udf_output_ptr, output_size))
             .map_err(|e| {
                 DataFusionError::Internal(format!(
-                    "Error deallocating output buffer: {:?}",
-                    e
+                    "Error deallocating output buffer: {e:?}"
                 ))
             })?;
         Ok(output)
@@ -263,8 +253,7 @@ where
         .downcast_ref::<PrimitiveArray<T>>()
         .ok_or_else(|| {
             DataFusionError::Internal(format!(
-                "Error casting column {:?} to array of primitive values",
-                col_ix
+                "Error casting column {col_ix:?} to array of primitive values"
             ))
         })
         .map(|arr| arr.value(row_ix))
@@ -309,8 +298,7 @@ fn messagepack_encode_input_value(
         ) {
             Some(arr) => Ok(Value::from(arr.value(row_ix))),
             None => Err(DataFusionError::Internal(format!(
-                "Error casting column {:?} to string array",
-                col_ix
+                "Error casting column {col_ix:?} to string array"
             ))),
         },
         CreateFunctionDataType::BOOLEAN => match args
@@ -321,8 +309,7 @@ fn messagepack_encode_input_value(
         ) {
             Some(arr) => Ok(Value::from(arr.value(row_ix))),
             None => Err(DataFusionError::Internal(format!(
-                "Error casting column {:?} to boolean array",
-                col_ix
+                "Error casting column {col_ix:?} to boolean array"
             ))),
         },
         // from: https://github.com/apache/arrow/blob/02c8598d264c839a5b5cf3109bfd406f3b8a6ba5/cpp/src/arrow/type.h#L824
@@ -390,14 +377,12 @@ fn messagepack_decode_results(
         >(encoded_results, &|v| {
             v.as_i64()
                 .ok_or(DataFusionError::Internal(format!(
-                    "Expected to find i64 value, but received {:?} instead",
-                    v
+                    "Expected to find i64 value, but received {v:?} instead"
                 )))
                 .and_then(|v_i64| {
                     i16::try_from(v_i64).map_err(|e| {
                         DataFusionError::Internal(format!(
-                            "Error converting i64 to i16: {:?}",
-                            e
+                            "Error converting i64 to i16: {e:?}"
                         ))
                     })
                 })
@@ -408,14 +393,12 @@ fn messagepack_decode_results(
                 &|v| {
                     v.as_i64()
                         .ok_or(DataFusionError::Internal(format!(
-                            "Expected to find i64 value, but received {:?} instead",
-                            v
+                            "Expected to find i64 value, but received {v:?} instead"
                         )))
                         .and_then(|v_i64| {
                             i32::try_from(v_i64).map_err(|e| {
                                 DataFusionError::Internal(format!(
-                                    "Error converting i64 to i32: {:?}",
-                                    e
+                                    "Error converting i64 to i32: {e:?}"
                                 ))
                             })
                         })
@@ -427,8 +410,7 @@ fn messagepack_decode_results(
                 encoded_results,
                 &|v| {
                     v.as_i64().ok_or(DataFusionError::Internal(format!(
-                        "Expected to find i64 value, but received {:?} instead",
-                        v
+                        "Expected to find i64 value, but received {v:?} instead"
                     )))
                 },
             )
@@ -451,14 +433,12 @@ fn messagepack_decode_results(
         >(encoded_results, &|v| {
             v.as_i64()
                 .ok_or(DataFusionError::Internal(format!(
-                    "Expected to find i64 value, but received {:?} instead",
-                    v
+                    "Expected to find i64 value, but received {v:?} instead"
                 )))
                 .and_then(|v_i64| {
                     i32::try_from(v_i64).map_err(|e| {
                         DataFusionError::Internal(format!(
-                            "Error converting i64 to i32 (for date): {:?}",
-                            e
+                            "Error converting i64 to i32 (for date): {e:?}"
                         ))
                     })
                 })
@@ -467,16 +447,14 @@ fn messagepack_decode_results(
             arrow::datatypes::TimestampNanosecondType,
         >(encoded_results, &|v| {
             v.as_i64().ok_or(DataFusionError::Internal(format!(
-                "Expected to find i64 value, but received {:?} instead",
-                v
+                "Expected to find i64 value, but received {v:?} instead"
             )))
         }),
         CreateFunctionDataType::BOOLEAN => encoded_results
             .iter()
             .map(|i| {
                 Some(i.as_bool().ok_or(DataFusionError::Internal(format!(
-                    "Expected to find string value, received {:?} instead",
-                    i
+                    "Expected to find string value, received {i:?} instead"
                 ))))
                 .transpose()
             })
@@ -488,8 +466,7 @@ fn messagepack_decode_results(
                 encoded_results,
                 &|v| {
                     v.as_f64().ok_or(DataFusionError::Internal(format!(
-                        "Expected to find f64 value, but received {:?} instead",
-                        v
+                        "Expected to find f64 value, but received {v:?} instead"
                     )))
                 },
             )
@@ -502,8 +479,7 @@ fn messagepack_decode_results(
         >(encoded_results, &|v| match v {
             Value::F32(n) => Ok(*n),
             _ => Err(DataFusionError::Internal(format!(
-                "Expected to find f32 value, but received {:?} instead",
-                v
+                "Expected to find f32 value, but received {v:?} instead"
             ))),
         })
         .map(|a| Arc::new(a) as ArrayRef),
@@ -516,8 +492,7 @@ fn messagepack_decode_results(
                 Some(
                     i.as_array()
                         .ok_or(DataFusionError::Internal(format!(
-                            "Expected to find array containing decimal parts, received {:?} instead",
-                            i
+                            "Expected to find array containing decimal parts, received {i:?} instead"
                         )))
                         .and_then(|decimal_array| {
                             if decimal_array.len() != 4 {
@@ -526,7 +501,7 @@ fn messagepack_decode_results(
                             decimal_array[0].as_u64()
                                 .ok_or(DataFusionError::Internal(format!("Decimal precision expected to be integer, found {:?} instead", decimal_array[0])))
                                 .and_then(|p_u64| {
-                                    let p_u8:u8 = p_u64.try_into().map_err(|err| DataFusionError::Internal(format!("Couldn't convert 64-bit precision value {:?} to u8 {:?}", p_u64, err)))?;
+                                    let p_u8:u8 = p_u64.try_into().map_err(|err| DataFusionError::Internal(format!("Couldn't convert 64-bit precision value {p_u64:?} to u8 {err:?}")))?;
                                     if p_u8 != *p {
                                         return Err(DataFusionError::Internal(format!("Expected to receive a decimal with precision {:?}, got {:?} instead.", *p, p_u8)))
                                     }
@@ -535,11 +510,11 @@ fn messagepack_decode_results(
                             decimal_array[1].as_u64()
                                 .ok_or(DataFusionError::Internal(format!("Decimal scale expected to be integer, found {:?} instead", decimal_array[1])))
                                 .and_then(|s_u64| {
-                                    let s_u8:u8 = s_u64.try_into().map_err(|err| DataFusionError::Internal(format!("Couldn't convert 64-bit scale value {:?} to u8 {:?}", s_u64, err)))?;
-                                    if s_u8 != *s {
-                                        return Err(DataFusionError::Internal(format!("Expected to receive a decimal with scale {:?}, got {:?} instead.", *s, s_u8)))
+                                    let s_i8: i8 = s_u64.try_into().map_err(|err| DataFusionError::Internal(format!("Couldn't convert 64-bit scale value {s_u64:?} to i8 {err:?}")))?;
+                                    if s_i8 != *s {
+                                        return Err(DataFusionError::Internal(format!("Expected to receive a decimal with scale {:?}, got {:?} instead.", *s, s_i8)))
                                     }
-                                    Ok(s_u8)
+                                    Ok(s_i8)
                                 })?;
                             let high = decimal_array[2].as_i64()
                                 .ok_or(DataFusionError::Internal(format!("Decimal value high half expected to be integer, found {:?} instead", decimal_array[2])))?;
@@ -575,16 +550,14 @@ fn make_scalar_function_wasm_messagepack(
     let _outer_instance = WasmMessagePackUDFInstance::new(&module_bytes, &function_name)
         .map_err(|err| {
             DataFusionError::Internal(format!(
-                "Error initializing WASM + MessagePack UDF {:?}: {:?}",
-                function_name, err
+                "Error initializing WASM + MessagePack UDF {function_name:?}: {err:?}"
             ))
         })?;
     let inner = move |args: &[ArrayRef]| {
         let mut instance = WasmMessagePackUDFInstance::new(&module_bytes, &function_name)
             .map_err(|err| {
                 DataFusionError::Internal(format!(
-                    "Error initializing WASM + MessagePack UDF {:?}: {:?}",
-                    function_name, err
+                    "Error initializing WASM + MessagePack UDF {function_name:?}: {err:?}"
                 ))
             })?;
         // this is guaranteed by DataFusion based on the function's signature.
@@ -616,8 +589,7 @@ fn make_scalar_function_wasm_messagepack(
 
             encoded_results.push(instance.call(params).map_err(|err| {
                 DataFusionError::Internal(format!(
-                    "Error invoking function {:?}: {:?}",
-                    function_name, err
+                    "Error invoking function {function_name:?}: {err:?}"
                 ))
             })?);
         }
@@ -638,22 +610,18 @@ fn make_scalar_function_from_wasm(
     return_type: ValType,
 ) -> Result<ScalarFunctionImplementation> {
     let mut store = Store::<()>::default();
-    let module = Module::from_binary(store.engine(), module_bytes).map_err(|e| {
-        DataFusionError::Internal(format!("Error loading module: {:?}", e))
-    })?;
+    let module = Module::from_binary(store.engine(), module_bytes)
+        .map_err(|e| DataFusionError::Internal(format!("Error loading module: {e:?}")))?;
 
     // Pre-flight checks to make sure the function exists
     let instance = Instance::new(&mut store, &module, &[]).map_err(|e| {
-        DataFusionError::Internal(format!("Error instantiating module: {:?}", e))
+        DataFusionError::Internal(format!("Error instantiating module: {e:?}"))
     })?;
 
     let _func = instance
         .get_func(&mut store, function_name)
         .ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "Error loading function {:?}",
-                function_name
-            ))
+            DataFusionError::Internal(format!("Error loading function {function_name:?}"))
         })?;
 
     // This function has to be of type Fn instead of FnMut. The function invocation (func.call)
@@ -669,19 +637,18 @@ fn make_scalar_function_from_wasm(
         let mut store = Store::<()>::default();
 
         let module = Module::from_binary(store.engine(), &module_bytes).map_err(|e| {
-            DataFusionError::Internal(format!("Error loading module: {:?}", e))
+            DataFusionError::Internal(format!("Error loading module: {e:?}"))
         })?;
 
         let instance = Instance::new(&mut store, &module, &[]).map_err(|e| {
-            DataFusionError::Internal(format!("Error instantiating module: {:?}", e))
+            DataFusionError::Internal(format!("Error instantiating module: {e:?}"))
         })?;
 
         let func = instance
             .get_func(&mut store, &function_name)
             .ok_or_else(|| {
                 DataFusionError::Internal(format!(
-                    "Error loading function {:?}",
-                    function_name
+                    "Error loading function {function_name:?}"
                 ))
             })?;
 
@@ -727,8 +694,7 @@ fn make_scalar_function_from_wasm(
             func.call(&mut store, &params, &mut results[row_ix..row_ix + 1])
                 .map_err(|e| {
                     DataFusionError::Execution(format!(
-                        "Error executing function {:?}: {:?}",
-                        function_name, e
+                        "Error executing function {function_name:?}: {e:?}"
                     ))
                 })?;
         }
@@ -1227,9 +1193,8 @@ c40201087f230041206b2203240020032002370318200320013703102003\
                     "SELECT
                     v1,
                     v2,
-                    CAST({}(v1, v2) AS {}) AS sum
-            FROM {}_values;",
-                    udf_name, type_name, type_name
+                    CAST({udf_name}(v1, v2) AS {type_name}) AS sum
+            FROM {type_name}_values;"
                 )
                 .as_str(),
             )

@@ -92,7 +92,7 @@ impl ApiError {
             // here too (e.g. ResourcesExhausted) and potentially some that leak internal
             // information (e.g. ObjectStore?)
             ApiError::DataFusionError(e) => (StatusCode::BAD_REQUEST, e.to_string()),
-            ApiError::HashMismatch(expected, got) => (StatusCode::BAD_REQUEST, format!("Invalid hash: expected {0:?}, got {1:?}. Resend your query with {0:?}", expected, got)),
+            ApiError::HashMismatch(expected, got) => (StatusCode::BAD_REQUEST, format!("Invalid hash: expected {expected:?}, got {got:?}. Resend your query with {expected:?}")),
             ApiError::NotReadOnlyQuery => (StatusCode::METHOD_NOT_ALLOWED, "NOT_READ_ONLY_QUERY".to_string()),
             ApiError::ReadOnlyEndpointDisabled => (StatusCode::METHOD_NOT_ALLOWED, "READ_ONLY_ENDPOINT_DISABLED".to_string()),
             ApiError::WriteForbidden => (StatusCode::FORBIDDEN, "WRITE_FORBIDDEN".to_string()),
@@ -104,13 +104,13 @@ impl ApiError {
             ApiError::EmptyMultiStatement => (StatusCode::BAD_REQUEST, "Empty query received".to_string()),
             ApiError::UploadMissingFile => (StatusCode::BAD_REQUEST, "No part containing file found in the request!".to_string()),
             ApiError::UploadMissingFilename => (StatusCode::BAD_REQUEST, "No filename found in the request!".to_string()),
-            ApiError::UploadMissingFilenameExtension(filename) => (StatusCode::BAD_REQUEST, format!("File {} missing extension", filename)),
-            ApiError::UploadSchemaDeserializationError(e) => (StatusCode::BAD_REQUEST, format!("Error deserializing the file schema: {:}", e)),
-            ApiError::UploadSchemaParseError(e) => (StatusCode::BAD_REQUEST, format!("Error parsing the file schema: {:}", e)),
-            ApiError::UploadBodyLoadError(e) => (StatusCode::BAD_REQUEST, format!("Error loading the upload body: {:}", e)),
-            ApiError::UploadFileLoadError(e) => (StatusCode::BAD_REQUEST, format!("Error loading the upload file: {:}", e)),
+            ApiError::UploadMissingFilenameExtension(filename) => (StatusCode::BAD_REQUEST, format!("File {filename} missing extension")),
+            ApiError::UploadSchemaDeserializationError(e) => (StatusCode::BAD_REQUEST, format!("Error deserializing the file schema: {e:}")),
+            ApiError::UploadSchemaParseError(e) => (StatusCode::BAD_REQUEST, format!("Error parsing the file schema: {e:}")),
+            ApiError::UploadBodyLoadError(e) => (StatusCode::BAD_REQUEST, format!("Error loading the upload body: {e:}")),
+            ApiError::UploadFileLoadError(e) => (StatusCode::BAD_REQUEST, format!("Error loading the upload file: {e:}")),
             ApiError::UploadHasHeaderParseError => (StatusCode::BAD_REQUEST, "Invalid has_header".to_string()),
-            ApiError::UploadUnsupportedFileFormat(filename) => (StatusCode::BAD_REQUEST, format!("File {} not supported", filename)),
+            ApiError::UploadUnsupportedFileFormat(filename) => (StatusCode::BAD_REQUEST, format!("File {filename} not supported")),
             ApiError::QueryDecodeError => (StatusCode::BAD_REQUEST, "QUERY_DECODE_ERROR".to_string()),
         }
     }

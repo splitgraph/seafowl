@@ -37,11 +37,11 @@ mod vacuum;
 
 // Object store IDs for frequently-used test data
 const FILENAME_1: &str =
-    "84ba4647437c6dcdcc565e655ea1f6ea50aa957e498731088856a60dd0696f51.parquet";
+    "7823142d1d5f7e4aa52dfadefa4624da2f72a05a896adf3e6dc68c904edc40fa.parquet";
 const FILENAME_2: &str =
-    "458a9c7e6b1b9637c7ce0c20b560c2645c7c8ec7d670bb90eb3481ec677762c1.parquet";
+    "5e08c5b77d5b282a57b6fb9f1a7f7e8307314e82b1a735f033f34fb117d8df33.parquet";
 const FILENAME_RECHUNKED: &str =
-    "13fe51ef3d3d21be9a1d7a95cdd449d8175b25732a12cfe5e54449f904901bd6.parquet";
+    "acd17cd24358fc15f85c1aee3c3179b22c69c7dbb0a9bc61dce7d94b784c81cf.parquet";
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
@@ -56,9 +56,8 @@ type = "memory"
 
 [catalog]
 type = "postgres"
-dsn = "{}"
-schema = "{}""#,
-        dsn, schema
+dsn = "{dsn}"
+schema = "{schema}""#
     );
 
     // Ignore the "in-memory object store / persistent catalog" error in e2e tests (we'll discard
@@ -76,9 +75,8 @@ async fn list_columns_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch>
                     format!(
                         "SELECT table_schema, table_name, column_name, data_type
         FROM information_schema.columns
-        WHERE table_catalog = 'default' AND table_schema != '{}'
+        WHERE table_catalog = 'default' AND table_schema != '{SYSTEM_SCHEMA}'
         ORDER BY table_name, ordinal_position",
-                        SYSTEM_SCHEMA,
                     )
                     .as_str(),
                 )
@@ -98,9 +96,8 @@ async fn list_tables_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch> 
                     format!(
                         "SELECT table_schema, table_name
         FROM information_schema.tables
-        WHERE table_catalog = 'default' AND table_schema != '{}'
+        WHERE table_catalog = 'default' AND table_schema != '{SYSTEM_SCHEMA}'
         ORDER BY table_schema, table_name",
-                        SYSTEM_SCHEMA,
                     )
                     .as_str(),
                 )
@@ -116,13 +113,12 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
         .plan_query(
             // SQL injection here, fine for test code
             format!(
-                "CREATE TABLE {:} (
+                "CREATE TABLE {table_name:} (
             some_time TIMESTAMP,
             some_value REAL,
             some_other_value NUMERIC,
             some_bool_value BOOLEAN,
-            some_int_value BIGINT)",
-                table_name
+            some_int_value BIGINT)"
             )
             .as_str(),
         )
@@ -134,11 +130,10 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
     let plan = context
         .plan_query(
             format!(
-                "INSERT INTO {:} (some_int_value, some_time, some_value) VALUES
+                "INSERT INTO {table_name:} (some_int_value, some_time, some_value) VALUES
                 (1111, '2022-01-01T20:01:01Z', 42),
                 (2222, '2022-01-01T20:02:02Z', 43),
-                (3333, '2022-01-01T20:03:03Z', 44)",
-                table_name
+                (3333, '2022-01-01T20:03:03Z', 44)"
             )
             .as_str(),
         )
@@ -168,7 +163,7 @@ async fn create_table_and_some_partitions(
     ) {
         if let Some(delay) = delay {
             let plan = context
-                .plan_query(format!("SELECT * FROM {}", table_name).as_str())
+                .plan_query(format!("SELECT * FROM {table_name}").as_str())
                 .await
                 .unwrap();
             let results = context.collect(plan).await.unwrap();
@@ -197,11 +192,8 @@ async fn create_table_and_some_partitions(
     // Add another partition for table_version 3
     let plan = context
         .plan_query(
-            format!(
-                "INSERT INTO {} (some_value) VALUES (45), (46), (47)",
-                table_name
-            )
-            .as_str(),
+            format!("INSERT INTO {table_name} (some_value) VALUES (45), (46), (47)")
+                .as_str(),
         )
         .await
         .unwrap();
@@ -219,11 +211,8 @@ async fn create_table_and_some_partitions(
     // Add another partition for table_version 4
     let plan = context
         .plan_query(
-            format!(
-                "INSERT INTO {} (some_value) VALUES (46), (47), (48)",
-                table_name
-            )
-            .as_str(),
+            format!("INSERT INTO {table_name} (some_value) VALUES (46), (47), (48)")
+                .as_str(),
         )
         .await
         .unwrap();
@@ -241,11 +230,8 @@ async fn create_table_and_some_partitions(
     // Add another partition for table_version 5
     let plan = context
         .plan_query(
-            format!(
-                "INSERT INTO {} (some_value) VALUES (42), (41), (40)",
-                table_name
-            )
-            .as_str(),
+            format!("INSERT INTO {table_name} (some_value) VALUES (42), (41), (40)")
+                .as_str(),
         )
         .await
         .unwrap();
@@ -269,14 +255,14 @@ async fn create_table_and_some_partitions(
 // A helper function for asserting contents of a given partition
 async fn scan_partition(
     context: &DefaultSeafowlContext,
-    projection: Option<Vec<usize>>,
+    projection: Option<&Vec<usize>>,
     partition: SeafowlPartition,
     table_name: &str,
 ) -> Vec<RecordBatch> {
     let table = context.try_get_seafowl_table(table_name).unwrap();
     let plan = table
         .partition_scan_plan(
-            &projection,
+            projection,
             vec![partition],
             &[],
             None,

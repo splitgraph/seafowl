@@ -69,7 +69,7 @@ write_access = "b786e07f52fc72d32b2163b6f63aa16344fd8d2d84df87b6c231ab33cd5aa125
         },
     );
 
-    dbg!(format!("Starting the server on {:?}", addr));
+    dbg!(format!("Starting the server on {addr:?}"));
     (addr, server.boxed(), tx, context)
 }
 
@@ -94,7 +94,7 @@ async fn post_query(
         .header("content-type", "application/json");
 
     if let Some(t) = token {
-        builder = builder.header("Authorization", format!("Bearer {}", t));
+        builder = builder.header("Authorization", format!("Bearer {t}"));
     }
 
     let req = builder.body(query_body(query)).unwrap();

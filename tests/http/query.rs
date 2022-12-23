@@ -11,7 +11,7 @@ async fn test_http_server_reader_writer() {
 
     tokio::task::spawn(server);
     let client = Client::new();
-    let uri = format!("http://{}/q", addr);
+    let uri = format!("http://{addr}/q");
 
     // POST SELECT 1 as a read-only user
     let resp = post_query(&client, &uri, "SELECT 1", None).await;
