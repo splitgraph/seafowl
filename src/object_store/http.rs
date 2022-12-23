@@ -78,7 +78,7 @@ impl Display for HttpObjectStoreError {
             Self::RangesUnsupported => {
                 writeln!(f, "This server does not support byte range fetches")
             }
-            Self::HttpClientError(e) => writeln!(f, "HTTP error: {:?}", e),
+            Self::HttpClientError(e) => writeln!(f, "HTTP error: {e:?}"),
         }
     }
 }

@@ -65,8 +65,7 @@ impl TableVersionProcessor {
             Ok(dt_rfc2822.timestamp())
         } else {
             return Err(DataFusionError::Execution(format!(
-                "Failed to parse version {} as timestamp",
-                version
+                "Failed to parse version {version} as timestamp"
             )));
         }
     }
@@ -94,8 +93,7 @@ impl TableVersionProcessor {
 
                 // The timestamp specified occurs prior to the earliest available table version.
                 Err(DataFusionError::Execution(format!(
-                    "No recorded table versions for the provided timestamp {}",
-                    version
+                    "No recorded table versions for the provided timestamp {version}"
                 )))
             }
         }
@@ -141,10 +139,7 @@ impl TableVersionProcessor {
             let table = &table_version.0;
             let version = &table_version.1;
             let all_versions = all_table_versions.get(table).ok_or_else(|| {
-                DataFusionError::Execution(format!(
-                    "No versions found for table {}",
-                    table
-                ))
+                DataFusionError::Execution(format!("No versions found for table {table}"))
             })?;
 
             let id = TableVersionProcessor::resolve_version_id(version, all_versions)?;
@@ -284,8 +279,8 @@ mod tests {
 
         // Ensure table name in the original query has been renamed to appropriate version
         assert_eq!(
-            format!("{}", q),
-            query.replace("('test_version')", format!(":{}", id).as_str())
+            format!("{q}"),
+            query.replace("('test_version')", format!(":{id}").as_str())
         )
     }
 

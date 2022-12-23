@@ -100,8 +100,7 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
             } else {
                 // We dont support TIMETZ and TIME WITH TIME ZONE for now
                 Err(Error::NotImplemented(format!(
-                    "Unsupported SQL type {:?}",
-                    sql_type
+                    "Unsupported SQL type {sql_type:?}"
                 )))
             }
         }
@@ -145,8 +144,7 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         | SQLDataType::Time(Some(_), _)
         | SQLDataType::Dec(_)
         | SQLDataType::Clob(_) => Err(Error::NotImplemented(format!(
-            "Unsupported SQL type {:?}",
-            sql_type
+            "Unsupported SQL type {sql_type:?}"
         ))),
     }
 }
@@ -175,8 +173,7 @@ pub(crate) fn make_decimal_type(
         || scale.unsigned_abs() > precision
     {
         Err(Error::Internal(format!(
-            "Decimal(precision = {}, scale = {}) should satisfy `0 < precision <= 38`, and `scale <= precision`.",
-            precision, scale
+            "Decimal(precision = {precision}, scale = {scale}) should satisfy `0 < precision <= 38`, and `scale <= precision`."
         )))
     } else {
         Ok(DataType::Decimal128(precision, scale))

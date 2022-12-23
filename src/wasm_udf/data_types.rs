@@ -23,8 +23,7 @@ pub fn get_wasm_type(t: &CreateFunctionDataType) -> Result<ValType, DataFusionEr
         CreateFunctionDataType::DOUBLE => Ok(ValType::F64),
 
         e => Err(DataFusionError::Internal(format!(
-            "UDFs with language 'wasm' do not support data type {}",
-            e
+            "UDFs with language 'wasm' do not support data type {e}"
         ))),
     }
 }
@@ -110,9 +109,7 @@ impl<'de> Visitor<'de> for DataTypeVecDeserializer {
             let parsed = parse_create_function_data_type(key);
             match parsed {
                 Ok(dt) => new_obj.push(dt),
-                Err(_) => {
-                    return Err(A::Error::custom(format!("couldnt decode {}", key)))
-                }
+                Err(_) => return Err(A::Error::custom(format!("couldnt decode {key}"))),
             }
         }
 
@@ -137,7 +134,7 @@ where
 {
     let s: String = Deserialize::deserialize(deserializer)?;
     parse_create_function_data_type(&s)
-        .map_err(|_| D::Error::custom(format!("unsupported data type: {}", s)))
+        .map_err(|_| D::Error::custom(format!("unsupported data type: {s}")))
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]

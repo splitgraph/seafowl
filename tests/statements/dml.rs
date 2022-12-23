@@ -84,9 +84,9 @@ async fn test_table_partitioning_and_rechunking() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected_row_2 = format!("| public       | test_table | 2                | 1                  | {} | 3         |", FILENAME_1);
-    let expected_row_3 = format!("| public       | test_table | 3                | 1                  | {} | 3         |", FILENAME_1);
-    let expected_row_4 = format!("| public       | test_table | 3                | 2                  | {} | 3         |", FILENAME_2);
+    let expected_row_2 = format!("| public       | test_table | 2                | 1                  | {FILENAME_1} | 3         |");
+    let expected_row_3 = format!("| public       | test_table | 3                | 1                  | {FILENAME_1} | 3         |");
+    let expected_row_4 = format!("| public       | test_table | 3                | 2                  | {FILENAME_2} | 3         |");
     let expected = vec![
         "+--------------+------------+------------------+--------------------+--------------------------------------------------------------------------+-----------+",
         "| table_schema | table_name | table_version_id | table_partition_id | object_storage_id                                                        | row_count |",
@@ -117,7 +117,7 @@ async fn test_table_partitioning_and_rechunking() {
         .to_string();
 
     let actual_lines: Vec<&str> = formatted.trim().lines().collect();
-    assert_contains!(actual_lines[10], format!("partitions=[{:}]", FILENAME_2));
+    assert_contains!(actual_lines[10], format!("partitions=[{FILENAME_2:}]"));
 
     // Assert query results
     let plan = context
@@ -174,7 +174,7 @@ async fn test_table_partitioning_and_rechunking() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected_row = format!("| {} |", FILENAME_RECHUNKED);
+    let expected_row = format!("| {FILENAME_RECHUNKED} |");
     let expected = vec![
         "+--------------------------------------------------------------------------+",
         "| object_storage_id                                                        |",

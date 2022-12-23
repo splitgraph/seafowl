@@ -35,7 +35,7 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
 };
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::string::ToString;
 use strum_macros::Display;
 
@@ -125,7 +125,7 @@ impl<'a> DFParser<'a> {
 
     /// Report unexpected token
     fn expected<T>(&self, expected: &str, found: Token) -> Result<T, ParserError> {
-        parser_err!(format!("Expected {}, found: {}", expected, found))
+        parser_err!(format!("Expected {expected}, found: {found}"))
     }
 
     /// Parse a new expression
@@ -363,6 +363,12 @@ impl<'a> DFParser<'a> {
             vec![]
         };
 
+        let options = if self.parse_has_options() {
+            self.parse_options()?
+        } else {
+            HashMap::new()
+        };
+
         self.parser.expect_keyword(Keyword::LOCATION)?;
         let location = self.parser.parse_literal_string()?;
 
@@ -376,7 +382,7 @@ impl<'a> DFParser<'a> {
             table_partition_cols,
             if_not_exists,
             file_compression_type,
-            options: Default::default(),
+            options,
         };
         Ok(Statement::CreateExternalTable(create))
     }
@@ -393,8 +399,35 @@ impl<'a> DFParser<'a> {
     fn parse_file_compression_type(&mut self) -> Result<String, ParserError> {
         match self.parser.next_token() {
             Token::Word(w) => parse_file_compression_type(&w.value),
-            unexpected => self.expected("one of GZIP, BZIP2", unexpected),
+            unexpected => self.expected("one of GZIP, BZIP2, XZ", unexpected),
         }
+    }
+
+    fn parse_has_options(&mut self) -> bool {
+        self.consume_token(&Token::make_keyword("OPTIONS"))
+    }
+
+    //
+    fn parse_options(&mut self) -> Result<HashMap<String, String>, ParserError> {
+        let mut options: HashMap<String, String> = HashMap::new();
+        self.parser.expect_token(&Token::LParen)?;
+
+        loop {
+            let key = self.parser.parse_literal_string()?;
+            let value = self.parser.parse_literal_string()?;
+            options.insert(key.to_string(), value.to_string());
+            let comma = self.parser.consume_token(&Token::Comma);
+            if self.parser.consume_token(&Token::RParen) {
+                // allow a trailing comma, even though it's not in standard
+                break;
+            } else if !comma {
+                return self.expected(
+                    "',' or ')' after option definition",
+                    self.parser.peek_token(),
+                );
+            }
+        }
+        Ok(options)
     }
 
     fn consume_token(&mut self, expected: &Token) -> bool {
@@ -407,15 +440,15 @@ impl<'a> DFParser<'a> {
             false
         }
     }
+
     fn parse_has_file_compression_type(&mut self) -> bool {
         self.consume_token(&Token::make_keyword("COMPRESSION"))
             & self.consume_token(&Token::make_keyword("TYPE"))
     }
 
     fn parse_csv_has_header(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("WITH"))
-            & self.consume_token(&Token::make_keyword("HEADER"))
-            & self.consume_token(&Token::make_keyword("ROW"))
+        self.parser
+            .parse_keywords(&[Keyword::WITH, Keyword::HEADER, Keyword::ROW])
     }
 
     fn parse_has_delimiter(&mut self) -> bool {
@@ -433,7 +466,7 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_has_partition(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("PARTITIONED"))
-            & self.consume_token(&Token::make_keyword("BY"))
+        self.parser
+            .parse_keywords(&[Keyword::PARTITIONED, Keyword::BY])
     }
 }

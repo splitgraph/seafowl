@@ -123,7 +123,7 @@ const PARTITION_FILE_MIN_PART_SIZE: usize = 5 * 1024 * 1024;
 const PARTITION_FILE_UPLOAD_MAX_CONCURRENCY: usize = 2;
 
 pub fn internal_object_store_url() -> ObjectStoreUrl {
-    ObjectStoreUrl::parse(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME)).unwrap()
+    ObjectStoreUrl::parse(format!("{INTERNAL_OBJECT_STORE_SCHEME}://")).unwrap()
 }
 
 fn quote_ident(val: &str) -> String {
@@ -634,8 +634,7 @@ impl DefaultSeafowlContext {
         let seafowl_table = match table_provider.as_any().downcast_ref::<SeafowlTable>() {
             Some(seafowl_table) => Ok(seafowl_table),
             None => Err(Error::Plan(format!(
-                "'{:?}' is a read-only table",
-                table_name
+                "'{table_name:?}' is a read-only table"
             ))),
         }?;
         Ok(seafowl_table.clone())
@@ -659,7 +658,7 @@ impl DefaultSeafowlContext {
             .get_collection_id_by_name(&self.database, schema_name)
             .await?
             .ok_or_else(|| {
-                Error::Plan(format!("Schema {:?} does not exist!", schema_name))
+                Error::Plan(format!("Schema {schema_name:?} does not exist!"))
             })?;
         Ok(self
             .table_catalog
@@ -673,7 +672,7 @@ impl DefaultSeafowlContext {
         details: &CreateFunctionDetails,
     ) -> Result<()> {
         let function_code = decode(&details.data)
-            .map_err(|e| Error::Execution(format!("Error decoding the UDF: {:?}", e)))?;
+            .map_err(|e| Error::Execution(format!("Error decoding the UDF: {e:?}")))?;
 
         let function = create_udf_from_wasm(
             &details.language,
@@ -793,8 +792,7 @@ impl DefaultSeafowlContext {
             .await
             .map_err(|e| {
                 DataFusionError::Execution(format!(
-                    "Failed persisting partition metadata {:?}",
-                    e
+                    "Failed persisting partition metadata {e:?}"
                 ))
             })
     }
@@ -1194,7 +1192,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     // and so we can get the user to put some JSON in there
                     let function_details: CreateFunctionDetails = serde_json::from_str(&class_name)
                         .map_err(|e| {
-                            Error::Execution(format!("Error parsing UDF details: {:?}", e))
+                            Error::Execution(format!("Error parsing UDF details: {e:?}"))
                         })?;
 
                         Ok(LogicalPlan::Extension(Extension {
@@ -1211,7 +1209,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         match self.try_get_seafowl_table(&table_name) {
                             Ok(seafowl_table) => Some(seafowl_table.table_id),
                             Err(_) => return Err(Error::Internal(format!(
-                                "Table with name {} not found", table_name
+                                "Table with name {table_name} not found"
                             )))
                         }
                     } else {
@@ -1227,7 +1225,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     }))
                 }
                 _ => Err(Error::NotImplemented(format!(
-                    "Unsupported SQL statement: {:?}", s
+                    "Unsupported SQL statement: {s:?}"
                 ))),
             },
             DFStatement::DescribeTable(s) => query_planner.describe_table_to_plan(s),
@@ -1316,11 +1314,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // Disallow the seafowl:// scheme (which is registered with DataFusion as our internal
                 // object store but shouldn't be accessible via CREATE EXTERNAL TABLE)
                 if location
-                    .starts_with(format!("{}://", INTERNAL_OBJECT_STORE_SCHEME).as_str())
+                    .starts_with(format!("{INTERNAL_OBJECT_STORE_SCHEME}://").as_str())
                 {
                     return Err(DataFusionError::Plan(format!(
-                        "Invalid URL scheme for location {:?}",
-                        location
+                        "Invalid URL scheme for location {location:?}"
                     )));
                 }
 
@@ -1412,8 +1409,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     Ok(make_dummy_exec())
                                 } else {
                                     Err(DataFusionError::Execution(format!(
-                                        "Table '{:?}' already exists",
-                                        name
+                                        "Table '{name:?}' already exists"
                                     )))
                                 };
                             }
@@ -1726,8 +1722,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                         .await?
                                         .ok_or_else(|| {
                                             Error::Plan(format!(
-                                                "Schema {:?} does not exist!",
-                                                schema
+                                                "Schema {schema:?} does not exist!"
                                             ))
                                         })?;
 
@@ -1778,9 +1773,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     }
                                     Err(error) => {
                                         return Err(Error::Internal(format!(
-                                            "Failed to delete old table versions: {:?}",
-                                            error
-                                        )))
+                                        "Failed to delete old table versions: {error:?}"
+                                    )))
                                     }
                                 }
                             }
@@ -1818,7 +1812,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
         // Ensure the schema exists prior to creating the table
         let (full_table_name, from_table_version) = {
-            let new_table_name = format!("{}.{}", schema_name, table_name);
+            let new_table_name = format!("{schema_name}.{table_name}");
 
             match self
                 .table_catalog
@@ -1831,8 +1825,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         if table.schema.arrow_schema != plan.schema() {
                             return Err(DataFusionError::Execution(
                             format!(
-                                "The table {} already exists but has a different schema than the one provided.",
-                                new_table_name)
+                                "The table {new_table_name} already exists but has a different schema than the one provided.")
                             )
                         );
                         }
@@ -2344,7 +2337,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            format!("{:?}", plan),
+            format!("{plan:?}"),
             "Insert: some_table\
             \n  Projection: CAST(column1 AS Date64) AS date, CAST(column2 AS Float64) AS value\
             \n    Values: (Utf8(\"2022-01-01T12:00:00\"), Int64(42))"
@@ -2364,7 +2357,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(format!("{:?}", plan), "Insert: some_table\
+        assert_eq!(format!("{plan:?}"), "Insert: some_table\
         \n  Projection: CAST(my_date AS Date64) AS date, CAST(my_value AS Float64) AS value\
         \n    Projection: testdb.testcol.some_table.date AS my_date, testdb.testcol.some_table.value AS my_value\
         \n      TableScan: testdb.testcol.some_table");
@@ -2486,7 +2479,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            format!("{:?}", plan),
+            format!("{plan:?}"),
             "Insert: some_table\
             \n  Projection: CAST(column1 AS Date64) AS date, CAST(column2 AS Float64) AS value\
             \n    Values: (Utf8(\"2022-01-01T12:00:00\"), Int64(42))"

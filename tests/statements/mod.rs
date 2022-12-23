@@ -56,9 +56,8 @@ type = "memory"
 
 [catalog]
 type = "postgres"
-dsn = "{}"
-schema = "{}""#,
-        dsn, schema
+dsn = "{dsn}"
+schema = "{schema}""#
     );
 
     // Ignore the "in-memory object store / persistent catalog" error in e2e tests (we'll discard
@@ -76,9 +75,8 @@ async fn list_columns_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch>
                     format!(
                         "SELECT table_schema, table_name, column_name, data_type
         FROM information_schema.columns
-        WHERE table_catalog = 'default' AND table_schema != '{}'
+        WHERE table_catalog = 'default' AND table_schema != '{SYSTEM_SCHEMA}'
         ORDER BY table_name, ordinal_position",
-                        SYSTEM_SCHEMA,
                     )
                     .as_str(),
                 )
@@ -98,9 +96,8 @@ async fn list_tables_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch> 
                     format!(
                         "SELECT table_schema, table_name
         FROM information_schema.tables
-        WHERE table_catalog = 'default' AND table_schema != '{}'
+        WHERE table_catalog = 'default' AND table_schema != '{SYSTEM_SCHEMA}'
         ORDER BY table_schema, table_name",
-                        SYSTEM_SCHEMA,
                     )
                     .as_str(),
                 )
@@ -116,13 +113,12 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
         .plan_query(
             // SQL injection here, fine for test code
             format!(
-                "CREATE TABLE {:} (
+                "CREATE TABLE {table_name:} (
             some_time TIMESTAMP,
             some_value REAL,
             some_other_value NUMERIC,
             some_bool_value BOOLEAN,
-            some_int_value BIGINT)",
-                table_name
+            some_int_value BIGINT)"
             )
             .as_str(),
         )
@@ -134,11 +130,10 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
     let plan = context
         .plan_query(
             format!(
-                "INSERT INTO {:} (some_int_value, some_time, some_value) VALUES
+                "INSERT INTO {table_name:} (some_int_value, some_time, some_value) VALUES
                 (1111, '2022-01-01T20:01:01Z', 42),
                 (2222, '2022-01-01T20:02:02Z', 43),
-                (3333, '2022-01-01T20:03:03Z', 44)",
-                table_name
+                (3333, '2022-01-01T20:03:03Z', 44)"
             )
             .as_str(),
         )
@@ -168,7 +163,7 @@ async fn create_table_and_some_partitions(
     ) {
         if let Some(delay) = delay {
             let plan = context
-                .plan_query(format!("SELECT * FROM {}", table_name).as_str())
+                .plan_query(format!("SELECT * FROM {table_name}").as_str())
                 .await
                 .unwrap();
             let results = context.collect(plan).await.unwrap();
@@ -197,11 +192,8 @@ async fn create_table_and_some_partitions(
     // Add another partition for table_version 3
     let plan = context
         .plan_query(
-            format!(
-                "INSERT INTO {} (some_value) VALUES (45), (46), (47)",
-                table_name
-            )
-            .as_str(),
+            format!("INSERT INTO {table_name} (some_value) VALUES (45), (46), (47)")
+                .as_str(),
         )
         .await
         .unwrap();
@@ -219,11 +211,8 @@ async fn create_table_and_some_partitions(
     // Add another partition for table_version 4
     let plan = context
         .plan_query(
-            format!(
-                "INSERT INTO {} (some_value) VALUES (46), (47), (48)",
-                table_name
-            )
-            .as_str(),
+            format!("INSERT INTO {table_name} (some_value) VALUES (46), (47), (48)")
+                .as_str(),
         )
         .await
         .unwrap();
@@ -241,11 +230,8 @@ async fn create_table_and_some_partitions(
     // Add another partition for table_version 5
     let plan = context
         .plan_query(
-            format!(
-                "INSERT INTO {} (some_value) VALUES (42), (41), (40)",
-                table_name
-            )
-            .as_str(),
+            format!("INSERT INTO {table_name} (some_value) VALUES (42), (41), (40)")
+                .as_str(),
         )
         .await
         .unwrap();

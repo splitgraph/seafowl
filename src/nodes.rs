@@ -247,12 +247,12 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 write!(f, "Insert: {}", table.name)
             }
             SeafowlExtensionNode::CreateTable(CreateTable { name, .. }) => {
-                write!(f, "Create: {}", name)
+                write!(f, "Create: {name}")
             }
             SeafowlExtensionNode::CreateRemoteTable(CreateRemoteTable {
                 name, ..
             }) => {
-                write!(f, "Create remote: {}", name)
+                write!(f, "Create remote: {name}")
             }
             SeafowlExtensionNode::Update(Update {
                 table,
@@ -266,12 +266,12 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                     table.name,
                     assignments
                         .iter()
-                        .map(|(c, e)| format!("{} = {}", c, e))
+                        .map(|(c, e)| format!("{c} = {e}"))
                         .collect::<Vec<String>>()
                         .join(", ")
                 )?;
                 if let Some(s) = selection {
-                    write!(f, " WHERE {}", s)?;
+                    write!(f, " WHERE {s}")?;
                 }
                 Ok(())
             }
@@ -290,7 +290,7 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 write!(f, "Delete: {} WHERE {}", table.name, e)
             }
             SeafowlExtensionNode::CreateFunction(CreateFunction { name, .. }) => {
-                write!(f, "CreateFunction: {}", name)
+                write!(f, "CreateFunction: {name}")
             }
             SeafowlExtensionNode::RenameTable(RenameTable {
                 table, new_name, ..
@@ -298,7 +298,7 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 write!(f, "RenameTable: {} to {}", table.name, new_name)
             }
             SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
-                write!(f, "DropSchema: {}", name)
+                write!(f, "DropSchema: {name}")
             }
             SeafowlExtensionNode::Vacuum(Vacuum { partitions, .. }) => {
                 write!(

@@ -75,30 +75,30 @@ pub trait FilterPushdownVisitor {
             }
             ScalarValue::Date32(Some(days)) => {
                 let date = date32_to_datetime(*days)?.date();
-                Some(format!("'{}'", date))
+                Some(format!("'{date}'"))
             }
             ScalarValue::Date64(Some(t_ms))
             | ScalarValue::TimestampMillisecond(Some(t_ms), None) => {
                 let timestamp = timestamp_ms_to_datetime(*t_ms)?;
-                Some(format!("'{}'", timestamp))
+                Some(format!("'{timestamp}'"))
             }
             ScalarValue::TimestampSecond(Some(t_s), None) => {
                 let timestamp = timestamp_s_to_datetime(*t_s)?;
-                Some(format!("'{}'", timestamp))
+                Some(format!("'{timestamp}'"))
             }
             ScalarValue::TimestampMicrosecond(Some(t_us), None) => {
                 let timestamp = timestamp_us_to_datetime(*t_us)?;
-                Some(format!("'{}'", timestamp))
+                Some(format!("'{timestamp}'"))
             }
             ScalarValue::TimestampNanosecond(Some(t_ns), None) => {
                 let timestamp = timestamp_ns_to_datetime(*t_ns)?;
-                Some(format!("'{}'", timestamp))
+                Some(format!("'{timestamp}'"))
             }
             ScalarValue::TimestampSecond(_, Some(_))
             | ScalarValue::TimestampMillisecond(_, Some(_))
             | ScalarValue::TimestampMicrosecond(_, Some(_))
             | ScalarValue::TimestampNanosecond(_, Some(_)) => None,
-            _ => Some(format!("{}", value)),
+            _ => Some(format!("{value}")),
         }
     }
 
@@ -126,16 +126,14 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
                 // through further recursion.
                 if self.source.op_to_sql(op).is_none() {
                     return Err(DataFusionError::Execution(format!(
-                        "Operator {} not shippable",
-                        op,
+                        "Operator {op} not shippable",
                     )));
                 }
             }
             _ => {
                 // Expression is not supported, no need to visit any remaining child or parent nodes
                 return Err(DataFusionError::Execution(format!(
-                    "Expression {:?} not shippable",
-                    expr,
+                    "Expression {expr:?} not shippable",
                 )));
             }
         };
@@ -150,8 +148,7 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
             Expr::Literal(val) => {
                 let sql_val = self.source.scalar_value_to_sql(val).ok_or_else(|| {
                     DataFusionError::Execution(format!(
-                        "ScalarValue {:?} not shippable",
-                        val,
+                        "ScalarValue {val:?} not shippable",
                     ))
                 })?;
                 self.sql_exprs.push(sql_val)
@@ -168,13 +165,13 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
                 if let Expr::BinaryExpr(right_be @ BinaryExpr { .. }) = &*be.right {
                     let p = right_be.precedence();
                     if p == 0 || p < be.precedence() {
-                        right_sql = format!("({})", right_sql)
+                        right_sql = format!("({right_sql})")
                     }
                 }
                 if let Expr::BinaryExpr(left_be @ BinaryExpr { .. }) = &*be.left {
                     let p = left_be.precedence();
                     if p == 0 || p < be.precedence() {
-                        left_sql = format!("({})", left_sql)
+                        left_sql = format!("({left_sql})")
                     }
                 }
 
@@ -186,7 +183,7 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
                 })?;
 
                 self.sql_exprs
-                    .push(format!("{} {} {}", left_sql, op_sql, right_sql))
+                    .push(format!("{left_sql} {op_sql} {right_sql}"))
             }
             Expr::Not(_) => {
                 let inner_sql = self.pop_sql_expr();
@@ -228,9 +225,9 @@ impl<T: FilterPushdownVisitor> ExpressionVisitor for FilterPushdown<T> {
                 let expr_sql = self.pop_sql_expr();
                 if *negated {
                     self.sql_exprs
-                        .push(format!("{expr_sql} NOT IN ({})", list_sql));
+                        .push(format!("{expr_sql} NOT IN ({list_sql})"));
                 } else {
-                    self.sql_exprs.push(format!("{expr_sql} IN ({})", list_sql));
+                    self.sql_exprs.push(format!("{expr_sql} IN ({list_sql})"));
                 }
             }
             _ => {}
@@ -266,8 +263,7 @@ pub fn filter_expr_to_sql<T: FilterPushdownVisitor>(
 
     if sql_exprs.len() != 1 {
         return Err(DataFusionError::Execution(format!(
-            "Expected exactly one SQL expression for filter {}, found: {:?}",
-            filter, sql_exprs,
+            "Expected exactly one SQL expression for filter {filter}, found: {sql_exprs:?}",
         )));
     }
 

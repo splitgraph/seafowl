@@ -120,8 +120,7 @@ impl SchemaProvider for SeafowlCollection {
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         if self.table_exist(name.as_str()) {
             return Err(DataFusionError::Execution(format!(
-                "The table {} already exists",
-                name
+                "The table {name} already exists"
             )));
         }
         let mut tables = self.tables.write();
@@ -405,14 +404,12 @@ impl SeafowlPruningStatistics {
                     ) {
                         Ok(value) => Ok(value),
                         Err(error) => Err(DataFusionError::Internal(format!(
-                            "Failed to deserialize min/max value: {}",
-                            error
+                            "Failed to deserialize min/max value: {error}"
                         ))),
                     }
                 }
                 Err(error) => Err(DataFusionError::Internal(format!(
-                    "Failed to decode min/max value: {}",
-                    error
+                    "Failed to decode min/max value: {error}"
                 ))),
             },
             None => {
@@ -809,7 +806,7 @@ mod tests {
 
             partitions.push(SeafowlPartition {
                 partition_id: Some(ind as PhysicalPartitionId),
-                object_storage_id: Arc::from(format!("par{}.parquet", ind)),
+                object_storage_id: Arc::from(format!("par{ind}.parquet")),
                 row_count: 3,
                 columns: Arc::new(vec![PartitionColumn {
                     name: Arc::from("some_int".to_string()),

@@ -651,7 +651,7 @@ mod tests {
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
+            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -670,7 +670,7 @@ mod tests {
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
+            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -686,7 +686,7 @@ mod tests {
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
+            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
             .json(&HashMap::from([("query", SELECT_QUERY)]))
             .reply(&handler)
             .await;
@@ -705,7 +705,7 @@ mod tests {
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{}.bin", SELECT_QUERY_HASH).as_str())
+            .path(format!("/q/{SELECT_QUERY_HASH}.bin").as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -726,7 +726,7 @@ mod tests {
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
+            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .header(IF_NONE_MATCH, V1_ETAG)
             .reply(&handler)
@@ -742,7 +742,7 @@ mod tests {
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{}.bin", SELECT_QUERY_HASH).as_str())
+            .path(format!("/q/{SELECT_QUERY_HASH}.bin").as_str())
             .header(QUERY_HEADER, PERCENT_ENCODED_SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -761,7 +761,7 @@ mod tests {
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{}.bin", SELECT_QUERY_HASH).as_str())
+            .path(format!("/q/{SELECT_QUERY_HASH}.bin").as_str())
             .header(QUERY_HEADER, BAD_PERCENT_ENCODED_SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -778,7 +778,7 @@ mod tests {
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
+            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .header(header::ETAG, V1_ETAG)
             .reply(&handler)
@@ -806,7 +806,7 @@ mod tests {
             .json(&HashMap::from([("query", query)]));
 
         if let Some(t) = token {
-            builder = builder.header(header::AUTHORIZATION, format!("Bearer {}", t));
+            builder = builder.header(header::AUTHORIZATION, format!("Bearer {t}"));
         }
 
         builder.reply(handler).await
@@ -919,7 +919,7 @@ mod tests {
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{}", SELECT_QUERY_HASH).as_str())
+            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;

@@ -960,6 +960,6 @@ mod tests {
         rewriter.visit_query(&mut q);
 
         // Ensure table name in the original query has been replaced
-        assert_eq!(format!("{}", q), query.replace("test_table", "aaaa"),)
+        assert_eq!(format!("{q}"), query.replace("test_table", "aaaa"),)
     }
 }

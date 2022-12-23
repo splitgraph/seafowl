@@ -17,7 +17,7 @@ async fn test_upload_base(
 
     tokio::task::spawn(server);
 
-    let table_name = format!("{}_table", file_format);
+    let table_name = format!("{file_format}_table");
 
     // Prepare the schema + data (a single record batch) which we'll save to a temp file via
     // a corresponding writer
@@ -65,7 +65,7 @@ async fn test_upload_base(
 
     // Open a temp file to write the data into
     let mut named_tempfile = Builder::new()
-        .suffix(format!(".{}", file_format).as_str())
+        .suffix(format!(".{file_format}").as_str())
         .tempfile()
         .unwrap();
 
@@ -94,19 +94,19 @@ async fn test_upload_base(
     if include_schema {
         curl_args.append(&mut vec![
             "-F".to_string(),
-            format!("schema={};type=application/json", schema_json),
+            format!("schema={schema_json};type=application/json"),
         ]);
     }
     if let Some(has_headers) = add_headers {
         curl_args.append(&mut vec![
             "-F".to_string(),
-            format!("has_header={}", has_headers),
+            format!("has_header={has_headers}"),
         ])
     }
     curl_args.append(&mut vec![
         "-F".to_string(),
         format!("data=@{}", named_tempfile.path().to_str().unwrap()),
-        format!("http://{}/upload/test_upload/{}", addr, table_name),
+        format!("http://{addr}/upload/test_upload/{table_name}"),
     ]);
 
     let mut child = Command::new("curl").args(curl_args).spawn().unwrap();
@@ -115,7 +115,7 @@ async fn test_upload_base(
 
     // Verify the newly created table contents
     let plan = context
-        .plan_query(format!("SELECT * FROM test_upload.{}", table_name).as_str())
+        .plan_query(format!("SELECT * FROM test_upload.{table_name}").as_str())
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
@@ -193,7 +193,7 @@ async fn test_upload_to_existing_table() {
             "Authorization: Bearer write_password",
             "-F",
             format!("data=@{}", named_tempfile.path().to_str().unwrap()).as_str(),
-            format!("http://{}/upload/public/test_table", addr).as_str(),
+            format!("http://{addr}/upload/public/test_table").as_str(),
         ])
         .spawn()
         .unwrap();
@@ -247,7 +247,7 @@ async fn test_upload_to_existing_table() {
             "Authorization: Bearer write_password",
             "-F",
             format!("data=@{}", named_tempfile.path().to_str().unwrap()).as_str(),
-            format!("http://{}/upload/public/test_table", addr).as_str(),
+            format!("http://{addr}/upload/public/test_table").as_str(),
         ])
         .output()
         .await
@@ -273,7 +273,7 @@ async fn test_upload_not_writer_authz() {
             "Authorization: Bearer wrong_password",
             "-F",
             "data='doesntmatter'",
-            format!("http://{}/upload/public/test_table", addr).as_str(),
+            format!("http://{addr}/upload/public/test_table").as_str(),
         ])
         .output()
         .await
