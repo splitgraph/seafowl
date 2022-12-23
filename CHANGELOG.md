@@ -4,6 +4,13 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Add support for pushdown in remote tables:
+  - `LIMIT` (<https://github.com/splitgraph/seafowl/pull/221>)
+  - `WHERE` (<https://github.com/splitgraph/seafowl/pull/226>,
+    <https://github.com/splitgraph/seafowl/pull/235>)
+- Factor out remote tables into a separate crate (<https://github.com/splitgraph/seafowl/pull/238>)
+- Upgrade to DataFusion 15 (<https://github.com/splitgraph/seafowl/pull/248>)
+
 ## [0.2.8] - 2022-11-21
 
 - Implement `table_partitions` system table (<https://github.com/splitgraph/seafowl/pull/214>)
