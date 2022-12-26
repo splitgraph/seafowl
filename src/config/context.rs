@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{
@@ -8,6 +9,7 @@ use crate::{
     context::{DefaultSeafowlContext, INTERNAL_OBJECT_STORE_SCHEME},
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
+use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::{
     error::DataFusionError,
     execution::runtime_env::{RuntimeConfig, RuntimeEnv},
@@ -20,6 +22,7 @@ use crate::repository::postgres::PostgresRepository;
 
 use crate::object_store::http::add_http_object_store;
 use crate::object_store::wrapped::InternalObjectStore;
+use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
 
@@ -116,10 +119,16 @@ pub async fn build_context(
     let target_partitions = session_config.target_partitions.max(2);
     let session_config = session_config.with_target_partitions(target_partitions);
 
-    let context = SessionContext::with_config_rt(
-        session_config,
-        Arc::new(RuntimeEnv::new(runtime_config)?),
-    );
+    // Construct and register additional table factories (e.g. for generating remote tables) besides
+    // the default ones for PARQUET, CSV, etc.
+    let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+        HashMap::new();
+    table_factories.insert("TABLE".to_string(), Arc::new(RemoteTableFactory {}));
+
+    let mut runtime_env = RuntimeEnv::new(runtime_config)?;
+    runtime_env.register_table_factories(table_factories);
+
+    let context = SessionContext::with_config_rt(session_config, Arc::new(runtime_env));
 
     let object_store = build_object_store(cfg);
     context.runtime_env().register_object_store(

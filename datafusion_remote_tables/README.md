@@ -12,37 +12,54 @@ is then executed on the remote data source using the
 
 To create a remote table one needs to provide the exact name of the table on the remote data source
 (escaping the identifier in the remote-compatible fashion if needed), and the corresponding
-connection string.
+connection string by:
 
-In addition, an optional schema reference can be supplied; if the schema is empty the schema will be
-inferred upon instantiation, otherwise the necessary casting of any column whose type doesn't match
-the specified one will be performed on each query.
+1. Using the DataFusion `CREATE EXTERNAL TABLE` command after registering the corresponding factory:
 
-```rust
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
-use datafusion_remote_tables::provider::RemoteTable;
+   ```rust
+   use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+   use datafusion_remote_tables::factory::RemoteTableFactory;
 
-let origin_table_name = "\"splitgraph-demo/seafowl:latest\".issue_reactions";
-let conn_str = "postgresql://$SPLITGRAPH_API_KEY:$SPLITGRAPH_API_SECRET@data.splitgraph.com:5432/ddn";
-let remote_table = RemoteTable::new(
-    origin_table_name.to_string(),
-    conn_str.to_string(),
-    SchemaRef::from(Schema::empty()),
-)
-.await?;
-```
+   let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+       HashMap::new();
+   table_factories.insert("TABLE".to_string(), Arc::new(RemoteTableFactory {}));
 
-Next, you need to register the table in the DataFusion (either in a `SchemaProvider` or
-`SessionContext`) using a table name that will be used for querying, for instance:
+   let mut runtime_env = RuntimeEnv::new(RuntimeConfig::new())?;
+   runtime_env.register_table_factories(table_factories);
+   ```
 
-```rust
-...
-schema_provider.register_table(
-    "seafowl_issue_reactions".to_string(),
-    Arc::new(remote_table),
-);
-...
-```
+   ```sql
+   CREATE EXTERNAL TABLE seafowl_issue_reactions [column schema definition]
+   STORED AS TABLE
+   OPTIONS ('name' '\"splitgraph-demo/seafowl:latest\".issue_reactions')
+   LOCATION 'postgresql://$SPLITGRAPH_API_KEY:$SPLITGRAPH_API_SECRET@data.splitgraph.com:5432/ddn'
+   ```
+
+2. Alternatively, you need to instantiate the table manually, and register it with DataFusion
+   (either in a `SchemaProvider` or `SessionContext`):
+
+   ```rust
+   use datafusion::arrow::datatypes::{Schema, SchemaRef};
+   use datafusion_remote_tables::provider::RemoteTable;
+
+   let origin_table_name = "\"splitgraph-demo/seafowl:latest\".issue_reactions";
+   let conn_str = "postgresql://$SPLITGRAPH_API_KEY:$SPLITGRAPH_API_SECRET@data.splitgraph.com:5432/ddn";
+   let remote_table = RemoteTable::new(
+       origin_table_name.to_string(),
+       conn_str.to_string(),
+       SchemaRef::from(Schema::empty()),
+   )
+       .await?;
+   schema_provider.register_table(
+       "seafowl_issue_reactions".to_string(),
+       Arc::new(remote_table),
+   );
+   ...
+   ```
+
+The optional column schema definition can alsso be supplied; if the schema is empty the schema will
+be inferred upon instantiation, otherwise the necessary casting of any column whose type doesn't
+match the specified one will be performed on each query.
 
 Finally, you can query the table:
 

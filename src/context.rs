@@ -19,7 +19,6 @@ use datafusion::datasource::listing::ListingTable;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
-use datafusion_remote_tables::provider::RemoteTable;
 
 use datafusion_proto::protobuf;
 
@@ -41,7 +40,6 @@ use sqlparser::ast::{
 
 use arrow_integration_test::field_to_json;
 use std::iter::zip;
-use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -67,7 +65,7 @@ use datafusion::{
         EmptyRecordBatchStream, ExecutionPlan, SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
-    sql::{parser, planner::SqlToRel, TableReference},
+    sql::{planner::SqlToRel, TableReference},
 };
 
 use datafusion_expr::logical_plan::{
@@ -84,7 +82,6 @@ use tokio::sync::Semaphore;
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::{PhysicalPartitionId, TableId, TableVersionId};
 use crate::datafusion::visit::VisitorMut;
-use crate::nodes::CreateRemoteTable;
 use crate::provider::{
     project_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
     SeafowlTable,
@@ -803,27 +800,8 @@ impl DefaultSeafowlContext {
         cmd: &CreateExternalTable,
         filter_suffix: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let file_compression_type =
-            match FileCompressionType::from_str(cmd.file_compression_type.as_str()) {
-                Ok(t) => t,
-                Err(_) => Err(DataFusionError::Execution(
-                    "Only known FileCompressionTypes can be ListingTables!".to_string(),
-                ))?,
-            };
-
-        let file_type = match FileType::from_str(cmd.file_type.as_str()) {
-            Ok(t) => t,
-            Err(_) => Err(DataFusionError::Execution(
-                "Only known FileTypes can be ListingTables!".to_string(),
-            ))?,
-        };
-
-        // Change from default DataFusion behaviour: allow disabling filtering by an extension
-        let file_extension = if filter_suffix {
-            file_type.get_ext_with_compression(file_compression_type.to_owned())?
-        } else {
-            "".to_string()
-        };
+        let table_provider: Arc<dyn TableProvider> =
+            self.create_custom_table(cmd).await?;
 
         let table = self.inner.table(cmd.name.as_str());
         match (cmd.if_not_exists, table) {
@@ -836,12 +814,41 @@ impl DefaultSeafowlContext {
                     Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
                 };
 
-                // This is quite unfortunate, as the DataFusion creates everything we need here, apart from
-                // the override of the `file_extension` above. There's no way to override the ListingOptions
+                if !cmd.options.is_empty() {
+                    // This is a remote table, register and exit
+                    self.inner
+                        .register_table(cmd.name.as_str(), table_provider)?;
+                    return Ok(make_dummy_exec());
+                }
+
+                // This is quite unfortunate, as the DataFusion creates everything we need above, apart from
+                // the override of the `file_extension`. There's no way to override the ListingOptions
                 // in the created ListingTable, so we just grab the one created and create a new ListingTable
                 // with our own `file_extension`.
-                let table_provider: Arc<dyn TableProvider> =
-                    self.create_custom_table(cmd).await?;
+                let file_compression_type = match FileCompressionType::from_str(
+                    cmd.file_compression_type.as_str(),
+                ) {
+                    Ok(t) => t,
+                    Err(_) => Err(DataFusionError::Execution(
+                        "Only known FileCompressionTypes can be ListingTables!"
+                            .to_string(),
+                    ))?,
+                };
+
+                let file_type = match FileType::from_str(cmd.file_type.as_str()) {
+                    Ok(t) => t,
+                    Err(_) => Err(DataFusionError::Execution(
+                        "Only known FileTypes can be ListingTables!".to_string(),
+                    ))?,
+                };
+
+                // Change from default DataFusion behaviour: allow disabling filtering by an extension
+                let file_extension = if filter_suffix {
+                    file_type
+                        .get_ext_with_compression(file_compression_type.to_owned())?
+                } else {
+                    "".to_string()
+                };
 
                 let options = table_provider
                     .as_any()
@@ -1229,35 +1236,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                 ))),
             },
             DFStatement::DescribeTable(s) => query_planner.describe_table_to_plan(s),
-            DFStatement::CreateExternalTable(parser::CreateExternalTable {
-                ref file_type,
-                columns,
-                name,
-                file_compression_type,
-                location,
-                if_not_exists,
-                ..
-            }) if file_type == "TABLE" => {
-                // This is a special case where we need to create a remote table; since we abuse:
-                // 1) file_type to distinguish this case from file-based external table types
-                // 2) file_compression_type to smuggle the remote table name
-                // we can't use the regular CreateExternalTable plan, as DF complains about
-                // compression type being set for non-{CSV, JSON} file types.
-                let schema = build_schema(columns)?.to_dfschema_ref()?;
-
-                Ok(LogicalPlan::Extension(Extension {
-                    node: Arc::new(SeafowlExtensionNode::CreateRemoteTable(
-                        CreateRemoteTable {
-                            schema,
-                            name,
-                            remote_name: file_compression_type,
-                            if_not_exists,
-                            output_schema: Arc::new(DFSchema::empty()),
-                            conn: location,
-                        },
-                    )),
-                }))
-            }
             DFStatement::CreateExternalTable(c) => {
                 query_planner.external_table_to_plan(c)
             }
@@ -1391,40 +1369,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                         }) => {
                             self.exec_create_table(name, schema).await?;
 
-                            Ok(make_dummy_exec())
-                        }
-                        SeafowlExtensionNode::CreateRemoteTable(CreateRemoteTable {
-                            schema,
-                            name,
-                            remote_name,
-                            if_not_exists,
-                            conn,
-                            ..
-                        }) => {
-                            let resolved_reference = self.resolve_staging_ref(name)?;
-                            let table = self.inner.table(resolved_reference);
-
-                            if table.is_ok() {
-                                return if *if_not_exists {
-                                    Ok(make_dummy_exec())
-                                } else {
-                                    Err(DataFusionError::Execution(format!(
-                                        "Table '{name:?}' already exists"
-                                    )))
-                                };
-                            }
-
-                            let remote_table = RemoteTable::new(
-                                remote_name.clone(),
-                                conn.clone(),
-                                SchemaRef::from(schema.deref().clone()),
-                            )
-                            .await?;
-
-                            self.inner.register_table(
-                                resolved_reference,
-                                Arc::new(remote_table),
-                            )?;
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::Insert(Insert { table, input, .. }) => {
