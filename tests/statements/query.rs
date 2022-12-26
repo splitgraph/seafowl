@@ -445,7 +445,8 @@ async fn test_remote_table_querying(
         .plan_query(
             format!(
                 "CREATE EXTERNAL TABLE remote_table {table_column_schema}
-                STORED AS TABLE '{table_name}'
+                STORED AS TABLE
+                OPTIONS ('name' '{table_name}')
                 LOCATION '{dsn}'"
             )
             .as_str(),
@@ -580,7 +581,8 @@ async fn test_remote_table_querying(
             "|               |     TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Date32(\"19297\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int32(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2 |",
             "| physical_plan | ProjectionExec: expr=[date field@1 as date field, c@0 as c]                                                                                                                                                                                                                                     |",
             "|               |   GlobalLimitExec: skip=0, fetch=2                                                                                                                                                                                                                                                              |",
-            "|               |     MemoryExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                               |",
+            "|               |     ProjectionExec: expr=[c@0 as c, date field@1 as date field]                                                                                                                                                                                                                                 |",
+            "|               |       MemoryExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                             |",
             "|               |                                                                                                                                                                                                                                                                                                 |",
             "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
         ]

@@ -347,11 +347,7 @@ impl<'a> DFParser<'a> {
             false => ',',
         };
 
-        let file_compression_type = if file_type == *"TABLE" {
-            // Parse the remote table name, and smuggle it through the compression field of the
-            // CreateExternalTable struct
-            self.parser.parse_literal_string()?
-        } else if self.parse_has_file_compression_type() {
+        let file_compression_type = if self.parse_has_file_compression_type() {
             self.parse_file_compression_type()?
         } else {
             "".to_string()
