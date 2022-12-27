@@ -15,6 +15,7 @@ use datafusion::{
     execution::runtime_env::{RuntimeConfig, RuntimeEnv},
     prelude::{SessionConfig, SessionContext},
 };
+use deltalake::delta_datafusion::DeltaTableFactory;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
 #[cfg(feature = "catalog-postgres")]
@@ -124,6 +125,7 @@ pub async fn build_context(
     let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
         HashMap::new();
     table_factories.insert("TABLE".to_string(), Arc::new(RemoteTableFactory {}));
+    table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
 
     let mut runtime_env = RuntimeEnv::new(runtime_config)?;
     runtime_env.register_table_factories(table_factories);

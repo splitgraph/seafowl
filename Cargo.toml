@@ -52,13 +52,16 @@ datafusion-proto = "15.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables" }
 
+deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "delta-builder-with-storage-options", features = ["s3", "datafusion-ext"] }
+dynamodb_lock = { git = "https://github.com/splitgraph/delta-rs", branch = "delta-builder-with-storage-options", package = "dynamodb_lock", default_features = false, features = ["native-tls"] }
+
 futures = "0.3"
 hex = ">=0.4.0"
 itertools = ">=0.10.0"
 lazy_static = ">=1.4.0"
 log = "0.4"
 moka = { version = "0.9.3", default_features = false, features = ["future", "atomic64", "quanta"] }
-object_store = "0.5.0"
+object_store = "0.5.2"
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
 pretty_env_logger = "0.4"

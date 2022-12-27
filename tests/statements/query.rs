@@ -589,3 +589,40 @@ async fn test_remote_table_querying(
     };
     assert_batches_eq!(expected, &results);
 }
+
+#[tokio::test]
+async fn test_delta_tables() {
+    let context = make_context_with_pg().await;
+
+    let plan = context
+        .plan_query(
+            "CREATE EXTERNAL TABLE test_delta \
+            STORED AS DELTATABLE \
+            LOCATION 'tests/data/delta-0.8.0-partitioned'",
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // The order gets randomized so we need to enforce it
+    let plan = context
+        .plan_query("SELECT * FROM staging.test_delta ORDER BY value")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+-------+------+-------+-----+",
+        "| value | year | month | day |",
+        "+-------+------+-------+-----+",
+        "| 1     | 2020 | 1     | 1   |",
+        "| 2     | 2020 | 2     | 3   |",
+        "| 3     | 2020 | 2     | 5   |",
+        "| 4     | 2021 | 4     | 5   |",
+        "| 5     | 2021 | 12    | 4   |",
+        "| 6     | 2021 | 12    | 20  |",
+        "| 7     | 2021 | 12    | 20  |",
+        "+-------+------+-------+-----+",
+    ];
+    assert_batches_eq!(expected, &results);
+}

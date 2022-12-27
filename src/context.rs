@@ -807,15 +807,8 @@ impl DefaultSeafowlContext {
         match (cmd.if_not_exists, table) {
             (true, Ok(_)) => Ok(make_dummy_exec()),
             (_, Err(_)) => {
-                // TODO make schema in CreateExternalTable optional instead of empty
-                let provided_schema = if cmd.schema.fields().is_empty() {
-                    None
-                } else {
-                    Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
-                };
-
-                if !cmd.options.is_empty() {
-                    // This is a remote table, register and exit
+                if ["TABLE", "DELTATABLE"].contains(&cmd.file_type.as_str()) {
+                    // This is a remote or delta table, register and exit
                     self.inner
                         .register_table(cmd.name.as_str(), table_provider)?;
                     return Ok(make_dummy_exec());
@@ -825,6 +818,14 @@ impl DefaultSeafowlContext {
                 // the override of the `file_extension`. There's no way to override the ListingOptions
                 // in the created ListingTable, so we just grab the one created and create a new ListingTable
                 // with our own `file_extension`.
+
+                // TODO make schema in CreateExternalTable optional instead of empty
+                let provided_schema = if cmd.schema.fields().is_empty() {
+                    None
+                } else {
+                    Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
+                };
+
                 let file_compression_type = match FileCompressionType::from_str(
                     cmd.file_compression_type.as_str(),
                 ) {
