@@ -12,9 +12,14 @@ use futures::TryStreamExt;
 use itertools::{sorted, Itertools};
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
+#[cfg(feature = "remote-tables")]
 use sqlx::{AnyPool, Executor};
+#[cfg(feature = "remote-tables")]
 use tempfile::{NamedTempFile, TempPath};
 use tokio::time::sleep;
+
+#[cfg(feature = "remote-tables")]
+use rstest::rstest;
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;

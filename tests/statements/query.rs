@@ -1,5 +1,4 @@
 use crate::statements::*;
-use rstest::rstest;
 
 #[tokio::test]
 async fn test_information_schema() {
@@ -373,6 +372,7 @@ async fn test_table_time_travel() {
     assert_batches_eq!(expected, &results);
 }
 
+#[cfg(feature = "remote-tables")]
 #[rstest]
 #[case::postgres_schema_introspected("Postgres", true)]
 #[case::postgres_schema_declared("Postgres", false)]
@@ -590,6 +590,7 @@ async fn test_remote_table_querying(
     assert_batches_eq!(expected, &results);
 }
 
+#[cfg(feature = "delta-tables")]
 #[tokio::test]
 async fn test_delta_tables() {
     let context = make_context_with_pg().await;

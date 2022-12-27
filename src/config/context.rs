@@ -15,6 +15,7 @@ use datafusion::{
     execution::runtime_env::{RuntimeConfig, RuntimeEnv},
     prelude::{SessionConfig, SessionContext},
 };
+#[cfg(feature = "delta-tables")]
 use deltalake::delta_datafusion::DeltaTableFactory;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
@@ -23,6 +24,7 @@ use crate::repository::postgres::PostgresRepository;
 
 use crate::object_store::http::add_http_object_store;
 use crate::object_store::wrapped::InternalObjectStore;
+#[cfg(feature = "remote-tables")]
 use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
@@ -98,6 +100,7 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
     }
 }
 
+#[allow(unused_mut)]
 pub async fn build_context(
     cfg: &schema::SeafowlConfig,
 ) -> Result<DefaultSeafowlContext, DataFusionError> {
@@ -124,8 +127,14 @@ pub async fn build_context(
     // the default ones for PARQUET, CSV, etc.
     let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
         HashMap::new();
-    table_factories.insert("TABLE".to_string(), Arc::new(RemoteTableFactory {}));
-    table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
+    #[cfg(feature = "remote-tables")]
+    {
+        table_factories.insert("TABLE".to_string(), Arc::new(RemoteTableFactory {}));
+    }
+    #[cfg(feature = "delta-tables")]
+    {
+        table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
+    }
 
     let mut runtime_env = RuntimeEnv::new(runtime_config)?;
     runtime_env.register_table_factories(table_factories);

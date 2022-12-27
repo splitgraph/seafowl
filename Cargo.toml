@@ -22,9 +22,11 @@ include = [
 
 [features]
 catalog-postgres = ["sqlx/postgres"]
-default = ["catalog-postgres", "frontend-postgres", "object-store-s3"]
+default = ["catalog-postgres", "delta-tables", "frontend-postgres", "object-store-s3", "remote-tables"]
+delta-tables = ["dep:deltalake", "dep:dynamodb_lock"]
 frontend-postgres = ["convergence", "convergence-arrow"]
 object-store-s3 = ["object_store/aws"]
+remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
 arrow = "28.0.0"
@@ -50,10 +52,10 @@ datafusion = "15.0.0"
 datafusion-expr = "15.0.0"
 datafusion-proto = "15.0.0"
 
-datafusion-remote-tables = { path = "./datafusion_remote_tables" }
+datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "delta-builder-with-storage-options", features = ["s3", "datafusion-ext"] }
-dynamodb_lock = { git = "https://github.com/splitgraph/delta-rs", branch = "delta-builder-with-storage-options", package = "dynamodb_lock", default_features = false, features = ["native-tls"] }
+deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "delta-builder-with-storage-options", features = ["s3", "datafusion-ext"], optional = true }
+dynamodb_lock = { git = "https://github.com/splitgraph/delta-rs", branch = "delta-builder-with-storage-options", package = "dynamodb_lock", default_features = false, features = ["native-tls"], optional = true }
 
 futures = "0.3"
 hex = ">=0.4.0"
