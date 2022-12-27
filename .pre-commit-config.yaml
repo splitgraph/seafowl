@@ -4,6 +4,7 @@ repos:
     hooks:
       - id: prettier
         files: \.(json|markdown|md|yaml|yml)$
+        exclude: tests/data
   - repo: local
     hooks:
       - id: fmt
