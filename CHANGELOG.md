@@ -6,6 +6,14 @@
 
 ## [0.2.9] - 2022-12-23
 
+- Add region config parameter for Amazon S3 object store
+  (<https://github.com/splitgraph/seafowl/pull/255>)
+- Enable querying external Delta tables in Seafowl
+  (<https://github.com/splitgraph/seafowl/pull/252>)
+- Implement remote table factory (<https://github.com/splitgraph/seafowl/pull/250>)
+
+## [0.2.9] - 2022-12-23
+
 - Add support for pushdown in remote tables:
   - `LIMIT` (<https://github.com/splitgraph/seafowl/pull/221>)
   - `WHERE` (<https://github.com/splitgraph/seafowl/pull/226>,
