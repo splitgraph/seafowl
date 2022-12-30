@@ -300,6 +300,18 @@ pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigErr
         ));
     };
 
+    if let ObjectStore::S3(S3 {
+        region: None,
+        endpoint: None,
+        ..
+    }) = config.object_store
+    {
+        return Err(ConfigError::Message(
+            "You need to supply either the region or the endpoint of the S3 object store."
+                .to_string(),
+        ));
+    }
+
     if let Some(max_memory) = config.runtime.max_memory {
         if max_memory < MIN_MEMORY {
             return Err(ConfigError::Message(format!(
@@ -413,6 +425,17 @@ upload_data_max_length = 1
     [catalog]
     type = "sqlite"
     dsn = ":memory:""#;
+
+    // Invalid config: S3 object store with neither region or endpoint provided
+    const TEST_CONFIG_INVALID_S3: &str = r#"
+    [object_store]
+    type = "s3"
+    access_key_id = "AKI..."
+    secret_access_key = "ABC..."
+    bucket = "seafowl"
+    [catalog]
+    type = "postgres"
+    dsn = "postgresql://user:pass@localhost:5432/somedb""#;
 
     #[cfg(feature = "object-store-s3")]
     #[test]
@@ -573,6 +596,15 @@ upload_data_max_length = 1
         assert!(error
             .to_string()
             .contains("You are using an in-memory catalog with a non in-memory"))
+    }
+
+    #[test]
+    fn test_parse_config_invalid_s3() {
+        let error =
+            load_config_from_string(TEST_CONFIG_INVALID_S3, false, None).unwrap_err();
+        assert!(error.to_string().contains(
+            "You need to supply either the region or the endpoint of the S3 object store"
+        ))
     }
 
     #[test]
