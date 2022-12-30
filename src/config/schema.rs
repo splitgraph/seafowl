@@ -112,9 +112,10 @@ pub struct InMemory {}
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct S3 {
+    pub region: Option<String>,
     pub access_key_id: String,
     pub secret_access_key: String,
-    pub endpoint: String,
+    pub endpoint: Option<String>,
     pub bucket: String,
 }
 
@@ -421,9 +422,10 @@ upload_data_max_length = 1
         assert_eq!(
             config.object_store,
             ObjectStore::S3(S3 {
+                region: None,
                 access_key_id: "AKI...".to_string(),
                 secret_access_key: "ABC...".to_string(),
-                endpoint: "https://s3.amazonaws.com:9000".to_string(),
+                endpoint: Some("https://s3.amazonaws.com:9000".to_string()),
                 bucket: "seafowl".to_string()
             })
         );
