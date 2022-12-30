@@ -80,21 +80,24 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
         schema::ObjectStore::InMemory(_) => Arc::new(InMemory::new()),
         #[cfg(feature = "object-store-s3")]
         schema::ObjectStore::S3(S3 {
+            region,
             access_key_id,
             secret_access_key,
             endpoint,
             bucket,
         }) => {
-            // Use endpoint instead of partition
-            let store = AmazonS3Builder::new()
+            let mut builder = AmazonS3Builder::new()
                 .with_access_key_id(access_key_id)
                 .with_secret_access_key(secret_access_key)
-                .with_region("")
+                .with_region(region.clone().unwrap_or("".to_string()))
                 .with_bucket_name(bucket)
-                .with_endpoint(endpoint.clone())
-                .with_allow_http(true)
-                .build()
-                .expect("Error creating object store");
+                .with_allow_http(true);
+
+            if let Some(endpoint) = endpoint {
+                builder = builder.with_endpoint(endpoint);
+            }
+
+            let store = builder.build().expect("Error creating object store");
             Arc::new(store)
         }
     }
