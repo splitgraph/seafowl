@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.2.10] - 2022-12-30
+
 - Add region config parameter for Amazon S3 object store
   (<https://github.com/splitgraph/seafowl/pull/255>)
 - Enable querying external Delta tables in Seafowl
@@ -98,6 +100,7 @@
 <!-- next-url -->
 
 [unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.10...HEAD
+[0.2.10]: https://github.com/splitgraph/seafowl/compare/v0.2.10...v0.2.10
 [0.2.10]: https://github.com/splitgraph/seafowl/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/splitgraph/seafowl/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/splitgraph/seafowl/compare/v0.2.7...v0.2.8
