@@ -448,7 +448,6 @@ mod tests {
 
         let paths = fs::read_dir(basedir)
             .unwrap()
-            .into_iter()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .sorted()
             .collect_vec();
