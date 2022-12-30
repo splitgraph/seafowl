@@ -3,7 +3,7 @@
 [package]
 name = "seafowl"
 build = "build.rs"
-version = "0.2.10"
+version = "0.2.9"
 edition = "2021"
 
 readme = "README.md"
