@@ -16,7 +16,7 @@ license = "Apache-2.0"
 arrow = "28.0.0"
 arrow-buffer = "28.0.0"
 arrow-schema = "28.0.0"
-async-trait = "0.1.41"
+async-trait = "0.1.61"
 
 # Remote query execution for a variety of DBs
 connectorx = { version = "0.3.1", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
