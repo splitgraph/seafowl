@@ -22,9 +22,9 @@ impl TableProviderFactory for RemoteTableFactory {
         let table = RemoteTable::new(
             cmd.options
                 .get("name")
-                .ok_or(DataFusionError::Execution(
-                    "Missing 'name' option".to_string(),
-                ))?
+                .ok_or_else(|| {
+                    DataFusionError::Execution("Missing 'name' option".to_string())
+                })?
                 .clone(),
             cmd.location.clone(),
             SchemaRef::from(cmd.schema.deref().clone()),

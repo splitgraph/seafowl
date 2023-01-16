@@ -112,11 +112,11 @@ impl WasmMessagePackUDFInstance {
         let alloc = get_wasm_module_exported_fn(&instance, &mut store, "alloc")?;
         let dealloc = get_wasm_module_exported_fn(&instance, &mut store, "dealloc")?;
         let udf = get_wasm_module_exported_fn(&instance, &mut store, function_name)?;
-        let memory = instance.get_memory(&mut store, "memory").ok_or(
+        let memory = instance.get_memory(&mut store, "memory").ok_or_else(|| {
             DataFusionError::Internal(
                 "could not find module's exported memory".to_string(),
-            ),
-        )?;
+            )
+        })?;
         Ok(Self {
             store,
             alloc,
@@ -376,7 +376,7 @@ fn messagepack_decode_results(
             arrow::datatypes::Int16Type,
         >(encoded_results, &|v| {
             v.as_i64()
-                .ok_or(DataFusionError::Internal(format!(
+                .ok_or_else(|| DataFusionError::Internal(format!(
                     "Expected to find i64 value, but received {v:?} instead"
                 )))
                 .and_then(|v_i64| {
@@ -392,7 +392,7 @@ fn messagepack_decode_results(
                 encoded_results,
                 &|v| {
                     v.as_i64()
-                        .ok_or(DataFusionError::Internal(format!(
+                        .ok_or_else(|| DataFusionError::Internal(format!(
                             "Expected to find i64 value, but received {v:?} instead"
                         )))
                         .and_then(|v_i64| {
@@ -409,7 +409,7 @@ fn messagepack_decode_results(
             decode_udf_result_primitive_array::<arrow::datatypes::Int64Type>(
                 encoded_results,
                 &|v| {
-                    v.as_i64().ok_or(DataFusionError::Internal(format!(
+                    v.as_i64().ok_or_else(|| DataFusionError::Internal(format!(
                         "Expected to find i64 value, but received {v:?} instead"
                     )))
                 },
@@ -420,7 +420,7 @@ fn messagepack_decode_results(
         | CreateFunctionDataType::TEXT => encoded_results
             .iter()
             .map(|i| {
-                Some(i.as_str().ok_or(DataFusionError::Internal(format!(
+                Some(i.as_str().ok_or_else(|| DataFusionError::Internal(format!(
                     "Expected to find string value, received {:?} instead",
                     &i
                 ))))
@@ -432,7 +432,7 @@ fn messagepack_decode_results(
             arrow::datatypes::Date32Type,
         >(encoded_results, &|v| {
             v.as_i64()
-                .ok_or(DataFusionError::Internal(format!(
+                .ok_or_else(|| DataFusionError::Internal(format!(
                     "Expected to find i64 value, but received {v:?} instead"
                 )))
                 .and_then(|v_i64| {
@@ -446,14 +446,14 @@ fn messagepack_decode_results(
         CreateFunctionDataType::TIMESTAMP => decode_udf_result_primitive_array::<
             arrow::datatypes::TimestampNanosecondType,
         >(encoded_results, &|v| {
-            v.as_i64().ok_or(DataFusionError::Internal(format!(
+            v.as_i64().ok_or_else(|| DataFusionError::Internal(format!(
                 "Expected to find i64 value, but received {v:?} instead"
             )))
         }),
         CreateFunctionDataType::BOOLEAN => encoded_results
             .iter()
             .map(|i| {
-                Some(i.as_bool().ok_or(DataFusionError::Internal(format!(
+                Some(i.as_bool().ok_or_else(|| DataFusionError::Internal(format!(
                     "Expected to find string value, received {i:?} instead"
                 ))))
                 .transpose()
@@ -465,7 +465,7 @@ fn messagepack_decode_results(
             decode_udf_result_primitive_array::<arrow::datatypes::Float64Type>(
                 encoded_results,
                 &|v| {
-                    v.as_f64().ok_or(DataFusionError::Internal(format!(
+                    v.as_f64().ok_or_else(|| DataFusionError::Internal(format!(
                         "Expected to find f64 value, but received {v:?} instead"
                     )))
                 },
@@ -491,7 +491,7 @@ fn messagepack_decode_results(
             .map(|i| {
                 Some(
                     i.as_array()
-                        .ok_or(DataFusionError::Internal(format!(
+                        .ok_or_else(|| DataFusionError::Internal(format!(
                             "Expected to find array containing decimal parts, received {i:?} instead"
                         )))
                         .and_then(|decimal_array| {
@@ -499,7 +499,7 @@ fn messagepack_decode_results(
                                 return Err(DataFusionError::Internal(format!("DECIMAL UDF result array should have 4 elements, found {:?} instead.", decimal_array.len())));
                             }
                             decimal_array[0].as_u64()
-                                .ok_or(DataFusionError::Internal(format!("Decimal precision expected to be integer, found {:?} instead", decimal_array[0])))
+                                .ok_or_else(|| DataFusionError::Internal(format!("Decimal precision expected to be integer, found {:?} instead", decimal_array[0])))
                                 .and_then(|p_u64| {
                                     let p_u8:u8 = p_u64.try_into().map_err(|err| DataFusionError::Internal(format!("Couldn't convert 64-bit precision value {p_u64:?} to u8 {err:?}")))?;
                                     if p_u8 != *p {
@@ -508,7 +508,7 @@ fn messagepack_decode_results(
                                     Ok(p_u8)
                                 })?;
                             decimal_array[1].as_u64()
-                                .ok_or(DataFusionError::Internal(format!("Decimal scale expected to be integer, found {:?} instead", decimal_array[1])))
+                                .ok_or_else(|| DataFusionError::Internal(format!("Decimal scale expected to be integer, found {:?} instead", decimal_array[1])))
                                 .and_then(|s_u64| {
                                     let s_i8: i8 = s_u64.try_into().map_err(|err| DataFusionError::Internal(format!("Couldn't convert 64-bit scale value {s_u64:?} to i8 {err:?}")))?;
                                     if s_i8 != *s {
@@ -517,9 +517,9 @@ fn messagepack_decode_results(
                                     Ok(s_i8)
                                 })?;
                             let high = decimal_array[2].as_i64()
-                                .ok_or(DataFusionError::Internal(format!("Decimal value high half expected to be integer, found {:?} instead", decimal_array[2])))?;
+                                .ok_or_else(|| DataFusionError::Internal(format!("Decimal value high half expected to be integer, found {:?} instead", decimal_array[2])))?;
                             let low = decimal_array[3].as_i64()
-                                .ok_or(DataFusionError::Internal(format!("Decimal value low half expected to be integer, found {:?} instead", decimal_array[3])))?;
+                                .ok_or_else(|| DataFusionError::Internal(format!("Decimal value low half expected to be integer, found {:?} instead", decimal_array[3])))?;
                             let value:i128 = (low as i128) + ((high as i128) << 64);
                             Ok(value)
                         }),
