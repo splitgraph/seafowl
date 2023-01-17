@@ -399,13 +399,17 @@ pub fn remove_quotes_from_statement(
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
-    use sqlparser::ast::{Ident, ObjectName, SchemaName};
+  use datafusion::sql::parser::Statement;
+  use lazy_static::__Deref;
+use rstest::rstest;
+  use sqlparser::ast::{Statement as SQLStatement, SchemaName};
 
-    use crate::datafusion::unquote::{
+    use sqlparser::ast::{Ident, ObjectName};
+
+    use crate::datafusion::{unquote::{
         remove_quotes_from_object_name, remove_quotes_from_schema_name,
         remove_quotes_from_string,
-    };
+    }, parser::DFParser};
 
     #[rstest]
     fn test_remove_quotes_from_string() {
@@ -436,4 +440,27 @@ mod tests {
             )]))
         );
     }
+
+    #[rstest]
+    fn test_create_schema_unquote() {
+      let stmts = DFParser::parse_sql("CREATE SCHEMA \"quoted_schema\"").unwrap();
+
+      let q = if let Statement::Statement(stmt) = &stmts[0] {
+          if let SQLStatement::CreateSchema {schema_name, ..} = stmt.deref() {
+              println!("schema name is {:?}", schema_name)
+          } else {
+              panic!("Expected CreateSchema not matched!");
+          }
+      } else {
+          panic!("Expected Statement not matched!");
+      };
+      println!("{:?}", q);
+      // Ensure table name in the original query has been renamed to appropriate version
+      /*
+      assert_eq!(
+          format!("{q}"),
+          "CREATE SCHEMA quoted_schema");
+           */
+
+  }
 }
