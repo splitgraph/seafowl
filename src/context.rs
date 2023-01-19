@@ -1015,9 +1015,19 @@ impl SeafowlContext for DefaultSeafowlContext {
                 | Statement::ShowTables { .. }
                 | Statement::ShowColumns { .. }
                 | Statement::CreateView { .. }
-                | Statement::CreateDatabase { .. }
-                | Statement::Drop { object_type: ObjectType::Table, .. } => query_planner.sql_statement_to_plan(*s),
-
+                | Statement::CreateDatabase { .. } => query_planner.sql_statement_to_plan(*s),
+                | Statement::Drop { object_type: ObjectType::Table,
+                    if_exists,
+                    names,
+                    cascade,
+                    restrict,
+                    purge } => query_planner.sql_statement_to_plan(Statement::Drop {
+                        object_type: ObjectType::Table,
+                        if_exists,
+                        names: names.iter().map(remove_quotes_from_object_name).collect(),
+                        cascade,
+                        restrict,
+                        purge }),
                 | Statement::Drop { object_type: ObjectType::Schema,
                     if_exists: _,
                     names,
@@ -2475,6 +2485,14 @@ mod tests {
         assert_eq!(
             get_logical_plan("ALTER TABLE \"testcol\".\"some_table\" RENAME TO \"testcol\".\"some_table_2\"").await,
             "RenameTable: some_table to testcol.some_table_2"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_drop_table_name_in_quotes() {
+        assert_eq!(
+            get_logical_plan("DROP TABLE \"testcol\".\"some_table\"").await,
+            "DropTable: \"testcol.some_table\" if not exist:=false"
         );
     }
 
