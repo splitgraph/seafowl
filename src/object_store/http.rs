@@ -14,9 +14,12 @@ use datafusion::prelude::SessionContext;
 use lazy_static::lazy_static;
 use log::warn;
 use regex::Regex;
-use reqwest::{header, Client, RequestBuilder, Response, StatusCode};
+use reqwest::{header, Client, ClientBuilder, RequestBuilder, Response, StatusCode};
+use std::env;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use std::fs::File;
+use std::io::Read;
 use std::ops::Range;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -85,10 +88,38 @@ impl Display for HttpObjectStoreError {
 
 impl Error for HttpObjectStoreError {}
 
+fn get_client() -> std::io::Result<Client> {
+    let builder: ClientBuilder = match env::var("SSL_CERT_FILE") {
+        Ok(cert_pem_file_path) => {
+            let mut buf = Vec::new();
+            let cert_result = File::open(&cert_pem_file_path)
+                .and_then(|mut file| file.read_to_end(&mut buf))
+                .and_then(|_| {
+                    reqwest::Certificate::from_pem(&buf).map_err(|e| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!(
+                                "Error parsing SSL cert file {cert_pem_file_path}: {e}"
+                            ),
+                        )
+                    })
+                });
+            cert_result.map(|cert| ClientBuilder::new().add_root_certificate(cert))
+        }
+        Err(_) => Ok(ClientBuilder::new()),
+    }?;
+    builder.build().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Error creating reqwest client builder: {e}"),
+        )
+    })
+}
+
 impl HttpObjectStore {
     pub fn new(scheme: String) -> Self {
         Self {
-            client: Client::new(),
+            client: get_client().expect("Couldn't get reqwest client!"),
             // DataFusion strips the URL scheme when passing it to us (e.g. http://), so we
             // have to record it in the object in order to reconstruct the actual full URL.
             scheme,
