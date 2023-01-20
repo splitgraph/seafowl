@@ -37,6 +37,7 @@ impl SystemSchemaProvider {
     }
 }
 
+#[async_trait]
 impl SchemaProvider for SystemSchemaProvider {
     fn as_any(&self) -> &dyn Any {
         self as &dyn Any
@@ -46,7 +47,7 @@ impl SchemaProvider for SystemSchemaProvider {
         vec![TABLE_VERSIONS.to_string(), TABLE_PARTITIONS.to_string()]
     }
 
-    fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
         match name {
             // Lazy instantiate the tables, but defer loading the rows until the actual scan is invoked.
             TABLE_VERSIONS => {

@@ -419,8 +419,8 @@ mod tests {
     #[case::fetch_nothing_at_the_chunk_boundary(16..16)]
     #[case::fetch_one_byte_at_the_chunk_boundary(16..17)]
     #[case::part_of_chunk_0_part_of_chunk_1(10..20)]
-    #[case::reaches_the_end_of_the_body(10..500)]
-    #[case::goes_beyond_the_end_of_the_body(400..505)]
+    #[case::reaches_the_end_of_the_body(10..484)]
+    #[case::goes_beyond_the_end_of_the_body(400..490)]
     // NB: going more than one chunk beyond the end of the body still makes it make
     // a Range request for e.g. 512 -- 527, which breaks the mock and also is a waste,
     // but we don't know that since we don't get Content-Length on this code path.

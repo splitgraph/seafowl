@@ -813,7 +813,7 @@ f95f3c90f2533d2267773eac66313f1d00803ff725303d03fd3fbe17a6d1\
         .unwrap();
 
         // Create a table with some floating point values
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.sql(
             "CREATE TABLE real_values AS
             -- Cast the values to REAL (Float32) since the function only supports that
@@ -939,7 +939,7 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         )
         .unwrap();
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.sql(
             "CREATE TABLE int64_values AS
             SELECT *
@@ -1033,7 +1033,7 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         let mut wasm_filename = std::env::var("CARGO_MANIFEST_DIR").unwrap();
         wasm_filename.push_str("/resources/test/messagepack_rust.wasm");
         let wasm_module = get_file_as_byte_vec(&wasm_filename);
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         create_udf_from_wasm(
             &CreateFunctionLanguage::WasmMessagePack,

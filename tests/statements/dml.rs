@@ -117,7 +117,10 @@ async fn test_table_partitioning_and_rechunking() {
         .to_string();
 
     let actual_lines: Vec<&str> = formatted.trim().lines().collect();
-    assert_contains!(actual_lines[10], format!("partitions=[{FILENAME_2:}]"));
+    assert_contains!(
+        actual_lines[10],
+        format!(r#"partitions={{1 group: [[{FILENAME_2:}]]}}"#)
+    );
 
     // Assert query results
     let plan = context
@@ -594,7 +597,7 @@ async fn test_update_statement() {
 
     assert!(err
         .to_string()
-        .contains("Unsupported CAST from Utf8 to Decimal128(38, 10)"));
+        .contains("Cannot cast string 'nope' to value of Decimal128(38, 10) type"));
 
     //
     // Execute complex UPDATE (redundant assignment and a case assignment) without a selection,
