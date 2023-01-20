@@ -956,7 +956,7 @@ impl SeafowlContext for DefaultSeafowlContext {
         // 1. Do a visit of the statement AST, and then load the metadata for only the referenced identifiers.
         // 2. No need to load metadata for the TableProvider implementation maps when instantiating SqlToRel,
         //    since it's sufficient to have metadata for TableSource implementation in the logical query
-        //    planning phase. We could use a liter structure for that, and implement `ContextProvider` for
+        //    planning phase. We could use a lighter structure for that, and implement `ContextProvider` for
         //    it rather than for DefaultSeafowlContext.
         self.reload_schema().await?;
         let state = self.inner.state();
