@@ -6,7 +6,6 @@ use bytes::BytesMut;
 
 use datafusion::datasource::{provider_as_source, TableProvider};
 use datafusion::parquet::basic::Compression;
-use datafusion::sql::ResolvedTableReference;
 use itertools::Itertools;
 use object_store::local::LocalFileSystem;
 use std::collections::{HashMap, HashSet};
@@ -15,9 +14,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use std::fs::File;
 
-use datafusion::datasource::listing::ListingTable;
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::execution::context::SessionState;
+use datafusion::execution::context::{default_session_builder, SessionState};
 use datafusion::execution::DiskManager;
 
 use datafusion_proto::protobuf;
@@ -35,23 +36,28 @@ use mockall::automock;
 use object_store::{path::Path, ObjectStore};
 
 use sqlparser::ast::{
-    AlterTableOperation, Ident, ObjectName, ObjectType, SchemaName, Statement,
-    TableFactor, TableWithJoins,
+    AlterTableOperation, CreateFunctionBody, FunctionDefinition, Ident, ObjectName,
+    ObjectType, SchemaName, Statement, TableFactor, TableWithJoins,
 };
 
 use arrow_integration_test::field_to_json;
+use arrow_schema::DataType;
 use std::iter::zip;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::common::{DFField, DFSchema, ToDFSchema};
-use datafusion::config::ConfigOptions;
+use datafusion::datasource::file_format::avro::AvroFormat;
+use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::file_type::{FileCompressionType, FileType};
+use datafusion::datasource::file_format::json::JsonFormat;
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::prelude::SessionConfig;
 use datafusion::scalar::ScalarValue;
+use datafusion::sql::planner::PlannerContext;
 use datafusion::{
     arrow::{
         datatypes::{Schema, SchemaRef},
@@ -68,6 +74,7 @@ use datafusion::{
     prelude::SessionContext,
     sql::{planner::SqlToRel, TableReference},
 };
+use datafusion_common::OwnedTableReference;
 
 use datafusion_expr::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
@@ -75,7 +82,6 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::{cast, Expr, LogicalPlanBuilder};
 use log::{debug, info, warn};
-use parking_lot::RwLock;
 use prost::Message;
 use tempfile::TempPath;
 use tokio::sync::Semaphore;
@@ -124,10 +130,6 @@ pub fn internal_object_store_url() -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!("{INTERNAL_OBJECT_STORE_SCHEME}://")).unwrap()
 }
 
-fn quote_ident(val: &str) -> String {
-    val.replace('"', "\"\"")
-}
-
 pub fn remove_quotes_from_ident(possibly_quoted_name: &Ident) -> Ident {
     Ident::new(&possibly_quoted_name.value)
 }
@@ -149,15 +151,6 @@ pub fn remove_quotes_from_schema_name(name: &SchemaName) -> SchemaName {
             name.to_owned()
         }
     }
-}
-
-fn reference_to_name(reference: &ResolvedTableReference) -> String {
-    format!(
-        "{}.{}.{}",
-        quote_ident(reference.catalog),
-        quote_ident(reference.schema),
-        quote_ident(reference.table)
-    )
 }
 
 /// Load the Statistics for a Parquet file in memory
@@ -188,13 +181,14 @@ async fn get_parquet_file_statistics_bytes(
         Arc::from(LocalFileSystem::new_with_prefix(tmp_dir)?);
     let dummy_path = Path::from(file_name.to_string());
 
-    let parquet = ParquetFormat::new(Arc::new(RwLock::new(ConfigOptions::new())));
+    let parquet = ParquetFormat::new();
+    let session_state = default_session_builder(SessionConfig::default());
     let meta = dummy_object_store
         .head(&dummy_path)
         .await
         .expect("Temporary object not found");
     let stats = parquet
-        .infer_stats(&dummy_object_store, schema, &meta)
+        .infer_stats(&session_state, &dummy_object_store, schema, &meta)
         .await?;
     Ok(stats)
 }
@@ -589,11 +583,18 @@ impl DefaultSeafowlContext {
     // Check that the TableReference doesn't have a database/schema in it.
     // We create all external tables in the staging schema (backed by DataFusion's
     // in-memory schema provider) instead.
-    fn resolve_staging_ref<'a>(
-        &'a self,
-        name: &'a str,
-    ) -> Result<ResolvedTableReference<'a>> {
-        let reference: TableReference = name.into();
+    fn resolve_staging_ref(
+        &self,
+        name: &OwnedTableReference,
+    ) -> Result<OwnedTableReference> {
+        // NB: Since Datafusion 16.0.0 there's this OwnedTableReference enum and for external tables
+        // the parsed ObjectName (which may be multipart, fully-qualified name) is coerced into the
+        // `Bare` enum variant (see `external_table_to_plan` in datafusion-sql) for some reason.
+        //
+        // This means that any potential catalog/schema references get condensed into the name, so
+        // we have to unravel that name here again, and then resolve it properly.
+        let full_name = name.to_string();
+        let reference = TableReference::from(full_name.as_str());
         let resolved_reference = reference.resolve(&self.database, STAGING_SCHEMA);
 
         if resolved_reference.catalog != self.database
@@ -606,11 +607,15 @@ impl DefaultSeafowlContext {
             )));
         }
 
-        Ok(resolved_reference)
+        Ok(OwnedTableReference::Full {
+            catalog: resolved_reference.catalog.to_string(),
+            schema: resolved_reference.schema.to_string(),
+            table: resolved_reference.table.to_string(),
+        })
     }
 
     /// Get a provider for a given table, return Err if it doesn't exist
-    fn get_table_provider(
+    async fn get_table_provider(
         &self,
         table_name: impl Into<String>,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -632,6 +637,7 @@ impl DefaultSeafowlContext {
                 Error::Plan(format!("failed to resolve schema: {}", resolved_ref.schema))
             })?
             .table(resolved_ref.table)
+            .await
             .ok_or_else(|| {
                 Error::Plan(format!(
                     "'{}.{}.{}' not found",
@@ -645,12 +651,12 @@ impl DefaultSeafowlContext {
     }
 
     /// Resolve a table reference into a Seafowl table
-    pub fn try_get_seafowl_table(
+    pub async fn try_get_seafowl_table(
         &self,
         table_name: impl Into<String> + std::fmt::Debug,
     ) -> Result<SeafowlTable> {
         let table_name = table_name.into();
-        let table_provider = self.get_table_provider(&table_name)?;
+        let table_provider = self.get_table_provider(&table_name).await?;
 
         let seafowl_table = match table_provider.as_any().downcast_ref::<SeafowlTable>() {
             Some(seafowl_table) => Ok(seafowl_table),
@@ -704,8 +710,7 @@ impl DefaultSeafowlContext {
             &details.return_type,
             get_volatility(&details.volatility),
         )?;
-        let mut mut_session_ctx = self.inner.clone();
-        mut_session_ctx.register_udf(function);
+        self.inner.register_udf(function);
 
         Ok(())
     }
@@ -825,78 +830,22 @@ impl DefaultSeafowlContext {
         filter_suffix: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let table_provider: Arc<dyn TableProvider> =
-            self.create_custom_table(cmd).await?;
-
-        let table = self.inner.table(cmd.name.as_str());
-        match (cmd.if_not_exists, table) {
-            (true, Ok(_)) => Ok(make_dummy_exec()),
-            (_, Err(_)) => {
-                if ["TABLE", "DELTATABLE"].contains(&cmd.file_type.as_str()) {
-                    // This is a remote or delta table, register and exit
-                    self.inner
-                        .register_table(cmd.name.as_str(), table_provider)?;
-                    return Ok(make_dummy_exec());
-                }
-
+            if ["TABLE", "DELTATABLE"].contains(&cmd.file_type.as_str()) {
+                self.create_custom_table(cmd).await?
+            } else {
                 // This is quite unfortunate, as the DataFusion creates everything we need above, apart from
                 // the override of the `file_extension`. There's no way to override the ListingOptions
-                // in the created ListingTable, so we just grab the one created and create a new ListingTable
-                // with our own `file_extension`.
+                // in the created ListingTable, so we just use a slightly modified ListingTableFactory
+                // code to instantiate the table.
+                self.create_listing_table(cmd, filter_suffix).await?
+            };
 
-                // TODO make schema in CreateExternalTable optional instead of empty
-                let provided_schema = if cmd.schema.fields().is_empty() {
-                    None
-                } else {
-                    Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
-                };
-
-                let file_compression_type = match FileCompressionType::from_str(
-                    cmd.file_compression_type.as_str(),
-                ) {
-                    Ok(t) => t,
-                    Err(_) => Err(DataFusionError::Execution(
-                        "Only known FileCompressionTypes can be ListingTables!"
-                            .to_string(),
-                    ))?,
-                };
-
-                let file_type = match FileType::from_str(cmd.file_type.as_str()) {
-                    Ok(t) => t,
-                    Err(_) => Err(DataFusionError::Execution(
-                        "Only known FileTypes can be ListingTables!".to_string(),
-                    ))?,
-                };
-
-                // Change from default DataFusion behaviour: allow disabling filtering by an extension
-                let file_extension = if filter_suffix {
-                    file_type
-                        .get_ext_with_compression(file_compression_type.to_owned())?
-                } else {
-                    "".to_string()
-                };
-
-                let options = table_provider
-                    .as_any()
-                    .downcast_ref::<ListingTable>()
-                    .ok_or_else(|| {
-                        DataFusionError::Execution(format!(
-                            "Couldn't cast table {:?} to ListingTable",
-                            table_provider.schema(),
-                        ))
-                    })?
-                    .options()
-                    .clone();
-
-                self.inner
-                    .register_listing_table(
-                        cmd.name.as_str(),
-                        cmd.location.clone(),
-                        options.with_file_extension(file_extension),
-                        provided_schema,
-                        cmd.definition.clone(),
-                    )
-                    .await?;
-                Ok(make_dummy_exec())
+        let table = self.inner.table(&cmd.name).await;
+        match (&cmd.if_not_exists, table) {
+            (true, Ok(_)) => Ok(make_dummy_exec()),
+            (_, Err(_)) => {
+                self.inner.register_table(&cmd.name, table_provider)?;
+                return Ok(make_dummy_exec());
             }
             (false, Ok(_)) => Err(DataFusionError::Execution(format!(
                 "Table '{:?}' already exists",
@@ -910,10 +859,10 @@ impl DefaultSeafowlContext {
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
-        let state = self.inner.state.read().clone();
+        let state = self.inner.state();
         let file_type = cmd.file_type.to_uppercase();
         let factory = &state
-            .runtime_env
+            .runtime_env()
             .table_factories
             .get(file_type.as_str())
             .ok_or_else(|| {
@@ -924,6 +873,94 @@ impl DefaultSeafowlContext {
             })?;
         let table = (*factory).create(&state, cmd).await?;
         Ok(table)
+    }
+
+    // Copied from TableProviderFactory for the ListingTable with some minimal changes
+    async fn create_listing_table(
+        &self,
+        cmd: &CreateExternalTable,
+        filter_suffix: bool,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let file_compression_type = FileCompressionType::from(cmd.file_compression_type);
+        let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
+            DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
+        })?;
+
+        // Change from default DataFusion behaviour: allow disabling filtering by an extension
+        let file_extension = if filter_suffix {
+            file_type.get_ext_with_compression(file_compression_type.to_owned())?
+        } else {
+            "".to_string()
+        };
+
+        let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::CSV => Arc::new(
+                CsvFormat::default()
+                    .with_has_header(cmd.has_header)
+                    .with_delimiter(cmd.delimiter as u8)
+                    .with_file_compression_type(file_compression_type),
+            ),
+            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::JSON => Arc::new(
+                JsonFormat::default().with_file_compression_type(file_compression_type),
+            ),
+        };
+
+        let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
+            (
+                None,
+                cmd.table_partition_cols
+                    .iter()
+                    .map(|x| (x.clone(), DataType::Utf8))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            let schema: SchemaRef = Arc::new(cmd.schema.as_ref().to_owned().into());
+            let table_partition_cols = cmd
+                .table_partition_cols
+                .iter()
+                .map(|col| {
+                    schema
+                        .field_with_name(col)
+                        .map_err(DataFusionError::ArrowError)
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?
+                .into_iter()
+                .map(|f| (f.name().to_owned(), f.data_type().to_owned()))
+                .collect();
+            // exclude partition columns to support creating partitioned external table
+            // with a specified column definition like
+            // `create external table a(c0 int, c1 int) stored as csv partitioned by (c1)...`
+            let mut project_idx = Vec::new();
+            for i in 0..schema.fields().len() {
+                if !cmd.table_partition_cols.contains(schema.field(i).name()) {
+                    project_idx.push(i);
+                }
+            }
+            let schema = Arc::new(schema.project(&project_idx)?);
+            (Some(schema), table_partition_cols)
+        };
+
+        let state = self.inner.state();
+        let options = ListingOptions::new(file_format)
+            .with_collect_stat(state.config().collect_statistics())
+            .with_file_extension(file_extension)
+            .with_target_partitions(state.config().target_partitions())
+            .with_table_partition_cols(table_partition_cols)
+            .with_file_sort_order(None);
+
+        let table_path = ListingTableUrl::parse(&cmd.location)?;
+        let resolved_schema = match provided_schema {
+            None => options.infer_schema(&state, &table_path).await?,
+            Some(s) => s,
+        };
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(options)
+            .with_schema(resolved_schema);
+        let table =
+            ListingTable::try_new(config)?.with_definition(cmd.definition.clone());
+        Ok(Arc::new(table))
     }
 }
 
@@ -938,11 +975,16 @@ impl SeafowlContext for DefaultSeafowlContext {
         statement: DFStatement,
     ) -> Result<LogicalPlan> {
         // Reload the schema before planning a query
+        // TODO: A couple of possible optimisations here:
+        // 1. Do a visit of the statement AST, and then load the metadata for only the referenced identifiers.
+        // 2. No need to load metadata for the TableProvider implementation maps when instantiating SqlToRel,
+        //    since it's sufficient to have metadata for TableSource implementation in the logical query
+        //    planning phase. We could use a lighter structure for that, and implement `ContextProvider` for
+        //    it rather than for DefaultSeafowlContext.
         self.reload_schema().await?;
-        let state = self.inner.state.read().clone();
-        let query_planner = SqlToRel::new(&state);
+        let state = self.inner.state();
 
-        match statement {
+        match statement.clone() {
             DFStatement::Statement(s) => match *s {
                 Statement::Query(mut q) => {
                     // Determine if some of the tables reference a non-latest version using table
@@ -958,7 +1000,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         // conditions leading to schema provider map leaking into other queries (and
                         // thus polluting e.g. the information_schema output), or even worse reloading
                         // the map and having the versioned query fail during execution.
-                        let session_ctx = SessionContext::with_state(state.clone());
+                        let session_ctx = SessionContext::with_state(self.inner.state());
 
                         version_processor.triage_version_ids(self.database.clone(), self.table_catalog.clone()).await?;
                         // We now have table_version_ids for each table with version specified; do another
@@ -985,19 +1027,18 @@ impl SeafowlContext for DefaultSeafowlContext {
                             }
                         }
 
-                        let state = session_ctx.state.read().clone();
-                        let query_planner = SqlToRel::new(&state);
-                        return query_planner.sql_statement_to_plan(Statement::Query(q));
+                        let state = session_ctx.state();
+                        return state.statement_to_plan(DFStatement::Statement(Box::from(Statement::Query(q)))).await;
                     }
 
-                    query_planner.sql_statement_to_plan(Statement::Query(q))
+                    state.statement_to_plan(DFStatement::Statement(Box::from(Statement::Query(q)))).await
                 },
-                Statement::CreateSchema { schema_name, if_not_exists } => query_planner.sql_statement_to_plan(
-                    Statement::CreateSchema {
+                Statement::CreateSchema { schema_name, if_not_exists } => state.statement_to_plan(
+                    DFStatement::Statement(Box::from(Statement::CreateSchema {
                         schema_name: remove_quotes_from_schema_name(&schema_name),
                         if_not_exists
-                    }
-                ),
+                    }))
+                ).await,
                 // Delegate generic queries to the basic DataFusion logical planner
                 // (though note EXPLAIN [our custom query] will mean we have to implement EXPLAIN ourselves)
                 Statement::Explain { .. }
@@ -1005,20 +1046,23 @@ impl SeafowlContext for DefaultSeafowlContext {
                 | Statement::ShowTables { .. }
                 | Statement::ShowColumns { .. }
                 | Statement::CreateView { .. }
-                | Statement::CreateDatabase { .. } => query_planner.sql_statement_to_plan(*s),
-                | Statement::Drop { object_type: ObjectType::Table,
+                | Statement::CreateDatabase { .. } => state.statement_to_plan(statement).await,
+                Statement::Drop { object_type: ObjectType::Table,
                     if_exists,
                     names,
                     cascade,
                     restrict,
-                    purge } => query_planner.sql_statement_to_plan(Statement::Drop {
+                    purge } => {
+                    let drop = Statement::Drop {
                         object_type: ObjectType::Table,
                         if_exists,
                         names: names.iter().map(remove_quotes_from_object_name).collect(),
                         cascade,
                         restrict,
-                        purge }),
-                | Statement::Drop { object_type: ObjectType::Schema,
+                        purge };
+                    state.statement_to_plan(DFStatement::Statement(Box::from(drop))).await
+                },
+                Statement::Drop { object_type: ObjectType::Schema,
                     if_exists: _,
                     names,
                     cascade: _,
@@ -1029,7 +1073,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                             node: Arc::new(SeafowlExtensionNode::DropSchema(DropSchema { name, output_schema: Arc::new(DFSchema::empty()) }))
                         }))
                     },
-
 
                 // CREATE TABLE (create empty table with columns)
                 Statement::CreateTable {
@@ -1061,9 +1104,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Statement::AlterTable { name, operation: AlterTableOperation::RenameTable {table_name: new_name }} => {
                     let old_table_name = remove_quotes_from_object_name(&name).to_string();
                     let new_table_name = remove_quotes_from_object_name(&new_name).to_string();
-                    let table = self.try_get_seafowl_table(old_table_name)?;
+                    let table = self.try_get_seafowl_table(old_table_name).await?;
 
-                    if self.get_table_provider(new_table_name.to_owned()).is_ok() {
+                    if self.get_table_provider(new_table_name.to_owned()).await.is_ok() {
                         return Err(Error::Plan(
                             format!("Target table {new_table_name:?} already exists")
                         ))
@@ -1080,7 +1123,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 // Other CREATE TABLE: SqlToRel only allows CreateTableAs statements and makes
                 // a CreateMemoryTable node. We're fine with that, but we'll execute it differently.
-                Statement::CreateTable { .. } => query_planner.sql_statement_to_plan(*s),
+                Statement::CreateTable { .. } => state.statement_to_plan(statement).await,
 
                 // This DML is defined by us
                 Statement::Insert {
@@ -1091,7 +1134,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 } => {
                     let table_name = table_name.to_string();
 
-                    let seafowl_table = self.try_get_seafowl_table(table_name)?;
+                    let seafowl_table = self.try_get_seafowl_table(table_name).await?;
 
                     // Get a list of columns we're inserting into and schema we
                     // have to cast `source` into
@@ -1107,7 +1150,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         DFSchema::new_with_metadata(fields, table_schema.metadata().clone())?
                     };
 
-                    let plan = query_planner.query_to_plan(*source, &mut HashMap::new())?;
+                    let plan = state.statement_to_plan(DFStatement::Statement(Box::from(Statement::Query(source)))).await?;
 
                     // Check the length
                     if plan.schema().fields().len() != target_schema.fields().len() {
@@ -1123,18 +1166,19 @@ impl SeafowlContext for DefaultSeafowlContext {
                     // (it doesn't seem to actually do casts at runtime, but ArrowWriter should forcefully
                     // cast the columns when we're writing to Parquet)
 
-                    let plan = LogicalPlan::Projection(Projection {
-                        expr: target_schema.fields().iter().zip(plan.schema().fields()).map(|(table_field, query_field)| {
-                            // Generate CAST (source_col AS table_col_type) AS table_col
-                            // If the type is the same, this will be optimized out.
-                            cast(
-                                Expr::Column(query_field.qualified_column()),
-                                table_field.data_type().clone()
-                            ).alias(table_field.name())
-                        }).collect(),
-                        input: Arc::new(plan),
-                        schema: Arc::new(target_schema),
-                    });
+                    let expr = target_schema.fields().iter().zip(plan.schema().fields()).map(|(table_field, query_field)| {
+                        // Generate CAST (source_col AS table_col_type) AS table_col
+                        // If the type is the same, this will be optimized out.
+                        cast(
+                            Expr::Column(query_field.qualified_column()),
+                            table_field.data_type().clone()
+                        ).alias(table_field.name())
+                    }).collect();
+                    let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
+                        expr,
+                        Arc::new(plan),
+                        Arc::new(target_schema),
+                    )?);
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Insert(Insert {
@@ -1164,18 +1208,20 @@ impl SeafowlContext for DefaultSeafowlContext {
                     // Get the actual table schema, since DF needs to validate unqualified columns
                     // (i.e. ones referenced only by column name, lacking the relation name)
                     let table_name = name.to_string();
-                    let seafowl_table = Arc::new(self.try_get_seafowl_table(&table_name)?);
+                    let seafowl_table = Arc::new(self.try_get_seafowl_table(&table_name).await?);
                     let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
 
+                    let context_provider = state.statement_to_context_provider(statement).await?;
+                    let query_planner = SqlToRel::new(&context_provider);
                     let selection_expr = match selection {
                         None => None,
-                        Some(expr) => Some(query_planner.sql_to_rex(expr, &table_schema, &mut HashMap::new())?),
+                        Some(expr) => Some(query_planner.sql_to_expr(expr, &table_schema, &mut PlannerContext::default())?),
                     };
 
                     let assignment_exprs = assignments.iter().map(|a| {
                         Ok((
                             table_schema.field_with_unqualified_name(&normalize_ident(&a.id[0]))?.name().clone(),
-                            query_planner.sql_to_rex(a.value.clone(), &table_schema, &mut HashMap::new())?
+                            query_planner.sql_to_expr(a.value.clone(), &table_schema, &mut PlannerContext::default())?
                         ))
                     }).collect::<Result<Vec<(String, Expr)>>>()?;
 
@@ -1194,7 +1240,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                     // Run the optimizer in order to apply required transformations to the query plan
                     // (e.g. type coercions for the WHERE clause)
-                    self.inner.optimize(&logical_plan)
+                    self.inner.state().optimize(&logical_plan)
                 }
                 Statement::Delete {
                     table_name,
@@ -1204,12 +1250,14 @@ impl SeafowlContext for DefaultSeafowlContext {
                     // Get the actual table schema, since DF needs to validate unqualified columns
                     // (i.e. ones referenced only by column name, lacking the relation name)
                     let table_name = table_name.to_string();
-                    let seafowl_table = Arc::new(self.try_get_seafowl_table(&table_name)?);
+                    let seafowl_table = Arc::new(self.try_get_seafowl_table(&table_name).await?);
                     let table_schema = seafowl_table.schema.arrow_schema.clone().to_dfschema()?;
 
+                    let context_provider = state.statement_to_context_provider(statement).await?;
+                    let query_planner = SqlToRel::new(&context_provider);
                     let selection_expr = match selection {
                         None => None,
-                        Some(expr) => Some(query_planner.sql_to_rex(expr, &table_schema, &mut HashMap::new())?),
+                        Some(expr) => Some(query_planner.sql_to_expr(expr, &table_schema, &mut PlannerContext::default())?),
                     };
 
                     let logical_plan = LogicalPlan::Extension(Extension {
@@ -1227,17 +1275,17 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                     // Run the optimizer in order to apply required transformations to the query plan
                     // (e.g. type coercions for the WHERE clause)
-                    self.inner.optimize(&logical_plan)
+                    self.inner.state().optimize(&logical_plan)
                 },
                 Statement::CreateFunction {
                     temporary: false,
                     name,
-                    class_name,
-                    using: None,
+                    params: CreateFunctionBody { as_: Some( FunctionDefinition::SingleQuotedDef(details) ), .. },
+                    ..
                 } => {
                     // We abuse the fact that in CREATE FUNCTION AS [class_name], class_name can be an arbitrary string
                     // and so we can get the user to put some JSON in there
-                    let function_details: CreateFunctionDetails = serde_json::from_str(&class_name)
+                    let function_details: CreateFunctionDetails = serde_json::from_str(&details)
                         .map_err(|e| {
                             Error::Execution(format!("Error parsing UDF details: {e:?}"))
                         })?;
@@ -1253,7 +1301,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Statement::Truncate { table_name, partitions} => {
                     let table_name = table_name.to_string();
                     let table_id = if partitions.is_none() && !table_name.is_empty() {
-                        match self.try_get_seafowl_table(&table_name) {
+                        match self.try_get_seafowl_table(&table_name).await {
                             Ok(seafowl_table) => Some(seafowl_table.table_id),
                             Err(_) => return Err(Error::Internal(format!(
                                 "Table with name {table_name} not found"
@@ -1275,9 +1323,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                     "Unsupported SQL statement: {s:?}"
                 ))),
             },
-            DFStatement::DescribeTable(s) => query_planner.describe_table_to_plan(s),
-            DFStatement::CreateExternalTable(c) => {
-                query_planner.external_table_to_plan(c)
+            DFStatement::DescribeTable(_) | DFStatement::CreateExternalTable(_) => {
+                state.statement_to_plan(statement).await
             }
         }
     }
@@ -1318,11 +1365,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                     ..
                 },
             ) => {
-                let resolved_reference = self.resolve_staging_ref(name)?;
-
                 // Replace the table name with the fully qualified one that has our staging schema
                 let mut cmd = cmd.clone();
-                cmd.name = reference_to_name(&resolved_reference);
+                cmd.name = self.resolve_staging_ref(name)?;
 
                 let (location, is_http) = match try_prepare_http_url(location) {
                     Some(new_loc) => (new_loc, true),
@@ -1389,7 +1434,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 schema: _,
             }) => {
                 // DROP TABLE
-                let table = self.try_get_seafowl_table(name)?;
+                let table = self.try_get_seafowl_table(name.to_string()).await?;
                 self.table_catalog.drop_table(table.table_id).await?;
                 Ok(make_dummy_exec())
             }
@@ -1766,10 +1811,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                             Ok(make_dummy_exec())
                         }
                     },
-                    None => self.inner.create_physical_plan(plan).await,
+                    None => self.inner.state().create_physical_plan(plan).await,
                 }
             }
-            _ => self.inner.create_physical_plan(plan).await,
+            _ => self.inner.state().create_physical_plan(plan).await,
         }
     }
 
@@ -1804,7 +1849,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 .await?
             {
                 Some(_) => {
-                    if let Ok(table) = self.try_get_seafowl_table(&new_table_name) {
+                    if let Ok(table) = self.try_get_seafowl_table(&new_table_name).await {
                         // Table exists, see if the schemas match
                         if table.schema.arrow_schema != plan.schema() {
                             return Err(DataFusionError::Execution(
@@ -2045,12 +2090,12 @@ mod tests {
     use super::test_utils::{in_memory_context, mock_context};
 
     const PARTITION_1_FILE_NAME: &str =
-        "90e86b04eb8fd3b0feaa7156282fc45a26932ce1cec905a8f3905eba97532f94.parquet";
+        "11254dbe7a7a9e04283c4e6698d7efd080a15c699444ad6e5ca48b8022a310b3.parquet";
     const PARTITION_2_FILE_NAME: &str =
-        "0572290deae3900339ce1638395a3b89ca981831bbf9a2c28fbed890139f1a0d.parquet";
+        "315c077f1fc7a0fc9b6bc52364e95929d82e1b15e0bbfcf7b5b15193c59975b2.parquet";
 
     const EXPECTED_INSERT_FILE_NAME: &str =
-        "6302ae550c00b5cda9add7eb99071b188d0bfd2835b405447be06f8865d159cc.parquet";
+        "21821d3386d9b6a7f5cae45f4b813dcc31caa65bc95f3241ccbb2a6fa088393b.parquet";
 
     fn to_min_max_value(value: ScalarValue) -> Arc<Option<Vec<u8>>> {
         Arc::from(scalar_value_to_bytes(&value))
@@ -2482,7 +2527,7 @@ mod tests {
     async fn test_plan_drop_table_name_in_quotes() {
         assert_eq!(
             get_logical_plan("DROP TABLE \"testcol\".\"some_table\"").await,
-            "DropTable: \"testcol.some_table\" if not exist:=false"
+            "DropTable: Partial { schema: \"testcol\", table: \"some_table\" } if not exist:=false"
         );
     }
 

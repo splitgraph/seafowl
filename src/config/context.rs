@@ -123,7 +123,7 @@ pub async fn build_context(
 
     // Make sure we have at least 2 target partitions even on single-core environments
     // (issues with PartitionMode::CollectLeft hash joins if a single target partition)
-    let target_partitions = session_config.target_partitions.max(2);
+    let target_partitions = session_config.target_partitions().max(2);
     let session_config = session_config.with_target_partitions(target_partitions);
 
     // Construct and register additional table factories (e.g. for generating remote tables) besides

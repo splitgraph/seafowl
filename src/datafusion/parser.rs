@@ -27,8 +27,9 @@
 
 pub use datafusion::sql::parser::Statement;
 use datafusion::sql::parser::{CreateExternalTable, DescribeTable};
-use sqlparser::ast::ObjectName;
-use sqlparser::tokenizer::Word;
+use datafusion_common::parsers::CompressionTypeVariant;
+use sqlparser::ast::{CreateFunctionBody, ObjectName};
+use sqlparser::tokenizer::{TokenWithLocation, Word};
 use sqlparser::{
     ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
     dialect::{keywords::Keyword, Dialect, GenericDialect},
@@ -36,6 +37,7 @@ use sqlparser::{
     tokenizer::{Token, Tokenizer},
 };
 use std::collections::{HashMap, VecDeque};
+use std::str::FromStr;
 use std::string::ToString;
 use strum_macros::Display;
 
@@ -47,10 +49,6 @@ macro_rules! parser_err {
 }
 
 fn parse_file_type(s: &str) -> Result<String, ParserError> {
-    Ok(s.to_uppercase())
-}
-
-fn parse_file_compression_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
 }
 
@@ -85,7 +83,7 @@ impl<'a> DFParser<'a> {
         let tokens = tokenizer.tokenize()?;
 
         Ok(DFParser {
-            parser: Parser::new(tokens, dialect),
+            parser: Parser::new(dialect).with_tokens(tokens),
         })
     }
 
@@ -123,14 +121,18 @@ impl<'a> DFParser<'a> {
         Ok(stmts)
     }
 
-    /// Report unexpected token
-    fn expected<T>(&self, expected: &str, found: Token) -> Result<T, ParserError> {
+    /// Report an unexpected token
+    fn expected<T>(
+        &self,
+        expected: &str,
+        found: TokenWithLocation,
+    ) -> Result<T, ParserError> {
         parser_err!(format!("Expected {expected}, found: {found}"))
     }
 
     /// Parse a new expression
     pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
-        match self.parser.peek_token() {
+        match self.parser.peek_token().token {
             Token::Word(w) => {
                 match w {
                     Word {
@@ -215,13 +217,38 @@ impl<'a> DFParser<'a> {
         // XXX SEAFOWL: this is the change to get CREATE FUNCTION parsing working
         else if self.parser.parse_keyword(Keyword::FUNCTION) {
             // assume we don't have CREATE TEMPORARY FUNCTION (since we don't care about TEMPORARY)
-            Ok(Statement::Statement(Box::from(
-                self.parser.parse_create_function(false)?,
-            )))
+            self.parse_create_function(false, false)
         // XXX SEAFOWL: change ends here
         } else {
             Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
         }
+    }
+
+    /// Parse CREATE FUNCTION AS in the Hive dialect
+    pub fn parse_create_function(
+        &mut self,
+        or_replace: bool,
+        temporary: bool,
+    ) -> Result<Statement, ParserError> {
+        let name = self.parser.parse_object_name()?;
+        self.parser.expect_keyword(Keyword::AS)?;
+        let class_name = self.parser.parse_function_definition()?;
+        let params = CreateFunctionBody {
+            as_: Some(class_name),
+            using: self.parser.parse_optional_create_function_using()?,
+            ..Default::default()
+        };
+
+        let create_function = SQLStatement::CreateFunction {
+            or_replace,
+            temporary,
+            name,
+            args: None,
+            return_type: None,
+            params,
+        };
+
+        Ok(Statement::Statement(Box::from(create_function)))
     }
 
     fn parse_partitions(&mut self) -> Result<Vec<String>, ParserError> {
@@ -233,7 +260,7 @@ impl<'a> DFParser<'a> {
         }
 
         loop {
-            if let Token::Word(_) = self.parser.peek_token() {
+            if let Token::Word(_) = self.parser.peek_token().token {
                 let identifier = self.parser.parse_identifier()?;
                 partitions.push(identifier.to_string());
             } else {
@@ -268,7 +295,7 @@ impl<'a> DFParser<'a> {
         loop {
             if let Some(constraint) = self.parser.parse_optional_table_constraint()? {
                 constraints.push(constraint);
-            } else if let Token::Word(_) = self.parser.peek_token() {
+            } else if let Token::Word(_) = self.parser.peek_token().token {
                 let column_def = self.parse_column_def()?;
                 columns.push(column_def);
             } else {
@@ -350,7 +377,7 @@ impl<'a> DFParser<'a> {
         let file_compression_type = if self.parse_has_file_compression_type() {
             self.parse_file_compression_type()?
         } else {
-            "".to_string()
+            CompressionTypeVariant::UNCOMPRESSED
         };
 
         let table_partition_cols = if self.parse_has_partition() {
@@ -385,22 +412,26 @@ impl<'a> DFParser<'a> {
 
     /// Parses the set of valid formats
     fn parse_file_format(&mut self) -> Result<String, ParserError> {
-        match self.parser.next_token() {
+        let token = self.parser.next_token();
+        match &token.token {
             Token::Word(w) => parse_file_type(&w.value),
-            unexpected => self.expected("one of PARQUET, NDJSON, or CSV", unexpected),
+            _ => self.expected("one of PARQUET, NDJSON, or CSV", token),
         }
     }
 
     /// Parses the set of
-    fn parse_file_compression_type(&mut self) -> Result<String, ParserError> {
-        match self.parser.next_token() {
-            Token::Word(w) => parse_file_compression_type(&w.value),
-            unexpected => self.expected("one of GZIP, BZIP2, XZ", unexpected),
+    fn parse_file_compression_type(
+        &mut self,
+    ) -> Result<CompressionTypeVariant, ParserError> {
+        let token = self.parser.next_token();
+        match &token.token {
+            Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
+            _ => self.expected("one of GZIP, BZIP2, XZ", token),
         }
     }
 
     fn parse_has_options(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("OPTIONS"))
+        self.parser.parse_keyword(Keyword::OPTIONS)
     }
 
     //
@@ -426,20 +457,9 @@ impl<'a> DFParser<'a> {
         Ok(options)
     }
 
-    fn consume_token(&mut self, expected: &Token) -> bool {
-        let token = self.parser.peek_token().to_string().to_uppercase();
-        let token = Token::make_keyword(&token);
-        if token == *expected {
-            self.parser.next_token();
-            true
-        } else {
-            false
-        }
-    }
-
     fn parse_has_file_compression_type(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("COMPRESSION"))
-            & self.consume_token(&Token::make_keyword("TYPE"))
+        self.parser
+            .parse_keywords(&[Keyword::COMPRESSION, Keyword::TYPE])
     }
 
     fn parse_csv_has_header(&mut self) -> bool {
@@ -448,7 +468,7 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_has_delimiter(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("DELIMITER"))
+        self.parser.parse_keyword(Keyword::DELIMITER)
     }
 
     fn parse_delimiter(&mut self) -> Result<char, ParserError> {

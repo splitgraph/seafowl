@@ -7,7 +7,6 @@ use sqlparser::ast::{
 use datafusion::arrow::datatypes::{Field, Schema};
 use datafusion::config::ConfigOptions;
 pub use datafusion::error::{DataFusionError as Error, Result};
-use datafusion::scalar::ScalarValue;
 
 // Normalize an identifier to a lowercase string unless the identifier is quoted.
 pub(crate) fn normalize_ident(id: &Ident) -> String {
@@ -40,9 +39,8 @@ pub(crate) fn build_schema(columns: Vec<SQLColumnDef>) -> Result<Schema> {
 }
 
 // Copied from SqlRel (private there since 15.0.0)
-// NB: We don't handle SQLDataType::Timestamp(None, tz_info) with timezone as in DataFusion since it
-// requires the check of `datafusion.execution.time_zone` config option, whereas we simply use the
-// default config value.
+// NB: We don't handle SQLDataType::Timestamp(None, tz_info) with timezone as in DataFusion since we
+// simply use the default `time_zone` config value.
 pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
     match sql_type {
         SQLDataType::Boolean => Ok(DataType::Boolean),
@@ -70,21 +68,7 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
                 // Timestamp With Time Zone
                 // INPUT : [SQLDataType]   TimestampTz + [RuntimeConfig] Time Zone
                 // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
-                match ConfigOptions::default()
-                    .get("datafusion.execution.time_zone")
-                {
-                    Some(ScalarValue::Utf8(s)) => s,
-                    Some(v) => {
-                        return Err(Error::Internal(format!(
-                            "Incorrect data type for time_zone: {}",
-                            v.get_datatype(),
-                        )))
-                    }
-                    None => return Err(Error::Internal(
-                        "Config Option datafusion.execution.time_zone doesn't exist"
-                            .to_string(),
-                    )),
-                }
+                ConfigOptions::default().execution.time_zone
             } else {
                 // Timestamp Without Time zone
                 None

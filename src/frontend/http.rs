@@ -1226,7 +1226,7 @@ SELECT
         assert_eq!(
             resp.body(),
             &Bytes::from(
-                r#"{"bigint_val":10000000000,"bool_val":true,"char_val":"c","date_val":"2022-01-01","double_val":12.345678910111213,"float_val":12.345,"int_array_val":[1,2,3,4,5],"integer_val":1000000,"real_val":12.345,"smallint_val":1,"text_array_val":["one","two"],"text_val":"text","timestamp_val":"2022-01-01 12:03:11.123456","varchar_val":"varchar"}
+                r#"{"bigint_val":10000000000,"bool_val":true,"char_val":"c","date_val":"2022-01-01","double_val":12.345678910111213,"float_val":12.345,"int_array_val":[1,2,3,4,5],"integer_val":1000000,"real_val":12.345,"smallint_val":1,"text_array_val":["one","two"],"text_val":"text","timestamp_val":"2022-01-01T12:03:11.123456","varchar_val":"varchar"}
 "#
             )
         );

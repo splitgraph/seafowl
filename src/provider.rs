@@ -7,14 +7,14 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 
 use datafusion::common::{Column, ToDFSchema};
-use datafusion::config::ConfigOptions;
-use datafusion::execution::context::ExecutionProps;
+use datafusion::execution::context::{default_session_builder, ExecutionProps};
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_expr::expressions::{case, cast, col};
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::DisplayFormatType;
+use datafusion::prelude::SessionConfig;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
@@ -93,6 +93,7 @@ pub struct SeafowlCollection {
     pub tables: RwLock<HashMap<Arc<str>, Arc<SeafowlTable>>>,
 }
 
+#[async_trait]
 impl SchemaProvider for SeafowlCollection {
     fn as_any(&self) -> &dyn Any {
         self
@@ -103,7 +104,7 @@ impl SchemaProvider for SeafowlCollection {
         tables.keys().map(|s| s.to_string()).collect()
     }
 
-    fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
         let tables = self.tables.read();
         tables.get(name).map(|c| Arc::clone(c) as _)
     }
@@ -113,6 +114,7 @@ impl SchemaProvider for SeafowlCollection {
         tables.contains_key(name)
     }
 
+    // Used for registering versioned as well as delta/remote tables via `SessionContext::register_table`.
     fn register_table(
         &self,
         name: String,
@@ -221,11 +223,14 @@ impl SeafowlTable {
             limit,
             table_partition_cols: vec![],
             output_ordering: None,
-            config_options: Arc::new(Default::default()),
+            infinite_source: false,
         };
 
-        let format = ParquetFormat::new(Arc::new(RwLock::new(ConfigOptions::new())));
-        format.create_physical_plan(config, filters).await
+        let format = ParquetFormat::new();
+        let session_state = default_session_builder(SessionConfig::default());
+        format
+            .create_physical_plan(&session_state, config, filters)
+            .await
     }
 
     // Wrap a base scan over the supplied partitions with a filter plan
@@ -288,7 +293,7 @@ impl TableProvider for SeafowlTable {
 
         // Get our object store (with a hardcoded scheme)
         let object_store_url = internal_object_store_url();
-        let store = ctx.runtime_env.object_store(object_store_url.clone())?;
+        let store = ctx.runtime_env().object_store(object_store_url.clone())?;
 
         Ok(Arc::new(SeafowlBaseTableScanNode {
             partitions: Arc::new(partitions.clone()),
@@ -707,7 +712,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_plan() {
         let (context, table) = make_table_with_batch().await;
-        let state = context.state.read().clone();
+        let state = context.state();
 
         let plan = table
             .scan(&state, None, &[], None)
@@ -732,7 +737,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_plan_projection() {
         let (context, table) = make_table_with_batch().await;
-        let state = context.state.read().clone();
+        let state = context.state();
 
         let plan = table
             .scan(&state, Some(&vec![1]), &[], None)

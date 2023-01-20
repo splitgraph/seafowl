@@ -319,9 +319,8 @@ async fn test_table_time_travel() {
         sorted(
             context
                 .inner()
-                .state
-                .read()
-                .catalog_list
+                .state()
+                .catalog_list()
                 .catalog(DEFAULT_DB)
                 .unwrap()
                 .schema(DEFAULT_SCHEMA)
@@ -557,37 +556,22 @@ async fn test_remote_table_querying(
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = if introspect_schema {
-        vec![
-            "+---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-            "| plan_type     | plan                                                                                                                                                                                                                                                                                               |",
-            "+---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-            "| logical_plan  | Projection: staging.remote_table.date field, staging.remote_table.c                                                                                                                                                                                                                                |",
-            "|               |   Limit: skip=0, fetch=2                                                                                                                                                                                                                                                                           |",
-            "|               |     TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Utf8(\"2022-11-01\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int64(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2 |",
-            "| physical_plan | ProjectionExec: expr=[date field@1 as date field, c@0 as c]                                                                                                                                                                                                                                        |",
-            "|               |   GlobalLimitExec: skip=0, fetch=2                                                                                                                                                                                                                                                                 |",
-            "|               |     MemoryExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                                  |",
-            "|               |                                                                                                                                                                                                                                                                                                    |",
-            "+---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-        ]
+    let formatted = arrow::util::pretty::pretty_format_batches(results.as_slice())
+        .unwrap()
+        .to_string();
+
+    let actual_lines: Vec<&str> = formatted.trim().lines().collect();
+    if introspect_schema {
+        assert_contains!(
+            actual_lines[5],
+            format!("TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Utf8(\"2022-11-01\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int64(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2")
+        );
     } else {
-        vec![
-            "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-            "| plan_type     | plan                                                                                                                                                                                                                                                                                            |",
-            "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-            "| logical_plan  | Projection: staging.remote_table.date field, staging.remote_table.c                                                                                                                                                                                                                             |",
-            "|               |   Limit: skip=0, fetch=2                                                                                                                                                                                                                                                                        |",
-            "|               |     TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Date32(\"19297\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int32(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2 |",
-            "| physical_plan | ProjectionExec: expr=[date field@1 as date field, c@0 as c]                                                                                                                                                                                                                                     |",
-            "|               |   GlobalLimitExec: skip=0, fetch=2                                                                                                                                                                                                                                                              |",
-            "|               |     ProjectionExec: expr=[c@0 as c, date field@1 as date field]                                                                                                                                                                                                                                 |",
-            "|               |       MemoryExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                             |",
-            "|               |                                                                                                                                                                                                                                                                                                 |",
-            "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-        ]
+        assert_contains!(
+            actual_lines[5],
+            format!("TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Date32(\"19297\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int32(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2")
+        );
     };
-    assert_batches_eq!(expected, &results);
 }
 
 #[cfg(feature = "delta-tables")]

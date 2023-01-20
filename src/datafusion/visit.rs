@@ -360,10 +360,10 @@ pub fn visit_select_item<'ast, V: VisitorMut<'ast> + ?Sized>(
         SelectItem::ExprWithAlias { expr, alias } => {
             visitor.visit_expr_with_alias(expr, alias)
         }
-        SelectItem::QualifiedWildcard(object_name) => {
+        SelectItem::QualifiedWildcard(object_name, ..) => {
             visitor.visit_qualified_wildcard(&mut object_name.0)
         }
-        SelectItem::Wildcard => visitor.visit_wildcard(),
+        SelectItem::Wildcard(..) => visitor.visit_wildcard(),
     }
 }
 
@@ -470,10 +470,16 @@ pub fn visit_join_operator<'ast, V: VisitorMut<'ast> + ?Sized>(
     op: &'ast mut JoinOperator,
 ) {
     match op {
-        JoinOperator::Inner(constraint) => visitor.visit_join_constraint(constraint),
-        JoinOperator::LeftOuter(constraint) => visitor.visit_join_constraint(constraint),
-        JoinOperator::RightOuter(constraint) => visitor.visit_join_constraint(constraint),
-        JoinOperator::FullOuter(constraint) => visitor.visit_join_constraint(constraint),
+        JoinOperator::Inner(constraint)
+        | JoinOperator::LeftOuter(constraint)
+        | JoinOperator::RightOuter(constraint)
+        | JoinOperator::FullOuter(constraint)
+        | JoinOperator::LeftSemi(constraint)
+        | JoinOperator::RightSemi(constraint)
+        | JoinOperator::LeftAnti(constraint)
+        | JoinOperator::RightAnti(constraint) => {
+            visitor.visit_join_constraint(constraint)
+        }
         JoinOperator::CrossJoin | JoinOperator::CrossApply | JoinOperator::OuterApply => {
         }
     }
@@ -881,7 +887,7 @@ pub fn visit_values<'ast, V: VisitorMut<'ast> + ?Sized>(
     visitor: &mut V,
     values: &'ast mut Values,
 ) {
-    for row in values.0.iter_mut() {
+    for row in values.rows.iter_mut() {
         visitor.visit_values_row(row)
     }
 }

@@ -74,8 +74,8 @@ pub enum CreateFunctionVolatility {
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
 pub enum CreateFunctionLanguage {
-    #[default]
     Wasm,
+    #[default]
     WasmMessagePack,
 }
 

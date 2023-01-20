@@ -42,11 +42,11 @@ mod vacuum;
 
 // Object store IDs for frequently-used test data
 const FILENAME_1: &str =
-    "7823142d1d5f7e4aa52dfadefa4624da2f72a05a896adf3e6dc68c904edc40fa.parquet";
+    "7f567cdbadd38d52123772f5eeb002d6c48b8be626f63442c23e7cc4d205e6d4.parquet";
 const FILENAME_2: &str =
-    "5e08c5b77d5b282a57b6fb9f1a7f7e8307314e82b1a735f033f34fb117d8df33.parquet";
+    "2f5443307c1f5f57da3d37431ba80f8fe458165ce422aed433d42e7d2a8eb127.parquet";
 const FILENAME_RECHUNKED: &str =
-    "acd17cd24358fc15f85c1aee3c3179b22c69c7dbb0a9bc61dce7d94b784c81cf.parquet";
+    "0d48d490ff42fc0a93bf20fc9bda3d063e9ecc90fa8ce83eb0665398b2114263.parquet";
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)
@@ -264,7 +264,7 @@ async fn scan_partition(
     partition: SeafowlPartition,
     table_name: &str,
 ) -> Vec<RecordBatch> {
-    let table = context.try_get_seafowl_table(table_name).unwrap();
+    let table = context.try_get_seafowl_table(table_name).await.unwrap();
     let plan = table
         .partition_scan_plan(
             projection,
