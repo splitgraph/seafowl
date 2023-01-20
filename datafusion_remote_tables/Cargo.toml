@@ -16,7 +16,7 @@ license = "Apache-2.0"
 arrow = "31.0.0"
 arrow-buffer = "31.0.0"
 arrow-schema = "31.0.0"
-async-trait = "0.1.41"
+async-trait = "0.1.62"
 
 # Remote query execution for a variety of DBs
 connectorx = { git = "https://github.com/splitgraph/connector-x", branch = "datafusion-16-upgrade", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
