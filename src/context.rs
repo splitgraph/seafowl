@@ -35,7 +35,8 @@ use mockall::automock;
 use object_store::{path::Path, ObjectStore};
 
 use sqlparser::ast::{
-    AlterTableOperation, ObjectType, Statement, TableFactor, TableWithJoins,
+    AlterTableOperation, Ident, ObjectName, ObjectType, SchemaName, Statement,
+    TableFactor, TableWithJoins,
 };
 
 use arrow_integration_test::field_to_json;
@@ -125,6 +126,29 @@ pub fn internal_object_store_url() -> ObjectStoreUrl {
 
 fn quote_ident(val: &str) -> String {
     val.replace('"', "\"\"")
+}
+
+pub fn remove_quotes_from_ident(possibly_quoted_name: &Ident) -> Ident {
+    Ident::new(&possibly_quoted_name.value)
+}
+
+pub fn remove_quotes_from_idents(column_names: &[Ident]) -> Vec<Ident> {
+    column_names.iter().map(remove_quotes_from_ident).collect()
+}
+
+pub fn remove_quotes_from_object_name(name: &ObjectName) -> ObjectName {
+    ObjectName(remove_quotes_from_idents(&name.0))
+}
+
+pub fn remove_quotes_from_schema_name(name: &SchemaName) -> SchemaName {
+    match name {
+        SchemaName::Simple(schema_name) => {
+            SchemaName::Simple(remove_quotes_from_object_name(schema_name))
+        }
+        SchemaName::UnnamedAuthorization(_) | SchemaName::NamedAuthorization(_, _) => {
+            name.to_owned()
+        }
+    }
 }
 
 fn reference_to_name(reference: &ResolvedTableReference) -> String {
@@ -968,7 +992,12 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                     query_planner.sql_statement_to_plan(Statement::Query(q))
                 },
-
+                Statement::CreateSchema { schema_name, if_not_exists } => query_planner.sql_statement_to_plan(
+                    Statement::CreateSchema {
+                        schema_name: remove_quotes_from_schema_name(&schema_name),
+                        if_not_exists
+                    }
+                ),
                 // Delegate generic queries to the basic DataFusion logical planner
                 // (though note EXPLAIN [our custom query] will mean we have to implement EXPLAIN ourselves)
                 Statement::Explain { .. }
@@ -976,10 +1005,19 @@ impl SeafowlContext for DefaultSeafowlContext {
                 | Statement::ShowTables { .. }
                 | Statement::ShowColumns { .. }
                 | Statement::CreateView { .. }
-                | Statement::CreateSchema { .. }
-                | Statement::CreateDatabase { .. }
-                | Statement::Drop { object_type: ObjectType::Table, .. } => query_planner.sql_statement_to_plan(*s),
-
+                | Statement::CreateDatabase { .. } => query_planner.sql_statement_to_plan(*s),
+                | Statement::Drop { object_type: ObjectType::Table,
+                    if_exists,
+                    names,
+                    cascade,
+                    restrict,
+                    purge } => query_planner.sql_statement_to_plan(Statement::Drop {
+                        object_type: ObjectType::Table,
+                        if_exists,
+                        names: names.iter().map(remove_quotes_from_object_name).collect(),
+                        cascade,
+                        restrict,
+                        purge }),
                 | Statement::Drop { object_type: ObjectType::Schema,
                     if_exists: _,
                     names,
@@ -1012,7 +1050,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::CreateTable(CreateTable {
                             schema: cols.to_dfschema_ref()?,
-                            name: name.to_string(),
+                            name: remove_quotes_from_object_name(&name).to_string(),
                             if_not_exists,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
@@ -1021,19 +1059,20 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 // ALTER TABLE ... RENAME TO
                 Statement::AlterTable { name, operation: AlterTableOperation::RenameTable {table_name: new_name }} => {
-                    let table_name = name.to_string();
-                    let table = self.try_get_seafowl_table(table_name)?;
+                    let old_table_name = remove_quotes_from_object_name(&name).to_string();
+                    let new_table_name = remove_quotes_from_object_name(&new_name).to_string();
+                    let table = self.try_get_seafowl_table(old_table_name)?;
 
-                    if self.get_table_provider(new_name.to_string()).is_ok() {
+                    if self.get_table_provider(new_table_name.to_owned()).is_ok() {
                         return Err(Error::Plan(
-                            format!("Target table {:?} already exists", new_name.to_string())
+                            format!("Target table {new_table_name:?} already exists")
                         ))
                     }
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::RenameTable(RenameTable {
                             table: Arc::from(table),
-                            new_name: new_name.to_string(),
+                            new_name: new_table_name,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
@@ -2410,6 +2449,41 @@ mod tests {
         assert_batches_eq!(expected, &results);
 
         Ok(())
+    }
+
+    async fn get_logical_plan(query: &str) -> String {
+        let sf_context = mock_context().await;
+
+        let plan = sf_context.create_logical_plan(query).await.unwrap();
+        format!("{plan:?}")
+    }
+
+    #[tokio::test]
+    async fn test_plan_create_schema_name_in_quotes() {
+        assert_eq!(
+            get_logical_plan("CREATE SCHEMA schema_name;").await,
+            "CreateCatalogSchema: \"schema_name\""
+        );
+        assert_eq!(
+            get_logical_plan("CREATE SCHEMA \"schema_name\";").await,
+            "CreateCatalogSchema: \"schema_name\""
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_rename_table_name_in_quotes() {
+        assert_eq!(
+            get_logical_plan("ALTER TABLE \"testcol\".\"some_table\" RENAME TO \"testcol\".\"some_table_2\"").await,
+            "RenameTable: some_table to testcol.some_table_2"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_drop_table_name_in_quotes() {
+        assert_eq!(
+            get_logical_plan("DROP TABLE \"testcol\".\"some_table\"").await,
+            "DropTable: \"testcol.some_table\" if not exist:=false"
+        );
     }
 
     #[tokio::test]

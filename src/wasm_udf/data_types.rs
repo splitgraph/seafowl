@@ -62,27 +62,21 @@ pub enum CreateFunctionDataType {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, EnumString, Display, Clone)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum CreateFunctionVolatility {
     Immutable,
     Stable,
+    #[default]
     Volatile,
-}
-impl Default for CreateFunctionVolatility {
-    fn default() -> Self {
-        CreateFunctionVolatility::Volatile
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, EnumString, Display, Clone)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum CreateFunctionLanguage {
+    #[default]
     Wasm,
     WasmMessagePack,
-}
-impl Default for CreateFunctionLanguage {
-    fn default() -> Self {
-        CreateFunctionLanguage::Wasm
-    }
 }
 
 fn parse_create_function_data_type(
