@@ -128,12 +128,8 @@ fn quote_ident(val: &str) -> String {
     val.replace('"', "\"\"")
 }
 
-pub fn remove_quotes_from_string(possibly_quoted_name: &str) -> String {
-    possibly_quoted_name.trim_matches('"').to_string()
-}
-
 pub fn remove_quotes_from_ident(possibly_quoted_name: &Ident) -> Ident {
-    Ident::new(remove_quotes_from_string(&possibly_quoted_name.value))
+    Ident::new(&possibly_quoted_name.value)
 }
 
 pub fn remove_quotes_from_idents(column_names: &[Ident]) -> Vec<Ident> {
@@ -149,14 +145,8 @@ pub fn remove_quotes_from_schema_name(name: &SchemaName) -> SchemaName {
         SchemaName::Simple(schema_name) => {
             SchemaName::Simple(remove_quotes_from_object_name(schema_name))
         }
-        SchemaName::UnnamedAuthorization(auth) => {
-            SchemaName::UnnamedAuthorization(remove_quotes_from_ident(auth))
-        }
-        SchemaName::NamedAuthorization(schema_name, auth) => {
-            SchemaName::NamedAuthorization(
-                remove_quotes_from_object_name(schema_name),
-                remove_quotes_from_ident(auth),
-            )
+        SchemaName::UnnamedAuthorization(_) | SchemaName::NamedAuthorization(_, _) => {
+            name.to_owned()
         }
     }
 }
