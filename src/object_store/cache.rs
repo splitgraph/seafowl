@@ -394,7 +394,7 @@ mod tests {
         let path = tmp_dir.into_path();
 
         CachingObjectStore::new(
-            Arc::new(HttpObjectStore::new("http".to_string())),
+            Arc::new(HttpObjectStore::new("http".to_string(), &None)),
             &path,
             16,
             512,
@@ -406,7 +406,7 @@ mod tests {
         let path = tmp_dir.into_path();
 
         CachingObjectStore::new(
-            Arc::new(HttpObjectStore::new("http".to_string())),
+            Arc::new(HttpObjectStore::new("http".to_string(), &None)),
             &path,
             16,
             4 * 16, // Max capacity 4 chunks

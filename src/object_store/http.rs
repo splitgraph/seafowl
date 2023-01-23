@@ -88,11 +88,11 @@ impl Display for HttpObjectStoreError {
 
 impl Error for HttpObjectStoreError {}
 
-fn get_client() -> std::io::Result<Client> {
-    let builder: ClientBuilder = match env::var("SSL_CERT_FILE") {
-        Ok(cert_pem_file_path) => {
+fn get_client(ssl_cert_file: &Option<String>) -> std::io::Result<Client> {
+    let builder: ClientBuilder = match ssl_cert_file {
+        Some(cert_pem_file_path) => {
             let mut buf = Vec::new();
-            let cert_result = File::open(&cert_pem_file_path)
+            let cert_result = File::open(cert_pem_file_path)
                 .and_then(|mut file| file.read_to_end(&mut buf))
                 .and_then(|_| {
                     reqwest::Certificate::from_pem(&buf).map_err(|e| {
@@ -106,7 +106,7 @@ fn get_client() -> std::io::Result<Client> {
                 });
             cert_result.map(|cert| ClientBuilder::new().add_root_certificate(cert))
         }
-        Err(_) => Ok(ClientBuilder::new()),
+        None => Ok(ClientBuilder::new()),
     }?;
     builder.build().map_err(|e| {
         std::io::Error::new(
@@ -117,9 +117,9 @@ fn get_client() -> std::io::Result<Client> {
 }
 
 impl HttpObjectStore {
-    pub fn new(scheme: String) -> Self {
+    pub fn new(scheme: String, ssl_cert_file: &Option<String>) -> Self {
         Self {
-            client: get_client().expect("Couldn't get reqwest client!"),
+            client: get_client(ssl_cert_file).expect("Couldn't get reqwest client!"),
             // DataFusion strips the URL scheme when passing it to us (e.g. http://), so we
             // have to record it in the object in order to reconstruct the actual full URL.
             scheme,
@@ -354,20 +354,20 @@ impl ObjectStore for HttpObjectStore {
 }
 
 /// Add HTTP/HTTPS support to a DataFusion SessionContext
-pub fn add_http_object_store(context: &SessionContext) {
+pub fn add_http_object_store(context: &SessionContext, ssl_cert_file: &Option<String>) {
     let tmp_dir = TempDir::new().unwrap();
     // NB won't delete tmp_dir any more
     let path = tmp_dir.into_path();
 
     let http_object_store = CachingObjectStore::new(
-        Arc::new(HttpObjectStore::new("http".to_string())),
+        Arc::new(HttpObjectStore::new("http".to_string(), ssl_cert_file)),
         &path,
         MIN_FETCH_SIZE,
         HTTP_CACHE_CAPACITY,
     );
     let https_object_store = CachingObjectStore::new_from_sibling(
         &http_object_store,
-        Arc::new(HttpObjectStore::new("https".to_string())),
+        Arc::new(HttpObjectStore::new("https".to_string(), ssl_cert_file)),
     );
 
     context.runtime_env().register_object_store(
@@ -438,7 +438,7 @@ mod tests {
         let path = tmp_dir.into_path();
 
         CachingObjectStore::new(
-            Arc::new(HttpObjectStore::new("http".to_string())),
+            Arc::new(HttpObjectStore::new("http".to_string(), &None)),
             &path,
             MIN_FETCH_SIZE,
             HTTP_CACHE_CAPACITY,

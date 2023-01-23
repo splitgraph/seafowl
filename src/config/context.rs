@@ -152,7 +152,7 @@ pub async fn build_context(
     );
 
     // Register the HTTP object store for external tables
-    add_http_object_store(&context);
+    add_http_object_store(&context, &cfg.misc.ssl_cert_file);
 
     let (tables, partitions, functions) = build_catalog(cfg).await;
 
@@ -228,6 +228,7 @@ mod tests {
             misc: schema::Misc {
                 max_partition_size: 1024 * 1024,
                 gc_interval: 0,
+                ssl_cert_file: None,
             },
         };
 
