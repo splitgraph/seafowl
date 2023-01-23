@@ -1933,7 +1933,7 @@ pub mod test_utils {
         );
 
         // Register the HTTP object store for external tables
-        add_http_object_store(&context);
+        add_http_object_store(&context, &None);
 
         context
     }

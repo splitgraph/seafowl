@@ -268,6 +268,7 @@ pub struct Misc {
     pub max_partition_size: u32,
     // Perhaps make this accept a cron job format and use tokio-cron-scheduler?
     pub gc_interval: u16,
+    pub ssl_cert_file: Option<String>,
 }
 
 impl Default for Misc {
@@ -275,6 +276,7 @@ impl Default for Misc {
         Self {
             max_partition_size: 1024 * 1024,
             gc_interval: 0,
+            ssl_cert_file: None,
         }
     }
 }
@@ -486,6 +488,7 @@ upload_data_max_length = 1
                 misc: Misc {
                     max_partition_size: 1024 * 1024,
                     gc_interval: 0,
+                    ssl_cert_file: None
                 },
             }
         )
@@ -578,6 +581,7 @@ upload_data_max_length = 1
                 misc: Misc {
                     max_partition_size: 1024 * 1024,
                     gc_interval: 0,
+                    ssl_cert_file: None
                 },
             }
         )
