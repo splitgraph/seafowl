@@ -6,7 +6,7 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 
-use datafusion::common::{Column, ToDFSchema};
+use datafusion::common::Column;
 use datafusion::execution::context::{default_session_builder, ExecutionProps};
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_expr::expressions::{case, cast, col};
@@ -36,6 +36,7 @@ use datafusion::{
         SendableRecordBatchStream, Statistics,
     },
 };
+use datafusion_common::DFSchema;
 use datafusion_expr::Expr;
 use datafusion_proto::protobuf;
 
@@ -504,48 +505,46 @@ impl PruningStatistics for SeafowlPruningStatistics {
     }
 }
 
-// Create a complete projection expression for all columns, simply replicating the columns omitted
-// in the provided assignments, and enveloping CAST (for fixing mistypes) with a CASE expression to
-// scope down the rows to which the assignment is applied
+// Create a complete projection expression for all columns by enveloping CAST (for fixing mistypes)
+// with a CASE expression to scope down the rows to which the assignment is applied
 pub fn project_expressions(
+    exprs: &[Expr],
+    df_schema: &DFSchema,
     schema: &ArrowSchema,
-    assignments: &HashMap<String, Expr>,
     selection_expr: Option<Arc<dyn PhysicalExpr>>,
 ) -> Result<Vec<(Arc<dyn PhysicalExpr>, String)>> {
-    schema
-        .fields
+    exprs
         .iter()
-        .map(|f| {
-            if assignments.contains_key(f.name()) {
-                let mut expr = create_physical_expr(
-                    &assignments[f.name()],
-                    &schema.clone().to_dfschema()?,
-                    schema,
-                    &ExecutionProps::new(),
-                )?;
-
-                let data_type = f.data_type().clone();
-                if expr.data_type(schema)? != data_type {
-                    // Literal value potentially mistyped; try to re-cast it
-                    expr = cast(expr, schema, data_type)?;
-                }
-
-                // If the selection was specified, use a CASE WHEN
-                // (selection expr) THEN (assignment expr) ELSE (old column value)
-                // approach
-                if let Some(sel_expr) = &selection_expr {
-                    expr = case(
-                        None,
-                        vec![(sel_expr.clone(), expr)],
-                        Some(col(f.name(), schema)?),
-                    )?;
-                }
-
-                Ok((expr, f.name().to_string()))
+        .zip(schema.fields())
+        .map(|(expr, f)| {
+            // De-alias the expression
+            let expr = if let Expr::Alias(expr, _) = expr {
+                expr
             } else {
-                // Just replicate the omitted columns
-                Ok((col(f.name(), schema)?, f.name().to_string()))
+                expr
+            };
+
+            let mut proj_expr =
+                create_physical_expr(expr, df_schema, schema, &ExecutionProps::new())?;
+
+            let data_type = f.data_type().clone();
+            if proj_expr.data_type(schema)? != data_type {
+                // Literal value potentially mistyped; try to re-cast it
+                proj_expr = cast(proj_expr, schema, data_type)?;
             }
+
+            // If the selection was specified, use a CASE WHEN
+            // (selection expr) THEN (assignment expr) ELSE (old column value)
+            // approach
+            if let Some(sel_expr) = &selection_expr {
+                proj_expr = case(
+                    None,
+                    vec![(sel_expr.clone(), proj_expr)],
+                    Some(col(f.name(), schema)?),
+                )?;
+            }
+
+            Ok((proj_expr, f.name().to_string()))
         })
         .collect()
 }

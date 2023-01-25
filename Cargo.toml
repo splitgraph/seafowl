@@ -96,10 +96,10 @@ wasmtime = "1.0.1"
 wasmtime-wasi = "1.0.1"
 
 [patch.crates-io]
-datafusion = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "planner-from-session-state" }
-datafusion-common = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "planner-from-session-state" }
-datafusion-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "planner-from-session-state" }
-datafusion-proto = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "planner-from-session-state" }
+datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "e6a050058bd704f73b38106b7abf21dc4539eebc" }
+datafusion-common = { git = "https://github.com/apache/arrow-datafusion", rev = "e6a050058bd704f73b38106b7abf21dc4539eebc" }
+datafusion-expr = { git = "https://github.com/apache/arrow-datafusion", rev = "e6a050058bd704f73b38106b7abf21dc4539eebc" }
+datafusion-proto = { git = "https://github.com/apache/arrow-datafusion", rev = "e6a050058bd704f73b38106b7abf21dc4539eebc" }
 
 [dev-dependencies]
 assert_unordered = "0.3"
