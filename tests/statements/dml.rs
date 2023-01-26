@@ -658,15 +658,14 @@ async fn test_update_statement_errors() {
     // Execute UPDATE that references a nonexistent column in the assignment or in the selection,
     // or results in a type mismatch
     //
-    // TODO: This errors out with "Unsupported CAST from Decimal128(38, 10) to Timestamp(Nanosecond, None)"
-    // let err = context
-    //     .plan_query("UPDATE test_table SET nonexistent = 42 WHERE some_value = 32")
-    //     .await
-    //     .unwrap_err();
-    //
-    // assert!(err
-    //     .to_string()
-    //     .contains("Schema error: No field named 'nonexistent'"));
+    let err = context
+        .plan_query("UPDATE test_table SET nonexistent = 42 WHERE some_value = 32")
+        .await
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Schema error: No field named 'nonexistent'"));
 
     let err = context
         .plan_query("UPDATE test_table SET some_value = 42 WHERE nonexistent = 32")
