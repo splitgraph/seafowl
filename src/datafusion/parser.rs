@@ -26,7 +26,7 @@
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
 pub use datafusion::sql::parser::Statement;
-use datafusion::sql::parser::{CreateExternalTable, DescribeTable};
+use datafusion::sql::parser::{CreateExternalTable, DescribeTableStmt};
 use datafusion_common::parsers::CompressionTypeVariant;
 use sqlparser::ast::{CreateFunctionBody, ObjectName};
 use sqlparser::tokenizer::{TokenWithLocation, Word};
@@ -181,7 +181,9 @@ impl<'a> DFParser<'a> {
 
     pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
         let table_name = self.parser.parse_object_name()?;
-        Ok(Statement::DescribeTable(DescribeTable { table_name }))
+        Ok(Statement::DescribeTableStmt(DescribeTableStmt {
+            table_name,
+        }))
     }
 
     pub fn parse_vacuum(&mut self) -> Result<Statement, ParserError> {

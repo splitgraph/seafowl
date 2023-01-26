@@ -21,16 +21,6 @@ pub struct CreateTable {
 }
 
 #[derive(Debug, Clone)]
-pub struct Insert {
-    /// The table to insert into
-    pub table: Arc<SeafowlTable>,
-    /// Result of a query to insert (with a type-compatible schema that is a subset of the target table)
-    pub input: Arc<LogicalPlan>,
-    /// Dummy result schema for the plan (empty)
-    pub output_schema: DFSchemaRef,
-}
-
-#[derive(Debug, Clone)]
 pub struct CreateFunction {
     /// The function name
     pub name: String,
@@ -71,7 +61,6 @@ pub struct Vacuum {
 #[derive(Debug, Clone)]
 pub enum SeafowlExtensionNode {
     CreateTable(CreateTable),
-    Insert(Insert),
     CreateFunction(CreateFunction),
     RenameTable(RenameTable),
     DropSchema(DropSchema),
@@ -90,10 +79,7 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
-        match self {
-            SeafowlExtensionNode::Insert(Insert { input, .. }) => vec![input.as_ref()],
-            _ => vec![],
-        }
+        vec![]
     }
 
     fn schema(&self) -> &DFSchemaRef {
@@ -102,7 +88,6 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
         // (& means it has to have been borrowed and we can't own anything, since this
         // function will exit soon)
         match self {
-            SeafowlExtensionNode::Insert(Insert { output_schema, .. }) => output_schema,
             SeafowlExtensionNode::CreateTable(CreateTable { output_schema, .. }) => {
                 output_schema
             }
@@ -129,9 +114,6 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
 
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            SeafowlExtensionNode::Insert(Insert { table, .. }) => {
-                write!(f, "Insert: {}", table.name)
-            }
             SeafowlExtensionNode::CreateTable(CreateTable { name, .. }) => {
                 write!(f, "Create: {name}")
             }
@@ -159,22 +141,8 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
     fn from_template(
         &self,
         _exprs: &[Expr],
-        inputs: &[LogicalPlan],
+        _inputs: &[LogicalPlan],
     ) -> Arc<dyn UserDefinedLogicalNode> {
-        match self {
-            SeafowlExtensionNode::Insert(Insert {
-                table,
-                input,
-                output_schema,
-            }) => Arc::new(SeafowlExtensionNode::Insert(Insert {
-                table: table.clone(),
-                input: match inputs.first() {
-                    Some(new_input) => Arc::new(new_input.clone()),
-                    None => input.clone(),
-                },
-                output_schema: output_schema.clone(),
-            })),
-            _ => Arc::from(self.clone()),
-        }
+        Arc::from(self.clone())
     }
 }
