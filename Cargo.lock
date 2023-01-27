@@ -1676,7 +1676,7 @@ dependencies = [
 [[package]]
 name = "datafusion"
 version = "16.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix#095e3f80ae80a6b1f5c00da6faf32398d1c3e6d3"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix-df16#b51b9768e4a920d6b2609350a7feed4ee21520f9"
 dependencies = [
  "ahash 0.8.1",
  "arrow",
@@ -1722,7 +1722,7 @@ dependencies = [
 [[package]]
 name = "datafusion-common"
 version = "16.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix#095e3f80ae80a6b1f5c00da6faf32398d1c3e6d3"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix-df16#b51b9768e4a920d6b2609350a7feed4ee21520f9"
 dependencies = [
  "arrow",
  "chrono",
@@ -1735,7 +1735,7 @@ dependencies = [
 [[package]]
 name = "datafusion-expr"
 version = "16.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix#095e3f80ae80a6b1f5c00da6faf32398d1c3e6d3"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix-df16#b51b9768e4a920d6b2609350a7feed4ee21520f9"
 dependencies = [
  "ahash 0.8.1",
  "arrow",
@@ -1747,7 +1747,7 @@ dependencies = [
 [[package]]
 name = "datafusion-optimizer"
 version = "16.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix#095e3f80ae80a6b1f5c00da6faf32398d1c3e6d3"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix-df16#b51b9768e4a920d6b2609350a7feed4ee21520f9"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1763,7 +1763,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-expr"
 version = "16.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix#095e3f80ae80a6b1f5c00da6faf32398d1c3e6d3"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix-df16#b51b9768e4a920d6b2609350a7feed4ee21520f9"
 dependencies = [
  "ahash 0.8.1",
  "arrow",
@@ -1793,7 +1793,7 @@ dependencies = [
 [[package]]
 name = "datafusion-proto"
 version = "16.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix#095e3f80ae80a6b1f5c00da6faf32398d1c3e6d3"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix-df16#b51b9768e4a920d6b2609350a7feed4ee21520f9"
 dependencies = [
  "arrow",
  "chrono",
@@ -1827,7 +1827,7 @@ dependencies = [
 [[package]]
 name = "datafusion-row"
 version = "16.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix#095e3f80ae80a6b1f5c00da6faf32398d1c3e6d3"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix-df16#b51b9768e4a920d6b2609350a7feed4ee21520f9"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1838,7 +1838,7 @@ dependencies = [
 [[package]]
 name = "datafusion-sql"
 version = "16.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix#095e3f80ae80a6b1f5c00da6faf32398d1c3e6d3"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=insert-target-columns-empty-fix-df16#b51b9768e4a920d6b2609350a7feed4ee21520f9"
 dependencies = [
  "arrow-schema",
  "datafusion-common",
