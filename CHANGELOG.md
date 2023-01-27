@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.2.11] - 2023-01-27
+
 - Upgrade to DataFusion post-16.0 (<https://github.com/splitgraph/seafowl/pull/270>)
 - Add an `ssl_cert_file` option to the config (<https://github.com/splitgraph/seafowl/pull/278>)
 - Migrate to DataFusion's native DML nodes for logical write statement planning
@@ -104,7 +106,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.10...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.11...HEAD
+[0.2.11]: https://github.com/splitgraph/seafowl/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/splitgraph/seafowl/compare/v0.2.10...v0.2.10
 [0.2.10]: https://github.com/splitgraph/seafowl/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/splitgraph/seafowl/compare/v0.2.8...v0.2.9
