@@ -223,8 +223,10 @@ async fn test_delete_statement() {
         .await
         .unwrap();
     assert_eq!(
-        format!("{}", plan.display()),
-        "Delete: test_table WHERE some_value > Float32(46)"
+        format!("{}", plan.display_indent()),
+        r#"Dml: op=[Delete] table=[test_table]
+  Filter: some_value > Float32(46)
+    TableScan: test_table projection=[some_bool_value, some_int_value, some_other_value, some_time, some_value], partial_filters=[some_value > Float32(46)]"#
     );
 
     //
@@ -530,8 +532,11 @@ async fn test_update_statement() {
 
     let plan = context.create_logical_plan(query).await.unwrap();
     assert_eq!(
-        format!("{}", plan.display()),
-        "Update: test_table, SET: some_time = Utf8(\"2022-01-01 21:21:21Z\"), some_int_value = Int64(5555), some_value = some_value - CAST(Int64(10) AS Float32) WHERE some_value IN ([CAST(Int64(41) AS Float32), CAST(Int64(42) AS Float32), CAST(Int64(43) AS Float32)])"
+        format!("{}", plan.display_indent()),
+        r#"Dml: op=[Update] table=[test_table]
+  Projection: test_table.some_bool_value AS some_bool_value, Int64(5555) AS some_int_value, test_table.some_other_value AS some_other_value, Utf8("2022-01-01 21:21:21Z") AS some_time, test_table.some_value - Float32(10) AS some_value
+    Filter: some_value = Float32(43) OR some_value = Float32(42) OR some_value = Float32(41)
+      TableScan: test_table"#
     );
 
     //
