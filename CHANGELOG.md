@@ -4,6 +4,11 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Upgrade to DataFusion post-16.0 (<https://github.com/splitgraph/seafowl/pull/270>)
+- Add an `ssl_cert_file` option to the config (<https://github.com/splitgraph/seafowl/pull/278>)
+- Migrate to DataFusion's native DML nodes for logical write statement planning
+  (<https://github.com/splitgraph/seafowl/pull/281>)
+
 ## [0.2.10] - 2022-12-30
 
 - Add region config parameter for Amazon S3 object store
