@@ -89,7 +89,7 @@ pub trait Repository: Send + Sync + Debug {
 
     async fn get_all_columns_in_database(
         &self,
-        database_id: DatabaseId,
+        database_name: &str,
         table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
@@ -327,7 +327,7 @@ pub mod tests {
         // Test loading all columns
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id, None)
+            .get_all_columns_in_database("testdb", None)
             .await
             .expect("Error getting all columns");
 
@@ -344,7 +344,7 @@ pub mod tests {
 
         // Test all columns again: we should have the schema for the latest table version
         let all_columns = repository
-            .get_all_columns_in_database(database_id, None)
+            .get_all_columns_in_database("testdb", None)
             .await
             .expect("Error getting all columns");
 
@@ -359,7 +359,7 @@ pub mod tests {
 
         // Try to get the original version again explicitly
         let all_columns = repository
-            .get_all_columns_in_database(database_id, Some(vec![1 as TableVersionId]))
+            .get_all_columns_in_database("testdb", Some(vec![1 as TableVersionId]))
             .await
             .expect("Error getting all columns");
 
@@ -520,7 +520,7 @@ pub mod tests {
             .unwrap();
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id, None)
+            .get_all_columns_in_database("testdb", None)
             .await
             .expect("Error getting all columns");
 
@@ -544,7 +544,7 @@ pub mod tests {
             .unwrap();
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id, None)
+            .get_all_columns_in_database("testdb", None)
             .await
             .expect("Error getting all columns");
 

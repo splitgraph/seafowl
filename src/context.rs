@@ -511,9 +511,16 @@ pub fn is_statement_read_only(statement: &DFStatement) -> bool {
     }
 }
 
+// The only reason to keep this as a trait (instead of migrating all the functions directly into
+// DefaultDeafowlContext), is that then `create_physical_plan` would be a recursive async function,
+// which works for traits, but is forbidden for structs: https://stackoverflow.com/a/74737853
+// The workaround is to Box a Future as the return of such functions, which isn't too appealing atm.
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait SeafowlContext: Send + Sync {
+    /// Deep copy into another SeafowlContext
+    async fn scope_to_database(&self, name: String) -> Arc<DefaultSeafowlContext>;
+
     /// Parse SQL into one or more statements
     async fn parse_query(&self, sql: &str) -> Result<Vec<DFStatement>>;
 
@@ -523,6 +530,7 @@ pub trait SeafowlContext: Send + Sync {
     /// Create a logical plan for a query from a parsed statement
     async fn create_logical_plan_from_statement(
         &self,
+        database_name: &str,
         statement: DFStatement,
     ) -> Result<LogicalPlan>;
 
@@ -550,6 +558,7 @@ pub trait SeafowlContext: Send + Sync {
     async fn plan_to_table(
         &self,
         plan: Arc<dyn ExecutionPlan>,
+        database_name: String,
         schema_name: String,
         table_name: String,
     ) -> Result<bool>;
@@ -561,18 +570,21 @@ impl DefaultSeafowlContext {
     }
 
     /// Reload the context to apply / pick up new schema changes
-    async fn reload_schema(&self) -> Result<()> {
-        // DataFusion's table catalog interface is not async, which means that we aren't really
-        // supposed to perform IO when loading a list of tables in a schema / list of schemas.
-        // This means that we need to know what tables we have before planning a query. We hence
-        // load the whole schema for a single database into memory before every query (otherwise
-        // writes applied by a different Seafowl instance won't be visible by us).
+    async fn reload_schema(&self, database_name: &str) -> Result<()> {
+        // DataFusion's catalog provider interface is not async, which means that we aren't really
+        // supposed to perform IO when loading the list of schemas. On the other hand, as of DF 16
+        // the schema provider allows for async fetching of tables. However, this isn't that helpful,
+        // since for a query with multiple tables we'd have multiple separate DB hits to load them,
+        // whereas below we load everything we need up front. (Furthermore, table existence and name
+        // listing and are still sync meaning we'd need the pre-load for them as well.)
+        // We hence load all schemas and tables into memory before every query (otherwise writes
+        // applied by a different Seafowl instance won't be visible by us).
 
         // This does incur a latency cost to every query.
 
         self.inner.register_catalog(
             &self.database,
-            Arc::new(self.table_catalog.load_database(self.database_id).await?),
+            Arc::new(self.table_catalog.load_database(database_name).await?),
         );
 
         // Register all functions in the database
@@ -969,22 +981,37 @@ impl DefaultSeafowlContext {
 
 #[async_trait]
 impl SeafowlContext for DefaultSeafowlContext {
+    async fn scope_to_database(&self, name: String) -> Arc<DefaultSeafowlContext> {
+        let context = DefaultSeafowlContext {
+            inner: self.inner.clone(),
+            table_catalog: self.table_catalog.clone(),
+            partition_catalog: self.partition_catalog.clone(),
+            function_catalog: self.function_catalog.clone(),
+            internal_object_store: self.internal_object_store.clone(),
+            database: name,
+            database_id: 0,
+            max_partition_size: self.max_partition_size,
+        };
+
+        Arc::from(context)
+    }
+
     async fn parse_query(&self, sql: &str) -> Result<Vec<DFStatement>> {
         Ok(DFParser::parse_sql(sql)?.into_iter().collect_vec())
     }
 
     async fn create_logical_plan_from_statement(
         &self,
+        database_name: &str,
         statement: DFStatement,
     ) -> Result<LogicalPlan> {
         // Reload the schema before planning a query
-        // TODO: A couple of possible optimisations here:
-        // 1. Do a visit of the statement AST, and then load the metadata for only the referenced identifiers.
-        // 2. No need to load metadata for the TableProvider implementation maps when instantiating SqlToRel,
-        //    since it's sufficient to have metadata for TableSource implementation in the logical query
-        //    planning phase. We could use a lighter structure for that, and implement `ContextProvider` for
-        //    it rather than for DefaultSeafowlContext.
-        self.reload_schema().await?;
+        // TODO: We could traverse the statement AST, and then load only the tables for the
+        // identifiers referenced inside. We'd still need to load the full list of table names,
+        // as those are needed for `SchemaProvider::table_names` and `SchemaProvider::table_exist`,
+        // however we'd keep the number of loaded `TableProvider`s we keep around in memory at a
+        // minimum.
+        self.reload_schema(database_name).await?;
         let state = self.inner.state();
 
         match statement.clone() {
@@ -1013,7 +1040,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                         let tables_by_version = self
                             .table_catalog
-                            .load_tables_by_version(self.database_id, Some(version_processor.table_version_ids())).await?;
+                            .load_tables_by_version(database_name, Some(version_processor.table_version_ids())).await?;
 
                         for ((table, version), table_version_id) in &version_processor.table_versions {
                             if let Some(table_version_id) = table_version_id {
@@ -1224,8 +1251,11 @@ impl SeafowlContext for DefaultSeafowlContext {
             ));
         }
 
-        self.create_logical_plan_from_statement(statements.pop().unwrap())
-            .await
+        self.create_logical_plan_from_statement(
+            self.database.as_str(),
+            statements.pop().unwrap(),
+        )
+        .await
     }
 
     async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1708,13 +1738,14 @@ impl SeafowlContext for DefaultSeafowlContext {
     async fn plan_to_table(
         &self,
         plan: Arc<dyn ExecutionPlan>,
+        database_name: String,
         schema_name: String,
         table_name: String,
     ) -> Result<bool> {
         // Reload the schema since `try_get_seafowl_table` relies on using DataFusion's
         // TableProvider interface (which we need to pre-populate with up to date
         // information on our tables)
-        self.reload_schema().await?;
+        self.reload_schema(database_name.as_str()).await?;
 
         // Ensure the schema exists prior to creating the table
         let (full_table_name, from_table_version) = {
@@ -1889,7 +1920,7 @@ pub mod test_utils {
         let mut table_catalog = MockTableCatalog::new();
         table_catalog
             .expect_load_database()
-            .with(predicate::eq(0))
+            .with(predicate::eq("testdb"))
             .returning(move |_| {
                 Ok(SeafowlDatabase {
                     name: Arc::from("testdb"),
@@ -1912,7 +1943,7 @@ pub mod test_utils {
 
         session.register_catalog(
             "testdb",
-            Arc::new(table_catalog.load_database(0).await.unwrap()),
+            Arc::new(table_catalog.load_database("testdb").await.unwrap()),
         );
 
         setup_table_catalog(&mut table_catalog);

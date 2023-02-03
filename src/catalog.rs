@@ -157,10 +157,10 @@ impl From<Error> for DataFusionError {
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait TableCatalog: Sync + Send {
-    async fn load_database(&self, id: DatabaseId) -> Result<SeafowlDatabase>;
+    async fn load_database(&self, database_name: &str) -> Result<SeafowlDatabase>;
     async fn load_tables_by_version(
         &self,
-        database_id: DatabaseId,
+        database_name: &str,
         table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<HashMap<TableVersionId, Arc<SeafowlTable>>>;
     async fn get_database_id_by_name(
@@ -383,10 +383,10 @@ impl DefaultCatalog {
 
 #[async_trait]
 impl TableCatalog for DefaultCatalog {
-    async fn load_database(&self, database_id: DatabaseId) -> Result<SeafowlDatabase> {
+    async fn load_database(&self, database_name: &str) -> Result<SeafowlDatabase> {
         let all_columns = self
             .repository
-            .get_all_columns_in_database(database_id, None)
+            .get_all_columns_in_database(database_name, None)
             .await
             .map_err(Self::to_sqlx_error)?;
 
@@ -418,12 +418,12 @@ impl TableCatalog for DefaultCatalog {
 
     async fn load_tables_by_version(
         &self,
-        database_id: DatabaseId,
+        database_name: &str,
         table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<HashMap<TableVersionId, Arc<SeafowlTable>>> {
         let table_columns = self
             .repository
-            .get_all_columns_in_database(database_id, table_version_ids)
+            .get_all_columns_in_database(database_name, table_version_ids)
             .await
             .map_err(Self::to_sqlx_error)?;
 

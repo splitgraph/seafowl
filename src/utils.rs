@@ -19,7 +19,7 @@ use crate::provider::SeafowlPartition;
 
 // Run a one-off command and output its results to a writer
 pub async fn run_one_off_command<W>(
-    context: Arc<dyn SeafowlContext>,
+    context: Arc<DefaultSeafowlContext>,
     command: &str,
     mut output: W,
 ) where
@@ -28,7 +28,7 @@ pub async fn run_one_off_command<W>(
     for statement in context.parse_query(command).await.unwrap() {
         async {
             let logical = context
-                .create_logical_plan_from_statement(statement)
+                .create_logical_plan_from_statement(context.database.as_str(), statement)
                 .await?;
             let physical = context.create_physical_plan(&logical).await?;
             let batches = context.collect(physical).await?;
