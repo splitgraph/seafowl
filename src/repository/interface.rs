@@ -109,6 +109,8 @@ pub trait Repository: Send + Sync + Debug {
         database_name: &str,
     ) -> Result<DatabaseId, Error>;
 
+    async fn get_all_database_ids(&self) -> Result<Vec<(String, DatabaseId)>, Error>;
+
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error>;
 
     async fn create_collection(

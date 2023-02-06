@@ -29,7 +29,7 @@ use datafusion::assert_batches_eq;
 use datafusion::from_slice::FromSlice;
 use datafusion::parquet::arrow::ArrowWriter;
 use itertools::Itertools;
-use seafowl::context::SeafowlContext;
+use seafowl::context::{DefaultSeafowlContext, SeafowlContext};
 use std::net::SocketAddr;
 use tempfile::Builder;
 use tokio::sync::oneshot;
@@ -42,7 +42,7 @@ async fn make_read_only_http_server() -> (
     SocketAddr,
     Pin<Box<dyn Future<Output = ()> + Send>>,
     Sender<()>,
-    Arc<dyn SeafowlContext>,
+    Arc<DefaultSeafowlContext>,
 ) {
     let config_text = r#"
 [object_store]

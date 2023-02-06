@@ -158,6 +158,7 @@ impl From<Error> for DataFusionError {
 #[async_trait]
 pub trait TableCatalog: Sync + Send {
     async fn load_database(&self, id: DatabaseId) -> Result<SeafowlDatabase>;
+    async fn load_database_ids(&self) -> Result<HashMap<String, DatabaseId>>;
     async fn load_tables_by_version(
         &self,
         database_id: DatabaseId,
@@ -414,6 +415,16 @@ impl TableCatalog for DefaultCatalog {
                 Arc::new(self.clone()),
             )),
         })
+    }
+
+    async fn load_database_ids(&self) -> Result<HashMap<String, DatabaseId>> {
+        let all_db_ids = self
+            .repository
+            .get_all_database_ids()
+            .await
+            .map_err(Self::to_sqlx_error)?;
+
+        Ok(HashMap::from_iter(all_db_ids))
     }
 
     async fn load_tables_by_version(

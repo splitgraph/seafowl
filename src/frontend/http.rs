@@ -33,7 +33,9 @@ use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::config::schema::{AccessSettings, MEBIBYTES};
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
-    context::{is_read_only, is_statement_read_only, SeafowlContext},
+    context::{
+        is_read_only, is_statement_read_only, DefaultSeafowlContext, SeafowlContext,
+    },
     data_types::TableVersionId,
     provider::SeafowlTable,
 };
@@ -95,7 +97,7 @@ struct QueryBody {
 
 /// Execute a physical plan and output its results to a JSON Lines format
 async fn physical_plan_to_json(
-    context: Arc<dyn SeafowlContext>,
+    context: Arc<DefaultSeafowlContext>,
     physical: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<u8>, DataFusionError> {
     let batches = context.collect(physical).await?;
@@ -108,12 +110,19 @@ async fn physical_plan_to_json(
     Ok(buf)
 }
 
-/// POST /q
+/// POST /q or /[database_name]/q
 pub async fn uncached_read_write_query(
+    database_name: Option<String>,
     user_context: UserContext,
     query: String,
-    context: Arc<dyn SeafowlContext>,
+    mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Vec<u8>, ApiError> {
+    // If a specific DB name was used as a parameter in the route, scope the context to it,
+    // effectively making it the default DB for the duration of the session.
+    if let Some(name) = database_name {
+        context = context.scope_to_database(name)?;
+    }
+
     let statements = context.parse_query(&query).await?;
 
     // We assume that there's at least one statement throughout the rest of this function
@@ -211,12 +220,13 @@ pub fn cached_read_query_authz(
         .untuple_one()
 }
 
-/// GET /q/[query hash]
+/// GET /q/[query hash] or /[database_name]/q/[query hash]
 pub async fn cached_read_query(
+    database_name: Option<String>,
     query_hash: String,
     raw_query: String,
     if_none_match: Option<String>,
-    context: Arc<dyn SeafowlContext>,
+    mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
     // Ignore dots at the end
     let query_hash = query_hash.split('.').next().unwrap();
@@ -234,6 +244,12 @@ pub async fn cached_read_query(
     if query_hash != hash_str {
         return Err(ApiError::HashMismatch(hash_str, query_hash.to_string()));
     };
+
+    // If a specific DB name was used as a parameter in the route, scope the context to it,
+    // effectively making it the default DB for the duration of the session.
+    if let Some(name) = database_name {
+        context = context.scope_to_database(name)?;
+    }
 
     // Plan the query
     let plan = context.create_logical_plan(&decoded_query).await?;
@@ -271,7 +287,7 @@ pub async fn upload(
     table_name: String,
     user_context: UserContext,
     form: FormData,
-    context: Arc<dyn SeafowlContext>,
+    context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
     if !user_context.can_perform_action(Action::Write) {
         return Err(ApiError::WriteForbidden);
@@ -403,7 +419,7 @@ fn load_parquet_bytes(
 // TODO: Fix the signature and remove the allow attribute at some point.
 #[allow(opaque_hidden_inferred_bound)]
 pub fn filters(
-    context: Arc<dyn SeafowlContext>,
+    context: Arc<DefaultSeafowlContext>,
     config: HttpFrontend,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let access_policy = AccessPolicy::from_config(&config);
@@ -420,10 +436,24 @@ pub fn filters(
 
     let log = warp::log(module_path!());
 
+    // TODO: The path parameter parsing below is very unergonomic, mostly because warp doesn't
+    // provide better primitives (e.g. `warp::generic::Either` is private outside of the crate).
+    // The logic is to try and match the endpoint with or without the optional prefix for the DB
+    // name, and then map the first parameter in both cases to the same `Option<String>` type, which
+    // lets us use the `unify` filter method.
+
     // Cached read query
     let ctx = context.clone();
-    let cached_read_query_route = warp::path!("q" / String)
+    let cached_read_query_route = warp::path::param::<String>()
+        .map(Some)
+        .or_else(|_| async { Ok::<(Option<String>,), Infallible>((None,)) })
+        .and(warp::path!("q" / String))
+        .or(warp::any()
+            .map(move || None::<String>)
+            .and(warp::path!("q" / String)))
+        .and(warp::path::end())
         .and(warp::get())
+        .unify()
         .and(cached_read_query_authz(access_policy.clone()))
         .and(
             // Extract the query either from the header or from the JSON body
@@ -440,8 +470,16 @@ pub fn filters(
 
     // Uncached read/write query
     let ctx = context.clone();
-    let uncached_read_write_query_route = warp::path!("q")
+    let uncached_read_write_query_route = warp::path::param::<String>()
+        .map(Some)
+        .or_else(|_| async { Ok::<(Option<String>,), Infallible>((None,)) })
+        .and(warp::path!("q"))
+        .or(warp::any()
+            .map(move || None::<String>)
+            .and(warp::path!("q")))
+        .and(warp::path::end())
         .and(warp::post())
+        .unify()
         .and(with_auth(access_policy.clone()))
         .and(
             // Extract the query from the JSON body
@@ -452,7 +490,7 @@ pub fn filters(
         .map(into_response);
 
     // Upload endpoint
-    let ctx = context.clone();
+    let ctx = context;
     let upload_route = warp::path!("upload" / String / String)
         .and(warp::post())
         .and(with_auth(access_policy))
@@ -473,7 +511,7 @@ pub fn filters(
 }
 
 pub async fn run_server(
-    context: Arc<dyn SeafowlContext>,
+    context: Arc<DefaultSeafowlContext>,
     config: HttpFrontend,
     mut shutdown: Receiver<()>,
 ) {
@@ -511,7 +549,7 @@ mod tests {
 
     use crate::config::schema::{str_to_hex_hash, HttpFrontend};
     use crate::{
-        context::{test_utils::in_memory_context, SeafowlContext},
+        context::{test_utils::in_memory_context, DefaultSeafowlContext, SeafowlContext},
         frontend::http::{filters, QUERY_HEADER},
     };
 
@@ -526,7 +564,7 @@ mod tests {
     /// Build an in-memory context with a single table
     /// We implicitly assume here that this table is the only one in this context
     /// and has version ID 1 (otherwise the hashes won't match).
-    async fn in_memory_context_with_single_table() -> Arc<dyn SeafowlContext> {
+    async fn in_memory_context_with_single_table() -> Arc<DefaultSeafowlContext> {
         let context = Arc::new(in_memory_context().await);
 
         context
@@ -551,7 +589,7 @@ mod tests {
         context
     }
 
-    async fn in_memory_context_with_modified_table() -> Arc<dyn SeafowlContext> {
+    async fn in_memory_context_with_modified_table() -> Arc<DefaultSeafowlContext> {
         let context = in_memory_context_with_single_table().await;
         context
             .collect(

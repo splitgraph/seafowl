@@ -8,7 +8,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::parquet::basic::Compression;
 use itertools::Itertools;
 use object_store::local::LocalFileSystem;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tokio::fs::File as AsyncFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
@@ -85,6 +85,7 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::{DmlStatement, Filter, WriteOp};
 use log::{debug, info, warn};
+use parking_lot::RwLock;
 use prost::Message;
 use tempfile::TempPath;
 use tokio::sync::Semaphore;
@@ -256,6 +257,7 @@ pub struct DefaultSeafowlContext {
     pub internal_object_store: Arc<InternalObjectStore>,
     pub database: String,
     pub database_id: DatabaseId,
+    pub all_database_ids: Arc<RwLock<HashMap<String, DatabaseId>>>,
     pub max_partition_size: u32,
 }
 
@@ -511,6 +513,16 @@ pub fn is_statement_read_only(statement: &DFStatement) -> bool {
     }
 }
 
+// The only reason to keep this trait around (instead of migrating all the functions directly into
+// DefaultDeafowlContext), is that `create_physical_plan` would then be a recursive async function,
+// which works for traits, but not for structs: https://stackoverflow.com/a/74737853
+//
+// The workaround would be to box a future as the return of such functions, which isn't very
+// appealing atm (involves heap allocations, and is not very readable).
+//
+// Alternatively, if we know that all recursive calls could be handled by the inner (DataFusion's)
+// `create_physical_plan` we could also rewrite the calls explicitly like that, and thus break the
+// recursion.
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait SeafowlContext: Send + Sync {
@@ -556,17 +568,55 @@ pub trait SeafowlContext: Send + Sync {
 }
 
 impl DefaultSeafowlContext {
+    pub fn scope_to_database(&self, name: String) -> Result<Arc<DefaultSeafowlContext>> {
+        let database_id =
+            self.all_database_ids
+                .read()
+                .get(name.as_str())
+                .map(|db_id| *db_id as DatabaseId)
+                .ok_or_else(|| {
+                    // TODO: reload DBs from catalog to double-check
+                    DataFusionError::Plan(format!(
+                        "Unknown database {name}; try creating one with CREATE DATABASE first"
+                    ))
+                })?;
+
+        // Swap the default database in the new internal context's session config
+        let session_config = self
+            .inner()
+            .copied_config()
+            .with_default_catalog_and_schema(name.clone(), DEFAULT_SCHEMA);
+
+        Ok(Arc::from(DefaultSeafowlContext {
+            inner: SessionContext::with_config_rt(
+                session_config,
+                self.inner().runtime_env(),
+            ),
+            table_catalog: self.table_catalog.clone(),
+            partition_catalog: self.partition_catalog.clone(),
+            function_catalog: self.function_catalog.clone(),
+            internal_object_store: self.internal_object_store.clone(),
+            database: name,
+            database_id,
+            all_database_ids: self.all_database_ids.clone(),
+            max_partition_size: self.max_partition_size,
+        }))
+    }
+
     pub fn inner(&self) -> &SessionContext {
         &self.inner
     }
 
     /// Reload the context to apply / pick up new schema changes
     async fn reload_schema(&self) -> Result<()> {
-        // DataFusion's table catalog interface is not async, which means that we aren't really
-        // supposed to perform IO when loading a list of tables in a schema / list of schemas.
-        // This means that we need to know what tables we have before planning a query. We hence
-        // load the whole schema for a single database into memory before every query (otherwise
-        // writes applied by a different Seafowl instance won't be visible by us).
+        // DataFusion's catalog provider interface is not async, which means that we aren't really
+        // supposed to perform IO when loading the list of schemas. On the other hand, as of DF 16
+        // the schema provider allows for async fetching of tables. However, this isn't that helpful,
+        // since for a query with multiple tables we'd have multiple separate DB hits to load them,
+        // whereas below we load everything we need up front. (Furthermore, table existence and name
+        // listing are still sync meaning we'd need the pre-load for them as well.)
+        // We hence load all schemas and tables into memory before every query (otherwise writes
+        // applied by a different Seafowl instance won't be visible by us).
 
         // This does incur a latency cost to every query.
 
@@ -1935,6 +1985,10 @@ pub mod test_utils {
             internal_object_store: object_store,
             database: "testdb".to_string(),
             database_id: 0,
+            all_database_ids: Arc::from(RwLock::new(HashMap::from([(
+                "testdb".to_string(),
+                0 as DatabaseId,
+            )]))),
             max_partition_size: 2,
         }
     }
