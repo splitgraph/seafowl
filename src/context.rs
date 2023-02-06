@@ -511,16 +511,19 @@ pub fn is_statement_read_only(statement: &DFStatement) -> bool {
     }
 }
 
-// The only reason to keep this as a trait (instead of migrating all the functions directly into
-// DefaultDeafowlContext), is that then `create_physical_plan` would be a recursive async function,
-// which works for traits, but is forbidden for structs: https://stackoverflow.com/a/74737853
-// The workaround is to Box a Future as the return of such functions, which isn't too appealing atm.
+// The only reason to keep this trait around (instead of migrating all the functions directly into
+// DefaultDeafowlContext), is that `create_physical_plan` would then be a recursive async function,
+// which works for traits, but not for structs: https://stackoverflow.com/a/74737853
+//
+// The workaround would be to box a future as the return of such functions, which isn't very
+// appealing atm (involves heap allocations, and is not very readable).
+//
+// Alternatively, if we know that all recursive calls could be handled by the inner (DataFusion's)
+// `create_physical_plan` we could also rewrite the calls explicitly like that, and thus break the
+// recursion.
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait SeafowlContext: Send + Sync {
-    /// Deep copy into another SeafowlContext
-    async fn scope_to_database(&self, name: String) -> Arc<DefaultSeafowlContext>;
-
     /// Parse SQL into one or more statements
     async fn parse_query(&self, sql: &str) -> Result<Vec<DFStatement>>;
 
@@ -565,6 +568,28 @@ pub trait SeafowlContext: Send + Sync {
 }
 
 impl DefaultSeafowlContext {
+    pub fn scope_to_database(&self, name: String) -> Arc<DefaultSeafowlContext> {
+        let runtime_env = self.inner().runtime_env();
+        // Swap the default database in the internal context
+        let session_config = self
+            .inner()
+            .copied_config()
+            .with_default_catalog_and_schema(name.clone(), DEFAULT_SCHEMA);
+
+        let context = DefaultSeafowlContext {
+            inner: SessionContext::with_config_rt(session_config, runtime_env),
+            table_catalog: self.table_catalog.clone(),
+            partition_catalog: self.partition_catalog.clone(),
+            function_catalog: self.function_catalog.clone(),
+            internal_object_store: self.internal_object_store.clone(),
+            database: name,
+            database_id: 0,
+            max_partition_size: self.max_partition_size,
+        };
+
+        Arc::from(context)
+    }
+
     pub fn inner(&self) -> &SessionContext {
         &self.inner
     }
@@ -981,21 +1006,6 @@ impl DefaultSeafowlContext {
 
 #[async_trait]
 impl SeafowlContext for DefaultSeafowlContext {
-    async fn scope_to_database(&self, name: String) -> Arc<DefaultSeafowlContext> {
-        let context = DefaultSeafowlContext {
-            inner: self.inner.clone(),
-            table_catalog: self.table_catalog.clone(),
-            partition_catalog: self.partition_catalog.clone(),
-            function_catalog: self.function_catalog.clone(),
-            internal_object_store: self.internal_object_store.clone(),
-            database: name,
-            database_id: 0,
-            max_partition_size: self.max_partition_size,
-        };
-
-        Arc::from(context)
-    }
-
     async fn parse_query(&self, sql: &str) -> Result<Vec<DFStatement>> {
         Ok(DFParser::parse_sql(sql)?.into_iter().collect_vec())
     }

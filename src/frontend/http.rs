@@ -110,12 +110,19 @@ async fn physical_plan_to_json(
     Ok(buf)
 }
 
-/// POST /q
+/// POST /q or /[database_name]/q
 pub async fn uncached_read_write_query(
+    database_name: Option<String>,
     user_context: UserContext,
     query: String,
-    context: Arc<DefaultSeafowlContext>,
+    mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Vec<u8>, ApiError> {
+    // If a specific DB name was used as a parameter in the route, scope the context to it,
+    // effectively making it the default DB for the duration of the session.
+    if let Some(name) = database_name {
+        context = context.scope_to_database(name);
+    }
+
     let statements = context.parse_query(&query).await?;
 
     // We assume that there's at least one statement throughout the rest of this function
@@ -213,12 +220,13 @@ pub fn cached_read_query_authz(
         .untuple_one()
 }
 
-/// GET /q/[query hash]
+/// GET /q/[query hash] or /[database_name]/q/[query hash]
 pub async fn cached_read_query(
+    database_name: Option<String>,
     query_hash: String,
     raw_query: String,
     if_none_match: Option<String>,
-    context: Arc<DefaultSeafowlContext>,
+    mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
     // Ignore dots at the end
     let query_hash = query_hash.split('.').next().unwrap();
@@ -236,6 +244,12 @@ pub async fn cached_read_query(
     if query_hash != hash_str {
         return Err(ApiError::HashMismatch(hash_str, query_hash.to_string()));
     };
+
+    // If a specific DB name was used as a parameter in the route, scope the context to it,
+    // effectively making it the default DB for the duration of the session.
+    if let Some(name) = database_name {
+        context = context.scope_to_database(name);
+    }
 
     // Plan the query
     let plan = context.create_logical_plan(&decoded_query).await?;
@@ -427,10 +441,24 @@ pub fn filters(
 
     let log = warp::log(module_path!());
 
+    // TODO: The path parameter parsing below is very unergonomic, mostly because warp doesn't
+    // provide better primitives (e.g. `warp::generic::Either` is private outside of the crate).
+    // The logic is to try and match the endpoint with or without the optional prefix for the DB
+    // name, and then map the first parameter in both cases to the same `Option<String>` type, which
+    // lets us use the `unify` filter method.
+
     // Cached read query
     let ctx = context.clone();
-    let cached_read_query_route = warp::path!("q" / String)
+    let cached_read_query_route = warp::path::param::<String>()
+        .map(Some)
+        .or_else(|_| async { Ok::<(Option<String>,), Infallible>((None,)) })
+        .and(warp::path!("q" / String))
+        .or(warp::any()
+            .map(move || None::<String>)
+            .and(warp::path!("q" / String)))
+        .and(warp::path::end())
         .and(warp::get())
+        .unify()
         .and(cached_read_query_authz(access_policy.clone()))
         .and(
             // Extract the query either from the header or from the JSON body
@@ -447,8 +475,16 @@ pub fn filters(
 
     // Uncached read/write query
     let ctx = context.clone();
-    let uncached_read_write_query_route = warp::path!("q")
+    let uncached_read_write_query_route = warp::path::param::<String>()
+        .map(Some)
+        .or_else(|_| async { Ok::<(Option<String>,), Infallible>((None,)) })
+        .and(warp::path!("q"))
+        .or(warp::any()
+            .map(move || None::<String>)
+            .and(warp::path!("q")))
+        .and(warp::path::end())
         .and(warp::post())
+        .unify()
         .and(with_auth(access_policy.clone()))
         .and(
             // Extract the query from the JSON body
