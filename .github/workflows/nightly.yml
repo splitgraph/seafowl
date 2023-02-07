@@ -94,10 +94,10 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             ./target/release/seafowl.exe --version
-            test $0 -eq 0 || exit $0
+            test $? -eq 0 || exit $?
           else
             ./target/release/seafowl --version
-            test $0 -eq 0 || exit $0
+            test $? -eq 0 || exit $?
           fi
 
       - name: Prepare artifact name
