@@ -608,7 +608,7 @@ impl DefaultSeafowlContext {
     }
 
     /// Reload the context to apply / pick up new schema changes
-    async fn reload_schema(&self) -> Result<()> {
+    pub(crate) async fn reload_schema(&self) -> Result<()> {
         // DataFusion's catalog provider interface is not async, which means that we aren't really
         // supposed to perform IO when loading the list of schemas. On the other hand, as of DF 16
         // the schema provider allows for async fetching of tables. However, this isn't that helpful,
@@ -1340,15 +1340,38 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Ok(make_dummy_exec())
             }
             LogicalPlan::CreateCatalog(CreateCatalog {
-                catalog_name: _,
-                if_not_exists: _,
-                schema: _,
+                catalog_name,
+                if_not_exists,
+                ..
             }) => {
-                // CREATE DATABASE: currently unsupported (we can create one but the context
-                // is tied to a database and the user can't query a different one)
-                return Err(Error::Plan(
-                    "Creating new databases is currently unsupported!".to_string(),
-                ));
+                // Insert into metadata catalog
+                match self
+                    .table_catalog
+                    .get_database_id_by_name(catalog_name)
+                    .await?
+                {
+                    Some(_) => {
+                        if !*if_not_exists {
+                            return Err(DataFusionError::Plan(format!(
+                                "Database {catalog_name} already exists"
+                            )));
+                        }
+                    }
+                    None => {
+                        let database_id = self
+                            .table_catalog
+                            .create_database(catalog_name)
+                            .await
+                            .unwrap();
+
+                        // Update the shared in-memory shared map of DB names -> ids
+                        self.all_database_ids
+                            .write()
+                            .insert(catalog_name.clone(), database_id);
+                    }
+                };
+
+                Ok(make_dummy_exec())
             }
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name,
