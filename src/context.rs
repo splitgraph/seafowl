@@ -568,6 +568,7 @@ pub trait SeafowlContext: Send + Sync {
 }
 
 impl DefaultSeafowlContext {
+    // Create a new `DefaultSeafowlContext` with a new inner context scoped to a different default DB
     pub fn scope_to_database(&self, name: String) -> Result<Arc<DefaultSeafowlContext>> {
         let database_id =
             self.all_database_ids
@@ -575,7 +576,6 @@ impl DefaultSeafowlContext {
                 .get(name.as_str())
                 .map(|db_id| *db_id as DatabaseId)
                 .ok_or_else(|| {
-                    // TODO: reload DBs from catalog to double-check
                     DataFusionError::Plan(format!(
                         "Unknown database {name}; try creating one with CREATE DATABASE first"
                     ))
@@ -1359,11 +1359,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                     }
                 }
 
-                // Persist DB into catalog
+                // Persist DB into metadata catalog
                 let database_id =
                     self.table_catalog.create_database(catalog_name).await?;
 
-                // Create the corresponding default schema
+                // Create the corresponding default schema as well
                 self.table_catalog
                     .create_collection(database_id, DEFAULT_SCHEMA)
                     .await?;
