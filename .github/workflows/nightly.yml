@@ -89,6 +89,17 @@ jobs:
         if: matrix.build == 'linux' || matrix.build == 'macos'
         run: strip "target/release/seafowl"
 
+      - name: Test invoking the binaries
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            ./target/release/seafowl.exe --version
+            test $0 -eq 0 || exit $0
+          else
+            ./target/release/seafowl --version
+            test $0 -eq 0 || exit $0
+          fi
+
       - name: Prepare artifact name
         shell: bash
         run: |
