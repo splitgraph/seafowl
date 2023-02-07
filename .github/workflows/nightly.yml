@@ -85,10 +85,6 @@ jobs:
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo build --release
 
-      - name: Strip release binary (linux and macos)
-        if: matrix.build == 'linux' || matrix.build == 'macos'
-        run: strip "target/release/seafowl"
-
       - name: Test invoking the binaries
         shell: bash
         run: |

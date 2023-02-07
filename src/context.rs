@@ -1344,32 +1344,34 @@ impl SeafowlContext for DefaultSeafowlContext {
                 if_not_exists,
                 ..
             }) => {
-                // Insert into metadata catalog
-                match self
+                if self
                     .table_catalog
                     .get_database_id_by_name(catalog_name)
                     .await?
+                    .is_some()
                 {
-                    Some(_) => {
-                        if !*if_not_exists {
-                            return Err(DataFusionError::Plan(format!(
-                                "Database {catalog_name} already exists"
-                            )));
-                        }
+                    if !*if_not_exists {
+                        return Err(DataFusionError::Plan(format!(
+                            "Database {catalog_name} already exists"
+                        )));
+                    } else {
+                        return Ok(make_dummy_exec());
                     }
-                    None => {
-                        let database_id = self
-                            .table_catalog
-                            .create_database(catalog_name)
-                            .await
-                            .unwrap();
+                }
 
-                        // Update the shared in-memory shared map of DB names -> ids
-                        self.all_database_ids
-                            .write()
-                            .insert(catalog_name.clone(), database_id);
-                    }
-                };
+                // Persist DB into catalog
+                let database_id =
+                    self.table_catalog.create_database(catalog_name).await?;
+
+                // Create the corresponding default schema
+                self.table_catalog
+                    .create_collection(database_id, DEFAULT_SCHEMA)
+                    .await?;
+
+                // Update the shared in-memory map of DB names -> ids
+                self.all_database_ids
+                    .write()
+                    .insert(catalog_name.clone(), database_id);
 
                 Ok(make_dummy_exec())
             }

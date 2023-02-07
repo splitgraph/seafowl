@@ -41,29 +41,37 @@ async fn test_http_server_reader_writer() {
     let resp = post_query(
         &client,
         &uri,
-        "CREATE TABLE test_table (col INT)",
+        "CREATE TABLE test_table (col INT); INSERT INTO test_table VALUES(1); SELECT * FROM test_table",
         Some("write_password"),
     )
     .await;
-    dbg!(&resp);
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    // TODO use single statement when https://github.com/splitgraph/seafowl/issues/48 lands
-    let resp = post_query(
-        &client,
-        &uri,
-        "INSERT INTO test_table VALUES(1)",
-        Some("write_password"),
-    )
-    .await;
-    dbg!(&resp);
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    // SELECT from the table as a read-only user
-    let resp = post_query(&client, &uri, "SELECT * FROM test_table", None).await;
     dbg!(&resp);
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(response_text(resp).await, "{\"col\":1}\n");
+
+    // Test the DB-scoped endpoint variant
+    // First create the new database
+    let resp = post_query(
+        &client,
+        &uri,
+        "CREATE DATABASE new_db",
+        Some("write_password"),
+    )
+    .await;
+    dbg!(&resp);
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let scoped_uri = format!("http://{addr}/new_db/q");
+
+    let resp = post_query(
+        &client,
+        &scoped_uri,
+        "CREATE TABLE new_table (new_col INT); INSERT INTO new_table VALUES(2); SELECT * FROM new_table",
+        Some("write_password")
+    ).await;
+    dbg!(&resp);
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(response_text(resp).await, "{\"new_col\":2}\n");
 
     // Stop the server
     // NB this won't run if the test fails, but at that point we're terminating the process
