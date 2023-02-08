@@ -67,7 +67,9 @@ jobs:
           rustup component add rustfmt clippy
 
       - name: Check pre-commit hooks (formatting and Clippy)
+        # First command is temp fix for FatalError: git failed. Is it installed, and are you in a Git repository directory?
         run: |
+          git config --system --add safe.directory *
           pre-commit run --all
 
       # NB this one doesn't run as a pre-commit hook

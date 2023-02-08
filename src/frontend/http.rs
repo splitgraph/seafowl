@@ -282,7 +282,7 @@ pub async fn cached_read_query(
     let physical = context.create_physical_plan(&plan).await?;
     let buf = physical_plan_to_json(context, physical).await?;
 
-    Ok(warp::reply::with_header(buf, header::ETAG, etag).into_response())
+    Ok(with_header(buf, header::ETAG, etag).into_response())
 }
 
 /// POST /upload/[schema]/[table]
@@ -538,6 +538,7 @@ mod tests {
 
     use itertools::Itertools;
 
+    use std::fmt::Display;
     use std::{collections::HashMap, sync::Arc};
 
     use rstest::rstest;
@@ -650,6 +651,13 @@ mod tests {
         AccessPolicy::free_for_all()
     }
 
+    fn make_uri(path: impl Display, db_prefix: Option<&str>) -> String {
+        match db_prefix {
+            None => path.to_string(),
+            Some(db_name) => format!("/{db_name}{path}"),
+        }
+    }
+
     const SELECT_QUERY: &str = "SELECT COUNT(*) AS c FROM test_table";
     const PERCENT_ENCODED_SELECT_QUERY: &str =
         "SELECT%20COUNT(*)%20AS%20c%20FROM%20test_table";
@@ -672,14 +680,9 @@ mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let mut uri = String::from("/q/wrong-hash");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("GET")
-            .path(uri.as_str())
+            .path(make_uri("/q/wrong-hash", new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -692,14 +695,9 @@ mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let mut uri = String::from("/q/somehash");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("OPTIONS")
-            .path(uri.as_str())
+            .path(make_uri("/q/somehash", new_db).as_str())
             .header("Access-Control-Request-Method", "GET")
             .header("Access-Control-Request-Headers", "x-seafowl-query")
             .header("Origin", "https://example.org")
@@ -732,14 +730,12 @@ mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let mut uri = format!("/q/{}", str_to_hex_hash(CREATE_QUERY));
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("GET")
-            .path(uri.as_str())
+            .path(
+                make_uri(format!("/q/{}", str_to_hex_hash(CREATE_QUERY)), new_db)
+                    .as_str(),
+            )
             .header(QUERY_HEADER, CREATE_QUERY)
             .reply(&handler)
             .await;
@@ -755,14 +751,9 @@ mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let mut uri = format!("/q/{SELECT_QUERY_HASH}");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("GET")
-            .path(uri.as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -782,14 +773,9 @@ mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let mut uri = format!("/q/{SELECT_QUERY_HASH}");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("GET")
-            .path(uri.as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -806,14 +792,9 @@ mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let mut uri = format!("/q/{SELECT_QUERY_HASH}");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("GET")
-            .path(uri.as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .json(&HashMap::from([("query", SELECT_QUERY)]))
             .reply(&handler)
             .await;
@@ -833,14 +814,9 @@ mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let mut uri = format!("/q/{SELECT_QUERY_HASH}.bin");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("GET")
-            .path(uri.as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}.bin"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -862,14 +838,9 @@ mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let mut uri = format!("/q/{SELECT_QUERY_HASH}");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("GET")
-            .path(uri.as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .header(IF_NONE_MATCH, V1_ETAG)
             .reply(&handler)
@@ -886,14 +857,9 @@ mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let mut uri = format!("/q/{SELECT_QUERY_HASH}.bin");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("GET")
-            .path(uri.as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}.bin"), new_db).as_str())
             .header(QUERY_HEADER, PERCENT_ENCODED_SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -913,14 +879,9 @@ mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let mut uri = format!("/q/{SELECT_QUERY_HASH}.bin");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("GET")
-            .path(uri.as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}.bin"), new_db).as_str())
             .header(QUERY_HEADER, BAD_PERCENT_ENCODED_SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -938,14 +899,9 @@ mod tests {
         let context = in_memory_context_with_modified_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let mut uri = format!("/q/{SELECT_QUERY_HASH}");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("GET")
-            .path(uri.as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .header(header::ETAG, V1_ETAG)
             .reply(&handler)
@@ -968,14 +924,9 @@ mod tests {
         R: Reply,
         H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
     {
-        let mut uri = String::from("/q");
-        if let Some(db_name) = path_prefix {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let mut builder = request()
             .method("POST")
-            .path(uri.as_str())
+            .path(make_uri("/q", path_prefix).as_str())
             .json(&HashMap::from([("query", query)]));
 
         if let Some(t) = token {
@@ -1139,14 +1090,9 @@ mod tests {
             ),
         );
 
-        let mut uri = format!("/q/{SELECT_QUERY_HASH}");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("GET")
-            .path(uri.as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -1360,14 +1306,9 @@ mod tests {
             ),
         );
 
-        let mut uri = String::from("/q");
-        if let Some(db_name) = new_db {
-            uri = format!("/{db_name}{uri}")
-        }
-
         let resp = request()
             .method("POST")
-            .path(uri.as_str())
+            .path(make_uri("/q", new_db).as_str())
             .json(&HashMap::from([("query", "SELECT 1")]))
             .header(header::AUTHORIZATION, "InvalidAuthzHeader")
             .reply(&handler)
