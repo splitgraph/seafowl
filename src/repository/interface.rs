@@ -109,6 +109,8 @@ pub trait Repository: Send + Sync + Debug {
         database_name: &str,
     ) -> Result<DatabaseId, Error>;
 
+    async fn get_all_database_ids(&self) -> Result<Vec<(String, DatabaseId)>, Error>;
+
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error>;
 
     async fn create_collection(
@@ -323,6 +325,13 @@ pub mod tests {
     ) -> (DatabaseId, TableId, TableVersionId) {
         let (database_id, _, table_id, table_version_id) =
             make_database_with_single_table(repository.clone()).await;
+
+        let all_database_ids = repository
+            .get_all_database_ids()
+            .await
+            .expect("Error getting all database ids");
+
+        assert_eq!(all_database_ids, vec![("testdb".to_string(), database_id)]);
 
         // Test loading all columns
 

@@ -22,7 +22,7 @@ jobs:
             os: ubuntu-18.04
             target: x86_64-unknown-linux-gnu
           - build: macos
-            os: macos-latest
+            os: macos-11
             target: x86_64-apple-darwin
           - build: win-msvc
             os: windows-latest
@@ -84,10 +84,6 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo build --release
-
-      - name: Strip release binary (linux and macos)
-        if: matrix.build == 'linux' || matrix.build == 'macos'
-        run: strip "target/release/seafowl"
 
       - name: Test invoking the binaries
         shell: bash

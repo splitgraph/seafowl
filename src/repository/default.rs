@@ -207,6 +207,17 @@ impl Repository for $repo {
         Ok(id)
     }
 
+    async fn get_all_database_ids(&self) -> Result<Vec<(String, DatabaseId)>> {
+        let all_db_ids = sqlx::query(r#"SELECT name, id FROM database"#)
+            .fetch_all(&self.executor)
+            .await.map_err($repo::interpret_error)?
+            .iter()
+            .map(|row| (row.get("name"), row.get("id")))
+            .collect();
+
+        Ok(all_db_ids)
+    }
+
     async fn create_collection(
         &self,
         database_id: DatabaseId,

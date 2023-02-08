@@ -33,7 +33,9 @@ use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::config::schema::{AccessSettings, MEBIBYTES};
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
-    context::{is_read_only, is_statement_read_only, SeafowlContext},
+    context::{
+        is_read_only, is_statement_read_only, DefaultSeafowlContext, SeafowlContext,
+    },
     data_types::TableVersionId,
     provider::SeafowlTable,
 };
@@ -95,7 +97,7 @@ struct QueryBody {
 
 /// Execute a physical plan and output its results to a JSON Lines format
 async fn physical_plan_to_json(
-    context: Arc<dyn SeafowlContext>,
+    context: Arc<DefaultSeafowlContext>,
     physical: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<u8>, DataFusionError> {
     let batches = context.collect(physical).await?;
@@ -108,12 +110,21 @@ async fn physical_plan_to_json(
     Ok(buf)
 }
 
-/// POST /q
+/// POST /q or /[database_name]/q
 pub async fn uncached_read_write_query(
+    database_name: Option<String>,
     user_context: UserContext,
     query: String,
-    context: Arc<dyn SeafowlContext>,
+    mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Vec<u8>, ApiError> {
+    // If a specific DB name was used as a parameter in the route, scope the context to it,
+    // effectively making it the default DB for the duration of the session.
+    if let Some(name) = database_name {
+        if name != context.database {
+            context = context.scope_to_database(name)?;
+        }
+    }
+
     let statements = context.parse_query(&query).await?;
 
     // We assume that there's at least one statement throughout the rest of this function
@@ -211,12 +222,13 @@ pub fn cached_read_query_authz(
         .untuple_one()
 }
 
-/// GET /q/[query hash]
+/// GET /q/[query hash] or /[database_name]/q/[query hash]
 pub async fn cached_read_query(
+    database_name: Option<String>,
     query_hash: String,
     raw_query: String,
     if_none_match: Option<String>,
-    context: Arc<dyn SeafowlContext>,
+    mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
     // Ignore dots at the end
     let query_hash = query_hash.split('.').next().unwrap();
@@ -234,6 +246,14 @@ pub async fn cached_read_query(
     if query_hash != hash_str {
         return Err(ApiError::HashMismatch(hash_str, query_hash.to_string()));
     };
+
+    // If a specific DB name was used as a parameter in the route, scope the context to it,
+    // effectively making it the default DB for the duration of the session.
+    if let Some(name) = database_name {
+        if name != context.database {
+            context = context.scope_to_database(name)?;
+        }
+    }
 
     // Plan the query
     let plan = context.create_logical_plan(&decoded_query).await?;
@@ -262,7 +282,7 @@ pub async fn cached_read_query(
     let physical = context.create_physical_plan(&plan).await?;
     let buf = physical_plan_to_json(context, physical).await?;
 
-    Ok(warp::reply::with_header(buf, header::ETAG, etag).into_response())
+    Ok(with_header(buf, header::ETAG, etag).into_response())
 }
 
 /// POST /upload/[schema]/[table]
@@ -271,7 +291,7 @@ pub async fn upload(
     table_name: String,
     user_context: UserContext,
     form: FormData,
-    context: Arc<dyn SeafowlContext>,
+    context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
     if !user_context.can_perform_action(Action::Write) {
         return Err(ApiError::WriteForbidden);
@@ -403,7 +423,7 @@ fn load_parquet_bytes(
 // TODO: Fix the signature and remove the allow attribute at some point.
 #[allow(opaque_hidden_inferred_bound)]
 pub fn filters(
-    context: Arc<dyn SeafowlContext>,
+    context: Arc<DefaultSeafowlContext>,
     config: HttpFrontend,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let access_policy = AccessPolicy::from_config(&config);
@@ -420,10 +440,24 @@ pub fn filters(
 
     let log = warp::log(module_path!());
 
+    // TODO: The path parameter parsing below is very unergonomic, mostly because warp doesn't
+    // provide better primitives (e.g. `warp::generic::Either` is private outside of the crate).
+    // The logic is to try and match the endpoint with or without the optional prefix for the DB
+    // name, and then map the first parameter in both cases to the same `Option<String>` type, which
+    // lets us use the `unify` filter method.
+
     // Cached read query
     let ctx = context.clone();
-    let cached_read_query_route = warp::path!("q" / String)
+    let cached_read_query_route = warp::path::param::<String>()
+        .map(Some)
+        .or_else(|_| async { Ok::<(Option<String>,), Infallible>((None,)) })
+        .and(warp::path!("q" / String))
+        .or(warp::any()
+            .map(move || None::<String>)
+            .and(warp::path!("q" / String)))
+        .and(warp::path::end())
         .and(warp::get())
+        .unify()
         .and(cached_read_query_authz(access_policy.clone()))
         .and(
             // Extract the query either from the header or from the JSON body
@@ -440,8 +474,16 @@ pub fn filters(
 
     // Uncached read/write query
     let ctx = context.clone();
-    let uncached_read_write_query_route = warp::path!("q")
+    let uncached_read_write_query_route = warp::path::param::<String>()
+        .map(Some)
+        .or_else(|_| async { Ok::<(Option<String>,), Infallible>((None,)) })
+        .and(warp::path!("q"))
+        .or(warp::any()
+            .map(move || None::<String>)
+            .and(warp::path!("q")))
+        .and(warp::path::end())
         .and(warp::post())
+        .unify()
         .and(with_auth(access_policy.clone()))
         .and(
             // Extract the query from the JSON body
@@ -452,7 +494,7 @@ pub fn filters(
         .map(into_response);
 
     // Upload endpoint
-    let ctx = context.clone();
+    let ctx = context;
     let upload_route = warp::path!("upload" / String / String)
         .and(warp::post())
         .and(with_auth(access_policy))
@@ -473,7 +515,7 @@ pub fn filters(
 }
 
 pub async fn run_server(
-    context: Arc<dyn SeafowlContext>,
+    context: Arc<DefaultSeafowlContext>,
     config: HttpFrontend,
     mut shutdown: Receiver<()>,
 ) {
@@ -496,8 +538,10 @@ mod tests {
 
     use itertools::Itertools;
 
+    use std::fmt::Display;
     use std::{collections::HashMap, sync::Arc};
 
+    use rstest::rstest;
     use warp::{Filter, Rejection, Reply};
 
     use warp::http::Response;
@@ -509,9 +553,10 @@ mod tests {
 
     use crate::auth::AccessPolicy;
 
+    use crate::catalog::DEFAULT_DB;
     use crate::config::schema::{str_to_hex_hash, HttpFrontend};
     use crate::{
-        context::{test_utils::in_memory_context, SeafowlContext},
+        context::{test_utils::in_memory_context, DefaultSeafowlContext, SeafowlContext},
         frontend::http::{filters, QUERY_HEADER},
     };
 
@@ -526,8 +571,26 @@ mod tests {
     /// Build an in-memory context with a single table
     /// We implicitly assume here that this table is the only one in this context
     /// and has version ID 1 (otherwise the hashes won't match).
-    async fn in_memory_context_with_single_table() -> Arc<dyn SeafowlContext> {
-        let context = Arc::new(in_memory_context().await);
+    async fn in_memory_context_with_single_table(
+        new_db: Option<&str>,
+    ) -> Arc<DefaultSeafowlContext> {
+        let mut context = Arc::new(in_memory_context().await);
+
+        // TODO: the ergonomics of setting up multi-db tests is not the nicest, since we don't support
+        // cross-db queries, so we have to switch context back and forth.
+        if let Some(db_name) = new_db {
+            context
+                .collect(
+                    context
+                        .plan_query(&format!("CREATE DATABASE IF NOT EXISTS {db_name}"))
+                        .await
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            context = context.scope_to_database(db_name.to_string()).unwrap();
+        }
 
         context
             .collect(
@@ -548,11 +611,24 @@ mod tests {
             )
             .await
             .unwrap();
+
+        if new_db.is_some() {
+            // Re-scope to the original DB
+            return context.scope_to_database(DEFAULT_DB.to_string()).unwrap();
+        }
+
         context
     }
 
-    async fn in_memory_context_with_modified_table() -> Arc<dyn SeafowlContext> {
-        let context = in_memory_context_with_single_table().await;
+    async fn in_memory_context_with_modified_table(
+        new_db: Option<&str>,
+    ) -> Arc<DefaultSeafowlContext> {
+        let mut context = in_memory_context_with_single_table(new_db).await;
+
+        if let Some(db_name) = new_db {
+            context = context.scope_to_database(db_name.to_string()).unwrap();
+        }
+
         context
             .collect(
                 context
@@ -562,11 +638,24 @@ mod tests {
             )
             .await
             .unwrap();
+
+        if new_db.is_some() {
+            // Re-scope to the original DB
+            return context.scope_to_database(DEFAULT_DB.to_string()).unwrap();
+        }
+
         context
     }
 
     fn free_for_all() -> AccessPolicy {
         AccessPolicy::free_for_all()
+    }
+
+    fn make_uri(path: impl Display, db_prefix: Option<&str>) -> String {
+        match db_prefix {
+            None => path.to_string(),
+            Some(db_name) => format!("/{db_name}{path}"),
+        }
     }
 
     const SELECT_QUERY: &str = "SELECT COUNT(*) AS c FROM test_table";
@@ -583,28 +672,32 @@ mod tests {
     const V2_ETAG: &str =
         "06d033ece6645de592db973644cf7357255f24536ff7b03c3b2ace10736f7636";
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_cached_hash_mismatch() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_get_cached_hash_mismatch(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
-            .path("/q/wrong-hash")
+            .path(make_uri("/q/wrong-hash", new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_cors() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_cors(#[values(None, Some("test_db"))] new_db: Option<&str>) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("OPTIONS")
-            .path("/q/somehash")
+            .path(make_uri("/q/somehash", new_db).as_str())
             .header("Access-Control-Request-Method", "GET")
             .header("Access-Control-Request-Headers", "x-seafowl-query")
             .header("Origin", "https://example.org")
@@ -629,14 +722,20 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_cached_write_query_error() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_get_cached_write_query_error(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{}", str_to_hex_hash(CREATE_QUERY)).as_str())
+            .path(
+                make_uri(format!("/q/{}", str_to_hex_hash(CREATE_QUERY)), new_db)
+                    .as_str(),
+            )
             .header(QUERY_HEADER, CREATE_QUERY)
             .reply(&handler)
             .await;
@@ -644,14 +743,17 @@ mod tests {
         assert_eq!(resp.body(), "NOT_READ_ONLY_QUERY");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_cached_no_etag() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_get_cached_no_etag(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -663,14 +765,17 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_cached_no_query() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_get_cached_no_query(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -679,14 +784,17 @@ mod tests {
         assert_eq!(resp.body(), "Request body deserialize error: EOF while parsing a value at line 1 column 0");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_cached_no_etag_query_in_body() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_get_cached_no_etag_query_in_body(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .json(&HashMap::from([("query", SELECT_QUERY)]))
             .reply(&handler)
             .await;
@@ -698,14 +806,17 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_cached_no_etag_extension() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_get_cached_no_etag_extension(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{SELECT_QUERY_HASH}.bin").as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}.bin"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -717,16 +828,19 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_cached_reuse_etag() {
+    async fn test_get_cached_reuse_etag(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
         // Pass the same ETag as If-None-Match, should return a 301
 
-        let context = in_memory_context_with_single_table().await;
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .header(IF_NONE_MATCH, V1_ETAG)
             .reply(&handler)
@@ -735,14 +849,17 @@ mod tests {
         assert_eq!(resp.body(), "NOT_MODIFIED");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_encoded_query_special_chars() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_get_encoded_query_special_chars(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{SELECT_QUERY_HASH}.bin").as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}.bin"), new_db).as_str())
             .header(QUERY_HEADER, PERCENT_ENCODED_SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -754,14 +871,17 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_query_bad_encoding() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_query_bad_encoding(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{SELECT_QUERY_HASH}.bin").as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}.bin"), new_db).as_str())
             .header(QUERY_HEADER, BAD_PERCENT_ENCODED_SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -769,16 +889,19 @@ mod tests {
         assert_eq!(resp.body(), "QUERY_DECODE_ERROR");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_cached_etag_new_version() {
+    async fn test_get_cached_etag_new_version(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
         // Pass the same ETag as If-None-Match, but the table version changed -> reruns the query
 
-        let context = in_memory_context_with_modified_table().await;
+        let context = in_memory_context_with_modified_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .header(header::ETAG, V1_ETAG)
             .reply(&handler)
@@ -794,6 +917,7 @@ mod tests {
     async fn _query_uncached_endpoint<R, H>(
         handler: &H,
         query: &'_ str,
+        path_prefix: Option<&str>,
         token: Option<&str>,
     ) -> Response<Bytes>
     where
@@ -802,7 +926,7 @@ mod tests {
     {
         let mut builder = request()
             .method("POST")
-            .path("/q")
+            .path(make_uri("/q", path_prefix).as_str())
             .json(&HashMap::from([("query", query)]));
 
         if let Some(t) = token {
@@ -812,57 +936,84 @@ mod tests {
         builder.reply(handler).await
     }
 
-    async fn query_uncached_endpoint<R, H>(handler: &H, query: &'_ str) -> Response<Bytes>
+    async fn query_uncached_endpoint<R, H>(
+        handler: &H,
+        query: &'_ str,
+        path_prefix: Option<&str>,
+    ) -> Response<Bytes>
     where
         R: Reply,
         H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
     {
-        _query_uncached_endpoint(handler, query, None).await
+        _query_uncached_endpoint(handler, query, path_prefix, None).await
     }
 
     async fn query_uncached_endpoint_token<R, H>(
         handler: &H,
         query: &'_ str,
+        path_prefix: Option<&str>,
         token: &str,
     ) -> Response<Bytes>
     where
         R: Reply,
         H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
     {
-        _query_uncached_endpoint(handler, query, Some(token)).await
+        _query_uncached_endpoint(handler, query, path_prefix, Some(token)).await
     }
 
     #[tokio::test]
-    async fn test_get_uncached_read_query() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_get_uncached_read_nonexistent_db() {
+        let context = in_memory_context_with_single_table(None).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp = query_uncached_endpoint(&handler, SELECT_QUERY).await;
+        let resp =
+            query_uncached_endpoint(&handler, SELECT_QUERY, Some("missing_db")).await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.body(),
+            "Error during planning: Unknown database missing_db; try creating one with CREATE DATABASE first"
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_get_uncached_read_query(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
+
+        let resp = query_uncached_endpoint(&handler, SELECT_QUERY, new_db).await;
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":1}\n");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_get_uncached_write_query() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_get_uncached_write_query(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp = query_uncached_endpoint(&handler, INSERT_QUERY).await;
+        let resp = query_uncached_endpoint(&handler, INSERT_QUERY, new_db).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "");
 
-        let resp = query_uncached_endpoint(&handler, SELECT_QUERY).await;
+        let resp = query_uncached_endpoint(&handler, SELECT_QUERY, new_db).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":2}\n");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_error_parse() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_error_parse(#[values(None, Some("test_db"))] new_db: Option<&str>) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp = query_uncached_endpoint(&handler, "SLEECT 1").await;
+        let resp = query_uncached_endpoint(&handler, "SLEECT 1", new_db).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
@@ -870,13 +1021,17 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_error_parse_seafowl() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_error_parse_seafowl(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp =
-            query_uncached_endpoint(&handler, "CREATE FUNCTION what_function").await;
+            query_uncached_endpoint(&handler, "CREATE FUNCTION what_function", new_db)
+                .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
@@ -884,32 +1039,50 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_error_plan_missing_table() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_error_plan_missing_table(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp = query_uncached_endpoint(&handler, "SELECT * FROM missing_table").await;
+        let resp =
+            query_uncached_endpoint(&handler, "SELECT * FROM missing_table", new_db)
+                .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            resp.body(),
-            "Error during planning: table 'default.public.missing_table' not found"
-        );
+
+        if let Some(db_name) = new_db {
+            assert_eq!(
+                resp.body(),
+                format!("Error during planning: table '{db_name}.public.missing_table' not found").as_str()
+            );
+        } else {
+            assert_eq!(
+                resp.body(),
+                "Error during planning: table 'default.public.missing_table' not found"
+            );
+        }
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_error_execution() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_error_execution(#[values(None, Some("test_db"))] new_db: Option<&str>) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp = query_uncached_endpoint(&handler, "SELECT 'notanint'::int").await;
+        let resp =
+            query_uncached_endpoint(&handler, "SELECT 'notanint'::int", new_db).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(resp.body(), "Arrow error: Cast error: Cannot cast string 'notanint' to value of Int32 type");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_password_read_disables_cached_get() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_password_read_disables_cached_get(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -919,7 +1092,7 @@ mod tests {
 
         let resp = request()
             .method("GET")
-            .path(format!("/q/{SELECT_QUERY_HASH}").as_str())
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
             .reply(&handler)
             .await;
@@ -927,23 +1100,12 @@ mod tests {
         assert_eq!(resp.body(), "READ_ONLY_ENDPOINT_DISABLED");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_password_writes_anonymous_can_read() {
-        let context = in_memory_context_with_single_table().await;
-        let handler = filters(
-            context,
-            http_config_from_access_policy(
-                AccessPolicy::free_for_all().with_write_password("somepw"),
-            ),
-        );
-
-        let resp = query_uncached_endpoint(&handler, "SELECT * FROM test_table").await;
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn test_password_writes_writer_can_write() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_password_writes_anonymous_can_read(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -952,14 +1114,16 @@ mod tests {
         );
 
         let resp =
-            query_uncached_endpoint_token(&handler, "DROP TABLE test_table", "somepw")
-                .await;
+            query_uncached_endpoint(&handler, "SELECT * FROM test_table", new_db).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_password_writes_anonymous_cant_write() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_password_writes_writer_can_write(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -967,14 +1131,41 @@ mod tests {
             ),
         );
 
-        let resp = query_uncached_endpoint(&handler, "DROP TABLE test_table").await;
+        let resp = query_uncached_endpoint_token(
+            &handler,
+            "DROP TABLE test_table",
+            new_db,
+            "somepw",
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_password_writes_anonymous_cant_write(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
+        let handler = filters(
+            context,
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_write_password("somepw"),
+            ),
+        );
+
+        let resp =
+            query_uncached_endpoint(&handler, "DROP TABLE test_table", new_db).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         assert_eq!(resp.body(), "WRITE_FORBIDDEN");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_password_read_writes_anonymous_cant_access() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_password_read_writes_anonymous_cant_access(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -984,14 +1175,17 @@ mod tests {
             ),
         );
 
-        let resp = query_uncached_endpoint(&handler, "SELECT 1").await;
+        let resp = query_uncached_endpoint(&handler, "SELECT 1", new_db).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(resp.body(), "NEED_ACCESS_TOKEN");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_password_read_writes_reader_cant_write() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_password_read_writes_reader_cant_write(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -1004,6 +1198,7 @@ mod tests {
         let resp = query_uncached_endpoint_token(
             &handler,
             "DROP TABLE test_table",
+            new_db,
             "somereadpw",
         )
         .await;
@@ -1011,9 +1206,12 @@ mod tests {
         assert_eq!(resp.body(), "WRITE_FORBIDDEN");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_password_read_writes_writer_can_write() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_password_read_writes_writer_can_write(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -1023,15 +1221,22 @@ mod tests {
             ),
         );
 
-        let resp =
-            query_uncached_endpoint_token(&handler, "DROP TABLE test_table", "somepw")
-                .await;
+        let resp = query_uncached_endpoint_token(
+            &handler,
+            "DROP TABLE test_table",
+            new_db,
+            "somepw",
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_read_only_anonymous_cant_write() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_read_only_anonymous_cant_write(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -1039,14 +1244,18 @@ mod tests {
             ),
         );
 
-        let resp = query_uncached_endpoint(&handler, "DROP TABLE test_table").await;
+        let resp =
+            query_uncached_endpoint(&handler, "DROP TABLE test_table", new_db).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         assert_eq!(resp.body(), "WRITE_FORBIDDEN");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_read_only_useless_access_token() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_read_only_useless_access_token(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -1054,16 +1263,23 @@ mod tests {
             ),
         );
 
-        let resp =
-            query_uncached_endpoint_token(&handler, "DROP TABLE test_table", "somepw")
-                .await;
+        let resp = query_uncached_endpoint_token(
+            &handler,
+            "DROP TABLE test_table",
+            new_db,
+            "somepw",
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(resp.body(), "USELESS_ACCESS_TOKEN");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_password_writes_anonymous_wrong_token() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_password_writes_anonymous_wrong_token(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -1071,14 +1287,18 @@ mod tests {
             ),
         );
 
-        let resp = query_uncached_endpoint_token(&handler, "SELECT 1", "otherpw").await;
+        let resp =
+            query_uncached_endpoint_token(&handler, "SELECT 1", new_db, "otherpw").await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(resp.body(), "INVALID_ACCESS_TOKEN");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_password_writes_anonymous_invalid_header() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_password_writes_anonymous_invalid_header(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -1088,7 +1308,7 @@ mod tests {
 
         let resp = request()
             .method("POST")
-            .path("/q")
+            .path(make_uri("/q", new_db).as_str())
             .json(&HashMap::from([("query", "SELECT 1")]))
             .header(header::AUTHORIZATION, "InvalidAuthzHeader")
             .reply(&handler)
@@ -1098,9 +1318,12 @@ mod tests {
         assert_eq!(resp.body(), "INVALID_AUTHORIZATION_HEADER");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_multi_statement_no_reads() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_multi_statement_no_reads(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -1112,6 +1335,7 @@ mod tests {
             &handler,
             "DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
             INSERT INTO test_table VALUES('hey')",
+            new_db,
             "somepw",
         )
         .await;
@@ -1120,15 +1344,19 @@ mod tests {
         let resp = query_uncached_endpoint_token(
             &handler,
             "SELECT * FROM test_table;",
+            new_db,
             "somepw",
         )
         .await;
         assert_eq!(resp.body(), "{\"key\":\"hey\"}\n");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_multi_statement_read_at_end() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_multi_statement_read_at_end(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -1140,6 +1368,7 @@ mod tests {
             &handler,
             "DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
             INSERT INTO test_table VALUES('hey');SELECT * FROM test_table;",
+            new_db,
             "somepw",
         )
         .await;
@@ -1147,9 +1376,12 @@ mod tests {
         assert_eq!(resp.body(), "{\"key\":\"hey\"}\n");
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_multi_statement_read_not_at_end_error() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_multi_statement_read_not_at_end_error(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -1159,7 +1391,7 @@ mod tests {
 
         let resp =
             query_uncached_endpoint_token(&handler, "SELECT * FROM test_table;DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
-            INSERT INTO test_table VALUES('hey')", "somepw")
+            INSERT INTO test_table VALUES('hey')", new_db,"somepw")
                 .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert!(String::from_utf8(resp.body().to_vec())
@@ -1167,9 +1399,12 @@ mod tests {
             .contains("must be at the end of a multi-statement query"));
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_multi_statement_multiple_reads_error() {
-        let context = in_memory_context_with_single_table().await;
+    async fn test_multi_statement_multiple_reads_error(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
             context,
             http_config_from_access_policy(
@@ -1179,7 +1414,7 @@ mod tests {
 
         let resp =
             query_uncached_endpoint_token(&handler, "DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
-            INSERT INTO test_table VALUES('hey');SELECT * FROM test_table;SELECT * FROM test_table;", "somepw")
+            INSERT INTO test_table VALUES('hey');SELECT * FROM test_table;SELECT * FROM test_table;", new_db, "somepw")
                 .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert!(String::from_utf8(resp.body().to_vec())

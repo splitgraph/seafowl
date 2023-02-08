@@ -28,6 +28,7 @@ use crate::object_store::wrapped::InternalObjectStore;
 use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
+use parking_lot::lock_api::RwLock;
 
 use super::schema::{self, MEBIBYTES, MEMORY_FRACTION, S3};
 
@@ -170,6 +171,8 @@ pub async fn build_context(
         None => tables.create_collection(default_db, DEFAULT_SCHEMA).await?,
     };
 
+    let all_database_ids = tables.load_database_ids().await?;
+
     // Convergence doesn't support connecting to different DB names. We are supposed
     // to do one context per query (as we need to load the schema before executing every
     // query) and per database (since the context is supposed to be limited to the database
@@ -187,6 +190,7 @@ pub async fn build_context(
         }),
         database: DEFAULT_DB.to_string(),
         database_id: default_db,
+        all_database_ids: Arc::from(RwLock::new(all_database_ids)),
         max_partition_size: cfg.misc.max_partition_size,
     })
 }

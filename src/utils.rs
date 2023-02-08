@@ -19,7 +19,7 @@ use crate::provider::SeafowlPartition;
 
 // Run a one-off command and output its results to a writer
 pub async fn run_one_off_command<W>(
-    context: Arc<dyn SeafowlContext>,
+    context: Arc<DefaultSeafowlContext>,
     command: &str,
     mut output: W,
 ) where
