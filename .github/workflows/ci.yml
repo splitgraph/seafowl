@@ -6,7 +6,7 @@ on:
 jobs:
   CI:
     name: Lint, build, test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     container:
       image: amd64/rust
       env:
@@ -68,8 +68,6 @@ jobs:
 
       - name: Check pre-commit hooks (formatting and Clippy)
         run: |
-          ls -l
-          which git
           pre-commit run --all
 
       # NB this one doesn't run as a pre-commit hook
