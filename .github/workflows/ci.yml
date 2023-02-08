@@ -6,7 +6,7 @@ on:
 jobs:
   CI:
     name: Lint, build, test
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     container:
       image: amd64/rust
       env:
@@ -69,7 +69,7 @@ jobs:
       - name: Check pre-commit hooks (formatting and Clippy)
         # First command is temp fix for FatalError: git failed. Is it installed, and are you in a Git repository directory?
         run: |
-          git config --system --add safe.directory *
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           pre-commit run --all
 
       # NB this one doesn't run as a pre-commit hook
