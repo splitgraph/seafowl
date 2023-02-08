@@ -68,6 +68,8 @@ jobs:
 
       - name: Check pre-commit hooks (formatting and Clippy)
         run: |
+          ls -l
+          which git
           pre-commit run --all
 
       # NB this one doesn't run as a pre-commit hook

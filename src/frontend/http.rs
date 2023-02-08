@@ -1010,6 +1010,21 @@ mod tests {
         _query_uncached_endpoint(handler, query, path_prefix, Some(token)).await
     }
 
+    #[tokio::test]
+    async fn test_get_uncached_read_nonexistent_db() {
+        let context = in_memory_context_with_single_table(None).await;
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
+
+        let resp =
+            query_uncached_endpoint(&handler, SELECT_QUERY, Some("missing_db")).await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.body(),
+            "Error during planning: Unknown database missing_db; try creating one with CREATE DATABASE first"
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn test_get_uncached_read_query(
