@@ -12,8 +12,9 @@ async fn test_upload_base(
     #[case] file_format: &str,
     #[case] include_schema: bool,
     #[case] add_headers: Option<bool>,
+    #[values(None, Some("test_db"))] db_prefix: Option<&str>,
 ) {
-    let (addr, server, terminate, context) = make_read_only_http_server().await;
+    let (addr, server, terminate, mut context) = make_read_only_http_server().await;
 
     tokio::task::spawn(server);
 
@@ -103,10 +104,27 @@ async fn test_upload_base(
             format!("has_header={has_headers}"),
         ])
     }
+
+    let db_path = if let Some(db_name) = db_prefix {
+        // Create the target database first
+        context
+            .collect(
+                context
+                    .plan_query(format!("CREATE DATABASE {db_name}").as_str())
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        format!("/{db_name}")
+    } else {
+        String::from("")
+    };
+
     curl_args.append(&mut vec![
         "-F".to_string(),
         format!("data=@{}", named_tempfile.path().to_str().unwrap()),
-        format!("http://{addr}/upload/test_upload/{table_name}"),
+        format!("http://{addr}{db_path}/upload/test_upload/{table_name}"),
     ]);
 
     let mut child = Command::new("curl").args(curl_args).spawn().unwrap();
@@ -114,6 +132,9 @@ async fn test_upload_base(
     dbg!("Upload status is {}", status);
 
     // Verify the newly created table contents
+    if let Some(db_name) = db_prefix {
+        context = context.scope_to_database(db_name.to_string()).unwrap();
+    }
     let plan = context
         .plan_query(format!("SELECT * FROM test_upload.{table_name}").as_str())
         .await
