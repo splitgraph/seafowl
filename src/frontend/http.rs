@@ -285,7 +285,7 @@ pub async fn cached_read_query(
     Ok(with_header(buf, header::ETAG, etag).into_response())
 }
 
-/// POST /upload/[schema]/[table] or /upload/[database]/[schema]/[table]
+/// POST /upload/[schema]/[table] or /[database]/upload/[schema]/[table]
 pub async fn upload(
     database_name: Option<String>,
     schema_name: String,
