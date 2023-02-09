@@ -15,6 +15,12 @@ async fn test_upload_base(
 ) {
     let (addr, server, terminate, context) = make_read_only_http_server().await;
 
+    // Create the target database
+    context
+        .collect(context.plan_query("CREATE DATABASE test_db").await.unwrap())
+        .await
+        .unwrap();
+
     tokio::task::spawn(server);
 
     let table_name = format!("{file_format}_table");
@@ -106,7 +112,7 @@ async fn test_upload_base(
     curl_args.append(&mut vec![
         "-F".to_string(),
         format!("data=@{}", named_tempfile.path().to_str().unwrap()),
-        format!("http://{addr}/upload/test_upload/{table_name}"),
+        format!("http://{addr}/upload/test_db/test_upload/{table_name}"),
     ]);
 
     let mut child = Command::new("curl").args(curl_args).spawn().unwrap();
@@ -114,6 +120,7 @@ async fn test_upload_base(
     dbg!("Upload status is {}", status);
 
     // Verify the newly created table contents
+    let context = context.scope_to_database("test_db".to_string()).unwrap();
     let plan = context
         .plan_query(format!("SELECT * FROM test_upload.{table_name}").as_str())
         .await
@@ -193,7 +200,7 @@ async fn test_upload_to_existing_table() {
             "Authorization: Bearer write_password",
             "-F",
             format!("data=@{}", named_tempfile.path().to_str().unwrap()).as_str(),
-            format!("http://{addr}/upload/public/test_table").as_str(),
+            format!("http://{addr}/upload/default/public/test_table").as_str(),
         ])
         .spawn()
         .unwrap();
@@ -247,7 +254,7 @@ async fn test_upload_to_existing_table() {
             "Authorization: Bearer write_password",
             "-F",
             format!("data=@{}", named_tempfile.path().to_str().unwrap()).as_str(),
-            format!("http://{addr}/upload/public/test_table").as_str(),
+            format!("http://{addr}/upload/default/public/test_table").as_str(),
         ])
         .output()
         .await
@@ -273,7 +280,7 @@ async fn test_upload_not_writer_authz() {
             "Authorization: Bearer wrong_password",
             "-F",
             "data='doesntmatter'",
-            format!("http://{addr}/upload/public/test_table").as_str(),
+            format!("http://{addr}/upload/default/public/test_table").as_str(),
         ])
         .output()
         .await

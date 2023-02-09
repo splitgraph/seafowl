@@ -285,17 +285,23 @@ pub async fn cached_read_query(
     Ok(with_header(buf, header::ETAG, etag).into_response())
 }
 
-/// POST /upload/[schema]/[table]
+/// POST /upload/[database]/[schema]/[table]
 pub async fn upload(
+    database_name: String,
     schema_name: String,
     table_name: String,
     user_context: UserContext,
     form: FormData,
-    context: Arc<DefaultSeafowlContext>,
+    mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
     if !user_context.can_perform_action(Action::Write) {
         return Err(ApiError::WriteForbidden);
     };
+
+    if database_name != context.database {
+        context = context.scope_to_database(database_name)?;
+    }
+
     let parts: Vec<Part> = form
         .try_collect()
         .await
@@ -495,7 +501,7 @@ pub fn filters(
 
     // Upload endpoint
     let ctx = context;
-    let upload_route = warp::path!("upload" / String / String)
+    let upload_route = warp::path!("upload" / String / String / String)
         .and(warp::post())
         .and(with_auth(access_policy))
         .and(
