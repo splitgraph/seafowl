@@ -285,9 +285,9 @@ pub async fn cached_read_query(
     Ok(with_header(buf, header::ETAG, etag).into_response())
 }
 
-/// POST /upload/[database]/[schema]/[table]
+/// POST /upload/[schema]/[table] or /upload/[database]/[schema]/[table]
 pub async fn upload(
-    database_name: String,
+    database_name: Option<String>,
     schema_name: String,
     table_name: String,
     user_context: UserContext,
@@ -298,8 +298,10 @@ pub async fn upload(
         return Err(ApiError::WriteForbidden);
     };
 
-    if database_name != context.database {
-        context = context.scope_to_database(database_name)?;
+    if let Some(name) = database_name {
+        if name != context.database {
+            context = context.scope_to_database(name)?;
+        }
     }
 
     let parts: Vec<Part> = form
@@ -501,8 +503,15 @@ pub fn filters(
 
     // Upload endpoint
     let ctx = context;
-    let upload_route = warp::path!("upload" / String / String / String)
+    let upload_route = warp::path::param::<String>()
+        .map(Some)
+        .or_else(|_| async { Ok::<(Option<String>,), Infallible>((None,)) })
+        .and(warp::path!("upload" / String / String))
+        .or(warp::any()
+            .map(move || None::<String>)
+            .and(warp::path!("upload" / String / String)))
         .and(warp::post())
+        .unify()
         .and(with_auth(access_policy))
         .and(
             warp::multipart::form().max_length(config.upload_data_max_length * MEBIBYTES),
