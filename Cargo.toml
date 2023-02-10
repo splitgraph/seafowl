@@ -37,7 +37,7 @@ arrow-buffer = "31.0.0"
 arrow-integration-test = "31.0.0"
 arrow-schema = "31.0.0"
 async-trait = "0.1.64"
-base64 = "0.13.0"
+base64 = "0.21.0"
 
 bytes = "1.4.0"
 chrono = { version = "0.4", default_features = false }

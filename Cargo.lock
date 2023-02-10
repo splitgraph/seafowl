@@ -5062,7 +5062,7 @@ dependencies = [
  "arrow-schema",
  "assert_unordered",
  "async-trait",
- "base64 0.13.1",
+ "base64 0.21.0",
  "bytes",
  "chrono",
  "clap",
