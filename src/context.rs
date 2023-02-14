@@ -1,8 +1,9 @@
 // DataFusion bindings
 
 use async_trait::async_trait;
-use base64::decode;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use bytes::BytesMut;
+use std::borrow::Cow;
 
 use datafusion::datasource::TableProvider;
 use datafusion::parquet::basic::Compression;
@@ -678,18 +679,18 @@ impl DefaultSeafowlContext {
         let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
 
         self.inner
-            .catalog(resolved_ref.catalog)
+            .catalog(&resolved_ref.catalog)
             .ok_or_else(|| {
                 Error::Plan(format!(
                     "failed to resolve catalog: {}",
                     resolved_ref.catalog
                 ))
             })?
-            .schema(resolved_ref.schema)
+            .schema(&resolved_ref.schema)
             .ok_or_else(|| {
                 Error::Plan(format!("failed to resolve schema: {}", resolved_ref.schema))
             })?
-            .table(resolved_ref.table)
+            .table(&resolved_ref.table)
             .await
             .ok_or_else(|| {
                 Error::Plan(format!(
@@ -735,14 +736,14 @@ impl DefaultSeafowlContext {
         };
         let collection_id = self
             .table_catalog
-            .get_collection_id_by_name(&self.database, schema_name)
+            .get_collection_id_by_name(&self.database, &schema_name)
             .await?
             .ok_or_else(|| {
                 Error::Plan(format!("Schema {schema_name:?} does not exist!"))
             })?;
         Ok(self
             .table_catalog
-            .create_table(collection_id, table_name, &sf_schema)
+            .create_table(collection_id, &table_name, &sf_schema)
             .await?)
     }
 
@@ -751,7 +752,8 @@ impl DefaultSeafowlContext {
         name: &str,
         details: &CreateFunctionDetails,
     ) -> Result<()> {
-        let function_code = decode(&details.data)
+        let function_code = STANDARD
+            .decode(&details.data)
             .map_err(|e| Error::Execution(format!("Error decoding the UDF: {e:?}")))?;
 
         let function = create_udf_from_wasm(
@@ -1067,14 +1069,19 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                         for ((table, version), table_version_id) in &version_processor.table_versions {
                             if let Some(table_version_id) = table_version_id {
-                                let mut name = table.clone();
-                                name.0.last_mut().unwrap().value =
-                                    version_processor.table_with_version(&name, version);
-                                let full_name = name.to_string();
-                                let table_ref = TableReference::from(full_name.as_str());
+                                let name_with_version =
+                                    version_processor.table_with_version(table, version);
+
+                                let full_table_name = table.to_string();
+                                let table_ref = match TableReference::from(full_table_name.as_str()) {
+                                    TableReference::Bare {.. } => TableReference::Bare{ table: Cow::Borrowed(name_with_version.as_str()) },
+                                    TableReference::Partial { schema, .. } => TableReference::Partial { schema, table: Cow::Borrowed(name_with_version.as_str()) },
+                                    TableReference::Full { catalog, schema, .. } => TableReference::Full { catalog, schema, table: Cow::Borrowed(name_with_version.as_str()) }
+                                };
+
                                 let table_provider = tables_by_version[table_version_id].clone();
 
-                                if !session_ctx.table_exist(table_ref)? {
+                                if !session_ctx.table_exist(table_ref.clone())? {
                                     session_ctx.register_table(table_ref, table_provider)?;
                                 }
                             }
@@ -1699,7 +1706,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 TableReference::Partial { schema, table } => {
                                     let collection_id = self
                                         .table_catalog
-                                        .get_collection_id_by_name(&self.database, schema)
+                                        .get_collection_id_by_name(
+                                            &self.database,
+                                            &schema,
+                                        )
                                         .await?
                                         .ok_or_else(|| {
                                             Error::Plan(format!(
@@ -1719,7 +1729,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                             };
 
                             self.table_catalog
-                                .move_table(table.table_id, new_table_name, new_schema_id)
+                                .move_table(
+                                    table.table_id,
+                                    &new_table_name,
+                                    new_schema_id,
+                                )
                                 .await?;
 
                             Ok(make_dummy_exec())
@@ -2046,12 +2060,12 @@ mod tests {
     use super::test_utils::{in_memory_context, mock_context};
 
     const PARTITION_1_FILE_NAME: &str =
-        "11254dbe7a7a9e04283c4e6698d7efd080a15c699444ad6e5ca48b8022a310b3.parquet";
+        "0d5bb8d787b39a501c1c677dc9cabf7fbdb5c10152e48499d8b365f41111aa54.parquet";
     const PARTITION_2_FILE_NAME: &str =
-        "315c077f1fc7a0fc9b6bc52364e95929d82e1b15e0bbfcf7b5b15193c59975b2.parquet";
+        "27fc0c6574c0ffb3706e69abd5babac25a3773b30695a62d41621ddb698de7a6.parquet";
 
     const EXPECTED_INSERT_FILE_NAME: &str =
-        "21821d3386d9b6a7f5cae45f4b813dcc31caa65bc95f3241ccbb2a6fa088393b.parquet";
+        "67a68a0a8d05a07c80fc235ca42c63c21c853ba8f590a85220978e484118b322.parquet";
 
     fn to_min_max_value(value: ScalarValue) -> Arc<Option<Vec<u8>>> {
         Arc::from(scalar_value_to_bytes(&value))

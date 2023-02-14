@@ -564,12 +564,12 @@ async fn test_remote_table_querying(
     if introspect_schema {
         assert_contains!(
             actual_lines[5],
-            format!("TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Utf8(\"2022-11-01\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int64(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2")
+            format!("TableScan: staging.remote_table projection=[a, c, date field, e], full_filters=[staging.remote_table.date field > Utf8(\"2022-11-01\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int64(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2")
         );
     } else {
         assert_contains!(
             actual_lines[5],
-            format!("TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Date32(\"19297\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int32(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2")
+            format!("TableScan: staging.remote_table projection=[a, c, date field, e], full_filters=[staging.remote_table.date field > Date32(\"19297\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int32(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2")
         );
     };
 }
