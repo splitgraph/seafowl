@@ -42,11 +42,11 @@ mod vacuum;
 
 // Object store IDs for frequently-used test data
 const FILENAME_1: &str =
-    "7f567cdbadd38d52123772f5eeb002d6c48b8be626f63442c23e7cc4d205e6d4.parquet";
+    "7fbfeeeade71978b4ae82cd3d97b8c1bd9ae7ab9a7a78ee541b66209cfd7722d.parquet";
 const FILENAME_2: &str =
-    "2f5443307c1f5f57da3d37431ba80f8fe458165ce422aed433d42e7d2a8eb127.parquet";
+    "48b15ba6156370b0f4cf0522fcdaedebfedb3a99aca2222be722e49264c476c1.parquet";
 const FILENAME_RECHUNKED: &str =
-    "0d48d490ff42fc0a93bf20fc9bda3d063e9ecc90fa8ce83eb0665398b2114263.parquet";
+    "ece2031a3e121f8e4e31b2f2ef632a92b00dc479a6643172da8950def9fdb16e.parquet";
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 /// (but uses an in-memory object store)

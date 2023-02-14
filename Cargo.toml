@@ -29,15 +29,15 @@ object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
-arrow = "31.0.0"
-arrow-buffer = "31.0.0"
+arrow = "32.0.0"
+arrow-buffer = "32.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "31.0.0"
-arrow-schema = "31.0.0"
+arrow-integration-test = "32.0.0"
+arrow-schema = "32.0.0"
 async-trait = "0.1.64"
-base64 = "0.13.0"
+base64 = "0.21.0"
 
 bytes = "1.4.0"
 chrono = { version = "0.4", default_features = false }
@@ -45,25 +45,25 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-16-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-16-upgrade", package = "convergence-arrow", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-18-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-18-upgrade", package = "convergence-arrow", optional = true }
 
-datafusion = "16.0.0"
-datafusion-common = "16.0.0"
-datafusion-expr = "16.0.0"
-datafusion-proto = "16.0.0"
+datafusion = "18.0.0"
+datafusion-common = "18.0.0"
+datafusion-expr = "18.0.0"
+datafusion-proto = "18.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "datafusion-16-upgrade", features = ["s3", "datafusion-ext"], optional = true }
-dynamodb_lock = { git = "https://github.com/splitgraph/delta-rs", branch = "datafusion-16-upgrade", package = "dynamodb_lock", default_features = false, features = ["native-tls"], optional = true }
+deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "datafusion-18-upgrade", features = ["s3-native-tls", "datafusion-ext"], optional = true }
+dynamodb_lock = { git = "https://github.com/splitgraph/delta-rs", branch = "datafusion-18-upgrade", package = "dynamodb_lock", default_features = false, features = ["native-tls"], optional = true }
 
 futures = "0.3"
 hex = ">=0.4.0"
 itertools = ">=0.10.0"
 lazy_static = ">=1.4.0"
 log = "0.4"
-moka = { version = "0.9.3", default_features = false, features = ["future", "atomic64", "quanta"] }
+moka = { version = "0.10.0", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.5.2"
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
@@ -96,14 +96,10 @@ wasmtime = "1.0.1"
 wasmtime-wasi = "1.0.1"
 
 [patch.crates-io]
-datafusion = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "insert-target-columns-empty-fix-df16" }
-datafusion-common = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "insert-target-columns-empty-fix-df16" }
-datafusion-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "insert-target-columns-empty-fix-df16" }
-datafusion-proto = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "insert-target-columns-empty-fix-df16" }
 
 [dev-dependencies]
 assert_unordered = "0.3"
-datafusion-common = "16.0.0"
+datafusion-common = "18.0.0"
 mockall = "0.11.1"
 rstest = "*"
 wiremock = "0.5"
