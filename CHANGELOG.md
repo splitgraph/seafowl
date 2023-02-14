@@ -4,9 +4,13 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.2.12] - 2023-02-14
+
 - Upgrade to DataFusion 18.0.0 (<https://github.com/splitgraph/seafowl/pull/297>)
-- Implement multi-database support for upload endpoint (<https://github.com/splitgraph/seafowl/pull/291>)
-- Implement multi-database support for GET and POST query endpoints (<https://github.com/splitgraph/seafowl/pull/289>)
+- Implement multi-database support for upload endpoint
+  (<https://github.com/splitgraph/seafowl/pull/291>)
+- Implement multi-database support for GET and POST query endpoints
+  (<https://github.com/splitgraph/seafowl/pull/289>)
 
 ## [0.2.11] - 2023-01-27
 
@@ -110,7 +114,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.11...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.12...HEAD
+[0.2.12]: https://github.com/splitgraph/seafowl/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/splitgraph/seafowl/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/splitgraph/seafowl/compare/v0.2.10...v0.2.10
 [0.2.10]: https://github.com/splitgraph/seafowl/compare/v0.2.9...v0.2.10
