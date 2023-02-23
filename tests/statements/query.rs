@@ -574,7 +574,6 @@ async fn test_remote_table_querying(
     };
 }
 
-#[cfg(feature = "delta-tables")]
 #[tokio::test]
 async fn test_delta_tables() {
     let context = make_context_with_pg().await;

@@ -39,6 +39,7 @@ use datafusion::{
 use datafusion_common::DFSchema;
 use datafusion_expr::Expr;
 use datafusion_proto::protobuf;
+use deltalake::{DeltaDataTypeVersion, DeltaTable};
 
 use futures::future;
 use log::warn;
@@ -91,7 +92,9 @@ impl CatalogProvider for SeafowlDatabase {
 
 pub struct SeafowlCollection {
     pub name: Arc<str>,
-    pub tables: RwLock<HashMap<Arc<str>, Arc<SeafowlTable>>>,
+    // TODO: consider using DashMap instead of RwLock<HashMap<_>>: https://github.com/xacrimon/conc-map-bench
+    pub legacy_tables: RwLock<HashMap<Arc<str>, Arc<SeafowlTable>>>,
+    pub tables: RwLock<HashMap<Arc<str>, Arc<DeltaTable>>>,
 }
 
 #[async_trait]
@@ -101,21 +104,66 @@ impl SchemaProvider for SeafowlCollection {
     }
 
     fn table_names(&self) -> Vec<String> {
-        let tables = self.tables.read();
-        tables.keys().map(|s| s.to_string()).collect()
+        let mut table_names: Vec<_> = self
+            .legacy_tables
+            .read()
+            .keys()
+            .map(|s| s.to_string())
+            .collect();
+        table_names.extend(
+            self.tables
+                .read()
+                .keys()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        );
+        table_names
     }
 
     async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        let tables = self.tables.read();
-        tables.get(name).map(|c| Arc::clone(c) as _)
+        {
+            let legacy_table = self
+                .legacy_tables
+                .read()
+                .get(name)
+                .map(|c| Arc::clone(c) as _);
+
+            if legacy_table.is_some() {
+                return legacy_table;
+            }
+        }
+
+        // TODO: This is not very nice: cloning into a new table, instead of just calling `load` on
+        // the existing one (which we can't because it's behind of an Arc, and `load` needs `mut`).
+        // We may be able to improve it by:
+        //    1. removing the `Arc` from the value in the map
+        //    2. enclosing the entire map inside of an `Arc`
+        //    3. using `entry` for in-place mutation
+        // Ultimately though, since the map gets re-created for each query the only point in
+        // updating the existing table is to optimize potential multi-lookups during processing of
+        // a single query.
+        let mut delta_table = match self.tables.read().get(name) {
+            None => return None,
+            Some(table) => table.as_ref().clone(),
+        };
+
+        if delta_table.version() == -1 as DeltaDataTypeVersion {
+            // A negative table version indicates that the table was never loaded
+            if let Err(err) = delta_table.load().await {
+                warn!("Failed to load table {name}: {err}");
+                return None;
+            }
+        }
+
+        Some(Arc::from(delta_table) as _)
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        let tables = self.tables.read();
-        tables.contains_key(name)
+        self.legacy_tables.read().contains_key(name)
+            || self.tables.read().contains_key(name)
     }
 
-    // Used for registering versioned as well as delta/remote tables via `SessionContext::register_table`.
+    // Used for registering versioned tables via `SessionContext::register_table`.
     fn register_table(
         &self,
         name: String,
@@ -126,23 +174,25 @@ impl SchemaProvider for SeafowlCollection {
                 "The table {name} already exists"
             )));
         }
-        let mut tables = self.tables.write();
-        let old_table = tables.insert(
-            Arc::from(name),
-            Arc::new(
-                table
-                    .as_any()
-                    .downcast_ref::<SeafowlTable>()
-                    .ok_or_else(|| {
-                        DataFusionError::Execution(format!(
-                            "Couldn't cast table {:?} to SeafowlTable",
-                            table.schema(),
-                        ))
-                    })?
-                    .clone(),
-            ),
-        );
-        Ok(old_table.map(|t| t as Arc<dyn TableProvider>))
+
+        if let Some(legacy_table) = table.as_any().downcast_ref::<SeafowlTable>() {
+            let mut tables = self.legacy_tables.write();
+            return Ok(tables
+                .insert(Arc::from(name), Arc::from(legacy_table.clone()))
+                .map(|t| t as Arc<dyn TableProvider>));
+        }
+
+        if let Some(table) = table.as_any().downcast_ref::<DeltaTable>() {
+            let mut tables = self.tables.write();
+            return Ok(tables
+                .insert(Arc::from(name), Arc::from(table.clone()))
+                .map(|t| t as Arc<dyn TableProvider>));
+        }
+
+        Err(DataFusionError::Execution(format!(
+            "Couldn't cast table {:?} to SeafowlTable or DeltaTable",
+            table.schema(),
+        )))
     }
 }
 

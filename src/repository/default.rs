@@ -109,17 +109,20 @@ impl Repository for $repo {
 
         builder.push(r#"
         SELECT
+            database.name AS database_name,
             collection.name AS collection_name,
             "table".name AS table_name,
             "table".id AS table_id,
+            "table".legacy AS table_legacy,
             desired_table_versions.id AS table_version_id,
             table_column.name AS column_name,
             table_column.type AS column_type
-        FROM collection
+        FROM database
+        INNER JOIN collection ON database.id = collection.database_id
         INNER JOIN "table" ON collection.id = "table".collection_id
         INNER JOIN desired_table_versions ON "table".id = desired_table_versions.table_id
         INNER JOIN table_column ON table_column.table_version_id = desired_table_versions.id
-        WHERE collection.database_id = "#);
+        WHERE database.id = "#);
         builder.push_bind(database_id);
 
         builder.push(r#"

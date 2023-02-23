@@ -22,8 +22,7 @@ include = [
 
 [features]
 catalog-postgres = ["sqlx/postgres"]
-default = ["catalog-postgres", "delta-tables", "frontend-postgres", "object-store-s3", "remote-tables"]
-delta-tables = ["dep:deltalake", "dep:dynamodb_lock"]
+default = ["catalog-postgres", "frontend-postgres", "object-store-s3", "remote-tables"]
 frontend-postgres = ["convergence", "convergence-arrow"]
 object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
@@ -55,8 +54,8 @@ datafusion-proto = "18.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "datafusion-18-upgrade", features = ["s3-native-tls", "datafusion-ext"], optional = true }
-dynamodb_lock = { git = "https://github.com/splitgraph/delta-rs", branch = "datafusion-18-upgrade", package = "dynamodb_lock", default_features = false, features = ["native-tls"], optional = true }
+deltalake = { path = "../delta-rs/rust", features = ["s3-native-tls", "datafusion-ext"] }
+dynamodb_lock = { path = "../delta-rs/dynamodb_lock", default_features = false, features = ["native-tls"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
@@ -65,7 +64,7 @@ lazy_static = ">=1.4.0"
 log = "0.4"
 moka = { version = "0.10.0", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.5.2"
-parking_lot = "0.12.1"
+parking_lot = { version = "0.12.1", features = ["send_guard"] }
 percent-encoding = "2.2.0"
 pretty_env_logger = "0.4"
 prost = "0.11"

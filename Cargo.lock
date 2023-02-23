@@ -1878,7 +1878,6 @@ checksum = "eaa37046cc0f6c3cc6090fbdbf73ef0b8ef4cfcc37f6befc0020f63e8cf121e1"
 [[package]]
 name = "deltalake"
 version = "0.7.0"
-source = "git+https://github.com/splitgraph/delta-rs?branch=datafusion-18-upgrade#f1e972fbafb8d6ec48d83cfec81f57e1f09e40dd"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2032,7 +2031,6 @@ checksum = "1435fa1053d8b2fbbe9be7e97eca7f33d37b28409959813daefc1446a14247f1"
 [[package]]
 name = "dynamodb_lock"
 version = "0.4.2"
-source = "git+https://github.com/splitgraph/delta-rs?branch=datafusion-18-upgrade#f1e972fbafb8d6ec48d83cfec81f57e1f09e40dd"
 dependencies = [
  "async-trait",
  "log",
@@ -2571,7 +2569,6 @@ dependencies = [
 [[package]]
 name = "glibc_version"
 version = "0.1.2"
-source = "git+https://github.com/splitgraph/delta-rs?branch=datafusion-18-upgrade#f1e972fbafb8d6ec48d83cfec81f57e1f09e40dd"
 dependencies = [
  "regex",
 ]
@@ -3883,6 +3880,7 @@ dependencies = [
  "lz4",
  "num",
  "num-bigint",
+ "object_store",
  "paste",
  "seq-macro",
  "snap",

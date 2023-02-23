@@ -14,9 +14,11 @@ use crate::{
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct AllDatabaseColumnsResult {
+    pub database_name: String,
     pub collection_name: String,
     pub table_name: String,
     pub table_id: TableId,
+    pub table_legacy: bool,
     pub table_version_id: TableVersionId,
     pub column_name: String,
     pub column_type: String,
@@ -296,22 +298,27 @@ pub mod tests {
 
     fn expected(
         version: TableVersionId,
+        database_name: String,
         collection_name: String,
         table_name: String,
     ) -> Vec<AllDatabaseColumnsResult> {
         vec![
             AllDatabaseColumnsResult {
+                database_name: database_name.clone(),
                 collection_name: collection_name.clone(),
                 table_name: table_name.clone(),
                 table_id: 1,
+                table_legacy: false,
                 table_version_id: version,
                 column_name: "date".to_string(),
                 column_type: "{\"children\":[],\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}}".to_string(),
             },
             AllDatabaseColumnsResult {
+                database_name,
                 collection_name,
                 table_name,
                 table_id: 1,
+                table_legacy: false,
                 table_version_id: version,
                 column_name: "value".to_string(),
                 column_type: "{\"children\":[],\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}}"
@@ -342,7 +349,12 @@ pub mod tests {
 
         assert_eq!(
             all_columns,
-            expected(1, "testcol".to_string(), "testtable".to_string())
+            expected(
+                1,
+                "testdb".to_string(),
+                "testcol".to_string(),
+                "testtable".to_string()
+            )
         );
 
         // Duplicate the table
@@ -361,6 +373,7 @@ pub mod tests {
             all_columns,
             expected(
                 new_version_id,
+                "testdb".to_string(),
                 "testcol".to_string(),
                 "testtable".to_string()
             )
@@ -374,7 +387,12 @@ pub mod tests {
 
         assert_eq!(
             all_columns,
-            expected(1, "testcol".to_string(), "testtable".to_string())
+            expected(
+                1,
+                "testdb".to_string(),
+                "testcol".to_string(),
+                "testtable".to_string()
+            )
         );
 
         // Check the existing table versions
@@ -537,6 +555,7 @@ pub mod tests {
             all_columns,
             expected(
                 table_version_id,
+                "testdb".to_string(),
                 "testcol".to_string(),
                 "testtable2".to_string()
             )
@@ -561,6 +580,7 @@ pub mod tests {
             all_columns,
             expected(
                 table_version_id,
+                "testdb".to_string(),
                 "testcol2".to_string(),
                 "testtable2".to_string()
             )

@@ -4,6 +4,7 @@ use std::{collections::HashMap, fmt::Debug, sync::Arc};
 use async_trait::async_trait;
 use datafusion::catalog::schema::MemorySchemaProvider;
 use datafusion::error::DataFusionError;
+use deltalake::{DeltaTable, DeltaTableBuilder};
 use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
@@ -276,14 +277,22 @@ pub struct DefaultCatalog {
 
     // DataFusion's in-memory schema provider for staging external tables
     staging_schema: Arc<MemorySchemaProvider>,
+    storage_options: HashMap<String, String>,
+    store_uri: String,
 }
 
 impl DefaultCatalog {
-    pub fn new(repository: Arc<dyn Repository>) -> Self {
+    pub fn new(
+        repository: Arc<dyn Repository>,
+        storage_options: HashMap<String, String>,
+        store_uri: String,
+    ) -> Self {
         let staging_schema = Arc::new(MemorySchemaProvider::new());
         Self {
             repository,
             staging_schema,
+            storage_options,
+            store_uri,
         }
     }
 
@@ -320,7 +329,7 @@ impl DefaultCatalog {
         }
     }
 
-    fn build_table<'a, I>(
+    fn build_legacy_table<'a, I>(
         &self,
         table_name: &str,
         table_columns: I,
@@ -358,6 +367,38 @@ impl DefaultCatalog {
         (Arc::from(table_name.to_string()), Arc::new(table))
     }
 
+    fn build_table<'a, I>(
+        &self,
+        table_name: &str,
+        table_columns: I,
+    ) -> (Arc<str>, Arc<DeltaTable>)
+    where
+        I: Iterator<Item = &'a AllDatabaseColumnsResult>,
+    {
+        let table_columns_vec = table_columns.collect_vec();
+
+        // Build a delta table but don't load it yet; we'll do that only for tables that are
+        // actually referenced in a statement, via the async `table` method of the schema provider.
+
+        // TODO: if the table has no columns, the result set will be empty, so we use the default DB and schema names.
+        let (database_name, collection_name) = table_columns_vec.get(0).map_or_else(
+            || (DEFAULT_DB, DEFAULT_SCHEMA),
+            |v| (&v.database_name, &v.collection_name),
+        );
+
+        let table_uri = format!(
+            "{}/{}/{}/{}",
+            self.store_uri, database_name, collection_name, table_name
+        );
+
+        let table = DeltaTableBuilder::from_uri(table_uri)
+            .with_storage_options(self.storage_options.clone())
+            .build()
+            .unwrap();
+
+        (Arc::from(table_name.to_string()), Arc::new(table))
+    }
+
     fn build_collection<'a, I>(
         &self,
         collection_name: &str,
@@ -366,7 +407,20 @@ impl DefaultCatalog {
     where
         I: Iterator<Item = &'a AllDatabaseColumnsResult>,
     {
-        let tables = collection_columns
+        let collection_columns_vec = collection_columns.collect_vec();
+
+        let legacy_tables = collection_columns_vec
+            .clone()
+            .into_iter()
+            .filter(|c| c.table_legacy)
+            .group_by(|col| &col.table_name)
+            .into_iter()
+            .map(|(tn, tc)| self.build_legacy_table(tn, tc))
+            .collect::<HashMap<_, _>>();
+
+        let tables = collection_columns_vec
+            .into_iter()
+            .filter(|c| !c.table_legacy)
             .group_by(|col| &col.table_name)
             .into_iter()
             .map(|(tn, tc)| self.build_table(tn, tc))
@@ -376,6 +430,7 @@ impl DefaultCatalog {
             Arc::from(collection_name.to_string()),
             Arc::new(SeafowlCollection {
                 name: Arc::from(collection_name.to_string()),
+                legacy_tables: RwLock::new(legacy_tables),
                 tables: RwLock::new(tables),
             }),
         )
@@ -440,9 +495,10 @@ impl TableCatalog for DefaultCatalog {
 
         let tables = table_columns
             .iter()
+            .filter(|col| col.table_legacy)
             .group_by(|col| (&col.table_name, &col.table_version_id))
             .into_iter()
-            .map(|((tn, &tv), tc)| (tv, self.build_table(tn, tc).1))
+            .map(|((tn, &tv), tc)| (tv, self.build_legacy_table(tn, tc).1))
             .collect();
 
         Ok(tables)

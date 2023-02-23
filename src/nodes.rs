@@ -1,5 +1,6 @@
 use datafusion::common::DFSchemaRef;
 
+use arrow_schema::Schema;
 use std::{any::Any, fmt, sync::Arc, vec};
 
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
@@ -10,7 +11,7 @@ use crate::{provider::SeafowlTable, wasm_udf::data_types::CreateFunctionDetails}
 #[derive(Debug, Clone)]
 pub struct CreateTable {
     /// The table schema
-    pub schema: DFSchemaRef,
+    pub schema: Schema,
     /// The table name
     pub name: String,
     /// Option to not error if table already exists

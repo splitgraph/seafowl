@@ -85,6 +85,8 @@ use datafusion_expr::logical_plan::{
     DropTable, Extension, LogicalPlan, Projection,
 };
 use datafusion_expr::{DmlStatement, Filter, WriteOp};
+use deltalake::operations::{create::CreateBuilder, write::WriteBuilder};
+use deltalake::{DeltaTable, Schema as DeltaSchema};
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use prost::Message;
@@ -92,7 +94,7 @@ use tempfile::TempPath;
 use tokio::sync::Semaphore;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
-use crate::data_types::{PhysicalPartitionId, TableId, TableVersionId};
+use crate::data_types::{PhysicalPartitionId, TableVersionId};
 use crate::datafusion::visit::VisitorMut;
 use crate::provider::{
     project_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
@@ -256,6 +258,8 @@ pub struct DefaultSeafowlContext {
     pub partition_catalog: Arc<dyn PartitionCatalog>,
     pub function_catalog: Arc<dyn FunctionCatalog>,
     pub internal_object_store: Arc<InternalObjectStore>,
+    pub storage_options: HashMap<String, String>,
+    pub store_uri: String,
     pub database: String,
     pub database_id: DatabaseId,
     pub all_database_ids: Arc<RwLock<HashMap<String, DatabaseId>>>,
@@ -597,11 +601,40 @@ impl DefaultSeafowlContext {
             partition_catalog: self.partition_catalog.clone(),
             function_catalog: self.function_catalog.clone(),
             internal_object_store: self.internal_object_store.clone(),
+            storage_options: self.storage_options.clone(),
+            store_uri: self.store_uri.clone(),
             database: name,
             database_id,
             all_database_ids: self.all_database_ids.clone(),
             max_partition_size: self.max_partition_size,
         }))
+    }
+
+    /// Construct the full table uri in the underlying object store
+    pub fn table_to_location<'a>(&self, table: impl Into<TableReference<'a>>) -> String {
+        let table_ref: TableReference = table.into();
+        let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
+
+        format!(
+            "{}/{}/{}/{}",
+            self.store_uri, resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+        )
+    }
+
+    /// Generate the Delta table builder and execute the write
+    pub async fn plan_to_delta_table(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        location: impl Into<String>,
+    ) -> Result<DeltaTable> {
+        let table = WriteBuilder::new()
+            .with_input_execution_plan(plan.clone())
+            .with_storage_options(self.storage_options.clone())
+            .with_location(location)
+            .await?;
+
+        debug!("Written table version {} for {table}", table.version());
+        Ok(table)
     }
 
     pub fn inner(&self) -> &SessionContext {
@@ -721,18 +754,14 @@ impl DefaultSeafowlContext {
         Ok(seafowl_table.clone())
     }
 
-    async fn exec_create_table(
-        &self,
-        name: &str,
-        schema: &Arc<DFSchema>,
-    ) -> Result<(TableId, TableVersionId)> {
+    async fn exec_create_table(&self, name: &str, schema: &Schema) -> Result<DeltaTable> {
         let table_ref = TableReference::from(name);
         let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
         let schema_name = resolved_ref.schema;
         let table_name = resolved_ref.table;
 
         let sf_schema = SeafowlSchema {
-            arrow_schema: Arc::new(schema.as_ref().into()),
+            arrow_schema: Arc::new(schema.clone()),
         };
         let collection_id = self
             .table_catalog
@@ -741,10 +770,30 @@ impl DefaultSeafowlContext {
             .ok_or_else(|| {
                 Error::Plan(format!("Schema {schema_name:?} does not exist!"))
             })?;
-        Ok(self
-            .table_catalog
+
+        let delta_schema = DeltaSchema::try_from(schema)?;
+        let location = self.table_to_location(name);
+
+        let table = CreateBuilder::new()
+            .with_storage_options(self.storage_options.clone())
+            .with_location(&location)
+            .with_table_name(&*table_name)
+            .with_columns(delta_schema.get_fields().clone())
+            .with_comment(format!(
+                "Created by Seafowl version {}",
+                env!("CARGO_PKG_VERSION")
+            ))
+            .await?;
+
+        // We still persist the table into our own catalog, the principal reason being able to load
+        // all collections/tables and their schemas in bulk to satisfy information_schema queries.
+        // We should look into doing this via delta-rs somehow eventually.
+        self.table_catalog
             .create_table(collection_id, &table_name, &sf_schema)
-            .await?)
+            .await?;
+
+        debug!("Created new table at location {location}");
+        Ok(table)
     }
 
     fn register_function(
@@ -804,25 +853,17 @@ impl DefaultSeafowlContext {
         output_schema: Option<SchemaRef>,
         name: Option<String>,
         from_table_version: Option<TableVersionId>,
-    ) -> Result<TableVersionId> {
-        let partition_ids = self
-            .execute_plan_to_partitions(physical_plan, output_schema.clone())
-            .await?;
-
+    ) -> Result<()> {
         // Create/Update table metadata
-        let new_table_version_id;
         match (name, from_table_version) {
             (Some(name), _) => {
                 let schema = output_schema.unwrap_or_else(|| physical_plan.schema());
                 // Create an empty table with an empty version
-                (_, new_table_version_id) = self
-                    .exec_create_table(&name, &schema.to_dfschema_ref()?)
-                    .await?;
+                self.exec_create_table(&name, schema.as_ref()).await?;
             }
             (_, Some(from_table_version)) => {
                 // Duplicate the table version into a new one
-                new_table_version_id = self
-                    .table_catalog
+                self.table_catalog
                     .create_new_table_version(from_table_version, true)
                     .await?;
             }
@@ -833,12 +874,7 @@ impl DefaultSeafowlContext {
             }
         }
 
-        // Attach the partitions to the table
-        self.partition_catalog
-            .append_partitions_to_table(partition_ids.clone(), new_table_version_id)
-            .await?;
-
-        Ok(new_table_version_id)
+        Ok(())
     }
 
     // Generate new physical Parquet partition files from the provided plan, upload to object store
@@ -1184,10 +1220,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                     && table_properties.is_empty()
                     && with_options.is_empty() =>
                 {
-                    let cols = build_schema(columns)?;
+                    let schema = build_schema(columns)?;
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::CreateTable(CreateTable {
-                            schema: cols.to_dfschema_ref()?,
+                            schema,
                             name: remove_quotes_from_object_name(&name).to_string(),
                             if_not_exists,
                             output_schema: Arc::new(DFSchema::empty())
@@ -1402,17 +1438,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                 input,
                 ..
             }) => {
-                let table = self.try_get_seafowl_table(table_name.to_string()).await?;
-
                 let physical = self.create_physical_plan(input).await?;
 
-                self.execute_plan_to_table(
-                    &physical,
-                    None,
-                    None,
-                    Some(table.table_version_id),
-                )
-                .await?;
+                self.plan_to_delta_table(&physical, self.table_to_location(table_name))
+                    .await?;
 
                 Ok(make_dummy_exec())
             }
@@ -1971,7 +2000,8 @@ pub mod test_utils {
             Arc::from("testcol"),
             Arc::from(SeafowlCollection {
                 name: Arc::from("testcol"),
-                tables: RwLock::new(tables),
+                legacy_tables: RwLock::new(tables),
+                tables: Default::default(),
             }),
         )]);
 
@@ -2022,6 +2052,8 @@ pub mod test_utils {
             partition_catalog: partition_catalog_ptr,
             function_catalog: Arc::new(function_catalog),
             internal_object_store: object_store,
+            storage_options: Default::default(),
+            store_uri: "/".to_string(),
             database: "testdb".to_string(),
             database_id: 0,
             all_database_ids: Arc::from(RwLock::new(HashMap::from([(
