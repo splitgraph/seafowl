@@ -95,6 +95,11 @@ wasmtime = "1.0.1"
 wasmtime-wasi = "1.0.1"
 
 [patch.crates-io]
+arrow-data = { git = "https://github.com/splitgraph/arrow-rs", package = "arrow-data", branch = "backport-cast-utf8-to-timestamp-microsecond" }
+arrow-array = { git = "https://github.com/splitgraph/arrow-rs", package = "arrow-array", branch = "backport-cast-utf8-to-timestamp-microsecond" }
+arrow-buffer = { git = "https://github.com/splitgraph/arrow-rs", package = "arrow-buffer", branch = "backport-cast-utf8-to-timestamp-microsecond" }
+arrow-schema = { git = "https://github.com/splitgraph/arrow-rs", package = "arrow-schema", branch = "backport-cast-utf8-to-timestamp-microsecond" }
+arrow-cast = { git = "https://github.com/splitgraph/arrow-rs", package = "arrow-cast", branch = "backport-cast-utf8-to-timestamp-microsecond" }
 
 [dev-dependencies]
 assert_unordered = "0.3"

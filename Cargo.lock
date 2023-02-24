@@ -125,7 +125,7 @@ dependencies = [
  "arrow-ord",
  "arrow-row",
  "arrow-schema",
- "arrow-select",
+ "arrow-select 32.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "arrow-string",
  "bitflags",
  "comfy-table",
@@ -149,8 +149,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "32.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fe66ec388d882a61fff3eb613b5266af133aa08a3318e5e493daf0f5c1696cb"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-cast-utf8-to-timestamp-microsecond#d01096c6c9ac845f863d43f326709d3aaa99bdaf"
 dependencies = [
  "ahash 0.8.1",
  "arrow-buffer",
@@ -165,8 +164,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "32.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ef967dadbccd4586ec8d7aab27d7033ecb5dfae8a605c839613039eac227bda"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-cast-utf8-to-timestamp-microsecond#d01096c6c9ac845f863d43f326709d3aaa99bdaf"
 dependencies = [
  "half",
  "num",
@@ -175,14 +173,13 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "32.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "491a7979ea9e76dc218f532896e2d245fde5235e2e6420ce80d27cf6395dda84"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-cast-utf8-to-timestamp-microsecond#d01096c6c9ac845f863d43f326709d3aaa99bdaf"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
- "arrow-select",
+ "arrow-select 32.0.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-cast-utf8-to-timestamp-microsecond)",
  "chrono",
  "lexical-core",
  "num",
@@ -210,8 +207,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "32.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee0c0e3c5d3b80be8f267f4b2af714c08cad630569be01a8379cfe27b4866495"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-cast-utf8-to-timestamp-microsecond#d01096c6c9ac845f863d43f326709d3aaa99bdaf"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -276,7 +272,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
- "arrow-select",
+ "arrow-select 32.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "num",
 ]
 
@@ -298,14 +294,25 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "32.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ead3f373b9173af52f2fdefcb5a7dd89f453fbc40056f574a8aeb23382a4ef81"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-cast-utf8-to-timestamp-microsecond#d01096c6c9ac845f863d43f326709d3aaa99bdaf"
 
 [[package]]
 name = "arrow-select"
 version = "32.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "646b4f15b5a77c970059e748aeb1539705c68cd397ecf0f0264c4ef3737d35f3"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "num",
+]
+
+[[package]]
+name = "arrow-select"
+version = "32.0.0"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-cast-utf8-to-timestamp-microsecond#d01096c6c9ac845f863d43f326709d3aaa99bdaf"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -324,7 +331,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
- "arrow-select",
+ "arrow-select 32.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex",
  "regex-syntax",
 ]
@@ -3869,7 +3876,7 @@ dependencies = [
  "arrow-data",
  "arrow-ipc",
  "arrow-schema",
- "arrow-select",
+ "arrow-select 32.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "base64 0.21.0",
  "brotli",
  "bytes",

@@ -39,7 +39,7 @@ use datafusion::{
 use datafusion_common::DFSchema;
 use datafusion_expr::Expr;
 use datafusion_proto::protobuf;
-use deltalake::{DeltaDataTypeVersion, DeltaTable};
+use deltalake::{DeltaTable, DeltaTableBuilder};
 
 use futures::future;
 use log::warn;
@@ -94,7 +94,7 @@ pub struct SeafowlCollection {
     pub name: Arc<str>,
     // TODO: consider using DashMap instead of RwLock<HashMap<_>>: https://github.com/xacrimon/conc-map-bench
     pub legacy_tables: RwLock<HashMap<Arc<str>, Arc<SeafowlTable>>>,
-    pub tables: RwLock<HashMap<Arc<str>, Arc<DeltaTable>>>,
+    pub tables: RwLock<HashMap<Arc<str>, Arc<dyn TableProvider>>>,
 }
 
 #[async_trait]
@@ -133,7 +133,7 @@ impl SchemaProvider for SeafowlCollection {
             }
         }
 
-        // TODO: This is not very nice: cloning into a new table, instead of just calling `load` on
+        // TODO: This is not very nice: rebuilding the table from scratch, instead of just `load` on
         // the existing one (which we can't because it's behind of an Arc, and `load` needs `mut`).
         // We may be able to improve it by:
         //    1. removing the `Arc` from the value in the map
@@ -142,20 +142,37 @@ impl SchemaProvider for SeafowlCollection {
         // Ultimately though, since the map gets re-created for each query the only point in
         // updating the existing table is to optimize potential multi-lookups during processing of
         // a single query.
-        let mut delta_table = match self.tables.read().get(name) {
+        let (table_uri, object_store) = match self.tables.read().get(name) {
             None => return None,
-            Some(table) => table.as_ref().clone(),
+            Some(table) => match table.as_any().downcast_ref::<DeltaTable>() {
+                // This shouldn't happen since we stsore only DeltaTable's in the map
+                None => return Some(table.clone()),
+                Some(delta_table) => {
+                    if delta_table.version() != -1 {
+                        // Table was already loaded.
+                        return Some(table.clone());
+                    } else {
+                        // A negative table version indicates that the table was never loaded; we need
+                        // to do it before returning it.
+                        (delta_table.table_uri(), delta_table.object_store())
+                    }
+                }
+            },
         };
 
-        if delta_table.version() == -1 as DeltaDataTypeVersion {
-            // A negative table version indicates that the table was never loaded
-            if let Err(err) = delta_table.load().await {
-                warn!("Failed to load table {name}: {err}");
-                return None;
-            }
+        let maybe_table = DeltaTableBuilder::from_uri(table_uri.clone())
+            .with_storage_backend(object_store, table_uri.parse().unwrap())
+            .load()
+            .await;
+
+        if let Err(err) = maybe_table {
+            warn!("Failed to load table {name}: {err}");
+            return None;
         }
 
-        Some(Arc::from(delta_table) as _)
+        let table = Arc::from(maybe_table.unwrap()) as Arc<dyn TableProvider>;
+        self.tables.write().insert(Arc::from(name), table.clone());
+        Some(table)
     }
 
     fn table_exist(&self, name: &str) -> bool {
@@ -182,17 +199,7 @@ impl SchemaProvider for SeafowlCollection {
                 .map(|t| t as Arc<dyn TableProvider>));
         }
 
-        if let Some(table) = table.as_any().downcast_ref::<DeltaTable>() {
-            let mut tables = self.tables.write();
-            return Ok(tables
-                .insert(Arc::from(name), Arc::from(table.clone()))
-                .map(|t| t as Arc<dyn TableProvider>));
-        }
-
-        Err(DataFusionError::Execution(format!(
-            "Couldn't cast table {:?} to SeafowlTable or DeltaTable",
-            table.schema(),
-        )))
+        Ok(self.tables.write().insert(Arc::from(name), table))
     }
 }
 

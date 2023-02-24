@@ -785,8 +785,8 @@ impl DefaultSeafowlContext {
             ))
             .await?;
 
-        // We still persist the table into our own catalog, the principal reason being able to load
-        // all collections/tables and their schemas in bulk to satisfy information_schema queries.
+        // We still persist the table into our own catalog, the principal reason is us being able to
+        // load all tables and their schemas in bulk to satisfy information_schema queries.
         // We should look into doing this via delta-rs somehow eventually.
         self.table_catalog
             .create_table(collection_id, &table_name, &sf_schema)

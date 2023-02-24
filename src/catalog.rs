@@ -3,8 +3,9 @@ use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::catalog::schema::MemorySchemaProvider;
+use datafusion::datasource::TableProvider;
 use datafusion::error::DataFusionError;
-use deltalake::{DeltaTable, DeltaTableBuilder};
+use deltalake::DeltaTableBuilder;
 use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
@@ -371,7 +372,7 @@ impl DefaultCatalog {
         &self,
         table_name: &str,
         table_columns: I,
-    ) -> (Arc<str>, Arc<DeltaTable>)
+    ) -> (Arc<str>, Arc<dyn TableProvider>)
     where
         I: Iterator<Item = &'a AllDatabaseColumnsResult>,
     {
@@ -396,7 +397,7 @@ impl DefaultCatalog {
             .build()
             .unwrap();
 
-        (Arc::from(table_name.to_string()), Arc::new(table))
+        (Arc::from(table_name.to_string()), Arc::new(table) as _)
     }
 
     fn build_collection<'a, I>(

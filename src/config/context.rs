@@ -113,9 +113,10 @@ fn build_storage_options(
         schema::ObjectStore::Local(schema::Local { data_dir }) => {
             (HashMap::<String, String>::default(), data_dir.clone())
         }
-        schema::ObjectStore::InMemory(_) => {
-            (HashMap::<String, String>::default(), "/".to_string())
-        }
+        schema::ObjectStore::InMemory(_) => (
+            HashMap::<String, String>::default(),
+            "memory://".to_string(),
+        ),
         #[cfg(feature = "object-store-s3")]
         schema::ObjectStore::S3(S3 {
             region,
