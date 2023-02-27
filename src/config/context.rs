@@ -90,7 +90,7 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             let mut builder = AmazonS3Builder::new()
                 .with_access_key_id(access_key_id)
                 .with_secret_access_key(secret_access_key)
-                .with_region(region.clone().unwrap_or("".to_string()))
+                .with_region(region.clone().unwrap_or_default())
                 .with_bucket_name(bucket)
                 .with_allow_http(true);
 

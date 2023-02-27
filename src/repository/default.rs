@@ -164,8 +164,9 @@ impl Repository for $repo {
     }
 
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error> {
+        let unqoted_name = database_name.trim_matches('"');
         let id = sqlx::query(r#"INSERT INTO database (name) VALUES ($1) RETURNING (id)"#)
-            .bind(database_name)
+            .bind(unqoted_name)
             .fetch_one(&self.executor)
             .await.map_err($repo::interpret_error)?
             .try_get("id").map_err($repo::interpret_error)?;
@@ -223,9 +224,10 @@ impl Repository for $repo {
         database_id: DatabaseId,
         collection_name: &str,
     ) -> Result<CollectionId, Error> {
+        let unquoted_name = collection_name.trim_matches('"');
         let id = sqlx::query(
             r#"INSERT INTO "collection" (database_id, name) VALUES ($1, $2) RETURNING (id)"#,
-        ).bind(database_id).bind(collection_name)
+        ).bind(database_id).bind(unquoted_name)
         .fetch_one(&self.executor)
         .await.map_err($repo::interpret_error)?
         .try_get("id").map_err($repo::interpret_error)?;
@@ -240,11 +242,12 @@ impl Repository for $repo {
         schema: &Schema,
     ) -> Result<(TableId, TableVersionId), Error> {
         // Create new (empty) table
+        let unquoted_name = table_name.trim_matches('"');
         let new_table_id: i64 = sqlx::query(
             r#"INSERT INTO "table" (collection_id, name) VALUES ($1, $2) RETURNING (id)"#,
         )
         .bind(collection_id)
-        .bind(table_name)
+        .bind(unquoted_name)
         .fetch_one(&self.executor)
         .await.map_err($repo::interpret_error)?
         .try_get("id").map_err($repo::interpret_error)?;
@@ -526,6 +529,7 @@ impl Repository for $repo {
         details: &CreateFunctionDetails,
     ) -> Result<FunctionId, Error> {
         let input_types = serde_json::to_string(&details.input_types).expect("Couldn't serialize input types!");
+        let unquoted_name = function_name.trim_matches('"');
 
         let new_function_id: i64 = sqlx::query(
             r#"
@@ -533,7 +537,7 @@ impl Repository for $repo {
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING (id);
         "#)
             .bind(database_id)
-            .bind(function_name)
+            .bind(unquoted_name)
             .bind(details.entrypoint.clone())
             .bind(details.language.to_string())
             .bind(input_types)

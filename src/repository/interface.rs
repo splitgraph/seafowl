@@ -244,15 +244,19 @@ pub mod tests {
         }
     }
 
-    async fn make_database_with_single_table(
+    // bumped into rustc bug: https://github.com/rust-lang/rust/issues/96771#issuecomment-1119886703
+    async fn make_database_with_single_table<'a>(
         repository: Arc<dyn Repository>,
+        database_name: &'a str,
+        collection_name: &'a str,
+        table_name: &'a str,
     ) -> (DatabaseId, CollectionId, TableId, TableVersionId) {
         let database_id = repository
-            .create_database("testdb")
+            .create_database(database_name)
             .await
             .expect("Error creating database");
         let collection_id = repository
-            .create_collection(database_id, "testcol")
+            .create_collection(database_id, collection_name)
             .await
             .expect("Error creating collection");
 
@@ -265,7 +269,7 @@ pub mod tests {
         };
 
         let (table_id, table_version_id) = repository
-            .create_table(collection_id, "testtable", &schema)
+            .create_table(collection_id, table_name, &schema)
             .await
             .expect("Error creating table");
 
@@ -281,6 +285,7 @@ pub mod tests {
         test_create_functions(repository.clone(), database_id).await;
         test_rename_table(repository.clone(), database_id, table_id, new_version_id)
             .await;
+        test_create_with_name_in_quotes(repository.clone()).await;
         test_error_propagation(repository, table_id).await;
     }
 
@@ -298,12 +303,13 @@ pub mod tests {
         version: TableVersionId,
         collection_name: String,
         table_name: String,
+        table_id: i64,
     ) -> Vec<AllDatabaseColumnsResult> {
         vec![
             AllDatabaseColumnsResult {
                 collection_name: collection_name.clone(),
                 table_name: table_name.clone(),
-                table_id: 1,
+                table_id,
                 table_version_id: version,
                 column_name: "date".to_string(),
                 column_type: "{\"children\":[],\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}}".to_string(),
@@ -311,7 +317,7 @@ pub mod tests {
             AllDatabaseColumnsResult {
                 collection_name,
                 table_name,
-                table_id: 1,
+                table_id,
                 table_version_id: version,
                 column_name: "value".to_string(),
                 column_type: "{\"children\":[],\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}}"
@@ -324,7 +330,13 @@ pub mod tests {
         repository: Arc<dyn Repository>,
     ) -> (DatabaseId, TableId, TableVersionId) {
         let (database_id, _, table_id, table_version_id) =
-            make_database_with_single_table(repository.clone()).await;
+            make_database_with_single_table(
+                repository.clone(),
+                "testdb",
+                "testcol",
+                "testtable",
+            )
+            .await;
 
         let all_database_ids = repository
             .get_all_database_ids()
@@ -342,7 +354,7 @@ pub mod tests {
 
         assert_eq!(
             all_columns,
-            expected(1, "testcol".to_string(), "testtable".to_string())
+            expected(1, "testcol".to_string(), "testtable".to_string(), 1)
         );
 
         // Duplicate the table
@@ -362,7 +374,8 @@ pub mod tests {
             expected(
                 new_version_id,
                 "testcol".to_string(),
-                "testtable".to_string()
+                "testtable".to_string(),
+                1
             )
         );
 
@@ -374,7 +387,7 @@ pub mod tests {
 
         assert_eq!(
             all_columns,
-            expected(1, "testcol".to_string(), "testtable".to_string())
+            expected(1, "testcol".to_string(), "testtable".to_string(), 1)
         );
 
         // Check the existing table versions
@@ -389,6 +402,55 @@ pub mod tests {
         assert_eq!(all_table_versions, vec![1, new_version_id]);
 
         (database_id, table_id, table_version_id)
+    }
+
+    async fn test_create_with_name_in_quotes(repository: Arc<dyn Repository>) {
+        let (database_id, _, _, table_version_id) = make_database_with_single_table(
+            repository.clone(),
+            "testdb2",
+            "\"testcol\"",
+            "\"testtable\"",
+        )
+        .await;
+
+        // Test loading all columns
+
+        let all_columns = repository
+            .get_all_columns_in_database(database_id, None)
+            .await
+            .expect("Error getting all columns");
+
+        assert_eq!(
+            all_columns,
+            expected(
+                table_version_id,
+                "testcol".to_string(),
+                "testtable".to_string(),
+                2
+            )
+        );
+
+        // Duplicate the table
+        let new_version_id = repository
+            .create_new_table_version(table_version_id, true)
+            .await
+            .unwrap();
+
+        // Test all columns again: we should have the schema for the latest table version
+        let all_columns = repository
+            .get_all_columns_in_database(database_id, None)
+            .await
+            .expect("Error getting all columns");
+
+        assert_eq!(
+            all_columns,
+            expected(
+                new_version_id,
+                "testcol".to_string(),
+                "testtable".to_string(),
+                2
+            )
+        );
     }
 
     async fn test_create_append_partition(
@@ -538,7 +600,8 @@ pub mod tests {
             expected(
                 table_version_id,
                 "testcol".to_string(),
-                "testtable2".to_string()
+                "testtable2".to_string(),
+                1
             )
         );
 
@@ -562,7 +625,8 @@ pub mod tests {
             expected(
                 table_version_id,
                 "testcol2".to_string(),
-                "testtable2".to_string()
+                "testtable2".to_string(),
+                1
             )
         );
     }
