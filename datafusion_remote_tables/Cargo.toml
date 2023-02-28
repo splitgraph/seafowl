@@ -14,7 +14,7 @@ license = "Apache-2.0"
 
 [dependencies]
 arrow = "32.0.0"
-arrow-buffer = "32.0.0"
+arrow-buffer = "34.0.0"
 arrow-schema = "32.0.0"
 async-trait = "0.1.64"
 
