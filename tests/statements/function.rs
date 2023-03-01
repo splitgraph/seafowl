@@ -2,7 +2,7 @@ use crate::statements::*;
 
 #[tokio::test]
 async fn test_create_and_run_function() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     let function_query = r#"CREATE FUNCTION sintau AS '
     {
@@ -55,7 +55,7 @@ async fn test_create_and_run_function() {
 
 #[tokio::test]
 async fn test_create_and_run_function_legacy_type_names() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     let function_query = r#"CREATE FUNCTION sintau AS '
     {
@@ -108,7 +108,7 @@ async fn test_create_and_run_function_legacy_type_names() {
 
 #[tokio::test]
 async fn test_create_and_run_function_uppercase_type_names() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     let function_query = r#"CREATE FUNCTION sintau AS '
     {

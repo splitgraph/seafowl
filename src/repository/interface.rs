@@ -30,6 +30,7 @@ pub struct TableVersionsResult {
     pub collection_name: String,
     pub table_name: String,
     pub table_version_id: TableVersionId,
+    pub table_legacy: bool,
     pub creation_time: Timestamp,
 }
 

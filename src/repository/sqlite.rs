@@ -57,6 +57,7 @@ impl SqliteRepository {
                 collection.name AS collection_name,
                 "table".name AS table_name,
                 table_version.id AS table_version_id,
+                "table".legacy AS table_legacy,
                 CAST(table_version.creation_time AS INTEGER(8)) AS creation_time
             FROM table_version
             INNER JOIN "table" ON "table".id = table_version.table_id

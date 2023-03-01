@@ -43,6 +43,7 @@ use sqlparser::ast::{
 
 use arrow_integration_test::field_to_json;
 use arrow_schema::DataType;
+use chrono::{DateTime, FixedOffset, Utc};
 use std::iter::zip;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1066,29 +1067,40 @@ impl SeafowlContext for DefaultSeafowlContext {
                         // We now have table_version_ids for each table with version specified; do another
                         // run over the query AST to rewrite the table.
                         version_processor.visit_query(&mut q);
-                        debug!("Time travel query rewritten to: {}", q);
+                        println!("Time travel query rewritten to: {}", q);
 
                         let tables_by_version = self
                             .table_catalog
                             .load_tables_by_version(self.database_id, Some(version_processor.table_version_ids())).await?;
 
                         for ((table, version), table_version_id) in &version_processor.table_versions {
-                            if let Some(table_version_id) = table_version_id {
-                                let name_with_version =
-                                    version_processor.table_with_version(table, version);
+                            let name_with_version =
+                                version_processor.table_with_version(table, version);
 
-                                let full_table_name = table.to_string();
-                                let table_ref = match TableReference::from(full_table_name.as_str()) {
-                                    TableReference::Bare {.. } => TableReference::Bare{ table: Cow::Borrowed(name_with_version.as_str()) },
-                                    TableReference::Partial { schema, .. } => TableReference::Partial { schema, table: Cow::Borrowed(name_with_version.as_str()) },
-                                    TableReference::Full { catalog, schema, .. } => TableReference::Full { catalog, schema, table: Cow::Borrowed(name_with_version.as_str()) }
-                                };
+                            let full_table_name = table.to_string();
+                            let mut resolved_ref = TableReference::from(full_table_name.as_str()).resolve(&self.database, DEFAULT_SCHEMA);
 
-                                let table_provider = tables_by_version[table_version_id].clone();
+                            let table_provider_for_version: Arc<dyn TableProvider> = if let Some(table_version_id) = table_version_id {
+                                // Legacy tables
+                                tables_by_version[table_version_id].clone()
+                            } else {
+                                // We only support datetime DeltaTable version specification for start
+                                let table_object_store =
+                                    self.internal_object_store.for_delta_table(&resolved_ref.catalog, &resolved_ref.schema, &resolved_ref.table);
+                                let datetime = DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(version).map_err(|_| DataFusionError::Execution(format!(
+                                    "Failed to parse version {version} as RFC3339 timestamp"
+                                )))?);
 
-                                if !session_ctx.table_exist(table_ref.clone())? {
-                                    session_ctx.register_table(table_ref, table_provider)?;
-                                }
+                                // This won't work with `InMemory` object store for now: https://github.com/apache/arrow-rs/issues/3782
+                                let mut delta_table = DeltaTable::new(table_object_store, Default::default());
+                                delta_table.load_with_datetime(datetime).await?;
+                                Arc::from(delta_table)
+                            };
+
+                            resolved_ref.table = Cow::Borrowed(name_with_version.as_str());
+
+                            if !session_ctx.table_exist(resolved_ref.clone())? {
+                                session_ctx.register_table(resolved_ref, table_provider_for_version)?;
                             }
                         }
 

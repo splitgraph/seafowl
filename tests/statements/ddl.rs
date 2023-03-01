@@ -2,7 +2,7 @@ use crate::statements::*;
 
 #[tokio::test]
 async fn test_create_table() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     let plan = context
         .plan_query(
@@ -37,7 +37,7 @@ async fn test_create_table() {
 
 #[tokio::test]
 async fn test_create_table_as() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
     create_table_and_insert(&context, "test_table").await;
 
     let plan = context
@@ -78,7 +78,7 @@ async fn test_create_table_as() {
 async fn test_create_table_move_and_drop() {
     // Create two tables, insert some data into them
 
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     for table_name in ["test_table_1", "test_table_2"] {
         create_table_and_insert(&context, table_name).await;
@@ -219,7 +219,7 @@ async fn test_create_table_move_and_drop() {
 
 #[tokio::test]
 async fn test_create_table_drop_schema() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     for table_name in ["test_table_1", "test_table_2"] {
         create_table_and_insert(&context, table_name).await;
@@ -337,7 +337,7 @@ async fn test_create_table_drop_schema() {
 
 #[tokio::test]
 async fn test_create_table_schema_already_exists() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     context
         .collect(
@@ -369,7 +369,7 @@ async fn test_create_table_schema_already_exists() {
 
 #[tokio::test]
 async fn test_create_table_in_staging_schema() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
     context
         .collect(
             context
@@ -420,7 +420,7 @@ async fn test_create_external_table_http() {
         &mock_server.uri()
     );
 
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     // Try creating a table in a non-staging schema
     let err = context

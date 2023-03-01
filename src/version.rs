@@ -44,9 +44,13 @@ impl TableVersionProcessor {
         {
             format!("{}:{}", name.0.last().unwrap().value, version_id)
         } else {
-            // The resolved table version id is None; this should only happen when we resolved
-            // the id to the latest table version, in which case no rewrite is needed.
-            name.0.last().unwrap().value.clone()
+            // The resolved table version id is None; this should only happen for delta tables, since
+            // we'll load those directly using the date string
+            format!(
+                "{}:{}",
+                name.0.last().unwrap().value,
+                version.to_ascii_lowercase()
+            )
         }
     }
 
@@ -115,6 +119,7 @@ impl TableVersionProcessor {
                 )
                 .await?
                 .into_iter()
+                .filter(|tv| tv.table_legacy)
                 .group_by(|tv| {
                     ObjectName(vec![
                         Ident::new(&tv.database_name),
@@ -138,19 +143,16 @@ impl TableVersionProcessor {
         for (table_version, table_version_id) in self.table_versions.iter_mut() {
             let table = &table_version.0;
             let version = &table_version.1;
+            if !all_table_versions.contains_key(table) {
+                // This means this is not the legacy table, no need to triage the version id
+                continue;
+            }
+
             let all_versions = all_table_versions.get(table).ok_or_else(|| {
                 DataFusionError::Execution(format!("No versions found for table {table}"))
             })?;
 
             let id = TableVersionProcessor::resolve_version_id(version, all_versions)?;
-
-            if id >= all_versions.last().unwrap().0 {
-                // The resolved table version id points to the latest table version; skip rewriting
-                // the table reference to that version, since we already have it loaded in the
-                // default table map of the schema provider.
-                continue;
-            }
-
             *table_version_id = Some(id);
         }
 
