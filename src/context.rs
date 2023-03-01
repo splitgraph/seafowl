@@ -34,7 +34,7 @@ use futures::{StreamExt, TryStreamExt};
 
 #[cfg(test)]
 use mockall::automock;
-use object_store::{path::Path, ObjectStore};
+use object_store::{path::Path, ObjectMeta, ObjectStore};
 
 use sqlparser::ast::{
     AlterTableOperation, CreateFunctionBody, FunctionDefinition, Ident, ObjectName,
@@ -1689,9 +1689,26 @@ impl SeafowlContext for DefaultSeafowlContext {
                         DataFusionError::Execution("Table {name} not found".to_string())
                     })?;
 
-                self.table_catalog.drop_table(table_id).await?;
                 // TODO: delay the actual delete and perform it during the subsequent vacuuming
-                // somehow, or when a new CREATE TABLE targets the same uri simply owerwrite
+                // somehow, or when a new CREATE TABLE targets the same uri simply overwrite
+                let table_object_store = self.internal_object_store.for_delta_table(
+                    &resolved_ref.catalog,
+                    &resolved_ref.schema,
+                    &resolved_ref.table,
+                );
+                let mut path_stream =
+                    table_object_store.list(None).await.map_err(|err| {
+                        DataFusionError::Execution(format!(
+                            "Cannot list contents of table {name}: {}",
+                            err
+                        ))
+                    })?;
+                while let Some(maybe_object) = path_stream.next().await {
+                    if let Ok(ObjectMeta { location, .. }) = maybe_object {
+                        table_object_store.delete(&location).await?;
+                    }
+                }
+                self.table_catalog.drop_table(table_id).await?;
                 Ok(make_dummy_exec())
             }
             LogicalPlan::CreateView(_) => {
