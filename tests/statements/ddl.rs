@@ -21,15 +21,15 @@ async fn test_create_table() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+------------+------------------+-----------------------------+",
-        "| table_schema | table_name | column_name      | data_type                   |",
-        "+--------------+------------+------------------+-----------------------------+",
-        "| public       | test_table | some_bool_value  | Boolean                     |",
-        "| public       | test_table | some_int_value   | Int64                       |",
-        "| public       | test_table | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table | some_value       | Float32                     |",
-        "+--------------+------------+------------------+-----------------------------+",
+        "+--------------+------------+------------------+------------------------------+",
+        "| table_schema | table_name | column_name      | data_type                    |",
+        "+--------------+------------+------------------+------------------------------+",
+        "| public       | test_table | some_time        | Timestamp(Microsecond, None) |",
+        "| public       | test_table | some_value       | Float32                      |",
+        "| public       | test_table | some_other_value | Decimal128(38, 10)           |",
+        "| public       | test_table | some_bool_value  | Boolean                      |",
+        "| public       | test_table | some_int_value   | Int64                        |",
+        "+--------------+------------+------------------+------------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -63,13 +63,13 @@ async fn test_create_table_as() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+----------------+-------------+------------+",
-        "| some_int_value | some_minute | some_value |",
-        "+----------------+-------------+------------+",
-        "| 3333           | 3           | 49         |",
-        "| 2222           | 2           | 48         |",
-        "| 1111           | 1           | 47         |",
-        "+----------------+-------------+------------+",
+        "+------------+----------------+-------------+",
+        "| some_value | some_int_value | some_minute |",
+        "+------------+----------------+-------------+",
+        "| 49         | 3333           | 3           |",
+        "| 48         | 2222           | 2           |",
+        "| 47         | 1111           | 1           |",
+        "+------------+----------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
 }
@@ -87,20 +87,20 @@ async fn test_create_table_move_and_drop() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| table_schema | table_name   | column_name      | data_type                   |",
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| public       | test_table_1 | some_bool_value  | Boolean                     |",
-        "| public       | test_table_1 | some_int_value   | Int64                       |",
-        "| public       | test_table_1 | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_1 | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_1 | some_value       | Float32                     |",
-        "| public       | test_table_2 | some_bool_value  | Boolean                     |",
-        "| public       | test_table_2 | some_int_value   | Int64                       |",
-        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_2 | some_value       | Float32                     |",
-        "+--------------+--------------+------------------+-----------------------------+",
+        "+--------------+--------------+------------------+------------------------------+",
+        "| table_schema | table_name   | column_name      | data_type                    |",
+        "+--------------+--------------+------------------+------------------------------+",
+        "| public       | test_table_1 | some_time        | Timestamp(Microsecond, None) |",
+        "| public       | test_table_1 | some_value       | Float32                      |",
+        "| public       | test_table_1 | some_other_value | Decimal128(38, 10)           |",
+        "| public       | test_table_1 | some_bool_value  | Boolean                      |",
+        "| public       | test_table_1 | some_int_value   | Int64                        |",
+        "| public       | test_table_2 | some_time        | Timestamp(Microsecond, None) |",
+        "| public       | test_table_2 | some_value       | Float32                      |",
+        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)           |",
+        "| public       | test_table_2 | some_bool_value  | Boolean                      |",
+        "| public       | test_table_2 | some_int_value   | Int64                        |",
+        "+--------------+--------------+------------------+------------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -354,7 +354,7 @@ async fn test_create_table_schema_already_exists() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Error during planning: Table \"some_table\" already exists"
+        "External error: Generic error: A Delta Lake table already exists at that location."
     );
 
     let err = context

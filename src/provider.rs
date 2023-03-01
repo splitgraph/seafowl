@@ -39,7 +39,7 @@ use datafusion::{
 use datafusion_common::DFSchema;
 use datafusion_expr::Expr;
 use datafusion_proto::protobuf;
-use deltalake::{DeltaTable, DeltaTableBuilder};
+use deltalake::DeltaTable;
 
 use futures::future;
 use log::warn;
@@ -142,7 +142,7 @@ impl SchemaProvider for SeafowlCollection {
         // Ultimately though, since the map gets re-created for each query the only point in
         // updating the existing table is to optimize potential multi-lookups during processing of
         // a single query.
-        let (table_uri, object_store) = match self.tables.read().get(name) {
+        let table_object_store = match self.tables.read().get(name) {
             None => return None,
             Some(table) => match table.as_any().downcast_ref::<DeltaTable>() {
                 // This shouldn't happen since we stsore only DeltaTable's in the map
@@ -154,23 +154,20 @@ impl SchemaProvider for SeafowlCollection {
                     } else {
                         // A negative table version indicates that the table was never loaded; we need
                         // to do it before returning it.
-                        (delta_table.table_uri(), delta_table.object_store())
+                        delta_table.object_store()
                     }
                 }
             },
         };
 
-        let maybe_table = DeltaTableBuilder::from_uri(table_uri.clone())
-            .with_storage_backend(object_store, table_uri.parse().unwrap())
-            .load()
-            .await;
+        let mut delta_table = DeltaTable::new(table_object_store, Default::default());
 
-        if let Err(err) = maybe_table {
+        if let Err(err) = delta_table.load().await {
             warn!("Failed to load table {name}: {err}");
             return None;
         }
 
-        let table = Arc::from(maybe_table.unwrap()) as Arc<dyn TableProvider>;
+        let table = Arc::from(delta_table) as Arc<dyn TableProvider>;
         self.tables.write().insert(Arc::from(name), table.clone());
         Some(table)
     }

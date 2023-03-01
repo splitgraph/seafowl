@@ -17,6 +17,8 @@ use datafusion::datasource::DefaultTableSource;
 use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion_expr::logical_plan::{LogicalPlan, PlanVisitor, TableScan};
+use deltalake::parquet::data_type::AsBytes;
+use deltalake::DeltaTable;
 use futures::{future, TryStreamExt};
 use hex::encode;
 use log::{debug, info};
@@ -36,8 +38,6 @@ use crate::{
     context::{
         is_read_only, is_statement_read_only, DefaultSeafowlContext, SeafowlContext,
     },
-    data_types::TableVersionId,
-    provider::SeafowlTable,
 };
 
 use super::http_utils::{handle_rejection, into_response, ApiError};
@@ -54,7 +54,7 @@ const VARY: &str = "Content-Type, Origin, X-Seafowl-Query";
 
 #[derive(Default)]
 struct ETagBuilderVisitor {
-    table_versions: Vec<TableVersionId>,
+    table_versions: Vec<u8>,
 }
 
 impl PlanVisitor for ETagBuilderVisitor {
@@ -69,9 +69,14 @@ impl PlanVisitor for ETagBuilderVisitor {
                 if let Some(table) = default_table_source
                     .table_provider
                     .as_any()
-                    .downcast_ref::<SeafowlTable>()
+                    .downcast_ref::<DeltaTable>()
                 {
-                    self.table_versions.push(table.table_version_id)
+                    println!("uri: {}", table.table_uri());
+                    println!("version: {}", table.version());
+                    self.table_versions
+                        .extend(table.table_uri().as_bytes().to_vec());
+                    self.table_versions
+                        .extend(table.version().as_bytes().to_vec());
                 }
             }
         }
@@ -682,10 +687,14 @@ mod tests {
     const CREATE_QUERY: &str = "CREATE TABLE other_test_table(col_1 INT)";
     const SELECT_QUERY_HASH: &str =
         "7fbbf7dddfd330d03e5e08cc5885ad8ca823e1b56e7cbadd156daa0e21c288f6";
-    const V1_ETAG: &str =
-        "038966de9f6b9a901b20b4c6ca8b2a46009feebe031babc842d43690c0bc222b";
-    const V2_ETAG: &str =
-        "06d033ece6645de592db973644cf7357255f24536ff7b03c3b2ace10736f7636";
+    const V1_ETAG_DEFAULT_DB: &str =
+        "c2d5a6434eb700587e0e95a5d22015e2616873d22353e83ce436075f5e01e740";
+    const V1_ETAG_TEST_DB: &str =
+        "b044e9f114a6627dd2449496514e938234dc1ff6e400cb177fe38b3ed977619b";
+    const V2_ETAG_DEFAULT_DB: &str =
+        "780c8dc5587a5a8cd32a4fabcdf1425e3c6f6c859cd24b7963a3007f450ce55e";
+    const V2_ETAG_TEST_DB: &str =
+        "26e1be6caca4a0fefb798b7d197033f6f181719f59042e87d95754bcf2ebdea0";
 
     #[rstest]
     #[tokio::test]
@@ -759,10 +768,10 @@ mod tests {
     }
 
     #[rstest]
+    #[case(None, V1_ETAG_DEFAULT_DB)]
+    #[case(Some("test_db"), V1_ETAG_TEST_DB)]
     #[tokio::test]
-    async fn test_get_cached_no_etag(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
-    ) {
+    async fn test_get_cached_no_etag(#[case] new_db: Option<&str>, #[case] etag: &str) {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
@@ -776,7 +785,7 @@ mod tests {
         assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V1_ETAG
+            etag,
         );
     }
 
@@ -800,9 +809,12 @@ mod tests {
     }
 
     #[rstest]
+    #[case(None, V1_ETAG_DEFAULT_DB)]
+    #[case(Some("test_db"), V1_ETAG_TEST_DB)]
     #[tokio::test]
     async fn test_get_cached_no_etag_query_in_body(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
+        #[case] new_db: Option<&str>,
+        #[case] etag: &str,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
@@ -817,14 +829,17 @@ mod tests {
         assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V1_ETAG
+            etag
         );
     }
 
     #[rstest]
+    #[case(None, V1_ETAG_DEFAULT_DB)]
+    #[case(Some("test_db"), V1_ETAG_TEST_DB)]
     #[tokio::test]
     async fn test_get_cached_no_etag_extension(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
+        #[case] new_db: Option<&str>,
+        #[case] etag: &str,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
@@ -839,14 +854,17 @@ mod tests {
         assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V1_ETAG
+            etag
         );
     }
 
     #[rstest]
+    #[case(None, V1_ETAG_DEFAULT_DB)]
+    #[case(Some("test_db"), V1_ETAG_TEST_DB)]
     #[tokio::test]
     async fn test_get_cached_reuse_etag(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
+        #[case] new_db: Option<&str>,
+        #[case] etag: &str,
     ) {
         // Pass the same ETag as If-None-Match, should return a 301
 
@@ -857,7 +875,7 @@ mod tests {
             .method("GET")
             .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
-            .header(IF_NONE_MATCH, V1_ETAG)
+            .header(IF_NONE_MATCH, etag)
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
@@ -865,9 +883,12 @@ mod tests {
     }
 
     #[rstest]
+    #[case(None, V1_ETAG_DEFAULT_DB)]
+    #[case(Some("test_db"), V1_ETAG_TEST_DB)]
     #[tokio::test]
     async fn test_get_encoded_query_special_chars(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
+        #[case] new_db: Option<&str>,
+        #[case] etag: &str,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
@@ -882,7 +903,7 @@ mod tests {
         assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V1_ETAG
+            etag
         );
     }
 
@@ -905,9 +926,12 @@ mod tests {
     }
 
     #[rstest]
+    #[case(None, V2_ETAG_DEFAULT_DB)]
+    #[case(Some("test_db"), V2_ETAG_TEST_DB)]
     #[tokio::test]
     async fn test_get_cached_etag_new_version(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
+        #[case] new_db: Option<&str>,
+        #[case] etag: &str,
     ) {
         // Pass the same ETag as If-None-Match, but the table version changed -> reruns the query
 
@@ -918,14 +942,14 @@ mod tests {
             .method("GET")
             .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
-            .header(header::ETAG, V1_ETAG)
+            .header(header::ETAG, V1_ETAG_DEFAULT_DB)
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":2}\n");
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V2_ETAG
+            etag
         );
     }
 

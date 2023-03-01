@@ -210,6 +210,31 @@ impl Repository for $repo {
         Ok(id)
     }
 
+    async fn get_table_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+        table_name: &str,
+    ) -> Result<CollectionId, Error> {
+        let id = sqlx::query(
+            r#"
+        SELECT "table".id
+        FROM "table"
+        JOIN collection ON "table".collection_id = collection.id
+        JOIN database ON collection.database_id = database.id
+        WHERE database.name = $1 AND collection.name = $2 AND "table".name = $3
+        "#,
+        )
+        .bind(database_name)
+        .bind(collection_name)
+        .bind(table_name)
+        .fetch_one(&self.executor)
+        .await.map_err($repo::interpret_error)?
+        .try_get("id").map_err($repo::interpret_error)?;
+
+        Ok(id)
+    }
+
     async fn get_all_database_ids(&self) -> Result<Vec<(String, DatabaseId)>> {
         let all_db_ids = sqlx::query(r#"SELECT name, id FROM database"#)
             .fetch_all(&self.executor)

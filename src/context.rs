@@ -94,7 +94,7 @@ use tempfile::TempPath;
 use tokio::sync::Semaphore;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
-use crate::data_types::{PhysicalPartitionId, TableVersionId};
+use crate::data_types::PhysicalPartitionId;
 use crate::datafusion::visit::VisitorMut;
 use crate::provider::{
     project_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
@@ -258,8 +258,6 @@ pub struct DefaultSeafowlContext {
     pub partition_catalog: Arc<dyn PartitionCatalog>,
     pub function_catalog: Arc<dyn FunctionCatalog>,
     pub internal_object_store: Arc<InternalObjectStore>,
-    pub storage_options: HashMap<String, String>,
-    pub store_uri: String,
     pub database: String,
     pub database_id: DatabaseId,
     pub all_database_ids: Arc<RwLock<HashMap<String, DatabaseId>>>,
@@ -519,13 +517,13 @@ pub fn is_statement_read_only(statement: &DFStatement) -> bool {
 }
 
 // The only reason to keep this trait around (instead of migrating all the functions directly into
-// DefaultDeafowlContext), is that `create_physical_plan` would then be a recursive async function,
+// DefaultSeafowlContext), is that `create_physical_plan` would then be a recursive async function,
 // which works for traits, but not for structs: https://stackoverflow.com/a/74737853
 //
 // The workaround would be to box a future as the return of such functions, which isn't very
 // appealing atm (involves heap allocations, and is not very readable).
 //
-// Alternatively, if we know that all recursive calls could be handled by the inner (DataFusion's)
+// Alternatively, if we're sure that all recursive calls can be handled by the inner (DataFusion's)
 // `create_physical_plan` we could also rewrite the calls explicitly like that, and thus break the
 // recursion.
 #[cfg_attr(test, automock)]
@@ -569,7 +567,7 @@ pub trait SeafowlContext: Send + Sync {
         plan: Arc<dyn ExecutionPlan>,
         schema_name: String,
         table_name: String,
-    ) -> Result<bool>;
+    ) -> Result<()>;
 }
 
 impl DefaultSeafowlContext {
@@ -601,40 +599,11 @@ impl DefaultSeafowlContext {
             partition_catalog: self.partition_catalog.clone(),
             function_catalog: self.function_catalog.clone(),
             internal_object_store: self.internal_object_store.clone(),
-            storage_options: self.storage_options.clone(),
-            store_uri: self.store_uri.clone(),
             database: name,
             database_id,
             all_database_ids: self.all_database_ids.clone(),
             max_partition_size: self.max_partition_size,
         }))
-    }
-
-    /// Construct the full table uri in the underlying object store
-    pub fn table_to_location<'a>(&self, table: impl Into<TableReference<'a>>) -> String {
-        let table_ref: TableReference = table.into();
-        let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
-
-        format!(
-            "{}/{}/{}/{}",
-            self.store_uri, resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
-        )
-    }
-
-    /// Generate the Delta table builder and execute the write
-    pub async fn plan_to_delta_table(
-        &self,
-        plan: &Arc<dyn ExecutionPlan>,
-        location: impl Into<String>,
-    ) -> Result<DeltaTable> {
-        let table = WriteBuilder::new()
-            .with_input_execution_plan(plan.clone())
-            .with_storage_options(self.storage_options.clone())
-            .with_location(location)
-            .await?;
-
-        debug!("Written table version {} for {table}", table.version());
-        Ok(table)
     }
 
     pub fn inner(&self) -> &SessionContext {
@@ -754,11 +723,15 @@ impl DefaultSeafowlContext {
         Ok(seafowl_table.clone())
     }
 
-    async fn exec_create_table(&self, name: &str, schema: &Schema) -> Result<DeltaTable> {
-        let table_ref = TableReference::from(name);
+    async fn create_delta_table<'a>(
+        &self,
+        name: impl Into<TableReference<'a>>,
+        schema: &Schema,
+    ) -> Result<DeltaTable> {
+        let table_ref: TableReference = name.into();
         let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
-        let schema_name = resolved_ref.schema;
-        let table_name = resolved_ref.table;
+        let schema_name = resolved_ref.schema.clone();
+        let table_name = resolved_ref.table.clone();
 
         let sf_schema = SeafowlSchema {
             arrow_schema: Arc::new(schema.clone()),
@@ -772,11 +745,14 @@ impl DefaultSeafowlContext {
             })?;
 
         let delta_schema = DeltaSchema::try_from(schema)?;
-        let location = self.table_to_location(name);
+        let table_object_store = self.internal_object_store.for_delta_table(
+            &resolved_ref.catalog,
+            &resolved_ref.schema,
+            &resolved_ref.table,
+        );
 
         let table = CreateBuilder::new()
-            .with_storage_options(self.storage_options.clone())
-            .with_location(&location)
+            .with_object_store(table_object_store)
             .with_table_name(&*table_name)
             .with_columns(delta_schema.get_fields().clone())
             .with_comment(format!(
@@ -792,7 +768,32 @@ impl DefaultSeafowlContext {
             .create_table(collection_id, &table_name, &sf_schema)
             .await?;
 
-        debug!("Created new table at location {location}");
+        debug!("Created new table {table}");
+        Ok(table)
+    }
+
+    /// Generate the Delta table builder and execute the write
+    pub async fn plan_to_delta_table<'a>(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        name: impl Into<TableReference<'a>>,
+    ) -> Result<DeltaTable> {
+        let table_ref: TableReference = name.into();
+        let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
+
+        let table_object_store = self.internal_object_store.for_delta_table(
+            &resolved_ref.catalog,
+            &resolved_ref.schema,
+            &resolved_ref.table,
+        );
+
+        let table = WriteBuilder::new()
+            .with_input_execution_plan(plan.clone())
+            .with_input_session_state(self.inner.state())
+            .with_object_store(table_object_store)
+            .await?;
+
+        debug!("Written table version {} for {table}", table.version());
         Ok(table)
     }
 
@@ -843,38 +844,6 @@ impl DefaultSeafowlContext {
     ) -> Result<SendableRecordBatchStream> {
         let task_context = Arc::new(TaskContext::from(self.inner()));
         physical_plan.execute(partition, task_context)
-    }
-
-    // Execute the plan, repartition to Parquet files, upload them to object store and add metadata
-    // records for table/partitions.
-    async fn execute_plan_to_table(
-        &self,
-        physical_plan: &Arc<dyn ExecutionPlan>,
-        output_schema: Option<SchemaRef>,
-        name: Option<String>,
-        from_table_version: Option<TableVersionId>,
-    ) -> Result<()> {
-        // Create/Update table metadata
-        match (name, from_table_version) {
-            (Some(name), _) => {
-                let schema = output_schema.unwrap_or_else(|| physical_plan.schema());
-                // Create an empty table with an empty version
-                self.exec_create_table(&name, schema.as_ref()).await?;
-            }
-            (_, Some(from_table_version)) => {
-                // Duplicate the table version into a new one
-                self.table_catalog
-                    .create_new_table_version(from_table_version, true)
-                    .await?;
-            }
-            _ => {
-                return Err(Error::Internal(
-                    "Either name or source table version need to be supplied".to_string(),
-                ));
-            }
-        }
-
-        Ok(())
     }
 
     // Generate new physical Parquet partition files from the provided plan, upload to object store
@@ -1427,8 +1396,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // This is actually CREATE TABLE AS
                 let physical = self.create_physical_plan(input).await?;
 
-                self.execute_plan_to_table(&physical, None, Some(name.to_string()), None)
+                // First create the table and then insert the data from the subqeury
+                let _table = self
+                    .create_delta_table(name, physical.schema().as_ref())
                     .await?;
+                self.plan_to_delta_table(&physical, name).await?;
 
                 Ok(make_dummy_exec())
             }
@@ -1440,8 +1412,7 @@ impl SeafowlContext for DefaultSeafowlContext {
             }) => {
                 let physical = self.create_physical_plan(input).await?;
 
-                self.plan_to_delta_table(&physical, self.table_to_location(table_name))
-                    .await?;
+                self.plan_to_delta_table(&physical, table_name).await?;
 
                 Ok(make_dummy_exec())
             }
@@ -1685,8 +1656,30 @@ impl SeafowlContext for DefaultSeafowlContext {
                 schema: _,
             }) => {
                 // DROP TABLE
-                let table = self.try_get_seafowl_table(name.to_string()).await?;
-                self.table_catalog.drop_table(table.table_id).await?;
+                if let Ok(table) = self.try_get_seafowl_table(name.to_string()).await {
+                    // Drop for legacy tables
+                    self.table_catalog.drop_table(table.table_id).await?;
+                    return Ok(make_dummy_exec());
+                };
+
+                let table_ref = TableReference::from(name);
+                let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
+
+                let table_id = self
+                    .table_catalog
+                    .get_table_id_by_name(
+                        &resolved_ref.catalog,
+                        &resolved_ref.schema,
+                        &resolved_ref.table,
+                    )
+                    .await?
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("Table {name} not found".to_string())
+                    })?;
+
+                self.table_catalog.drop_table(table_id).await?;
+                // TODO: delay the actual delete and perform it during the subsequent vacuuming
+                // somehow, or when a new CREATE TABLE targets the same uri simply owerwrite
                 Ok(make_dummy_exec())
             }
             LogicalPlan::CreateView(_) => {
@@ -1703,7 +1696,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                             name,
                             ..
                         }) => {
-                            self.exec_create_table(name, schema).await?;
+                            self.create_delta_table(name.as_str(), schema).await?;
 
                             Ok(make_dummy_exec())
                         }
@@ -1828,55 +1821,67 @@ impl SeafowlContext for DefaultSeafowlContext {
         plan: Arc<dyn ExecutionPlan>,
         schema_name: String,
         table_name: String,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         // Reload the schema since `try_get_seafowl_table` relies on using DataFusion's
         // TableProvider interface (which we need to pre-populate with up to date
         // information on our tables)
         self.reload_schema().await?;
 
-        // Ensure the schema exists prior to creating the table
-        let (full_table_name, from_table_version) = {
-            let new_table_name = format!("{schema_name}.{table_name}");
+        // Check whether table already exists and ensure that the schema exists
+        let table_exists = match self
+            .inner
+            .catalog(&self.database)
+            .ok_or_else(|| Error::Plan(format!("Database {} not found!", self.database)))?
+            .schema(&schema_name)
+        {
+            Some(_) => {
+                if self
+                    .try_get_seafowl_table(format!("{schema_name}.{table_name}"))
+                    .await
+                    .is_ok()
+                {
+                    return Err(DataFusionError::Execution("Cannot insert into legacy table {table_name}, please use a different name".to_string()));
+                }
 
-            match self
-                .table_catalog
-                .get_collection_id_by_name(&self.database, &schema_name)
-                .await?
-            {
-                Some(_) => {
-                    if let Ok(table) = self.try_get_seafowl_table(&new_table_name).await {
-                        // Table exists, see if the schemas match
-                        if table.schema.arrow_schema != plan.schema() {
+                // Schema exists, check if existing table's schema matches the new one
+                match self.get_table_provider(&table_name).await {
+                    Ok(table) => {
+                        if table.schema() != plan.schema() {
                             return Err(DataFusionError::Execution(
-                            format!(
-                                "The table {new_table_name} already exists but has a different schema than the one provided.")
+                                format!(
+                                    "The table {table_name} already exists but has a different schema than the one provided.")
                             )
-                        );
+                            );
                         }
 
-                        // Instead of creating a new table, just insert the data into a new version
-                        // of an existing table
-                        (None, Some(table.table_version_id))
-                    } else {
-                        // Table doesn't exist or isn't a Seafowl table
-                        // We assume it doesn't exist for now
-                        (Some(new_table_name), None)
+                        true
                     }
+                    Err(_) => false,
                 }
-                None => {
-                    self.table_catalog
-                        .create_collection(self.database_id, &schema_name)
-                        .await?;
-
-                    (Some(new_table_name), None)
-                }
+            }
+            None => {
+                // Schema doesn't exist; create one first
+                self.table_catalog
+                    .create_collection(self.database_id, &schema_name)
+                    .await?;
+                false
             }
         };
 
-        self.execute_plan_to_table(&plan, None, full_table_name, from_table_version)
-            .await?;
+        let table_ref = TableReference::Full {
+            catalog: Cow::from(self.database.clone()),
+            schema: Cow::from(schema_name),
+            table: Cow::from(table_name),
+        };
 
-        Ok(true)
+        if !table_exists {
+            self.create_delta_table(table_ref.clone(), plan.schema().as_ref())
+                .await?;
+        }
+
+        self.plan_to_delta_table(&plan, table_ref).await?;
+
+        Ok(())
     }
 }
 
@@ -2036,10 +2041,10 @@ pub mod test_utils {
 
         setup_table_catalog(&mut table_catalog);
 
-        let object_store = Arc::new(InternalObjectStore {
-            inner: Arc::new(InMemory::new()),
-            config: schema::ObjectStore::InMemory(schema::InMemory {}),
-        });
+        let object_store = Arc::new(InternalObjectStore::new(
+            Arc::new(InMemory::new()),
+            schema::ObjectStore::InMemory(schema::InMemory {}),
+        ));
         session.runtime_env().register_object_store(
             INTERNAL_OBJECT_STORE_SCHEME,
             "",
@@ -2052,8 +2057,6 @@ pub mod test_utils {
             partition_catalog: partition_catalog_ptr,
             function_catalog: Arc::new(function_catalog),
             internal_object_store: object_store,
-            storage_options: Default::default(),
-            store_uri: "/".to_string(),
             database: "testdb".to_string(),
             database_id: 0,
             all_database_ids: Arc::from(RwLock::new(HashMap::from([(
@@ -2147,22 +2150,20 @@ mod tests {
             let tmp_dir = TempDir::new().unwrap();
 
             (
-                Arc::new(InternalObjectStore {
-                    inner: Arc::new(
-                        LocalFileSystem::new_with_prefix(tmp_dir.path()).unwrap(),
-                    ),
-                    config: schema::ObjectStore::Local(schema::Local {
+                Arc::new(InternalObjectStore::new(
+                    Arc::new(LocalFileSystem::new_with_prefix(tmp_dir.path()).unwrap()),
+                    schema::ObjectStore::Local(schema::Local {
                         data_dir: tmp_dir.path().to_string_lossy().to_string(),
                     }),
-                }),
+                )),
                 Some(tmp_dir),
             )
         } else {
             (
-                Arc::new(InternalObjectStore {
-                    inner: Arc::new(InMemory::new()),
-                    config: schema::ObjectStore::InMemory(schema::InMemory {}),
-                }),
+                Arc::new(InternalObjectStore::new(
+                    Arc::new(InMemory::new()),
+                    schema::ObjectStore::InMemory(schema::InMemory {}),
+                )),
                 None,
             )
         };
@@ -2318,10 +2319,10 @@ mod tests {
             MemoryExec::try_new(df_partitions.as_slice(), schema, None).unwrap(),
         );
 
-        let object_store = Arc::new(InternalObjectStore {
-            inner: Arc::new(InMemory::new()),
-            config: schema::ObjectStore::InMemory(schema::InMemory {}),
-        });
+        let object_store = Arc::new(InternalObjectStore::new(
+            Arc::new(InMemory::new()),
+            schema::ObjectStore::InMemory(schema::InMemory {}),
+        ));
         let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
         let partitions = plan_to_object_store(
             &sf_context.inner.state(),

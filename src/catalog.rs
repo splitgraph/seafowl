@@ -5,12 +5,13 @@ use async_trait::async_trait;
 use datafusion::catalog::schema::MemorySchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::error::DataFusionError;
-use deltalake::DeltaTableBuilder;
+use deltalake::DeltaTable;
 use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
 use parking_lot::RwLock;
 
+use crate::object_store::wrapped::InternalObjectStore;
 use crate::provider::SeafowlFunction;
 use crate::repository::interface::TablePartitionsResult;
 use crate::system_tables::SystemSchemaProvider;
@@ -175,6 +176,12 @@ pub trait TableCatalog: Sync + Send {
         database_name: &str,
         collection_name: &str,
     ) -> Result<Option<CollectionId>>;
+    async fn get_table_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+        table_name: &str,
+    ) -> Result<Option<TableId>>;
 
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId>;
 
@@ -278,22 +285,19 @@ pub struct DefaultCatalog {
 
     // DataFusion's in-memory schema provider for staging external tables
     staging_schema: Arc<MemorySchemaProvider>,
-    storage_options: HashMap<String, String>,
-    store_uri: String,
+    object_store: Arc<InternalObjectStore>,
 }
 
 impl DefaultCatalog {
     pub fn new(
         repository: Arc<dyn Repository>,
-        storage_options: HashMap<String, String>,
-        store_uri: String,
+        object_store: Arc<InternalObjectStore>,
     ) -> Self {
         let staging_schema = Arc::new(MemorySchemaProvider::new());
         Self {
             repository,
             staging_schema,
-            storage_options,
-            store_uri,
+            object_store,
         }
     }
 
@@ -387,16 +391,11 @@ impl DefaultCatalog {
             |v| (&v.database_name, &v.collection_name),
         );
 
-        let table_uri = format!(
-            "{}/{}/{}/{}",
-            self.store_uri, database_name, collection_name, table_name
-        );
+        let table_object_store =
+            self.object_store
+                .for_delta_table(database_name, collection_name, table_name);
 
-        let table = DeltaTableBuilder::from_uri(table_uri)
-            .with_storage_options(self.storage_options.clone())
-            .build()
-            .unwrap();
-
+        let table = DeltaTable::new(table_object_store, Default::default());
         (Arc::from(table_name.to_string()), Arc::new(table) as _)
     }
 
@@ -542,7 +541,7 @@ impl TableCatalog for DefaultCatalog {
         database_name: &str,
         collection_name: &str,
     ) -> Result<Option<CollectionId>> {
-        if database_name == DEFAULT_DB && collection_name == STAGING_SCHEMA {
+        if collection_name == STAGING_SCHEMA {
             return Err(Error::UsedStagingSchema);
         }
 
@@ -562,6 +561,27 @@ impl TableCatalog for DefaultCatalog {
         database_name: &str,
     ) -> Result<Option<DatabaseId>> {
         match self.repository.get_database_id_by_name(database_name).await {
+            Ok(id) => Ok(Some(id)),
+            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => Ok(None),
+            Err(e) => Err(Self::to_sqlx_error(e)),
+        }
+    }
+
+    async fn get_table_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+        table_name: &str,
+    ) -> Result<Option<TableId>> {
+        if collection_name == STAGING_SCHEMA {
+            return Err(Error::UsedStagingSchema);
+        }
+
+        match self
+            .repository
+            .get_table_id_by_name(database_name, collection_name, table_name)
+            .await
+        {
             Ok(id) => Ok(Some(id)),
             Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => Ok(None),
             Err(e) => Err(Self::to_sqlx_error(e)),

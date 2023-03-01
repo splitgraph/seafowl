@@ -27,15 +27,13 @@ use crate::object_store::wrapped::InternalObjectStore;
 use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
-use object_store::aws::AmazonS3ConfigKey;
 use parking_lot::lock_api::RwLock;
 
 use super::schema::{self, MEBIBYTES, MEMORY_FRACTION, S3};
 
 async fn build_catalog(
     config: &schema::SeafowlConfig,
-    storage_options: HashMap<String, String>,
-    store_uri: String,
+    object_store: Arc<InternalObjectStore>,
 ) -> (
     Arc<dyn TableCatalog>,
     Arc<dyn PartitionCatalog>,
@@ -69,7 +67,7 @@ async fn build_catalog(
         ),
     };
 
-    let catalog = Arc::new(DefaultCatalog::new(repository, storage_options, store_uri));
+    let catalog = Arc::new(DefaultCatalog::new(repository, object_store));
 
     (catalog.clone(), catalog.clone(), catalog)
 }
@@ -102,59 +100,6 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
 
             let store = builder.build().expect("Error creating object store");
             Arc::new(store)
-        }
-    }
-}
-
-fn build_storage_options(
-    cfg: &schema::SeafowlConfig,
-) -> (HashMap<String, String>, String) {
-    match &cfg.object_store {
-        schema::ObjectStore::Local(schema::Local { data_dir }) => {
-            (HashMap::<String, String>::default(), data_dir.clone())
-        }
-        schema::ObjectStore::InMemory(_) => (
-            HashMap::<String, String>::default(),
-            "memory://".to_string(),
-        ),
-        #[cfg(feature = "object-store-s3")]
-        schema::ObjectStore::S3(S3 {
-            region,
-            access_key_id,
-            secret_access_key,
-            endpoint,
-            bucket,
-        }) => {
-            let mut storage_options = HashMap::<String, String>::from([
-                (
-                    AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
-                    access_key_id.clone(),
-                ),
-                (
-                    AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
-                    secret_access_key.clone(),
-                ),
-                (
-                    AmazonS3ConfigKey::Bucket.as_ref().to_string(),
-                    bucket.clone(),
-                ),
-            ]);
-
-            if let Some(region) = region {
-                storage_options.insert(
-                    AmazonS3ConfigKey::Region.as_ref().to_string(),
-                    region.clone(),
-                );
-            }
-
-            if let Some(endpoint) = endpoint {
-                storage_options.insert(
-                    AmazonS3ConfigKey::Endpoint.as_ref().to_string(),
-                    endpoint.clone(),
-                );
-            }
-
-            (storage_options, format!("s3://{bucket}"))
         }
     }
 }
@@ -203,13 +148,17 @@ pub async fn build_context(
         "",
         object_store.clone(),
     );
-    let (storage_options, store_uri) = build_storage_options(cfg);
+
+    let internal_object_store = Arc::new(InternalObjectStore::new(
+        object_store.clone(),
+        cfg.object_store.clone(),
+    ));
 
     // Register the HTTP object store for external tables
     add_http_object_store(&context, &cfg.misc.ssl_cert_file);
 
     let (tables, partitions, functions) =
-        build_catalog(cfg, storage_options.clone(), store_uri.clone()).await;
+        build_catalog(cfg, internal_object_store.clone()).await;
 
     // Create default DB/collection
     let default_db = match tables.get_database_id_by_name(DEFAULT_DB).await? {
@@ -238,12 +187,7 @@ pub async fn build_context(
         table_catalog: tables,
         partition_catalog: partitions,
         function_catalog: functions,
-        internal_object_store: Arc::new(InternalObjectStore {
-            inner: object_store,
-            config: cfg.object_store.clone(),
-        }),
-        storage_options,
-        store_uri,
+        internal_object_store,
         database: DEFAULT_DB.to_string(),
         database_id: default_db,
         all_database_ids: Arc::from(RwLock::new(all_database_ids)),

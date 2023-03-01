@@ -275,7 +275,7 @@ async fn test_upload_to_existing_table() {
         .unwrap();
 
     assert_eq!(
-        "Execution error: The table public.test_table already exists but has a different schema than the one provided.".to_string(),
+        "Execution error: The table test_table already exists but has a different schema than the one provided.".to_string(),
         String::from_utf8(output.stdout).unwrap()
     );
 
