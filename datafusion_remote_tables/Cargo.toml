@@ -25,7 +25,7 @@ datafusion = "18.0.0"
 datafusion-expr = "18.0.0"
 itertools = ">=0.10.0"
 log = "0.4"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
+tokio = { version = "1.26", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
 
 [dev-dependencies]
 rstest = "*"
