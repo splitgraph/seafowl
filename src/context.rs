@@ -34,7 +34,7 @@ use futures::{StreamExt, TryStreamExt};
 
 #[cfg(test)]
 use mockall::automock;
-use object_store::{path::Path, ObjectMeta, ObjectStore};
+use object_store::{path::Path, ObjectStore};
 
 use sqlparser::ast::{
     AlterTableOperation, CreateFunctionBody, FunctionDefinition, Ident, ObjectName,
@@ -1216,9 +1216,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Statement::AlterTable { name, operation: AlterTableOperation::RenameTable {table_name: new_name }} => {
                     let old_table_name = remove_quotes_from_object_name(&name).to_string();
                     let new_table_name = remove_quotes_from_object_name(&new_name).to_string();
-                    let table = self.try_get_seafowl_table(old_table_name).await?;
 
-                    if self.get_table_provider(new_table_name.to_owned()).await.is_ok() {
+                    if self.get_table_provider(old_table_name.to_owned()).await.is_err() {
+                        return Err(Error::Plan(
+                            format!("Source table {old_table_name:?} doesn't exist")
+                        ))
+                    } else if self.get_table_provider(new_table_name.to_owned()).await.is_ok() {
                         return Err(Error::Plan(
                             format!("Target table {new_table_name:?} already exists")
                         ))
@@ -1226,7 +1229,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::RenameTable(RenameTable {
-                            table: Arc::from(table),
+                            old_name: old_table_name,
                             new_name: new_table_name,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
@@ -1691,23 +1694,20 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 // TODO: delay the actual delete and perform it during the subsequent vacuuming
                 // somehow, or when a new CREATE TABLE targets the same uri simply overwrite
-                let table_object_store = self.internal_object_store.for_delta_table(
-                    &resolved_ref.catalog,
-                    &resolved_ref.schema,
-                    &resolved_ref.table,
-                );
-                let mut path_stream =
-                    table_object_store.list(None).await.map_err(|err| {
+                let table_prefix = Path::from(format!(
+                    "{}/{}/{}",
+                    &resolved_ref.catalog, &resolved_ref.schema, &resolved_ref.table
+                ));
+
+                self.internal_object_store
+                    .delete_in_prefix(&table_prefix)
+                    .await
+                    .map_err(|err| {
                         DataFusionError::Execution(format!(
-                            "Cannot list contents of table {name}: {}",
+                            "Failed to delete table {name} : {}",
                             err
                         ))
                     })?;
-                while let Some(maybe_object) = path_stream.next().await {
-                    if let Ok(ObjectMeta { location, .. }) = maybe_object {
-                        table_object_store.delete(&location).await?;
-                    }
-                }
                 self.table_catalog.drop_table(table_id).await?;
                 Ok(make_dummy_exec())
             }
@@ -1744,45 +1744,101 @@ impl SeafowlContext for DefaultSeafowlContext {
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::RenameTable(RenameTable {
-                            table,
+                            old_name,
                             new_name,
                             ..
                         }) => {
-                            let table_ref = TableReference::from(new_name.as_str());
+                            // Resolve new table reference
+                            let new_table_ref = TableReference::from(new_name.as_str());
+                            let resolved_new_ref =
+                                new_table_ref.resolve(&self.database, DEFAULT_SCHEMA);
+                            if resolved_new_ref.catalog != self.database {
+                                return Err(Error::Plan(
+                                    "Changing the table's database is not supported!"
+                                        .to_string(),
+                                ));
+                            }
+                            let new_path_prefix = Path::from(format!(
+                                "{}/{}/{}",
+                                &resolved_new_ref.catalog,
+                                &resolved_new_ref.schema,
+                                &resolved_new_ref.table
+                            ));
 
-                            let (new_table_name, new_schema_id) = match table_ref {
-                                // Rename the table (keep same schema)
-                                TableReference::Bare { table } => (table, None),
-                                // Rename the table / move its schema
-                                TableReference::Partial { schema, table } => {
+                            // Resolve old table reference and fetch the table id
+                            let old_table_ref = TableReference::from(old_name.as_str());
+                            let resolved_old_ref =
+                                old_table_ref.resolve(&self.database, DEFAULT_SCHEMA);
+                            let old_path_prefix = Path::from(format!(
+                                "{}/{}/{}",
+                                &resolved_old_ref.catalog,
+                                &resolved_old_ref.schema,
+                                &resolved_old_ref.table
+                            ));
+
+                            let table_id = self
+                                .table_catalog
+                                .get_table_id_by_name(
+                                    &resolved_old_ref.catalog,
+                                    &resolved_old_ref.schema,
+                                    &resolved_old_ref.table,
+                                )
+                                .await?
+                                .ok_or_else(|| {
+                                    DataFusionError::Execution(
+                                        "Table {old_name} not found".to_string(),
+                                    )
+                                })?;
+
+                            // If the old and new table schema is different check that the
+                            // corresponding collection already exists
+                            let new_schema_id =
+                                if resolved_new_ref.schema != resolved_old_ref.schema {
                                     let collection_id = self
                                         .table_catalog
                                         .get_collection_id_by_name(
                                             &self.database,
-                                            &schema,
+                                            &resolved_new_ref.schema,
                                         )
                                         .await?
                                         .ok_or_else(|| {
                                             Error::Plan(format!(
-                                                "Schema {schema:?} does not exist!"
+                                                "Schema \"{}\" does not exist!",
+                                                &resolved_new_ref.schema,
                                             ))
                                         })?;
+                                    Some(collection_id)
+                                } else {
+                                    None
+                                };
 
-                                    (table, Some(collection_id))
-                                }
-                                // Catalog specified: raise an error
-                                TableReference::Full { .. } => {
-                                    return Err(Error::Plan(
-                                        "Changing the table's database is not supported!"
-                                            .to_string(),
-                                    ))
-                                }
-                            };
+                            // If we're using the local FS store ensure the full Delta log folder
+                            // path exists prior to the move
+                            self.internal_object_store
+                                .ensure_path_exists(&new_path_prefix.child("_delta_log"))
+                                .await
+                                .map_err(|err| {
+                                DataFusionError::Execution(format!(
+                                    "Failed to ensure path existence for table {new_name} : {}",
+                                    err
+                                ))
+                            })?;
+                            // Iterate over all objects in the old table path and rename to new path
+                            self.internal_object_store
+                                .rename_in_prefix(&old_path_prefix, &new_path_prefix)
+                                .await
+                                .map_err(|err| {
+                                DataFusionError::Execution(format!(
+                                    "Failed to rename table objects in {old_path_prefix} to {new_path_prefix}: {}",
+                                    err
+                                ))
+                            })?;
 
+                            // Finally update our catalog entry
                             self.table_catalog
                                 .move_table(
-                                    table.table_id,
-                                    &new_table_name,
+                                    table_id,
+                                    &resolved_new_ref.table,
                                     new_schema_id,
                                 )
                                 .await?;
@@ -1795,6 +1851,18 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 .get_collection_id_by_name(&self.database, name)
                                 .await?
                             {
+                                let schema_prefix =
+                                    Path::from(format!("{}/{}", &self.database, name));
+                                // This is very bad.
+                                self.internal_object_store
+                                    .delete_in_prefix(&schema_prefix)
+                                    .await
+                                    .map_err(|err| {
+                                        DataFusionError::Execution(format!(
+                                        "Failed to delete objects in schema {name}: {}",
+                                        err
+                                    ))
+                                    })?;
                                 self.table_catalog.drop_collection(collection_id).await?
                             };
 
@@ -1997,7 +2065,7 @@ pub mod test_utils {
     {
         let session = make_session();
         let arrow_schema = ArrowSchema::new(vec![
-            ArrowField::new("date", ArrowDataType::Date64, false),
+            ArrowField::new("date", ArrowDataType::Date32, false),
             ArrowField::new("value", ArrowDataType::Float64, false),
         ]);
 

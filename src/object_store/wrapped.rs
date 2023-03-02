@@ -1,7 +1,7 @@
 use crate::config::schema;
 use crate::config::schema::{Local, S3};
 use bytes::Bytes;
-use futures::{stream::BoxStream, TryFutureExt};
+use futures::{stream::BoxStream, StreamExt, TryFutureExt};
 use log::debug;
 use object_store::{
     path::Path, Error, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
@@ -11,9 +11,10 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use tokio::io::AsyncWrite;
 
-use tokio::fs::{copy, remove_file, rename};
+use tokio::fs::{copy, create_dir_all, remove_file, rename};
 
 use deltalake::storage::DeltaObjectStore;
+use itertools::Itertools;
 use object_store::prefix::PrefixObjectStore;
 use std::path::Path as StdPath;
 use std::str::FromStr;
@@ -77,6 +78,57 @@ impl InternalObjectStore {
             Url::from_str(format!("{}/{}", self.root_uri.as_str(), prefix).as_str())
                 .unwrap(),
         ))
+    }
+
+    /// Delete all objects under a given prefix
+    pub async fn delete_in_prefix(&self, prefix: &Path) -> Result<(), Error> {
+        let mut path_stream = self.inner.list(Some(prefix)).await?;
+        while let Some(maybe_object) = path_stream.next().await {
+            if let Ok(ObjectMeta { location, .. }) = maybe_object {
+                self.inner.delete(&location).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Create any missing intermediate directories in the given path, so that further actions don't
+    /// error out. Applicable only to local FS, since in other stores the directories are virtual.
+    pub async fn ensure_path_exists(&self, path: &Path) -> Result<(), Error> {
+        if let schema::ObjectStore::Local(_) = self.config.clone() {
+            let full_path = StdPath::new(self.root_uri.path()).join(path.to_string());
+            create_dir_all(full_path)
+                .await
+                .map_err(|e| Error::Generic {
+                    store: "local",
+                    source: Box::new(e),
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Moving all objects in paths with `from_prefix` to paths with `to_prefix`. The main purpose
+    /// of this is to ensure that `to_prefix` actually exists when using the local FS store, otherwise
+    /// we get "No such file or directory" on rename.
+    pub async fn rename_in_prefix(
+        &self,
+        from_prefix: &Path,
+        to_prefix: &Path,
+    ) -> Result<(), Error> {
+        // Go over all objects with the `from_prefix` prefix and rename them to be with `to_prefix`
+        let mut path_stream = self.inner.list(Some(from_prefix)).await?;
+
+        while let Some(maybe_object) = path_stream.next().await {
+            if let Ok(ObjectMeta { location, .. }) = maybe_object {
+                // We unwrap since the path must match the from prefix
+                let mut new_path_parts = to_prefix.parts().collect_vec();
+                new_path_parts
+                    .extend(location.prefix_match(from_prefix).unwrap().collect_vec());
+                let new_location = Path::from_iter(new_path_parts);
+                self.inner.rename(&location, &new_location).await?;
+            }
+        }
+        Ok(())
     }
 
     /// For local filesystem object stores, try "uploading" by just moving the file.

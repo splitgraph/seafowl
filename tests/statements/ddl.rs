@@ -195,15 +195,15 @@ async fn test_create_table_move_and_drop() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| table_schema | table_name   | column_name      | data_type                   |",
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| public       | test_table_2 | some_bool_value  | Boolean                     |",
-        "| public       | test_table_2 | some_int_value   | Int64                       |",
-        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_2 | some_value       | Float32                     |",
-        "+--------------+--------------+------------------+-----------------------------+",
+        "+--------------+--------------+------------------+------------------------------+",
+        "| table_schema | table_name   | column_name      | data_type                    |",
+        "+--------------+--------------+------------------+------------------------------+",
+        "| public       | test_table_2 | some_time        | Timestamp(Microsecond, None) |",
+        "| public       | test_table_2 | some_value       | Float32                      |",
+        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)           |",
+        "| public       | test_table_2 | some_bool_value  | Boolean                      |",
+        "| public       | test_table_2 | some_int_value   | Int64                        |",
+        "+--------------+--------------+------------------+------------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -219,7 +219,11 @@ async fn test_create_table_move_and_drop() {
 
 #[tokio::test]
 async fn test_create_table_drop_schema() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let data_dir = TempDir::new().unwrap();
+    let context = make_context_with_pg(ObjectStoreType::Local(
+        data_dir.path().display().to_string(),
+    ))
+    .await;
 
     for table_name in ["test_table_1", "test_table_2"] {
         create_table_and_insert(&context, table_name).await;
