@@ -133,9 +133,9 @@ impl SchemaProvider for SeafowlCollection {
             }
         }
 
-        // TODO: This is not very nice: rebuilding the table from scratch, instead of just `load` on
+        // TODO: This is kind of meh: rebuilding the table from scratch and over-writing the existing entry, instead of just `load`-ing
         // the existing one (which we can't because it's behind of an Arc, and `load` needs `mut`).
-        // We may be able to improve it by:
+        // We may be able get away with it by:
         //    1. removing the `Arc` from the value in the map
         //    2. enclosing the entire map inside of an `Arc`
         //    3. using `entry` for in-place mutation

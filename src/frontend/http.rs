@@ -71,8 +71,6 @@ impl PlanVisitor for ETagBuilderVisitor {
                     .as_any()
                     .downcast_ref::<DeltaTable>()
                 {
-                    println!("uri: {}", table.table_uri());
-                    println!("version: {}", table.version());
                     self.table_versions
                         .extend(table.table_uri().as_bytes().to_vec());
                     self.table_versions
