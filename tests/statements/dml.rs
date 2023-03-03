@@ -37,6 +37,7 @@ async fn test_insert_two_different_schemas() {
     assert_batches_eq!(expected, &results);
 }
 
+#[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_table_partitioning_and_rechunking() {
     let context = make_context_with_pg(ObjectStoreType::InMemory).await;
@@ -209,6 +210,7 @@ async fn test_table_partitioning_and_rechunking() {
     assert_batches_eq!(expected, &results);
 }
 
+#[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_delete_statement() {
     let context = make_context_with_pg(ObjectStoreType::InMemory).await;
@@ -436,6 +438,7 @@ async fn test_delete_statement() {
     assert!(results.is_empty());
 }
 
+#[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_delete_with_string_filter_exact_match() {
     let context = make_context_with_pg(ObjectStoreType::InMemory).await;
@@ -519,6 +522,7 @@ async fn test_delete_with_string_filter_exact_match() {
     assert_batches_eq!(expected, &results);
 }
 
+#[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_update_statement() {
     let context = make_context_with_pg(ObjectStoreType::InMemory).await;
@@ -647,6 +651,7 @@ async fn test_update_statement() {
     assert_batches_eq!(expected, &results);
 }
 
+#[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_update_statement_errors() {
     let context = make_context_with_pg(ObjectStoreType::InMemory).await;

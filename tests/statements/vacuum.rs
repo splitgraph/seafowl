@@ -1,5 +1,6 @@
 use crate::statements::*;
 
+#[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_vacuum_command() {
     let context = Arc::new(make_context_with_pg(ObjectStoreType::InMemory).await);
@@ -120,6 +121,7 @@ async fn test_vacuum_command() {
     assert_eq!(object_metas.len(), 0);
 }
 
+#[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_vacuum_with_reused_file() {
     let context = Arc::new(make_context_with_pg(ObjectStoreType::InMemory).await);

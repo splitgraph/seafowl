@@ -54,8 +54,8 @@ datafusion-proto = "18.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { path = "../delta-rs/rust", features = ["s3-native-tls", "datafusion-ext"] }
-dynamodb_lock = { path = "../delta-rs/dynamodb_lock", default_features = false, features = ["native-tls"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", hash = "8dcf46e614370b93a6d47402456621b713768674", features = ["s3-native-tls", "datafusion-ext"] }
+dynamodb_lock = { git = "https://github.com/delta-io/delta-rs", package = "dynamodb_lock", hash = "8dcf46e614370b93a6d47402456621b713768674", default_features = false, features = ["native-tls"] }
 
 futures = "0.3"
 hex = ">=0.4.0"

@@ -1869,6 +1869,7 @@ checksum = "eaa37046cc0f6c3cc6090fbdbf73ef0b8ef4cfcc37f6befc0020f63e8cf121e1"
 [[package]]
 name = "deltalake"
 version = "0.7.0"
+source = "git+https://github.com/delta-io/delta-rs#8dcf46e614370b93a6d47402456621b713768674"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2022,6 +2023,7 @@ checksum = "1435fa1053d8b2fbbe9be7e97eca7f33d37b28409959813daefc1446a14247f1"
 [[package]]
 name = "dynamodb_lock"
 version = "0.4.3"
+source = "git+https://github.com/delta-io/delta-rs#8dcf46e614370b93a6d47402456621b713768674"
 dependencies = [
  "async-trait",
  "log",
@@ -2560,6 +2562,7 @@ dependencies = [
 [[package]]
 name = "glibc_version"
 version = "0.1.2"
+source = "git+https://github.com/delta-io/delta-rs#8dcf46e614370b93a6d47402456621b713768674"
 dependencies = [
  "regex",
 ]
