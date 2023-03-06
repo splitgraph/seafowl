@@ -8,6 +8,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     Pool, QueryBuilder, Row, Sqlite,
 };
+use uuid::Uuid;
 
 use crate::{
     data_types::{

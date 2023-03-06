@@ -551,7 +551,7 @@ pub async fn run_server(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use bytes::Bytes;
 
     use itertools::Itertools;
@@ -559,7 +559,13 @@ mod tests {
     use std::fmt::Display;
     use std::{collections::HashMap, sync::Arc};
 
+    use rand::{rngs::mock::StepRng, Rng};
+    use std::cell::RefCell;
+    use uuid::Builder;
+    thread_local!(static STEP_RNG: RefCell<StepRng> = RefCell::new(StepRng::new(1, 1)));
+
     use rstest::rstest;
+    use uuid::Uuid;
     use warp::{Filter, Rejection, Reply};
 
     use warp::http::Response;
@@ -685,14 +691,18 @@ mod tests {
     const CREATE_QUERY: &str = "CREATE TABLE other_test_table(col_1 INT)";
     const SELECT_QUERY_HASH: &str =
         "7fbbf7dddfd330d03e5e08cc5885ad8ca823e1b56e7cbadd156daa0e21c288f6";
-    const V1_ETAG_DEFAULT_DB: &str =
-        "c2d5a6434eb700587e0e95a5d22015e2616873d22353e83ce436075f5e01e740";
-    const V1_ETAG_TEST_DB: &str =
-        "b044e9f114a6627dd2449496514e938234dc1ff6e400cb177fe38b3ed977619b";
-    const V2_ETAG_DEFAULT_DB: &str =
-        "780c8dc5587a5a8cd32a4fabcdf1425e3c6f6c859cd24b7963a3007f450ce55e";
-    const V2_ETAG_TEST_DB: &str =
-        "26e1be6caca4a0fefb798b7d197033f6f181719f59042e87d95754bcf2ebdea0";
+    const V1_ETAG: &str =
+        "1230e7ce41e2f7c2050b75e36b6f313f5cc4dd99b255f2761f589d60a44eee00";
+    const V2_ETAG: &str =
+        "b17259a6a4e10c9a8b42ce23e683b919ada82b2ed1fafbbcd10ff42c63ff2443";
+
+    pub fn deterministic_uuid() -> Uuid {
+        // A crude hack to get reproducible bytes as source for UUID generation, to enable etag asserts
+        STEP_RNG.with(|rng| {
+            let bytes: [u8; 16] = rng.borrow_mut().gen();
+            Builder::from_random_bytes(bytes).into_uuid()
+        })
+    }
 
     #[rstest]
     #[tokio::test]
@@ -766,10 +776,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case(None, V1_ETAG_DEFAULT_DB)]
-    #[case(Some("test_db"), V1_ETAG_TEST_DB)]
     #[tokio::test]
-    async fn test_get_cached_no_etag(#[case] new_db: Option<&str>, #[case] etag: &str) {
+    async fn test_get_cached_no_etag(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
@@ -783,7 +793,7 @@ mod tests {
         assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            etag,
+            V1_ETAG,
         );
     }
 
@@ -807,12 +817,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case(None, V1_ETAG_DEFAULT_DB)]
-    #[case(Some("test_db"), V1_ETAG_TEST_DB)]
     #[tokio::test]
     async fn test_get_cached_no_etag_query_in_body(
-        #[case] new_db: Option<&str>,
-        #[case] etag: &str,
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
@@ -827,17 +834,14 @@ mod tests {
         assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            etag
+            V1_ETAG
         );
     }
 
     #[rstest]
-    #[case(None, V1_ETAG_DEFAULT_DB)]
-    #[case(Some("test_db"), V1_ETAG_TEST_DB)]
     #[tokio::test]
     async fn test_get_cached_no_etag_extension(
-        #[case] new_db: Option<&str>,
-        #[case] etag: &str,
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
@@ -852,19 +856,16 @@ mod tests {
         assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            etag
+            V1_ETAG
         );
     }
 
     #[rstest]
-    #[case(None, V1_ETAG_DEFAULT_DB)]
-    #[case(Some("test_db"), V1_ETAG_TEST_DB)]
     #[tokio::test]
     async fn test_get_cached_reuse_etag(
-        #[case] new_db: Option<&str>,
-        #[case] etag: &str,
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
     ) {
-        // Pass the same ETag as If-None-Match, should return a 301
+        // Pass the same ETag as If-None-Match, should return a 304
 
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
@@ -873,7 +874,7 @@ mod tests {
             .method("GET")
             .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
-            .header(IF_NONE_MATCH, etag)
+            .header(IF_NONE_MATCH, V1_ETAG)
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
@@ -881,12 +882,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case(None, V1_ETAG_DEFAULT_DB)]
-    #[case(Some("test_db"), V1_ETAG_TEST_DB)]
     #[tokio::test]
     async fn test_get_encoded_query_special_chars(
-        #[case] new_db: Option<&str>,
-        #[case] etag: &str,
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
@@ -901,7 +899,7 @@ mod tests {
         assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            etag
+            V1_ETAG
         );
     }
 
@@ -924,12 +922,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case(None, V2_ETAG_DEFAULT_DB)]
-    #[case(Some("test_db"), V2_ETAG_TEST_DB)]
     #[tokio::test]
     async fn test_get_cached_etag_new_version(
-        #[case] new_db: Option<&str>,
-        #[case] etag: &str,
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
     ) {
         // Pass the same ETag as If-None-Match, but the table version changed -> reruns the query
 
@@ -940,14 +935,14 @@ mod tests {
             .method("GET")
             .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
             .header(QUERY_HEADER, SELECT_QUERY)
-            .header(header::ETAG, V1_ETAG_DEFAULT_DB)
+            .header(header::ETAG, V1_ETAG)
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":2}\n");
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            etag
+            V2_ETAG
         );
     }
 

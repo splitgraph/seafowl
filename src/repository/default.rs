@@ -113,6 +113,7 @@ impl Repository for $repo {
             collection.name AS collection_name,
             "table".name AS table_name,
             "table".id AS table_id,
+            "table".uuid AS table_uuid,
             "table".legacy AS table_legacy,
             desired_table_versions.id AS table_version_id,
             table_column.name AS column_name,
@@ -215,7 +216,7 @@ impl Repository for $repo {
         database_name: &str,
         collection_name: &str,
         table_name: &str,
-    ) -> Result<CollectionId, Error> {
+    ) -> Result<TableId, Error> {
         let id = sqlx::query(
             r#"
         SELECT "table".id
@@ -266,13 +267,15 @@ impl Repository for $repo {
         collection_id: CollectionId,
         table_name: &str,
         schema: &Schema,
+        uuid: Uuid,
     ) -> Result<(TableId, TableVersionId), Error> {
         // Create new (empty) table
         let new_table_id: i64 = sqlx::query(
-            r#"INSERT INTO "table" (collection_id, name) VALUES ($1, $2) RETURNING (id)"#,
+            r#"INSERT INTO "table" (collection_id, name, uuid) VALUES ($1, $2, $3) RETURNING (id)"#,
         )
         .bind(collection_id)
         .bind(table_name)
+        .bind(uuid)
         .fetch_one(&self.executor)
         .await.map_err($repo::interpret_error)?
         .try_get("id").map_err($repo::interpret_error)?;

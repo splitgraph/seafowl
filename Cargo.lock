@@ -5134,6 +5134,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
+ "uuid 1.2.1",
  "vergen",
  "warp",
  "wasi-common",
@@ -5526,6 +5527,7 @@ dependencies = [
  "thiserror",
  "tokio-stream",
  "url",
+ "uuid 1.2.1",
  "webpki-roots",
  "whoami",
 ]

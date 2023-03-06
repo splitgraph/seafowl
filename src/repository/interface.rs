@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use async_trait::async_trait;
+use uuid::Uuid;
 
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
@@ -18,6 +19,7 @@ pub struct AllDatabaseColumnsResult {
     pub collection_name: String,
     pub table_name: String,
     pub table_id: TableId,
+    pub table_uuid: Uuid,
     pub table_legacy: bool,
     pub table_version_id: TableVersionId,
     pub column_name: String,
@@ -117,7 +119,7 @@ pub trait Repository: Send + Sync + Debug {
         database_name: &str,
         collection_name: &str,
         table_name: &str,
-    ) -> Result<CollectionId, Error>;
+    ) -> Result<TableId, Error>;
 
     async fn get_all_database_ids(&self) -> Result<Vec<(String, DatabaseId)>, Error>;
 
@@ -134,6 +136,7 @@ pub trait Repository: Send + Sync + Debug {
         collection_id: CollectionId,
         table_name: &str,
         schema: &Schema,
+        uuid: Uuid,
     ) -> Result<(TableId, TableVersionId), Error>;
 
     async fn delete_old_table_versions(
@@ -275,7 +278,7 @@ pub mod tests {
         };
 
         let (table_id, table_version_id) = repository
-            .create_table(collection_id, "testtable", &schema)
+            .create_table(collection_id, "testtable", &schema, Uuid::default())
             .await
             .expect("Error creating table");
 
@@ -316,6 +319,7 @@ pub mod tests {
                 collection_name: collection_name.clone(),
                 table_name: table_name.clone(),
                 table_id: 1,
+                table_uuid: Default::default(),
                 table_legacy: false,
                 table_version_id: version,
                 column_name: "date".to_string(),
@@ -326,6 +330,7 @@ pub mod tests {
                 collection_name,
                 table_name,
                 table_id: 1,
+                table_uuid: Default::default(),
                 table_legacy: false,
                 table_version_id: version,
                 column_name: "value".to_string(),
@@ -630,7 +635,7 @@ pub mod tests {
 
         assert!(matches!(
             repository
-                .create_table(collection_id_2, "testtable2", &schema)
+                .create_table(collection_id_2, "testtable2", &schema, Uuid::default())
                 .await
                 .unwrap_err(),
             Error::UniqueConstraintViolation(_)
@@ -638,7 +643,7 @@ pub mod tests {
 
         // Make a new table in the previous collection, try renaming
         let (new_table_id, _) = repository
-            .create_table(collection_id_1, "testtable2", &schema)
+            .create_table(collection_id_1, "testtable2", &schema, Uuid::default())
             .await
             .unwrap();
 

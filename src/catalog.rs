@@ -10,6 +10,7 @@ use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
 use parking_lot::RwLock;
+use uuid::Uuid;
 
 use crate::object_store::wrapped::InternalObjectStore;
 use crate::provider::SeafowlFunction;
@@ -196,6 +197,7 @@ pub trait TableCatalog: Sync + Send {
         collection_id: CollectionId,
         table_name: &str,
         schema: &Schema,
+        uuid: Uuid,
     ) -> Result<(TableId, TableVersionId)>;
 
     async fn delete_old_table_versions(
@@ -385,15 +387,12 @@ impl DefaultCatalog {
         // Build a delta table but don't load it yet; we'll do that only for tables that are
         // actually referenced in a statement, via the async `table` method of the schema provider.
 
-        // TODO: if the table has no columns, the result set will be empty, so we use the default DB and schema names.
-        let (database_name, collection_name) = table_columns_vec.get(0).map_or_else(
-            || (DEFAULT_DB, DEFAULT_SCHEMA),
-            |v| (&v.database_name, &v.collection_name),
-        );
+        // TODO: if the table has no columns, the result set will be empty, so we use the default UUID (all zeros).
+        let table_uuid = table_columns_vec
+            .get(0)
+            .map_or_else(Uuid::default, |v| v.table_uuid);
 
-        let table_object_store =
-            self.object_store
-                .for_delta_table(database_name, collection_name, table_name);
+        let table_object_store = self.object_store.for_delta_table(table_uuid);
 
         let table = DeltaTable::new(table_object_store, Default::default());
         (Arc::from(table_name.to_string()), Arc::new(table) as _)
@@ -509,9 +508,10 @@ impl TableCatalog for DefaultCatalog {
         collection_id: CollectionId,
         table_name: &str,
         schema: &Schema,
+        uuid: Uuid,
     ) -> Result<(TableId, TableVersionId)> {
         self.repository
-            .create_table(collection_id, table_name, schema)
+            .create_table(collection_id, table_name, schema, uuid)
             .await
             .map_err(|e| match e {
                 RepositoryError::UniqueConstraintViolation(_) => {

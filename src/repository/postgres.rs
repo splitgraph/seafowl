@@ -7,6 +7,7 @@ use sqlx::{
     postgres::PgPoolOptions,
     Executor, PgPool, Postgres, QueryBuilder, Row,
 };
+use uuid::Uuid;
 
 use crate::{
     data_types::{

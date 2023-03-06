@@ -358,7 +358,7 @@ async fn test_create_table_schema_already_exists() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "External error: Generic error: A Delta Lake table already exists at that location."
+        "Error during planning: Table \"some_table\" already exists"
     );
 
     let err = context

@@ -93,10 +93,13 @@ use parking_lot::RwLock;
 use prost::Message;
 use tempfile::TempPath;
 use tokio::sync::Semaphore;
+use uuid::Uuid;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::data_types::PhysicalPartitionId;
 use crate::datafusion::visit::VisitorMut;
+#[cfg(test)]
+use crate::frontend::http::tests::deterministic_uuid;
 use crate::provider::{
     project_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
     SeafowlTable,
@@ -724,6 +727,40 @@ impl DefaultSeafowlContext {
         Ok(seafowl_table.clone())
     }
 
+    // Parse the uuid from the Delta table uri if available
+    async fn get_table_uuid<'a>(
+        &self,
+        name: impl Into<TableReference<'a>>,
+    ) -> Result<Uuid> {
+        match self
+            .inner
+            .table_provider(name)
+            .await?
+            .as_any()
+            .downcast_ref::<DeltaTable>()
+        {
+            None => {
+                // TODO: try to load from DB if missing?
+                Err(DataFusionError::Execution(
+                    "Couldn't fetch table uuid".to_string(),
+                ))
+            }
+            Some(delta_table) => {
+                let table_uri = Path::from(delta_table.table_uri());
+                let uuid = table_uri.parts().last().ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Failed parsing the uuid suffix from uri {table_uri} for table {delta_table}"
+                    ))
+                })?;
+                Ok(Uuid::try_parse(uuid.as_ref()).map_err(|err| {
+                    DataFusionError::Execution(format!(
+                        "Failed parsing uuid from {uuid:?}: {err}"
+                    ))
+                })?)
+            }
+        }
+    }
+
     async fn create_delta_table<'a>(
         &self,
         name: impl Into<TableReference<'a>>,
@@ -746,11 +783,18 @@ impl DefaultSeafowlContext {
             })?;
 
         let delta_schema = DeltaSchema::try_from(schema)?;
-        let table_object_store = self.internal_object_store.for_delta_table(
-            &resolved_ref.catalog,
-            &resolved_ref.schema,
-            &resolved_ref.table,
-        );
+
+        // TODO: we could be doing this inside the DB itself (i.e. `... DEFAULT gen_random_uuid()`
+        // in Postgres and `... DEFAULT (uuid())` in SQLite) however we won't be able to do it until
+        // sqlx 0.7 is released (which has libsqlite3-sys > 0.25, with the SQLite version that has
+        // the `uuid()` function).
+        // Then we could create the table in our catalog first and try to create the delta table itself
+        // with the returned uuid (and delete the catalog entry if the object store creation fails).
+        #[cfg(test)]
+        let table_uuid = deterministic_uuid();
+        #[cfg(not(test))]
+        let table_uuid = Uuid::new_v4();
+        let table_object_store = self.internal_object_store.for_delta_table(table_uuid);
 
         let table = CreateBuilder::new()
             .with_object_store(table_object_store)
@@ -762,11 +806,12 @@ impl DefaultSeafowlContext {
             ))
             .await?;
 
-        // We still persist the table into our own catalog, the principal reason is us being able to
-        // load all tables and their schemas in bulk to satisfy information_schema queries.
-        // We should look into doing this via delta-rs somehow eventually.
+        // We still persist the table into our own catalog, one reason is us being able to load all
+        // tables and their schemas in bulk to satisfy information_schema queries.
+        // Another is to keep track of table uuid's, which are used to construct the table uri.
+        // We may look into doing this via delta-rs somehow eventually.
         self.table_catalog
-            .create_table(collection_id, &table_name, &sf_schema)
+            .create_table(collection_id, &table_name, &sf_schema, table_uuid)
             .await?;
 
         debug!("Created new table {table}");
@@ -779,14 +824,8 @@ impl DefaultSeafowlContext {
         plan: &Arc<dyn ExecutionPlan>,
         name: impl Into<TableReference<'a>>,
     ) -> Result<DeltaTable> {
-        let table_ref: TableReference = name.into();
-        let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
-
-        let table_object_store = self.internal_object_store.for_delta_table(
-            &resolved_ref.catalog,
-            &resolved_ref.schema,
-            &resolved_ref.table,
-        );
+        let table_uuid = self.get_table_uuid(name).await?;
+        let table_object_store = self.internal_object_store.for_delta_table(table_uuid);
 
         let table = WriteBuilder::new()
             .with_input_execution_plan(plan.clone())
@@ -1085,8 +1124,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 tables_by_version[table_version_id].clone()
                             } else {
                                 // We only support datetime DeltaTable version specification for start
+                                let table_uuid = self.get_table_uuid(resolved_ref.clone()).await?;
                                 let table_object_store =
-                                    self.internal_object_store.for_delta_table(&resolved_ref.catalog, &resolved_ref.schema, &resolved_ref.table);
+                                    self.internal_object_store.for_delta_table(table_uuid);
                                 let datetime = DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(version).map_err(|_| DataFusionError::Execution(format!(
                                     "Failed to parse version {version} as RFC3339 timestamp"
                                 )))?);
@@ -1415,6 +1455,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 let _table = self
                     .create_delta_table(name, physical.schema().as_ref())
                     .await?;
+                self.reload_schema().await?;
                 self.plan_to_delta_table(&physical, name).await?;
 
                 Ok(make_dummy_exec())
@@ -1692,22 +1733,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                         DataFusionError::Execution("Table {name} not found".to_string())
                     })?;
 
-                // TODO: delay the actual delete and perform it during the subsequent vacuuming
-                // somehow, or when a new CREATE TABLE targets the same uri simply overwrite
-                let table_prefix = Path::from(format!(
-                    "{}/{}/{}",
-                    &resolved_ref.catalog, &resolved_ref.schema, &resolved_ref.table
-                ));
-
-                self.internal_object_store
-                    .delete_in_prefix(&table_prefix)
-                    .await
-                    .map_err(|err| {
-                        DataFusionError::Execution(format!(
-                            "Failed to delete table {name} : {}",
-                            err
-                        ))
-                    })?;
                 self.table_catalog.drop_table(table_id).await?;
                 Ok(make_dummy_exec())
             }
@@ -1758,23 +1783,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                                         .to_string(),
                                 ));
                             }
-                            let new_path_prefix = Path::from(format!(
-                                "{}/{}/{}",
-                                &resolved_new_ref.catalog,
-                                &resolved_new_ref.schema,
-                                &resolved_new_ref.table
-                            ));
 
                             // Resolve old table reference and fetch the table id
                             let old_table_ref = TableReference::from(old_name.as_str());
                             let resolved_old_ref =
                                 old_table_ref.resolve(&self.database, DEFAULT_SCHEMA);
-                            let old_path_prefix = Path::from(format!(
-                                "{}/{}/{}",
-                                &resolved_old_ref.catalog,
-                                &resolved_old_ref.schema,
-                                &resolved_old_ref.table
-                            ));
 
                             let table_id = self
                                 .table_catalog
@@ -1811,28 +1824,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 } else {
                                     None
                                 };
-
-                            // If we're using the local FS store ensure the full Delta log folder
-                            // path exists prior to the move
-                            self.internal_object_store
-                                .ensure_path_exists(&new_path_prefix.child("_delta_log"))
-                                .await
-                                .map_err(|err| {
-                                DataFusionError::Execution(format!(
-                                    "Failed to ensure path existence for table {new_name} : {}",
-                                    err
-                                ))
-                            })?;
-                            // Iterate over all objects in the old table path and rename to new path
-                            self.internal_object_store
-                                .rename_in_prefix(&old_path_prefix, &new_path_prefix)
-                                .await
-                                .map_err(|err| {
-                                DataFusionError::Execution(format!(
-                                    "Failed to rename table objects in {old_path_prefix} to {new_path_prefix}: {}",
-                                    err
-                                ))
-                            })?;
 
                             // Finally update our catalog entry
                             self.table_catalog
@@ -1974,6 +1965,9 @@ impl SeafowlContext for DefaultSeafowlContext {
         if !table_exists {
             self.create_delta_table(table_ref.clone(), plan.schema().as_ref())
                 .await?;
+            // TODO: This is really only needed here and for CREATE TABLE AS statements only to be
+            // able to get the uuid without hitting the catalog DB in `get_table_uuid`
+            self.reload_schema().await?;
         }
 
         self.plan_to_delta_table(&plan, table_ref).await?;

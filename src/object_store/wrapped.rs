@@ -11,15 +11,15 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use tokio::io::AsyncWrite;
 
-use tokio::fs::{copy, create_dir_all, remove_file, rename};
+use tokio::fs::{copy, remove_file, rename};
 
 use deltalake::storage::DeltaObjectStore;
-use itertools::Itertools;
 use object_store::prefix::PrefixObjectStore;
 use std::path::Path as StdPath;
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
+use uuid::Uuid;
 
 /// Wrapper around the object_store crate that holds on to the original config
 /// in order to provide a more efficient "upload" for the local object store (since it's
@@ -63,19 +63,13 @@ impl InternalObjectStore {
     //     `InternalObjectStore` comes in.
     // This does mean that we have 3 layers of indirection before we hit the "real" object store
     // (`DeltaObjectStore` -> `PrefixObjectStore` -> `InternalObjectStore` -> `inner`).
-    pub fn for_delta_table(
-        &self,
-        database_name: &str,
-        collection_name: &str,
-        table_name: &str,
-    ) -> Arc<DeltaObjectStore> {
-        let prefix = format!("{}/{}/{}", database_name, collection_name, table_name);
+    pub fn for_delta_table(&self, table_uuid: Uuid) -> Arc<DeltaObjectStore> {
         let prefixed_store: PrefixObjectStore<InternalObjectStore> =
-            PrefixObjectStore::new(self.clone(), prefix.clone());
+            PrefixObjectStore::new(self.clone(), table_uuid.to_string());
 
         Arc::from(DeltaObjectStore::new(
             Arc::from(prefixed_store),
-            Url::from_str(format!("{}/{}", self.root_uri.as_str(), prefix).as_str())
+            Url::from_str(format!("{}/{}", self.root_uri.as_str(), table_uuid).as_str())
                 .unwrap(),
         ))
     }
@@ -86,46 +80,6 @@ impl InternalObjectStore {
         while let Some(maybe_object) = path_stream.next().await {
             if let Ok(ObjectMeta { location, .. }) = maybe_object {
                 self.inner.delete(&location).await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Create any missing intermediate directories in the given path, so that further actions don't
-    /// error out. Applicable only to local FS, since in other stores the directories are virtual.
-    pub async fn ensure_path_exists(&self, path: &Path) -> Result<(), Error> {
-        if let schema::ObjectStore::Local(_) = self.config.clone() {
-            let full_path = StdPath::new(self.root_uri.path()).join(path.to_string());
-            create_dir_all(full_path)
-                .await
-                .map_err(|e| Error::Generic {
-                    store: "local",
-                    source: Box::new(e),
-                })?;
-        }
-
-        Ok(())
-    }
-
-    /// Moving all objects in paths with `from_prefix` to paths with `to_prefix`. The main purpose
-    /// of this is to ensure that `to_prefix` actually exists when using the local FS store, otherwise
-    /// we get "No such file or directory" on rename.
-    pub async fn rename_in_prefix(
-        &self,
-        from_prefix: &Path,
-        to_prefix: &Path,
-    ) -> Result<(), Error> {
-        // Go over all objects with the `from_prefix` prefix and rename them to be with `to_prefix`
-        let mut path_stream = self.inner.list(Some(from_prefix)).await?;
-
-        while let Some(maybe_object) = path_stream.next().await {
-            if let Ok(ObjectMeta { location, .. }) = maybe_object {
-                // We unwrap since the path must match the from prefix
-                let mut new_path_parts = to_prefix.parts().collect_vec();
-                new_path_parts
-                    .extend(location.prefix_match(from_prefix).unwrap().collect_vec());
-                let new_location = Path::from_iter(new_path_parts);
-                self.inner.rename(&location, &new_location).await?;
             }
         }
         Ok(())
