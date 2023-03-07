@@ -39,6 +39,58 @@ async fn test_legacy_tables() {
     let context =
         make_context_with_local_sqlite(data_dir.path().display().to_string()).await;
 
+    //
+    // For start test that migration actually works
+    // TODO: make us cast automatic
+    //
+    let plan = context
+        .plan_query(
+            r"
+        CREATE TABLE test_migration AS
+        (SELECT
+            to_timestamp_micros(some_time) AS some_time,
+            some_value,
+            some_other_value,
+            some_bool_value,
+            some_int_value
+         FROM test_table ORDER BY some_value, some_int_value
+        )",
+        )
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    let plan = context
+        .plan_query("SELECT * FROM test_migration")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+---------------------+------------+------------------+-----------------+----------------+",
+        "| some_time           | some_value | some_other_value | some_bool_value | some_int_value |",
+        "+---------------------+------------+------------------+-----------------+----------------+",
+        "|                     | 40         |                  |                 |                |",
+        "|                     | 41         |                  |                 |                |",
+        "| 2022-01-01T20:01:01 | 42         |                  |                 | 1111           |",
+        "|                     | 42         |                  |                 |                |",
+        "| 2022-01-01T20:02:02 | 43         |                  |                 | 2222           |",
+        "| 2022-01-01T20:03:03 | 44         |                  |                 | 3333           |",
+        "|                     | 45         |                  |                 |                |",
+        "|                     | 46         |                  |                 |                |",
+        "|                     | 46         |                  |                 |                |",
+        "|                     | 47         |                  |                 |                |",
+        "|                     | 47         |                  |                 |                |",
+        "|                     | 48         |                  |                 |                |",
+        "+---------------------+------------+------------------+-----------------+----------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    //
+    // Create the accompanying new tables with same content (though different column/row order) to
+    // be used in comparisons
+    //
     let (_, version_timestamps) = create_table_and_some_partitions(
         &context,
         "test_new_table",
@@ -305,6 +357,7 @@ async fn test_legacy_tables() {
         )
         .collect::<Vec<String>>(),
         vec![
+            "test_migration".to_string(),
             "test_table".to_string(),
             "test_table:2".to_string(),
             "test_table:3".to_string(),
@@ -327,6 +380,7 @@ async fn test_legacy_tables() {
         "| information_schema | df_settings    |",
         "| information_schema | tables         |",
         "| information_schema | views          |",
+        "| public             | test_migration |",
         "| public             | test_new_table |",
         "| public             | test_table     |",
         "+--------------------+----------------+",
@@ -339,6 +393,11 @@ async fn test_legacy_tables() {
         "+--------------+----------------+------------------+------------------------------+",
         "| table_schema | table_name     | column_name      | data_type                    |",
         "+--------------+----------------+------------------+------------------------------+",
+        "| public       | test_migration | some_time        | Timestamp(Microsecond, None) |",
+        "| public       | test_migration | some_value       | Float32                      |",
+        "| public       | test_migration | some_other_value | Decimal128(38, 10)           |",
+        "| public       | test_migration | some_bool_value  | Boolean                      |",
+        "| public       | test_migration | some_int_value   | Int64                        |",
         "| public       | test_new_table | some_time        | Timestamp(Microsecond, None) |",
         "| public       | test_new_table | some_value       | Float32                      |",
         "| public       | test_new_table | some_other_value | Decimal128(38, 10)           |",
