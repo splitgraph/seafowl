@@ -40,6 +40,7 @@ mod function;
 #[path = "../../src/object_store/testutils.rs"]
 mod http_testutils;
 mod query;
+mod query_legacy;
 mod vacuum;
 
 // Object store IDs for frequently-used test data
@@ -56,7 +57,6 @@ enum ObjectStoreType {
 }
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
-/// (but uses an in-memory object store)
 async fn make_context_with_pg(
     object_store_type: ObjectStoreType,
 ) -> DefaultSeafowlContext {

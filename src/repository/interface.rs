@@ -41,6 +41,7 @@ pub struct TablePartitionsResult {
     pub database_name: String,
     pub collection_name: String,
     pub table_name: String,
+    pub table_legacy: bool,
     pub table_version_id: TableVersionId,
     pub table_partition_id: Option<i64>,
     pub object_storage_id: Option<String>,

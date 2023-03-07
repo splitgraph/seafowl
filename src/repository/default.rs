@@ -514,6 +514,7 @@ impl Repository for $repo {
                 database.name AS database_name,
                 collection.name AS collection_name,
                 "table".name AS table_name,
+                "table".legacy AS table_legacy,
                 table_version.id AS table_version_id,
                 physical_partition.id AS table_partition_id,
                 physical_partition.object_storage_id,

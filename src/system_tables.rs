@@ -2,6 +2,7 @@
 //! and datafusion's information_schema.
 
 use crate::catalog::TableCatalog;
+use crate::repository::interface::{TablePartitionsResult, TableVersionsResult};
 use arrow::array::{
     Int32Builder, Int64Builder, StringBuilder, StructBuilder, TimestampSecondBuilder,
 };
@@ -167,7 +168,10 @@ impl SeafowlSystemTable for TableVersionsTable {
         let table_versions = self
             .table_catalog
             .get_all_table_versions(&self.database, None)
-            .await?;
+            .await?
+            .into_iter()
+            .filter(|tv| tv.table_legacy)
+            .collect::<Vec<TableVersionsResult>>();
 
         let mut builder = StructBuilder::from_fields(
             self.schema.fields().clone(),
@@ -239,7 +243,10 @@ impl SeafowlSystemTable for TablePartitionsTable {
         let table_partitions = self
             .table_catalog
             .get_all_table_partitions(&self.database)
-            .await?;
+            .await?
+            .into_iter()
+            .filter(|tv| tv.table_legacy)
+            .collect::<Vec<TablePartitionsResult>>();
 
         let mut builder = StructBuilder::from_fields(
             self.schema.fields().clone(),

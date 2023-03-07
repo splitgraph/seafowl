@@ -697,7 +697,8 @@ pub mod tests {
         "b17259a6a4e10c9a8b42ce23e683b919ada82b2ed1fafbbcd10ff42c63ff2443";
 
     pub fn deterministic_uuid() -> Uuid {
-        // A crude hack to get reproducible bytes as source for UUID generation, to enable etag asserts
+        // A crude hack to get reproducible bytes as source for table UUID generation, to enable
+        // transparent etag asserts
         STEP_RNG.with(|rng| {
             let bytes: [u8; 16] = rng.borrow_mut().gen();
             Builder::from_random_bytes(bytes).into_uuid()
@@ -793,7 +794,7 @@ pub mod tests {
         assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V1_ETAG,
+            V1_ETAG
         );
     }
 

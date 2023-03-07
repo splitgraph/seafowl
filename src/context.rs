@@ -790,6 +790,7 @@ impl DefaultSeafowlContext {
         // the `uuid()` function).
         // Then we could create the table in our catalog first and try to create the delta table itself
         // with the returned uuid (and delete the catalog entry if the object store creation fails).
+        // On the other hand that would complicate etag testing logic.
         #[cfg(test)]
         let table_uuid = deterministic_uuid();
         #[cfg(not(test))]
@@ -1106,7 +1107,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         // We now have table_version_ids for each table with version specified; do another
                         // run over the query AST to rewrite the table.
                         version_processor.visit_query(&mut q);
-                        println!("Time travel query rewritten to: {}", q);
+                        debug!("Time travel query rewritten to: {}", q);
 
                         let tables_by_version = self
                             .table_catalog
