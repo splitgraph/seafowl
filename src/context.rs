@@ -9,7 +9,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::parquet::basic::Compression;
 use itertools::Itertools;
 use object_store::local::LocalFileSystem;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tokio::fs::File as AsyncFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
@@ -28,7 +28,7 @@ use crate::datafusion::parser::{DFParser, Statement as DFStatement};
 use crate::datafusion::utils::build_schema;
 use crate::object_store::http::try_prepare_http_url;
 use crate::object_store::wrapped::InternalObjectStore;
-use crate::utils::{gc_partitions, group_partitions, hash_file};
+use crate::utils::{gc_partitions, hash_file};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 
@@ -51,7 +51,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use datafusion::common::{DFSchema, ToDFSchema};
+use datafusion::common::DFSchema;
 use datafusion::datasource::file_format::avro::AvroFormat;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::file_type::{FileCompressionType, FileType};
@@ -108,13 +108,11 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
-use crate::data_types::PhysicalPartitionId;
 use crate::datafusion::visit::VisitorMut;
 #[cfg(test)]
 use crate::frontend::http::tests::deterministic_uuid;
 use crate::provider::{
-    project_expressions, PartitionColumn, SeafowlPartition, SeafowlPruningStatistics,
-    SeafowlTable,
+    project_expressions, PartitionColumn, SeafowlPartition, SeafowlTable,
 };
 use crate::wasm_udf::data_types::{get_volatility, CreateFunctionDetails};
 use crate::{
@@ -943,10 +941,6 @@ impl DefaultSeafowlContext {
             })
     }
 
-    fn get_internal_object_store(&self) -> Arc<InternalObjectStore> {
-        self.internal_object_store.clone()
-    }
-
     /// Resolve a table reference into a Seafowl table
     pub async fn try_get_seafowl_table(
         &self,
@@ -1122,43 +1116,6 @@ impl DefaultSeafowlContext {
     ) -> Result<SendableRecordBatchStream> {
         let task_context = Arc::new(TaskContext::from(self.inner()));
         physical_plan.execute(partition, task_context)
-    }
-
-    // Generate new physical Parquet partition files from the provided plan, upload to object store
-    // and persist partition metadata.
-    async fn execute_plan_to_partitions(
-        &self,
-        physical_plan: &Arc<dyn ExecutionPlan>,
-        output_schema: Option<SchemaRef>,
-    ) -> Result<Vec<PhysicalPartitionId>> {
-        let disk_manager = self.inner.runtime_env().disk_manager.clone();
-        let store = self.get_internal_object_store();
-
-        // Generate new physical partition objects
-        let partitions = plan_to_object_store(
-            &self.inner.state(),
-            physical_plan,
-            output_schema,
-            store,
-            disk_manager,
-            self.max_partition_size,
-        )
-        .await?;
-
-        debug!(
-            "execute_plan_to_partition completed, metrics: {:?}",
-            physical_plan.metrics()
-        );
-
-        // Record partition metadata to the catalog
-        self.partition_catalog
-            .create_partitions(partitions)
-            .await
-            .map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Failed persisting partition metadata {e:?}"
-                ))
-            })
     }
 
     // Copied from DataFusion's source code (private functions)
@@ -1716,113 +1673,135 @@ impl SeafowlContext for DefaultSeafowlContext {
                 input,
                 ..
             }) => {
-                let table = self.try_get_seafowl_table(table_name.to_string()).await?;
-
                 // Destructure input into projection expressions and the upstream scan/filter plan
                 let LogicalPlan::Projection(Projection { expr, input, .. }) = &**input
                     else { return Err(DataFusionError::Plan("Update plan doesn't contain a Projection node".to_string())) };
 
-                // Load all pre-existing partitions
-                let partitions = self
-                    .partition_catalog
-                    .load_table_partitions(table.table_version_id)
-                    .await?;
+                // TODO: Once https://github.com/delta-io/delta-rs/issues/1126 is closed use the
+                // native delta-rs UPDATE op
+                let table_object_store = self
+                    .inner
+                    .table_provider(table_name)
+                    .await?
+                    .as_any()
+                    .downcast_ref::<DeltaTable>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution(
+                            "Table {table_name} not found".to_string(),
+                        )
+                    })?
+                    .object_store();
+                // Can't just keep hold of the downcasted ref from above because of
+                // `temporary value dropped while borrowed`
+                let mut table = DeltaTable::new(table_object_store, Default::default());
+                table.load().await?;
 
-                // By default (e.g. when there is no qualifier/selection, or we somehow
-                // fail to prune partitions) update all partitions
-                let mut partitions_to_update = HashSet::<PhysicalPartitionId>::from_iter(
-                    partitions.iter().map(|p| p.partition_id.unwrap()),
-                );
+                let schema_ref = TableProvider::schema(&table);
+                let df_schema = DFSchema::try_from_qualified_schema(
+                    table_name.table(),
+                    schema_ref.as_ref(),
+                )?;
 
-                let schema = table.schema().as_ref().clone();
-                let df_schema =
-                    DFSchema::try_from_qualified_schema(&table.name, &schema)?;
-                let mut selection_expr = None;
+                let selection_expr =
+                    if let LogicalPlan::Filter(Filter { predicate, .. }) = &**input {
+                        Some(create_physical_expr(
+                            &predicate.clone(),
+                            &df_schema,
+                            schema_ref.as_ref(),
+                            &ExecutionProps::new(),
+                        )?)
+                    } else {
+                        None
+                    };
 
-                // Try to scope down partition ids which need to be updated with pruning
-                if let LogicalPlan::Filter(Filter { predicate, .. }) = &**input {
-                    selection_expr = Some(create_physical_expr(
-                        &predicate.clone(),
-                        &schema.clone().to_dfschema()?,
-                        &schema,
-                        &ExecutionProps::new(),
-                    )?);
+                let projections = project_expressions(
+                    expr,
+                    &df_schema,
+                    schema_ref.as_ref(),
+                    selection_expr,
+                )?;
+                let state = self.inner.state();
 
-                    match SeafowlPruningStatistics::from_partitions(
-                        partitions.clone(),
-                        table.schema(),
-                    ) {
-                        Ok(pruning_stats) => {
-                            partitions_to_update = HashSet::from_iter(
-                                pruning_stats
-                                    .prune(& [predicate.clone()])
-                                    .await
-                                    .iter()
-                                    .map( | p| p.partition_id.unwrap()),
-                            );
-                        }
-                        Err(error) => warn ! (
-                            "Failed constructing pruning statistics for table {} (version: {}) during UPDATE execution: {}",
-                            table.name, table.table_version_id, error
+                let (filters, removes) =
+                    if let LogicalPlan::Filter(Filter { predicate, .. }) = &**input {
+                        // A WHERE clause has been used; employ it to prune the update down to only
+                        // a subset of files, while inheriting the rest from the previous version
+                        let pruning_predicate = PruningPredicate::try_new(
+                            predicate.clone(),
+                            schema_ref.clone(),
+                        )?;
+                        let prune_map = pruning_predicate.prune(&table)?;
+
+                        let files_to_prune = table
+                            .get_state()
+                            .files()
+                            .iter()
+                            .zip(prune_map.into_iter())
+                            .filter_map(
+                                |(add, keep)| if keep { Some(add.clone()) } else { None },
                             )
-                    }
+                            .collect::<Vec<Add>>();
+
+                        (vec![predicate.clone().not()], files_to_prune)
+                    } else {
+                        // If no qualifier is specified we're basically updating the whole table.
+                        (vec![], table.get_state().files().clone())
+                    };
+
+                if removes.is_empty() {
+                    // Nothing to update
+                    return Ok(make_dummy_exec());
                 }
 
-                let mut final_partition_ids = Vec::with_capacity(partitions.len());
+                let base_scan = parquet_scan_from_actions(
+                    &table,
+                    removes.as_slice(),
+                    schema_ref.as_ref(),
+                    filters.as_slice(),
+                    &state,
+                    None,
+                    None,
+                )
+                .await?;
 
-                let mut update_plan: Arc<dyn ExecutionPlan>;
-                let projections =
-                    project_expressions(expr, &df_schema, &schema, selection_expr)?;
+                // Apply the provided assignments
+                let update_plan =
+                    Arc::new(ProjectionExec::try_new(projections.clone(), base_scan)?);
 
-                // Iterate over partitions, updating the ones affected by the selection,
-                // while re-using the rest
-                for (keep, group) in
-                    group_partitions(partitions, |p: &SeafowlPartition| {
-                        !partitions_to_update.contains(&p.partition_id.unwrap())
-                    })
-                {
-                    if keep {
-                        // Inherit the partition(s) as is from the previous
-                        // table version
-                        final_partition_ids
-                            .extend(group.iter().map(|p| p.partition_id.unwrap()));
-                        continue;
-                    }
+                // Write the updated data
+                let adds = write_execution_plan(
+                    &table,
+                    state,
+                    update_plan,
+                    vec![],
+                    table.object_store(),
+                    None,
+                    None,
+                )
+                .await?;
 
-                    let scan_plan = table
-                        .partition_scan_plan(
-                            None,
-                            group,
-                            &[],
-                            None,
-                            self.internal_object_store.inner.clone(),
-                        )
-                        .await?;
+                let deletion_timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64;
 
-                    update_plan = Arc::new(ProjectionExec::try_new(
-                        projections.clone(),
-                        scan_plan,
-                    )?);
-
-                    final_partition_ids.extend(
-                        self.execute_plan_to_partitions(
-                            &update_plan,
-                            Some(table.schema()),
-                        )
-                        .await?,
-                    );
+                let mut actions: Vec<Action> =
+                    adds.into_iter().map(Action::add).collect();
+                for remove in removes {
+                    actions.push(Action::remove(Remove {
+                        path: remove.path,
+                        deletion_timestamp: Some(deletion_timestamp),
+                        data_change: true,
+                        extended_file_metadata: Some(true),
+                        partition_values: Some(remove.partition_values),
+                        size: Some(remove.size),
+                        tags: None,
+                    }))
                 }
 
-                // Create a new blank table version
-                let new_table_version_id = self
-                    .table_catalog
-                    .create_new_table_version(table.table_version_id, false)
-                    .await?;
-
-                // Link the new table version with the corresponding partitions
-                self.partition_catalog
-                    .append_partitions_to_table(final_partition_ids, new_table_version_id)
-                    .await?;
+                let mut tx = table.create_transaction(None);
+                tx.add_actions(actions);
+                tx.commit(None, None).await?;
 
                 Ok(make_dummy_exec())
             }
@@ -2978,7 +2957,7 @@ mod tests {
             .await
             .unwrap();
 
-        let store = sf_context.get_internal_object_store();
+        let store = sf_context.internal_object_store.clone();
         assert_uploaded_objects(
             store,
             vec![Path::from(EXPECTED_INSERT_FILE_NAME.to_string())],

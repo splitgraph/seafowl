@@ -37,179 +37,6 @@ async fn test_insert_two_different_schemas() {
     assert_batches_eq!(expected, &results);
 }
 
-#[ignore = "not yet implemented"]
-#[tokio::test]
-async fn test_table_partitioning_and_rechunking() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
-
-    // Make table versions 1 and 2
-    create_table_and_insert(&context, "test_table").await;
-
-    // Make table version 3
-    let plan = context
-        .plan_query(
-            "INSERT INTO test_table (some_int_value, some_value) VALUES
-            (4444, 45),
-            (5555, 46),
-            (6666, 47)",
-        )
-        .await
-        .unwrap();
-    context.collect(plan).await.unwrap();
-
-    let partitions = context
-        .partition_catalog
-        .load_table_partitions(3 as TableVersionId)
-        .await
-        .unwrap();
-
-    // Ensure we have 2 partitions, originating from 2 INSERTS
-    assert_eq!(partitions.len(), 2);
-    assert_eq!(
-        partitions[0].object_storage_id,
-        Arc::from(FILENAME_1.to_string())
-    );
-    assert_eq!(partitions[0].row_count, 3);
-    assert_eq!(partitions[0].columns.len(), 3);
-    assert_eq!(
-        partitions[1].object_storage_id,
-        Arc::from(FILENAME_2.to_string())
-    );
-    assert_eq!(partitions[1].row_count, 3);
-    assert_eq!(partitions[1].columns.len(), 2);
-
-    // Test table_partitions system table shows correct state
-    let plan = context
-        .plan_query("SELECT * FROM system.table_partitions")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
-
-    let expected_row_2 = format!("| public       | test_table | 2                | 1                  | {FILENAME_1} | 3         |");
-    let expected_row_3 = format!("| public       | test_table | 3                | 1                  | {FILENAME_1} | 3         |");
-    let expected_row_4 = format!("| public       | test_table | 3                | 2                  | {FILENAME_2} | 3         |");
-    let expected = vec![
-        "+--------------+------------+------------------+--------------------+--------------------------------------------------------------------------+-----------+",
-        "| table_schema | table_name | table_version_id | table_partition_id | object_storage_id                                                        | row_count |",
-        "+--------------+------------+------------------+--------------------+--------------------------------------------------------------------------+-----------+",
-        "| public       | test_table | 1                |                    |                                                                          |           |",
-        expected_row_2.as_str(),
-        expected_row_3.as_str(),
-        expected_row_4.as_str(),
-        "+--------------+------------+------------------+--------------------+--------------------------------------------------------------------------+-----------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    //
-    // Test partition pruning during scans works
-    //
-
-    // Assert that only a single partition is going to be used
-    let plan = context
-        .plan_query(
-            "EXPLAIN SELECT some_value, some_int_value FROM test_table WHERE some_value > 45",
-        )
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
-
-    let formatted = arrow::util::pretty::pretty_format_batches(results.as_slice())
-        .unwrap()
-        .to_string();
-
-    let actual_lines: Vec<&str> = formatted.trim().lines().collect();
-    assert_contains!(
-        actual_lines[10],
-        format!(r#"partitions={{1 group: [[{FILENAME_2:}]]}}"#)
-    );
-
-    // Assert query results
-    let plan = context
-        .plan_query(
-            "SELECT some_value, some_int_value FROM test_table WHERE some_value > 45",
-        )
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
-
-    let expected = vec![
-        "+------------+----------------+",
-        "| some_value | some_int_value |",
-        "+------------+----------------+",
-        "| 46         | 5555           |",
-        "| 47         | 6666           |",
-        "+------------+----------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    //
-    // Re-chunk by creating a new table
-    //
-    let plan = context
-        .plan_query("CREATE TABLE table_rechunked AS SELECT * FROM test_table")
-        .await
-        .unwrap();
-    context.collect(plan).await.unwrap();
-
-    let partitions = context
-        .partition_catalog
-        .load_table_partitions(4 as TableVersionId)
-        .await
-        .unwrap();
-
-    // Ensure we have re-chunked the 2 partitions into 1
-    assert_eq!(partitions.len(), 1);
-    assert_eq!(
-        partitions[0].object_storage_id,
-        Arc::from(FILENAME_RECHUNKED.to_string())
-    );
-    assert_eq!(partitions[0].row_count, 6);
-    assert_eq!(partitions[0].columns.len(), 5);
-
-    // Test table_partitions system table shows correct state with filtering
-    let plan = context
-        .plan_query(
-            r#"
-            SELECT object_storage_id FROM system.table_partitions
-            WHERE table_version_id = 4 AND table_partition_id = 3 AND row_count = 6
-        "#,
-        )
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
-
-    let expected_row = format!("| {FILENAME_RECHUNKED} |");
-    let expected = vec![
-        "+--------------------------------------------------------------------------+",
-        "| object_storage_id                                                        |",
-        "+--------------------------------------------------------------------------+",
-        expected_row.as_str(),
-        "+--------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    // Ensure table contents
-    let plan = context
-        .plan_query("SELECT some_value, some_int_value FROM table_rechunked")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
-
-    let expected = vec![
-        "+------------+----------------+",
-        "| some_value | some_int_value |",
-        "+------------+----------------+",
-        "| 42         | 1111           |",
-        "| 43         | 2222           |",
-        "| 44         | 3333           |",
-        "| 45         | 4444           |",
-        "| 46         | 5555           |",
-        "| 47         | 6666           |",
-        "+------------+----------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-}
-
 #[tokio::test]
 async fn test_delete_statement() {
     let context = make_context_with_pg(ObjectStoreType::InMemory).await;
@@ -437,65 +264,56 @@ async fn test_delete_with_string_filter_exact_match() {
     assert_batches_eq!(expected, &results);
 }
 
-#[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_update_statement() {
     let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     create_table_and_some_partitions(&context, "test_table", None).await;
 
-    // Check the UPDATE query plan to make sure IN (41, 42, 43) (int) get cast to a float value
+    //
+    // Execute UPDATE with a selection, affecting only some files
+    //
     let query = "UPDATE test_table
     SET some_time = '2022-01-01 21:21:21Z', some_int_value = 5555, some_value = some_value - 10
     WHERE some_value IN (41, 42, 43)";
 
     let plan = context.create_logical_plan(query).await.unwrap();
+
+    // Check the UPDATE query plan to make sure IN (41, 42, 43) (int) get cast to a float value
     assert_eq!(
         format!("{}", plan.display_indent()),
         r#"Dml: op=[Update] table=[test_table]
-  Projection: test_table.some_bool_value AS some_bool_value, Int64(5555) AS some_int_value, test_table.some_other_value AS some_other_value, Utf8("2022-01-01 21:21:21Z") AS some_time, test_table.some_value - Float32(10) AS some_value
+  Projection: Utf8("2022-01-01 21:21:21Z") AS some_time, test_table.some_value - Float32(10) AS some_value, test_table.some_other_value AS some_other_value, test_table.some_bool_value AS some_bool_value, Int64(5555) AS some_int_value
     Filter: some_value = Float32(43) OR some_value = Float32(42) OR some_value = Float32(41)
       TableScan: test_table"#
     );
 
-    //
-    // Execute UPDATE with a selection, affecting partitions 1 and 4, and creating table_version 6
-    //
+    // Now check the results
     let plan = context.plan_query(query).await.unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 6, vec![2, 3, 5, 6]).await;
-
-    // Verify new partition contents
-    let partitions = context
-        .partition_catalog
-        .load_table_partitions(6 as TableVersionId)
+    let plan = context
+        .plan_query("SELECT * FROM test_table ORDER BY some_value")
         .await
         .unwrap();
-
-    let results =
-        scan_partition(&context, None, partitions[2].clone(), "test_table").await;
+    let results = context.collect(plan).await.unwrap();
     let expected = vec![
-        "+-----------------+----------------+------------------+---------------------+------------+",
-        "| some_bool_value | some_int_value | some_other_value | some_time           | some_value |",
-        "+-----------------+----------------+------------------+---------------------+------------+",
-        "|                 | 5555           |                  | 2022-01-01T21:21:21 | 32         |",
-        "|                 | 5555           |                  | 2022-01-01T21:21:21 | 33         |",
-        "|                 | 3333           |                  | 2022-01-01T20:03:03 | 44         |",
-        "+-----------------+----------------+------------------+---------------------+------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    let results =
-        scan_partition(&context, None, partitions[3].clone(), "test_table").await;
-    let expected = vec![
-        "+-----------------+----------------+------------------+---------------------+------------+",
-        "| some_bool_value | some_int_value | some_other_value | some_time           | some_value |",
-        "+-----------------+----------------+------------------+---------------------+------------+",
-        "|                 | 5555           |                  | 2022-01-01T21:21:21 | 32         |",
-        "|                 | 5555           |                  | 2022-01-01T21:21:21 | 31         |",
-        "|                 |                |                  |                     | 40         |",
-        "+-----------------+----------------+------------------+---------------------+------------+"
+        "+---------------------+------------+------------------+-----------------+----------------+",
+        "| some_time           | some_value | some_other_value | some_bool_value | some_int_value |",
+        "+---------------------+------------+------------------+-----------------+----------------+",
+        "| 2022-01-01T21:21:21 | 31         |                  |                 | 5555           |",
+        "| 2022-01-01T21:21:21 | 32         |                  |                 | 5555           |",
+        "| 2022-01-01T21:21:21 | 32         |                  |                 | 5555           |",
+        "| 2022-01-01T21:21:21 | 33         |                  |                 | 5555           |",
+        "|                     | 40         |                  |                 |                |",
+        "| 2022-01-01T20:03:03 | 44         |                  |                 | 3333           |",
+        "|                     | 45         |                  |                 |                |",
+        "|                     | 46         |                  |                 |                |",
+        "|                     | 46         |                  |                 |                |",
+        "|                     | 47         |                  |                 |                |",
+        "|                     | 47         |                  |                 |                |",
+        "|                     | 48         |                  |                 |                |",
+        "+---------------------+------------+------------------+-----------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -508,7 +326,12 @@ async fn test_update_statement() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 7, vec![2, 3, 5, 6]).await;
+    let plan = context
+        .plan_query("SELECT * FROM test_table ORDER BY some_value")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+    assert_batches_eq!(expected, &results);
 
     //
     // Execute UPDATE that causes an error during planning/execution, to test that the subsequent
@@ -524,8 +347,7 @@ async fn test_update_statement() {
         .contains("Cannot cast string 'nope' to value of Decimal128(38, 10) type"));
 
     //
-    // Execute complex UPDATE (redundant assignment and a case assignment) without a selection,
-    // creating new table_version with a single new partition
+    // Execute complex UPDATE (redundant assignment and a case assignment) without a selection
     //
     let plan = context
         .plan_query(
@@ -536,8 +358,6 @@ async fn test_update_statement() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 8, vec![7]).await;
-
     // Verify results
     let plan = context
         .plan_query("SELECT * FROM test_table")
@@ -546,27 +366,26 @@ async fn test_update_statement() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+-----------------+----------------+------------------+---------------------+------------+",
-        "| some_bool_value | some_int_value | some_other_value | some_time           | some_value |",
-        "+-----------------+----------------+------------------+---------------------+------------+",
-        "|                 |                | 0.0000000000     |                     | 42         |",
-        "|                 |                | 0.0000000000     |                     | 42         |",
-        "|                 |                | 0.0000000000     |                     | 42         |",
-        "|                 |                | 0.0000000000     |                     | 42         |",
-        "|                 |                | 0.0000000000     |                     | 42         |",
-        "|                 |                | 0.0000000000     |                     | 42         |",
-        "| true            | 5555           | 5.5550000000     | 2022-01-01T21:21:21 | 42         |",
-        "| true            | 5555           | 5.5550000000     | 2022-01-01T21:21:21 | 42         |",
-        "| false           | 3333           | 3.3330000000     | 2022-01-01T20:03:03 | 42         |",
-        "| true            | 5555           | 5.5550000000     | 2022-01-01T21:21:21 | 42         |",
-        "| true            | 5555           | 5.5550000000     | 2022-01-01T21:21:21 | 42         |",
-        "|                 |                | 0.0000000000     |                     | 42         |",
-        "+-----------------+----------------+------------------+---------------------+------------+",
+        "+---------------------+------------+------------------+-----------------+----------------+",
+        "| some_time           | some_value | some_other_value | some_bool_value | some_int_value |",
+        "+---------------------+------------+------------------+-----------------+----------------+",
+        "|                     | 42         | 0.0000000000     |                 |                |",
+        "|                     | 42         | 0.0000000000     |                 |                |",
+        "|                     | 42         | 0.0000000000     |                 |                |",
+        "|                     | 42         | 0.0000000000     |                 |                |",
+        "|                     | 42         | 0.0000000000     |                 |                |",
+        "|                     | 42         | 0.0000000000     |                 |                |",
+        "| 2022-01-01T21:21:21 | 42         | 5.5550000000     | true            | 5555           |",
+        "| 2022-01-01T21:21:21 | 42         | 5.5550000000     | true            | 5555           |",
+        "| 2022-01-01T20:03:03 | 42         | 3.3330000000     | false           | 3333           |",
+        "| 2022-01-01T21:21:21 | 42         | 5.5550000000     | true            | 5555           |",
+        "| 2022-01-01T21:21:21 | 42         | 5.5550000000     | true            | 5555           |",
+        "|                     | 42         | 0.0000000000     |                 |                |",
+        "+---------------------+------------+------------------+-----------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 }
 
-#[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_update_statement_errors() {
     let context = make_context_with_pg(ObjectStoreType::InMemory).await;
