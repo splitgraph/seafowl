@@ -16,7 +16,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use std::fs::File;
 
 use datafusion::datasource::listing::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl, PartitionedFile,
 };
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::{default_session_builder, SessionState};
@@ -34,19 +34,22 @@ use futures::{StreamExt, TryStreamExt};
 
 #[cfg(test)]
 use mockall::automock;
-use object_store::{path::Path, ObjectStore};
+use object_store::{path::Path, ObjectMeta, ObjectStore};
 
 use sqlparser::ast::{
     AlterTableOperation, CreateFunctionBody, FunctionDefinition, Ident, ObjectName,
     ObjectType, SchemaName, Statement, TableFactor, TableWithJoins,
 };
 
+use arrow::compute::{cast_with_options, CastOptions};
 use arrow_integration_test::field_to_json;
-use arrow_schema::DataType;
-use chrono::{DateTime, FixedOffset, Utc};
+use arrow_schema::{ArrowError, DataType, TimeUnit};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, Utc};
 use std::iter::zip;
+use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use datafusion::common::{DFSchema, ToDFSchema};
 use datafusion::datasource::file_format::avro::AvroFormat;
@@ -60,6 +63,9 @@ use datafusion::optimizer::type_coercion::TypeCoercion;
 use datafusion::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_expr::execution_props::ExecutionProps;
+use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_plan::file_format::{partition_type_wrap, FileScanConfig};
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::prelude::SessionConfig;
 use datafusion::scalar::ScalarValue;
@@ -85,14 +91,20 @@ use datafusion_expr::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     DropTable, Extension, LogicalPlan, Projection,
 };
-use datafusion_expr::{DmlStatement, Filter, WriteOp};
+use datafusion_expr::{DmlStatement, Expr, Filter, WriteOp};
+use deltalake::action::{Action, Add, Remove};
+use deltalake::delta_datafusion::DeltaDataChecker;
+use deltalake::operations::writer::{DeltaWriter, WriterConfig};
 use deltalake::operations::{create::CreateBuilder, write::WriteBuilder};
-use deltalake::{DeltaTable, Schema as DeltaSchema};
+use deltalake::storage::DeltaObjectStore;
+use deltalake::{DeltaResult, DeltaTable, Schema as DeltaSchema};
 use log::{debug, info, warn};
+use object_store::path::DELIMITER;
 use parking_lot::RwLock;
 use prost::Message;
 use tempfile::TempPath;
 use tokio::sync::Semaphore;
+use url::Url;
 use uuid::Uuid;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
@@ -520,6 +532,231 @@ pub fn is_statement_read_only(statement: &DFStatement) -> bool {
     }
 }
 
+// Appropriated from https://github.com/delta-io/delta-rs/pull/1176; once the DELETE and UPDATE ops
+// are available through delta-rs this will be obsolete.
+/// Write the provide ExecutionPlan to the underlying storage
+/// The table's invariants are checked during this proccess
+pub async fn write_execution_plan(
+    table: &DeltaTable,
+    state: SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+    partition_columns: Vec<String>,
+    object_store: Arc<DeltaObjectStore>,
+    target_file_size: Option<usize>,
+    write_batch_size: Option<usize>,
+) -> Result<Vec<Add>> {
+    let invariants = table
+        .get_metadata()
+        .and_then(|meta| meta.schema.get_invariants())
+        .unwrap_or_default();
+    let checker = DeltaDataChecker::new(invariants);
+
+    // Write data to disk
+    let mut tasks = vec![];
+    for i in 0..plan.output_partitioning().partition_count() {
+        let inner_plan = plan.clone();
+        let task_ctx = Arc::new(TaskContext::from(&state));
+
+        let config = WriterConfig::new(
+            inner_plan.schema(),
+            partition_columns.clone(),
+            None,
+            target_file_size,
+            write_batch_size,
+        );
+        let mut writer = DeltaWriter::new(object_store.clone(), config);
+        let checker_stream = checker.clone();
+        let mut stream = inner_plan.execute(i, task_ctx)?;
+        let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
+            tokio::task::spawn(async move {
+                while let Some(maybe_batch) = stream.next().await {
+                    let batch = maybe_batch?;
+                    checker_stream.check_batch(&batch).await?;
+                    writer.write(&batch).await?;
+                }
+                writer.close().await
+            });
+
+        tasks.push(handle);
+    }
+
+    // Collect add actions to add to commit
+    Ok(futures::future::join_all(tasks)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            DataFusionError::Execution(format!(
+                "Failed writing to delta table {table}: {err}"
+            ))
+        })?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .concat()
+        .into_iter()
+        .collect::<Vec<_>>())
+}
+
+// Appropriated from https://github.com/delta-io/delta-rs/pull/1176; once the DELETE and UPDATE ops
+// are available through delta-rs this will be obsolete.
+/// Create a Parquet scan limited to a set of files
+pub async fn parquet_scan_from_actions(
+    table: &DeltaTable,
+    actions: &[Add],
+    schema: &Schema,
+    filters: &[Expr],
+    state: &SessionState,
+    projection: Option<&Vec<usize>>,
+    limit: Option<usize>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    // TODO we group files together by their partition values. If the table is partitioned
+    // and partitions are somewhat evenly distributed, probably not the worst choice ...
+    // However we may want to do some additional balancing in case we are far off from the above.
+    let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
+    for action in actions {
+        let part = partitioned_file_from_action(action, schema);
+        file_groups
+            .entry(part.partition_values.clone())
+            .or_default()
+            .push(part);
+    }
+
+    let table_partition_cols = table.get_metadata()?.partition_columns.clone();
+    let file_schema = Arc::new(Schema::new(
+        schema
+            .fields()
+            .iter()
+            .filter(|f| !table_partition_cols.contains(f.name()))
+            .cloned()
+            .collect(),
+    ));
+
+    let url = Url::parse(&table.table_uri()).unwrap();
+    let host = format!(
+        "{}-{}{}",
+        url.scheme(),
+        url.host_str().unwrap_or_default(),
+        url.path().replace(DELIMITER, "-").replace(':', "-")
+    );
+    state
+        .runtime_env()
+        .register_object_store("delta-rs", &host, table.object_store());
+    let object_store_url = ObjectStoreUrl::parse(format!("delta-rs://{host}"))?;
+
+    ParquetFormat::new()
+        .create_physical_plan(
+            state,
+            FileScanConfig {
+                object_store_url,
+                file_schema,
+                file_groups: file_groups.into_values().collect(),
+                statistics: table.datafusion_table_statistics(),
+                projection: projection.cloned(),
+                limit,
+                table_partition_cols: table_partition_cols
+                    .iter()
+                    .map(|c| {
+                        Ok((
+                            c.to_owned(),
+                            partition_type_wrap(
+                                schema.field_with_name(c)?.data_type().clone(),
+                            ),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, ArrowError>>()?,
+                output_ordering: None,
+                infinite_source: false,
+            },
+            filters,
+        )
+        .await
+}
+
+// Copied from delta-rs as it's private there; once the DELETE and UPDATE ops
+// are available through delta-rs this will be obsolete.
+fn partitioned_file_from_action(action: &Add, schema: &Schema) -> PartitionedFile {
+    let partition_values = schema
+        .fields()
+        .iter()
+        .filter_map(|f| {
+            action.partition_values.get(f.name()).map(|val| match val {
+                Some(value) => to_correct_scalar_value(
+                    &serde_json::Value::String(value.to_string()),
+                    f.data_type(),
+                )
+                .unwrap_or(ScalarValue::Null),
+                None => ScalarValue::Null,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let ts_secs = action.modification_time / 1000;
+    let ts_ns = (action.modification_time % 1000) * 1_000_000;
+    let last_modified = DateTime::<Utc>::from_utc(
+        NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap(),
+        Utc,
+    );
+    PartitionedFile {
+        object_meta: ObjectMeta {
+            location: Path::from(action.path.clone()),
+            last_modified,
+            size: action.size as usize,
+        },
+        partition_values,
+        range: None,
+        extensions: None,
+    }
+}
+
+// Copied from delta-rs as it's private there; once the DELETE and UPDATE ops
+// are available through delta-rs this will be obsolete.
+fn to_correct_scalar_value(
+    stat_val: &serde_json::Value,
+    field_dt: &DataType,
+) -> Option<ScalarValue> {
+    match stat_val {
+        serde_json::Value::Array(_) => None,
+        serde_json::Value::Object(_) => None,
+        serde_json::Value::Null => None,
+        serde_json::Value::String(string_val) => match field_dt {
+            DataType::Timestamp(_, _) => {
+                let time_nanos = ScalarValue::try_from_string(
+                    string_val.to_owned(),
+                    &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                )
+                .ok()?;
+                let cast_arr = cast_with_options(
+                    &time_nanos.to_array(),
+                    field_dt,
+                    &CastOptions { safe: false },
+                )
+                .ok()?;
+                Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
+            }
+            _ => {
+                Some(ScalarValue::try_from_string(string_val.to_owned(), field_dt).ok()?)
+            }
+        },
+        other => match field_dt {
+            DataType::Timestamp(_, _) => {
+                let time_nanos = ScalarValue::try_from_string(
+                    other.to_string(),
+                    &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                )
+                .ok()?;
+                let cast_arr = cast_with_options(
+                    &time_nanos.to_array(),
+                    field_dt,
+                    &CastOptions { safe: false },
+                )
+                .ok()?;
+                Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
+            }
+            _ => Some(ScalarValue::try_from_string(other.to_string(), field_dt).ok()?),
+        },
+    }
+}
+
 // The only reason to keep this trait around (instead of migrating all the functions directly into
 // DefaultSeafowlContext), is that `create_physical_plan` would then be a recursive async function,
 // which works for traits, but not for structs: https://stackoverflow.com/a/74737853
@@ -822,8 +1059,8 @@ impl DefaultSeafowlContext {
     /// Generate the Delta table builder and execute the write
     pub async fn plan_to_delta_table<'a>(
         &self,
-        plan: &Arc<dyn ExecutionPlan>,
         name: impl Into<TableReference<'a>>,
+        plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<DeltaTable> {
         let table_uuid = self.get_table_uuid(name).await?;
         let table_object_store = self.internal_object_store.for_delta_table(table_uuid);
@@ -1457,7 +1694,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     .create_delta_table(name, physical.schema().as_ref())
                     .await?;
                 self.reload_schema().await?;
-                self.plan_to_delta_table(&physical, name).await?;
+                self.plan_to_delta_table(name, &physical).await?;
 
                 Ok(make_dummy_exec())
             }
@@ -1469,7 +1706,7 @@ impl SeafowlContext for DefaultSeafowlContext {
             }) => {
                 let physical = self.create_physical_plan(input).await?;
 
-                self.plan_to_delta_table(&physical, table_name).await?;
+                self.plan_to_delta_table(table_name, &physical).await?;
 
                 Ok(make_dummy_exec())
             }
@@ -1591,119 +1828,115 @@ impl SeafowlContext for DefaultSeafowlContext {
             }
             LogicalPlan::Dml(DmlStatement {
                 table_name,
+                table_schema,
                 op: WriteOp::Delete,
                 input,
-                ..
             }) => {
-                let table = self.try_get_seafowl_table(table_name.to_string()).await?;
+                // TODO: Once https://github.com/delta-io/delta-rs/pull/1176 is merged use that instead
+                let table_object_store = self
+                    .inner
+                    .table_provider(table_name)
+                    .await?
+                    .as_any()
+                    .downcast_ref::<DeltaTable>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution(
+                            "Table {table_name} not found".to_string(),
+                        )
+                    })?
+                    .object_store();
+                // Can't just keep hold of the downcasted ref from above because of
+                // `temporary value dropped while borrowed`
+                let mut table = DeltaTable::new(table_object_store, Default::default());
+                table.load().await?;
+                let schema_ref = SchemaRef::from(table_schema.deref().clone());
 
-                // If no qualifier is specified we're basically truncating the table;
-                // Make a new (empty) table version and finish.
-                let new_table_version_id = self
-                    .table_catalog
-                    .create_new_table_version(table.table_version_id, false)
-                    .await?;
-
-                if let LogicalPlan::Filter(Filter { predicate, .. }) = &**input {
+                let (adds, removes) = if let LogicalPlan::Filter(Filter {
+                    predicate,
+                    ..
+                }) = &**input
+                {
                     // A WHERE clause has been used; employ it to prune the filtration
                     // down to only a subset of partitions, re-use the rest as is
 
-                    // Load all pre-existing partitions
-                    let partitions = self
-                        .partition_catalog
-                        .load_table_partitions(table.table_version_id)
-                        .await?;
+                    let state = self.inner.state();
 
                     // To simulate the effect of a WHERE clause from a DELETE, we
                     // need to use the inverse clause in a SELECT when filtering
                     let filter = create_physical_expr(
                         &predicate.clone().not(),
-                        &table.schema.arrow_schema.clone().to_dfschema()?,
-                        table.schema().as_ref(),
+                        table_schema,
+                        schema_ref.as_ref(),
                         &ExecutionProps::new(),
                     )?;
 
-                    let mut final_partition_ids = Vec::with_capacity(partitions.len());
-
-                    match SeafowlPruningStatistics::from_partitions(
-                        partitions.clone(),
-                        table.schema(),
-                    ) {
-                        Ok(pruning_stats) => {
-                            // Determine the set of all partition ids that will need to
-                            // be filtered
-                            let partitions_to_filter =
-                                HashSet::<PhysicalPartitionId>::from_iter(
-                                    pruning_stats
-                                        .prune(&[predicate.clone()])
-                                        .await
-                                        .iter()
-                                        .map(|p| p.partition_id.unwrap()),
-                                );
-
-                            for (keep, group) in
-                                group_partitions(partitions, |p: &SeafowlPartition| {
-                                    !partitions_to_filter
-                                        .contains(&p.partition_id.unwrap())
-                                })
-                            {
-                                if keep {
-                                    // Inherit the partition(s) as is from the previous
-                                    // table version
-                                    final_partition_ids.extend(
-                                        group.iter().map(|p| p.partition_id.unwrap()),
-                                    );
-                                    continue;
-                                }
-
-                                // Get the plan which will eliminate the affected rows
-                                let filter_plan = table
-                                    .partition_filter_plan(
-                                        group,
-                                        filter.clone(),
-                                        &[predicate.clone().not()],
-                                        self.internal_object_store.inner.clone(),
-                                    )
-                                    .await?;
-
-                                debug!("Prepared delete filter plan: {:?}", &filter_plan);
-
-                                final_partition_ids.extend(
-                                    self.execute_plan_to_partitions(&filter_plan, None)
-                                        .await?,
-                                );
-                            }
-                        }
-                        Err(error) => {
-                            warn!(
-                                "Failed constructing pruning statistics for table {} (version: {}) during DELETE execution: {}",
-                                table.name, table.table_version_id, error
-                            );
-
-                            // Fallback to scan + filter across all partitions
-                            let filter_plan = table
-                                .partition_filter_plan(
-                                    partitions,
-                                    filter.clone(),
-                                    &[predicate.clone().not()],
-                                    self.internal_object_store.inner.clone(),
-                                )
-                                .await?;
-
-                            final_partition_ids = self
-                                .execute_plan_to_partitions(&filter_plan, None)
-                                .await?;
-                        }
-                    }
-
-                    // Link the new table version with the corresponding partitions
-                    self.partition_catalog
-                        .append_partitions_to_table(
-                            final_partition_ids,
-                            new_table_version_id,
+                    let pruning_predicate =
+                        PruningPredicate::try_new(predicate.clone(), schema_ref.clone())?;
+                    let prune_map = pruning_predicate.prune(&table)?;
+                    let files_to_prune = table
+                        .get_state()
+                        .files()
+                        .iter()
+                        .zip(prune_map.into_iter())
+                        .filter_map(
+                            |(add, keep)| if keep { Some(add.clone()) } else { None },
                         )
-                        .await?;
+                        .collect::<Vec<Add>>();
+
+                    let base_scan = parquet_scan_from_actions(
+                        &table,
+                        files_to_prune.as_slice(),
+                        schema_ref.as_ref(),
+                        &[predicate.clone().not()],
+                        &state,
+                        None,
+                        None,
+                    )
+                    .await?;
+
+                    let filter_plan = Arc::new(FilterExec::try_new(filter, base_scan)?);
+
+                    // Write the filtered out data
+                    let adds = write_execution_plan(
+                        &table,
+                        state,
+                        filter_plan,
+                        vec![],
+                        table.object_store(),
+                        None,
+                        None,
+                    )
+                    .await?;
+
+                    (adds, files_to_prune)
+                } else {
+                    // If no qualifier is specified we're basically truncating the table.
+                    // Remove all files.
+                    (vec![], table.get_state().files().clone())
+                };
+
+                let deletion_timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64;
+
+                let mut actions: Vec<Action> =
+                    adds.into_iter().map(Action::add).collect();
+                for remove in removes {
+                    actions.push(Action::remove(Remove {
+                        path: remove.path,
+                        deletion_timestamp: Some(deletion_timestamp),
+                        data_change: true,
+                        extended_file_metadata: Some(true),
+                        partition_values: Some(remove.partition_values),
+                        size: Some(remove.size),
+                        tags: None,
+                    }))
                 }
+
+                let mut tx = table.create_transaction(None);
+                tx.add_actions(actions);
+                tx.commit(None, None).await?;
 
                 Ok(make_dummy_exec())
             }
@@ -1835,6 +2068,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 )
                                 .await?;
 
+                            // TODO: Update table metadata with the new table name during writes,
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
@@ -1971,7 +2205,7 @@ impl SeafowlContext for DefaultSeafowlContext {
             self.reload_schema().await?;
         }
 
-        self.plan_to_delta_table(&plan, table_ref).await?;
+        self.plan_to_delta_table(table_ref, &plan).await?;
 
         Ok(())
     }

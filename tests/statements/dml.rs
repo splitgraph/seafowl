@@ -210,16 +210,15 @@ async fn test_table_partitioning_and_rechunking() {
     assert_batches_eq!(expected, &results);
 }
 
-#[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_delete_statement() {
     let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     create_table_and_some_partitions(&context, "test_table", None).await;
 
-    // Check DELETE's query plan to make sure 46 (int) gets cast to a float value
-    // by the optimizer
-    // (NB: EXPLAIN isn't supported for user-defined nodes)
+    //
+    // Check DELETE's query plan to make sure 46 (int) gets cast to a float value by the optimizer
+    //
     let plan = context
         .create_logical_plan("DELETE FROM test_table WHERE some_value > 46")
         .await
@@ -228,11 +227,11 @@ async fn test_delete_statement() {
         format!("{}", plan.display_indent()),
         r#"Dml: op=[Delete] table=[test_table]
   Filter: some_value > Float32(46)
-    TableScan: test_table projection=[some_bool_value, some_int_value, some_other_value, some_time, some_value], partial_filters=[some_value > Float32(46)]"#
+    TableScan: test_table projection=[some_time, some_value, some_other_value, some_bool_value, some_int_value], partial_filters=[some_value > Float32(46)]"#
     );
 
     //
-    // Execute DELETE affecting partitions 2, 3 and creating table_version 6
+    // Execute DELETE affecting partitions two of the partitions and creating new table_version
     //
     let plan = context
         .plan_query("DELETE FROM test_table WHERE some_value > 46")
@@ -240,36 +239,9 @@ async fn test_delete_statement() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 6, vec![1, 4, 5]).await;
-
-    let partitions = context
-        .partition_catalog
-        .load_table_partitions(6 as TableVersionId)
-        .await
-        .unwrap();
-
-    // Assert result of the new partition with id 5
-    let results = scan_partition(
-        &context,
-        Some(&vec![4]),
-        partitions[2].clone(),
-        "test_table",
-    )
-    .await;
-    let expected = vec![
-        "+------------+",
-        "| some_value |",
-        "+------------+",
-        "| 45         |",
-        "| 46         |",
-        "| 46         |",
-        "+------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
     // Verify results
     let plan = context
-        .plan_query("SELECT some_value FROM test_table")
+        .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
@@ -278,12 +250,12 @@ async fn test_delete_statement() {
         "+------------+",
         "| some_value |",
         "+------------+",
+        "| 40         |",
+        "| 41         |",
+        "| 42         |",
         "| 42         |",
         "| 43         |",
         "| 44         |",
-        "| 42         |",
-        "| 41         |",
-        "| 40         |",
         "| 45         |",
         "| 46         |",
         "| 46         |",
@@ -301,18 +273,21 @@ async fn test_delete_statement() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 7, vec![1, 4, 5]).await;
+    let plan = context
+        .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+    assert_batches_eq!(expected, &results);
 
     //
-    // Add another partition for table_version 8
+    // Add another partition for a new table_version
     //
     let plan = context
         .plan_query("INSERT INTO test_table (some_value) VALUES (48), (49), (50)")
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
-
-    assert_partition_ids(&context, 8, vec![1, 4, 5, 6]).await;
 
     //
     // Execute DELETE not affecting only partition with id 4, while trimming/combining the rest
@@ -323,43 +298,21 @@ async fn test_delete_statement() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 9, vec![4, 7, 8]).await;
-
-    // Verify new partition contents
-    let partitions = context
-        .partition_catalog
-        .load_table_partitions(9 as TableVersionId)
+    let plan = context
+        .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
         .await
         .unwrap();
+    let results = context.collect(plan).await.unwrap();
 
-    let results = scan_partition(
-        &context,
-        Some(&vec![4]),
-        partitions[1].clone(),
-        "test_table",
-    )
-    .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
         "+------------+",
+        "| 40         |",
+        "| 41         |",
+        "| 42         |",
         "| 42         |",
         "| 44         |",
-        "+------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    let results = scan_partition(
-        &context,
-        Some(&vec![4]),
-        partitions[2].clone(),
-        "test_table",
-    )
-    .await;
-    let expected = vec![
-        "+------------+",
-        "| some_value |",
-        "+------------+",
         "| 46         |",
         "| 46         |",
         "| 48         |",
@@ -377,43 +330,20 @@ async fn test_delete_statement() {
         .unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 10, vec![7, 9, 10]).await;
-
-    // Verify new partition contents
-    let partitions = context
-        .partition_catalog
-        .load_table_partitions(10 as TableVersionId)
+    let plan = context
+        .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
         .await
         .unwrap();
+    let results = context.collect(plan).await.unwrap();
 
-    let results = scan_partition(
-        &context,
-        Some(&vec![4]),
-        partitions[1].clone(),
-        "test_table",
-    )
-    .await;
     let expected = vec![
         "+------------+",
         "| some_value |",
         "+------------+",
-        "| 42         |",
         "| 41         |",
-        "+------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    let results = scan_partition(
-        &context,
-        Some(&vec![4]),
-        partitions[2].clone(),
-        "test_table",
-    )
-    .await;
-    let expected = vec![
-        "+------------+",
-        "| some_value |",
-        "+------------+",
+        "| 42         |",
+        "| 42         |",
+        "| 44         |",
         "| 46         |",
         "| 46         |",
         "+------------+",
@@ -438,7 +368,6 @@ async fn test_delete_statement() {
     assert!(results.is_empty());
 }
 
-#[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_delete_with_string_filter_exact_match() {
     let context = make_context_with_pg(ObjectStoreType::InMemory).await;
@@ -492,18 +421,11 @@ async fn test_delete_with_string_filter_exact_match() {
         .await
         .unwrap();
 
-    let partitions = context
-        .partition_catalog
-        .load_table_partitions(5 as TableVersionId)
+    let plan = context
+        .plan_query("SELECT * FROM test_table ORDER BY value ASC")
         .await
         .unwrap();
-
-    // For some reason, the initial pruning in a DELETE doesn't discard the two
-    // partitions that definitely don't match (partition != 'two'), so we end up
-    // with a new partition (if we delete where value = 2, this does result in the other
-    // two partitions being kept as-is, so could have something to do with strings)
-    let results =
-        scan_partition(&context, None, partitions[0].clone(), "test_table").await;
+    let results = context.collect(plan).await.unwrap();
     let expected = vec![
         "+-----------+-------+",
         "| partition | value |",
@@ -512,13 +434,6 @@ async fn test_delete_with_string_filter_exact_match() {
         "| three     | 3     |",
         "+-----------+-------+",
     ];
-    assert_batches_eq!(expected, &results);
-
-    let plan = context
-        .plan_query("SELECT * FROM test_table ORDER BY value ASC")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
     assert_batches_eq!(expected, &results);
 }
 
