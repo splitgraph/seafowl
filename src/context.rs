@@ -595,8 +595,8 @@ pub async fn write_execution_plan(
         .collect::<Vec<_>>())
 }
 
-// Appropriated from https://github.com/delta-io/delta-rs/pull/1176; once the DELETE and UPDATE ops
-// are available through delta-rs this will be obsolete.
+// Appropriated from https://github.com/delta-io/delta-rs/pull/1176 with minor changes.
+// Once the DELETE and UPDATE ops are available through delta-rs this will be obsolete.
 /// Create a Parquet scan limited to a set of files
 pub async fn parquet_scan_from_actions(
     table: &DeltaTable,
@@ -958,6 +958,27 @@ impl DefaultSeafowlContext {
         Ok(seafowl_table.clone())
     }
 
+    /// Resolve a table reference into a Delta table
+    pub async fn try_get_delta_table<'a>(
+        &self,
+        table_name: impl Into<TableReference<'a>>,
+    ) -> Result<DeltaTable> {
+        let table_object_store = self
+            .inner
+            .table_provider(table_name)
+            .await?
+            .as_any()
+            .downcast_ref::<DeltaTable>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Table {table_name} not found".to_string())
+            })?
+            .object_store();
+
+        // We can't just keep hold of the downcasted ref from above because of
+        // `temporary value dropped while borrowed`
+        Ok(DeltaTable::new(table_object_store, Default::default()))
+    }
+
     // Parse the uuid from the Delta table uri if available
     async fn get_table_uuid<'a>(
         &self,
@@ -1059,6 +1080,7 @@ impl DefaultSeafowlContext {
         let table_uuid = self.get_table_uuid(name).await?;
         let table_object_store = self.internal_object_store.for_delta_table(table_uuid);
 
+        // We're not exposing `target_file_size` nor `write_batch_size` atm
         let table = WriteBuilder::new()
             .with_input_execution_plan(plan.clone())
             .with_input_session_state(self.inner.state())
@@ -1647,6 +1669,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                 let physical = self.create_physical_plan(input).await?;
 
                 // First create the table and then insert the data from the subqeury
+                // TODO: this means we'll have 2 table versions at the end, 1st from the create
+                // and 2nd from the insert, while it seems more reasonable that in this case we have
+                // only one
                 let _table = self
                     .create_delta_table(name, physical.schema().as_ref())
                     .await?;
@@ -1679,21 +1704,8 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 // TODO: Once https://github.com/delta-io/delta-rs/issues/1126 is closed use the
                 // native delta-rs UPDATE op
-                let table_object_store = self
-                    .inner
-                    .table_provider(table_name)
-                    .await?
-                    .as_any()
-                    .downcast_ref::<DeltaTable>()
-                    .ok_or_else(|| {
-                        DataFusionError::Execution(
-                            "Table {table_name} not found".to_string(),
-                        )
-                    })?
-                    .object_store();
-                // Can't just keep hold of the downcasted ref from above because of
-                // `temporary value dropped while borrowed`
-                let mut table = DeltaTable::new(table_object_store, Default::default());
+
+                let mut table = self.try_get_delta_table(table_name).await?;
                 table.load().await?;
 
                 let schema_ref = TableProvider::schema(&table);
@@ -1812,21 +1824,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                 input,
             }) => {
                 // TODO: Once https://github.com/delta-io/delta-rs/pull/1176 is merged use that instead
-                let table_object_store = self
-                    .inner
-                    .table_provider(table_name)
-                    .await?
-                    .as_any()
-                    .downcast_ref::<DeltaTable>()
-                    .ok_or_else(|| {
-                        DataFusionError::Execution(
-                            "Table {table_name} not found".to_string(),
-                        )
-                    })?
-                    .object_store();
-                // Can't just keep hold of the downcasted ref from above because of
-                // `temporary value dropped while borrowed`
-                let mut table = DeltaTable::new(table_object_store, Default::default());
+
+                let mut table = self.try_get_delta_table(table_name).await?;
                 table.load().await?;
                 let schema_ref = SchemaRef::from(table_schema.deref().clone());
 
@@ -1946,6 +1945,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                         DataFusionError::Execution("Table {name} not found".to_string())
                     })?;
 
+                // TODO: We should keep track of dropped delta tables, so that we can do lazy deletion
+                // of actual files in that path via `VACUUM` at some point.
                 self.table_catalog.drop_table(table_id).await?;
                 Ok(make_dummy_exec())
             }
@@ -2056,18 +2057,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 .get_collection_id_by_name(&self.database, name)
                                 .await?
                             {
-                                let schema_prefix =
-                                    Path::from(format!("{}/{}", &self.database, name));
-                                // This is very bad.
-                                self.internal_object_store
-                                    .delete_in_prefix(&schema_prefix)
-                                    .await
-                                    .map_err(|err| {
-                                        DataFusionError::Execution(format!(
-                                        "Failed to delete objects in schema {name}: {}",
-                                        err
-                                    ))
-                                    })?;
+                                // Similar as for DROP TABLE; we should really only flag all tables
+                                // in the schema as DROPED, and then try to lazy delete them during
+                                // subsequent `VACUUM`s. Only once all the contained tables directories
+                                // are deleted is it safe to drop the collection.
                                 self.table_catalog.drop_collection(collection_id).await?
                             };
 

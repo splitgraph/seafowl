@@ -145,7 +145,7 @@ impl SchemaProvider for SeafowlCollection {
         let table_object_store = match self.tables.read().get(name) {
             None => return None,
             Some(table) => match table.as_any().downcast_ref::<DeltaTable>() {
-                // This shouldn't happen since we stsore only DeltaTable's in the map
+                // This shouldn't happen since we store only DeltaTable's in the map
                 None => return Some(table.clone()),
                 Some(delta_table) => {
                     if delta_table.version() != -1 {
