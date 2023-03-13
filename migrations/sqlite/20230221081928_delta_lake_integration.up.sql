@@ -7,6 +7,11 @@ ALTER TABLE "table" ADD COLUMN legacy BOOLEAN DEFAULT FALSE;
 ALTER TABLE "table" ADD COLUMN uuid BLOB NOT NULL DEFAULT x'00000000000000000000000000000000';
 UPDATE "table" SET legacy = TRUE;
 
+-- Add column for tracking Delta table versions; back-populate -1 for legacy tables
+-- TODO: maybe version should be part of the primary key
+ALTER TABLE table_version ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
+UPDATE table_version SET version = -1;
+
 -- Table for facilitating soft-dropping of tables, via deferring the actual file deletion for later.
 CREATE TABLE dropped_table (
     database_name VARCHAR NOT NULL,

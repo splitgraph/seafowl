@@ -107,21 +107,21 @@ async fn test_legacy_tables() {
     //
 
     let plan = context
-        .plan_query("SELECT * FROM system.table_versions")
+        .plan_query("SELECT * FROM system.table_versions WHERE version = -1")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+--------------+------------+------------------+---------------------+",
-        "| table_schema | table_name | table_version_id | creation_time       |",
-        "+--------------+------------+------------------+---------------------+",
-        "| public       | test_table | 1                | 2023-03-07T08:44:49 |",
-        "| public       | test_table | 2                | 2023-03-07T08:44:49 |",
-        "| public       | test_table | 3                | 2023-03-07T08:44:51 |",
-        "| public       | test_table | 4                | 2023-03-07T08:44:53 |",
-        "| public       | test_table | 5                | 2023-03-07T08:44:55 |",
-        "+--------------+------------+------------------+---------------------+",
+        "+--------------+------------+------------------+---------+---------------------+",
+        "| table_schema | table_name | table_version_id | version | creation_time       |",
+        "+--------------+------------+------------------+---------+---------------------+",
+        "| public       | test_table | 1                | -1      | 2023-03-07T08:44:49 |",
+        "| public       | test_table | 2                | -1      | 2023-03-07T08:44:49 |",
+        "| public       | test_table | 3                | -1      | 2023-03-07T08:44:51 |",
+        "| public       | test_table | 4                | -1      | 2023-03-07T08:44:53 |",
+        "| public       | test_table | 5                | -1      | 2023-03-07T08:44:55 |",
+        "+--------------+------------+------------------+---------+---------------------+",
     ];
     assert_batches_eq!(expected, &results);
 
@@ -428,15 +428,15 @@ async fn test_vacuum_legacy_tables() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+--------------+------------+------------------+---------------------+",
-        "| table_schema | table_name | table_version_id | creation_time       |",
-        "+--------------+------------+------------------+---------------------+",
-        "| public       | test_table | 1                | 2023-03-07T08:44:49 |",
-        "| public       | test_table | 2                | 2023-03-07T08:44:49 |",
-        "| public       | test_table | 3                | 2023-03-07T08:44:51 |",
-        "| public       | test_table | 4                | 2023-03-07T08:44:53 |",
-        "| public       | test_table | 5                | 2023-03-07T08:44:55 |",
-        "+--------------+------------+------------------+---------------------+",
+        "+--------------+------------+------------------+---------+---------------------+",
+        "| table_schema | table_name | table_version_id | version | creation_time       |",
+        "+--------------+------------+------------------+---------+---------------------+",
+        "| public       | test_table | 1                | -1      | 2023-03-07T08:44:49 |",
+        "| public       | test_table | 2                | -1      | 2023-03-07T08:44:49 |",
+        "| public       | test_table | 3                | -1      | 2023-03-07T08:44:51 |",
+        "| public       | test_table | 4                | -1      | 2023-03-07T08:44:53 |",
+        "| public       | test_table | 5                | -1      | 2023-03-07T08:44:55 |",
+        "+--------------+------------+------------------+---------+---------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -453,11 +453,11 @@ async fn test_vacuum_legacy_tables() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+--------------+------------+------------------+---------------------+",
-        "| table_schema | table_name | table_version_id | creation_time       |",
-        "+--------------+------------+------------------+---------------------+",
-        "| public       | test_table | 5                | 2023-03-07T08:44:55 |",
-        "+--------------+------------+------------------+---------------------+",
+        "+--------------+------------+------------------+---------+---------------------+",
+        "| table_schema | table_name | table_version_id | version | creation_time       |",
+        "+--------------+------------+------------------+---------+---------------------+",
+        "| public       | test_table | 5                | -1      | 2023-03-07T08:44:55 |",
+        "+--------------+------------+------------------+---------+---------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -505,10 +505,10 @@ async fn test_vacuum_legacy_tables() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+--------------+------------+------------------+---------------+",
-        "| table_schema | table_name | table_version_id | creation_time |",
-        "+--------------+------------+------------------+---------------+",
-        "+--------------+------------+------------------+---------------+",
+        "+--------------+------------+------------------+---------+---------------+",
+        "| table_schema | table_name | table_version_id | version | creation_time |",
+        "+--------------+------------+------------------+---------+---------------+",
+        "+--------------+------------+------------------+---------+---------------+",
     ];
 
     assert_batches_eq!(expected, &results);

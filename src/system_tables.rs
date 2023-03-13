@@ -162,6 +162,7 @@ impl TableVersionsTable {
                 Field::new("table_schema", DataType::Utf8, false),
                 Field::new("table_name", DataType::Utf8, false),
                 Field::new("table_version_id", DataType::Int64, false),
+                Field::new("version", DataType::Int64, false),
                 Field::new(
                     "creation_time",
                     // TODO: should we be using a concrete timezone here?
@@ -186,7 +187,6 @@ impl SeafowlSystemTable for TableVersionsTable {
             .get_all_table_versions(&self.database, None)
             .await?
             .into_iter()
-            .filter(|tv| tv.table_legacy)
             .collect::<Vec<TableVersionsResult>>();
 
         let mut builder = StructBuilder::from_fields(
@@ -209,7 +209,11 @@ impl SeafowlSystemTable for TableVersionsTable {
                 .unwrap()
                 .append_value(table_version.table_version_id);
             builder
-                .field_builder::<TimestampSecondBuilder>(3)
+                .field_builder::<Int64Builder>(3)
+                .unwrap()
+                .append_value(table_version.version);
+            builder
+                .field_builder::<TimestampSecondBuilder>(4)
                 .unwrap()
                 .append_value(table_version.creation_time);
 

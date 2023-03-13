@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use datafusion::catalog::schema::MemorySchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::error::DataFusionError;
-use deltalake::DeltaTable;
+use deltalake::{DeltaDataTypeVersion, DeltaTable};
 use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
@@ -211,8 +211,8 @@ pub trait TableCatalog: Sync + Send {
 
     async fn create_new_table_version(
         &self,
-        from_version: TableVersionId,
-        inherit_partitions: bool,
+        uuid: Uuid,
+        version: DeltaDataTypeVersion,
     ) -> Result<TableVersionId>;
 
     async fn get_all_table_versions(
@@ -637,15 +637,15 @@ impl TableCatalog for DefaultCatalog {
 
     async fn create_new_table_version(
         &self,
-        from_version: TableVersionId,
-        inherit_partitions: bool,
+        uuid: Uuid,
+        version: DeltaDataTypeVersion,
     ) -> Result<TableVersionId> {
         self.repository
-            .create_new_table_version(from_version, inherit_partitions)
+            .create_new_table_version(uuid, version)
             .await
             .map_err(|e| match e {
-                RepositoryError::FKConstraintViolation(_) => {
-                    Error::TableVersionDoesNotExist { id: from_version }
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::TableUuidDoesNotExist { uuid }
                 }
                 _ => Self::to_sqlx_error(e),
             })

@@ -1087,6 +1087,13 @@ impl DefaultSeafowlContext {
             .with_object_store(table_object_store)
             .await?;
 
+        // TODO: if `DeltaTable::get_version_timestamp` was globally public we could also pass the
+        // exact version timestamp, instead of creating onw automatically in our own catalog (which
+        // could lead to minor timestamp differences).
+        self.table_catalog
+            .create_new_table_version(table_uuid, table.version())
+            .await?;
+
         debug!("Written table version {} for {table}", table.version());
         Ok(table)
     }
@@ -1813,7 +1820,11 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 let mut tx = table.create_transaction(None);
                 tx.add_actions(actions);
-                tx.commit(None, None).await?;
+                let version = tx.commit(None, None).await?;
+                let uuid = self.get_table_uuid(table_name).await?;
+                self.table_catalog
+                    .create_new_table_version(uuid, version)
+                    .await?;
 
                 Ok(make_dummy_exec())
             }
@@ -1914,7 +1925,11 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 let mut tx = table.create_transaction(None);
                 tx.add_actions(actions);
-                tx.commit(None, None).await?;
+                let version = tx.commit(None, None).await?;
+                let uuid = self.get_table_uuid(table_name).await?;
+                self.table_catalog
+                    .create_new_table_version(uuid, version)
+                    .await?;
 
                 Ok(make_dummy_exec())
             }
@@ -2964,7 +2979,7 @@ mod tests {
             |tables| {
                 tables
                     .expect_create_new_table_version()
-                    .with(predicate::eq(0), predicate::eq(true))
+                    .with(predicate::eq(Uuid::parse_str("01020304-0506-4708-890a-0b0c0d0e0f10").unwrap()), predicate::eq(1))
                     .return_once(|_, _| Ok(1));
             },
         )

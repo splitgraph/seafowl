@@ -436,15 +436,26 @@ impl Repository for $repo {
 
     async fn create_new_table_version(
         &self,
-        from_version: TableVersionId,
-        inherit_partitions: bool,
+        uuid: Uuid,
+        version: DeltaDataTypeVersion,
     ) -> Result<TableVersionId, Error> {
-        let new_version = sqlx::query(
-            "INSERT INTO table_version (table_id)
-            SELECT table_id FROM table_version WHERE id = $1
+        // For now we only support linear history
+        let last_version_id: TableVersionId = sqlx::query(r#"SELECT max(table_version.id) AS id
+                FROM table_version
+                JOIN "table" ON table_version.table_id = "table".id
+                WHERE "table".uuid = $1"#)
+            .bind(uuid)
+            .fetch_one(&self.executor)
+            .await.map_err($repo::interpret_error)?
+            .try_get("id").map_err($repo::interpret_error)?;
+
+        let new_version_id = sqlx::query(
+            "INSERT INTO table_version (table_id, version)
+            SELECT table_id, $1 FROM table_version WHERE id = $2
             RETURNING (id)",
         )
-        .bind(from_version)
+        .bind(version)
+        .bind(last_version_id)
         .fetch_one(&self.executor)
         .await.map_err($repo::interpret_error)?
         .try_get("id").map_err($repo::interpret_error)?;
@@ -453,23 +464,12 @@ impl Repository for $repo {
             "INSERT INTO table_column (table_version_id, name, type)
             SELECT $2, name, type FROM table_column WHERE table_version_id = $1;",
         )
-        .bind(from_version)
-        .bind(new_version)
+        .bind(last_version_id)
+        .bind(new_version_id)
         .execute(&self.executor)
         .await.map_err($repo::interpret_error)?;
 
-        if inherit_partitions {
-            sqlx::query(
-                "INSERT INTO table_partition (table_version_id, physical_partition_id)
-                SELECT $2, physical_partition_id FROM table_partition WHERE table_version_id = $1;",
-            )
-            .bind(from_version)
-            .bind(new_version)
-            .execute(&self.executor)
-            .await.map_err($repo::interpret_error)?;
-        }
-
-        Ok(new_version)
+        Ok(new_version_id)
     }
 
     async fn get_all_table_versions(
@@ -482,6 +482,7 @@ impl Repository for $repo {
                 collection.name AS collection_name,
                 "table".name AS table_name,
                 table_version.id AS table_version_id,
+                table_version.version AS version,
                 "table".legacy AS table_legacy,
                 {} AS creation_time
             FROM table_version
@@ -662,8 +663,8 @@ impl Repository for $repo {
         // them to a special table that is used for lazy cleanup of files via `VACUUM`.
         // TODO: We could do this via a trigger, but then we'd lose the ability to actually
         // perform hard deletes at the DB-level.
-        // NB: we also persist db/col name on the off chance that we want to add table restore/undrop
-        // at some point.
+        // NB: We rally only need the uuid for cleanup, but we also persist db/col name on the off
+        // chance that we want to add table restore/undrop at some point.
         let mut builder: QueryBuilder<_> = QueryBuilder::new(
             r#"INSERT INTO dropped_table(database_name, collection_name, table_name, uuid)
             SELECT * FROM (

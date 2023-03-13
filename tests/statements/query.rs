@@ -60,6 +60,7 @@ async fn test_information_schema() {
         "| system       | table_versions   | table_schema       | Utf8                    | NO          |",
         "| system       | table_versions   | table_name         | Utf8                    | NO          |",
         "| system       | table_versions   | table_version_id   | Int64                   | NO          |",
+        "| system       | table_versions   | version            | Int64                   | NO          |",
         "| system       | table_versions   | creation_time      | Timestamp(Second, None) | NO          |",
         "+--------------+------------------+--------------------+-------------------------+-------------+",
     ];
@@ -148,84 +149,53 @@ async fn test_table_time_travel() {
     // Verify that the new table versions are shown in the corresponding system table
     //
 
-    // TODO: Make `system.table_versions` table work for delta tables
-    // let plan = context
-    //     .plan_query("SELECT table_schema, table_name, table_version_id FROM system.table_versions")
-    //     .await
-    //     .unwrap();
-    // let results = context.collect(plan).await.unwrap();
-    //
-    // let expected = vec![
-    //     "+--------------+------------+------------------+",
-    //     "| table_schema | table_name | table_version_id |",
-    //     "+--------------+------------+------------------+",
-    //     "| public       | test_table | 1                |",
-    //     "| public       | test_table | 2                |",
-    //     "| public       | test_table | 3                |",
-    //     "| public       | test_table | 4                |",
-    //     "| public       | test_table | 5                |",
-    //     "+--------------+------------+------------------+",
-    // ];
-    // assert_batches_eq!(expected, &results);
+    let plan = context
+        .plan_query("SELECT table_schema, table_name, version FROM system.table_versions")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
 
-    // //
-    // // Test that filtering the system table works, given that we provide all rows to DF and expect
-    // // it to do it.
-    // //
-    // let plan = context
-    //     .plan_query(
-    //         format!(
-    //             "
-    //         SELECT table_version_id FROM system.table_versions \
-    //         WHERE table_version_id < 5 AND creation_time > to_timestamp('{}')
-    //     ",
-    //             timestamp_to_rfc3339(version_timestamps[&2])
-    //         )
-    //         .as_str(),
-    //     )
-    //     .await
-    //     .unwrap();
-    // let results = context.collect(plan).await.unwrap();
-    //
-    // let expected = vec![
-    //     "+------------------+",
-    //     "| table_version_id |",
-    //     "+------------------+",
-    //     "| 3                |",
-    //     "| 4                |",
-    //     "+------------------+",
-    // ];
-    // assert_batches_eq!(expected, &results);
+    let expected = vec![
+        "+--------------+------------+---------+",
+        "| table_schema | table_name | version |",
+        "+--------------+------------+---------+",
+        "| public       | test_table | 0       |",
+        "| public       | test_table | 1       |",
+        "| public       | test_table | 2       |",
+        "| public       | test_table | 3       |",
+        "| public       | test_table | 4       |",
+        "+--------------+------------+---------+",
+    ];
+    assert_batches_eq!(expected, &results);
 
     //
-    // Verify that the new table partitions for all versions are shown in the corresponding system table
+    // Test that filtering the system table works, given that we provide all rows to DF and expect
+    // it to do it.
     //
+    let plan = context
+        .plan_query(
+            format!(
+                "
+            SELECT version FROM system.table_versions \
+            WHERE version < 4 AND creation_time > to_timestamp('{}')
+        ",
+                timestamp_to_rfc3339(version_timestamps[&1])
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
 
-    // TODO: Make `system.table_partitions` table work for delta tables
-    // let plan = context
-    //     .plan_query("SELECT table_schema, table_name, table_version_id, table_partition_id, row_count FROM system.table_partitions")
-    //     .await
-    //     .unwrap();
-    // let results = context.collect(plan).await.unwrap();
-    //
-    // let expected = vec![
-    //     "+--------------+------------+------------------+--------------------+-----------+",
-    //     "| table_schema | table_name | table_version_id | table_partition_id | row_count |",
-    //     "+--------------+------------+------------------+--------------------+-----------+",
-    //     "| public       | test_table | 1                |                    |           |",
-    //     "| public       | test_table | 2                | 1                  | 3         |",
-    //     "| public       | test_table | 3                | 1                  | 3         |",
-    //     "| public       | test_table | 3                | 2                  | 3         |",
-    //     "| public       | test_table | 4                | 1                  | 3         |",
-    //     "| public       | test_table | 4                | 2                  | 3         |",
-    //     "| public       | test_table | 4                | 3                  | 3         |",
-    //     "| public       | test_table | 5                | 1                  | 3         |",
-    //     "| public       | test_table | 5                | 2                  | 3         |",
-    //     "| public       | test_table | 5                | 3                  | 3         |",
-    //     "| public       | test_table | 5                | 4                  | 3         |",
-    //     "+--------------+------------+------------------+--------------------+-----------+",
-    // ];
-    // assert_batches_eq!(expected, &results);
+    let expected = vec![
+        "+---------+",
+        "| version |",
+        "+---------+",
+        "| 2       |",
+        "| 3       |",
+        "+---------+",
+    ];
+    assert_batches_eq!(expected, &results);
 
     //
     // Now use the recorded timestamps to query specific earlier table versions and compare them to
