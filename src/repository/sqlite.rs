@@ -26,8 +26,8 @@ use crate::implement_repository;
 use super::{
     default::RepositoryQueries,
     interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Error, Repository, Result,
-        TablePartitionsResult, TableVersionsResult,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, DroppedTablesResult, Error,
+        Repository, Result, TablePartitionsResult, TableVersionsResult,
     },
 };
 
@@ -53,17 +53,7 @@ impl SqliteRepository {
             FROM table_version
             GROUP BY table_id
         )"#,
-        all_table_versions: r#"SELECT
-                database.name AS database_name,
-                collection.name AS collection_name,
-                "table".name AS table_name,
-                table_version.id AS table_version_id,
-                "table".legacy AS table_legacy,
-                CAST(table_version.creation_time AS INTEGER(8)) AS creation_time
-            FROM table_version
-            INNER JOIN "table" ON "table".id = table_version.table_id
-            INNER JOIN collection ON collection.id = "table".collection_id
-            INNER JOIN database ON database.id = collection.database_id"#,
+        cast_timestamp: "CAST(timestamp_column AS INTEGER(8))",
     };
 
     pub async fn try_new(

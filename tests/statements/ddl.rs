@@ -307,6 +307,26 @@ async fn test_create_table_drop_schema() {
     ];
     assert_batches_eq!(expected, &results);
 
+    // Check tables from the dropped schemas are pending for deletion
+    let plan = context
+        .plan_query(
+            "SELECT table_schema, table_name, deletion_status FROM system.dropped_tables",
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+--------------+--------------+-----------------+",
+        "| table_schema | table_name   | deletion_status |",
+        "+--------------+--------------+-----------------+",
+        "| public       | test_table_1 | PENDING         |",
+        "| new_schema   | test_table_2 | PENDING         |",
+        "+--------------+--------------+-----------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
     // Recreate the public schema and add a table to it
     context
         .collect(context.plan_query("CREATE SCHEMA public").await.unwrap())

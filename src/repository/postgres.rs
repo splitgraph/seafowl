@@ -24,8 +24,8 @@ use crate::{
 use super::{
     default::RepositoryQueries,
     interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Error, Repository, Result,
-        TablePartitionsResult, TableVersionsResult,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, DroppedTablesResult, Error,
+        Repository, Result, TablePartitionsResult, TableVersionsResult,
     },
 };
 
@@ -44,17 +44,7 @@ impl PostgresRepository {
             FROM table_version
             ORDER BY table_id, creation_time DESC, id DESC
         )"#,
-        all_table_versions: r#"SELECT
-                database.name AS database_name,
-                collection.name AS collection_name,
-                "table".name AS table_name,
-                table_version.id AS table_version_id,
-                "table".legacy AS table_legacy,
-                CAST(EXTRACT(EPOCH FROM table_version.creation_time) AS INT8) AS creation_time
-            FROM table_version
-            INNER JOIN "table" ON "table".id = table_version.table_id
-            INNER JOIN collection ON collection.id = "table".collection_id
-            INNER JOIN database ON database.id = collection.database_id"#,
+        cast_timestamp: "CAST(EXTRACT(EPOCH FROM timestamp_column) AS INT8)",
     };
 
     pub async fn try_new(

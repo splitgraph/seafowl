@@ -2,7 +2,9 @@
 //! and datafusion's information_schema.
 
 use crate::catalog::TableCatalog;
-use crate::repository::interface::{TablePartitionsResult, TableVersionsResult};
+use crate::repository::interface::{
+    DroppedTablesResult, TablePartitionsResult, TableVersionsResult,
+};
 use arrow::array::{
     Int32Builder, Int64Builder, StringBuilder, StructBuilder, TimestampSecondBuilder,
 };
@@ -23,6 +25,7 @@ use std::sync::Arc;
 pub const SYSTEM_SCHEMA: &str = "system";
 const TABLE_VERSIONS: &str = "table_versions";
 const TABLE_PARTITIONS: &str = "table_partitions";
+const DROPPED_TABLES: &str = "dropped_tables";
 
 pub struct SystemSchemaProvider {
     database: Arc<str>,
@@ -45,7 +48,11 @@ impl SchemaProvider for SystemSchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        vec![TABLE_VERSIONS.to_string(), TABLE_PARTITIONS.to_string()]
+        vec![
+            TABLE_VERSIONS.to_string(),
+            TABLE_PARTITIONS.to_string(),
+            DROPPED_TABLES.to_string(),
+        ]
     }
 
     async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
@@ -69,6 +76,15 @@ impl SchemaProvider for SystemSchemaProvider {
                     table: Arc::new(table),
                 }))
             }
+            DROPPED_TABLES => {
+                let table = DroppedTablesTable::new(
+                    self.database.clone(),
+                    self.table_catalog.clone(),
+                );
+                Some(Arc::new(SystemTableProvider {
+                    table: Arc::new(table),
+                }))
+            }
             _ => None,
         }
     }
@@ -76,7 +92,7 @@ impl SchemaProvider for SystemSchemaProvider {
     fn table_exist(&self, name: &str) -> bool {
         matches!(
             name.to_ascii_lowercase().as_str(),
-            TABLE_VERSIONS | TABLE_PARTITIONS
+            TABLE_VERSIONS | TABLE_PARTITIONS | DROPPED_TABLES
         )
     }
 }
@@ -279,6 +295,88 @@ impl SeafowlSystemTable for TablePartitionsTable {
                 .field_builder::<Int32Builder>(5)
                 .unwrap()
                 .append_option(table_partition.row_count);
+
+            builder.append(true);
+        }
+
+        let struct_array = builder.finish();
+
+        RecordBatch::try_new(self.schema.clone(), struct_array.columns().to_vec())
+            .map_err(DataFusionError::from)
+    }
+}
+
+// Table listing all dropped tables that are pending lazy deletion on subsequent `VACUUM`s
+struct DroppedTablesTable {
+    database: Arc<str>,
+    schema: SchemaRef,
+    table_catalog: Arc<dyn TableCatalog>,
+}
+
+impl DroppedTablesTable {
+    fn new(database: Arc<str>, table_catalog: Arc<dyn TableCatalog>) -> Self {
+        Self {
+            // This is dictated by the output of `get_dropped_tables`, except that we omit the
+            // database_name field, since we scope down to the database at hand.
+            database,
+            schema: Arc::new(Schema::new(vec![
+                Field::new("table_schema", DataType::Utf8, false),
+                Field::new("table_name", DataType::Utf8, false),
+                Field::new("uuid", DataType::Utf8, false),
+                Field::new("deletion_status", DataType::Utf8, false),
+                Field::new(
+                    "drop_time",
+                    // TODO: should we be using a concrete timezone here?
+                    DataType::Timestamp(TimeUnit::Second, None),
+                    false,
+                ),
+            ])),
+            table_catalog,
+        }
+    }
+}
+
+#[async_trait]
+impl SeafowlSystemTable for DroppedTablesTable {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    async fn load_record_batch(&self) -> Result<RecordBatch> {
+        let dropped_tables = self
+            .table_catalog
+            .get_dropped_tables(&self.database)
+            .await?
+            .into_iter()
+            .collect::<Vec<DroppedTablesResult>>();
+
+        let mut builder = StructBuilder::from_fields(
+            self.schema.fields().clone(),
+            dropped_tables.len(),
+        );
+
+        // Construct the table columns from the returned rows
+        for dropped_table in &dropped_tables {
+            builder
+                .field_builder::<StringBuilder>(0)
+                .unwrap()
+                .append_value(dropped_table.collection_name.clone());
+            builder
+                .field_builder::<StringBuilder>(1)
+                .unwrap()
+                .append_value(&dropped_table.table_name.clone());
+            builder
+                .field_builder::<StringBuilder>(2)
+                .unwrap()
+                .append_value(dropped_table.uuid.to_string().clone());
+            builder
+                .field_builder::<StringBuilder>(3)
+                .unwrap()
+                .append_value(dropped_table.deletion_status.clone());
+            builder
+                .field_builder::<TimestampSecondBuilder>(4)
+                .unwrap()
+                .append_value(dropped_table.drop_time);
 
             builder.append(true);
         }

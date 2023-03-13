@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::object_store::wrapped::InternalObjectStore;
 use crate::provider::SeafowlFunction;
-use crate::repository::interface::TablePartitionsResult;
+use crate::repository::interface::{DroppedTablesResult, TablePartitionsResult};
 use crate::system_tables::SystemSchemaProvider;
 use crate::wasm_udf::data_types::{
     CreateFunctionDataType, CreateFunctionDetails, CreateFunctionLanguage,
@@ -238,6 +238,11 @@ pub trait TableCatalog: Sync + Send {
     async fn drop_collection(&self, collection_id: CollectionId) -> Result<()>;
 
     async fn drop_database(&self, database_id: DatabaseId) -> Result<()>;
+
+    async fn get_dropped_tables(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<DroppedTablesResult>>;
 
     async fn delete_dropped_table(&self, uuid: Uuid) -> Result<()>;
 }
@@ -729,6 +734,16 @@ impl TableCatalog for DefaultCatalog {
                 }
                 _ => Self::to_sqlx_error(e),
             })
+    }
+
+    async fn get_dropped_tables(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<DroppedTablesResult>> {
+        self.repository
+            .get_dropped_tables(database_name)
+            .await
+            .map_err(Self::to_sqlx_error)
     }
 
     async fn delete_dropped_table(&self, uuid: Uuid) -> Result<()> {

@@ -49,6 +49,16 @@ pub struct TablePartitionsResult {
 }
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
+pub struct DroppedTablesResult {
+    pub database_name: String,
+    pub collection_name: String,
+    pub table_name: String,
+    pub uuid: Uuid,
+    pub deletion_status: String,
+    pub drop_time: Timestamp,
+}
+
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct AllTablePartitionColumnsResult {
     pub table_partition_id: i64,
     pub object_storage_id: String,
@@ -211,6 +221,11 @@ pub trait Repository: Send + Sync + Debug {
         maybe_collection_id: Option<CollectionId>,
         maybe_database_id: Option<DatabaseId>,
     ) -> Result<(), Error>;
+
+    async fn get_dropped_tables(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<DroppedTablesResult>>;
 
     async fn delete_dropped_table(&self, uuid: Uuid) -> Result<(), Error>;
 }

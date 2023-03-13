@@ -50,7 +50,7 @@
 /// Queries that are different between SQLite and PG
 pub struct RepositoryQueries {
     pub latest_table_versions: &'static str,
-    pub all_table_versions: &'static str,
+    pub cast_timestamp: &'static str,
 }
 
 #[macro_export]
@@ -477,8 +477,22 @@ impl Repository for $repo {
         database_name: &str,
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>, Error> {
+        let query = format!(r#"SELECT
+                database.name AS database_name,
+                collection.name AS collection_name,
+                "table".name AS table_name,
+                table_version.id AS table_version_id,
+                "table".legacy AS table_legacy,
+                {} AS creation_time
+            FROM table_version
+            INNER JOIN "table" ON "table".id = table_version.table_id
+            INNER JOIN collection ON collection.id = "table".collection_id
+            INNER JOIN database ON database.id = collection.database_id"#,
+            $repo::QUERIES.cast_timestamp.replace("timestamp_column", "table_version.creation_time")
+        );
+
         // We have to manually construct the query since SQLite doesn't have the proper Encode trait
-        let mut builder: QueryBuilder<_> = QueryBuilder::new($repo::QUERIES.all_table_versions);
+        let mut builder: QueryBuilder<_> = QueryBuilder::new(&query);
 
         builder.push(" WHERE database.name = ");
         builder.push_bind(database_name);
@@ -651,7 +665,7 @@ impl Repository for $repo {
         // NB: we also persist db/col name on the off chance that we want to add table restore/undrop
         // at some point.
         let mut builder: QueryBuilder<_> = QueryBuilder::new(
-            r#"INSERT INTO dropped_table(database_name, collection_name, name, uuid)
+            r#"INSERT INTO dropped_table(database_name, collection_name, table_name, uuid)
             SELECT * FROM (
                 SELECT database.name, collection.name, "table".name, "table".uuid
                 FROM "table"
@@ -677,6 +691,29 @@ impl Repository for $repo {
         let query = builder.build();
         query.execute(&self.executor).await.map_err($repo::interpret_error)?;
         Ok(())
+    }
+
+    async fn get_dropped_tables(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<DroppedTablesResult>> {
+        let query = format!(r#"SELECT
+                database_name,
+                collection_name,
+                table_name,
+                uuid,
+                deletion_status,
+                {} AS drop_time
+            FROM dropped_table WHERE database_name = $1"#,
+            $repo::QUERIES.cast_timestamp.replace("timestamp_column", "drop_time")
+        );
+
+        let dropped_tables = sqlx::query_as(&query)
+        .bind(database_name)
+        .fetch_all(&self.executor)
+        .await.map_err($repo::interpret_error)?;
+
+        Ok(dropped_tables)
     }
 
     async fn delete_dropped_table(&self, uuid: Uuid) -> Result<(), Error> {

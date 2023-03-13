@@ -2691,6 +2691,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_drop_table_pending_deletion() -> Result<()> {
+        let context = Arc::new(in_memory_context().await);
+        let plan = context
+            .plan_query("CREATE TABLE test_table (\"key\" INTEGER, value STRING)")
+            .await
+            .unwrap();
+        context.collect(plan).await.unwrap();
+        let plan = context.plan_query("DROP TABLE test_table").await.unwrap();
+        context.collect(plan).await.unwrap();
+
+        let plan = context
+            .plan_query("SELECT table_schema, table_name, uuid, deletion_status FROM system.dropped_tables")
+            .await
+            .unwrap();
+        let results = context.collect(plan).await.unwrap();
+
+        let expected = vec![
+            "+--------------+------------+--------------------------------------+-----------------+",
+            "| table_schema | table_name | uuid                                 | deletion_status |",
+            "+--------------+------------+--------------------------------------+-----------------+",
+            "| public       | test_table | 01020304-0506-4708-890a-0b0c0d0e0f10 | PENDING         |",
+            "+--------------+------------+--------------------------------------+-----------------+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_execute_insert_from_other_table() -> Result<()> {
         let context = Arc::new(in_memory_context().await);
         context
