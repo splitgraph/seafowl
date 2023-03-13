@@ -204,6 +204,15 @@ pub trait Repository: Send + Sync + Debug {
     async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error>;
 
     async fn drop_database(&self, database_id: DatabaseId) -> Result<(), Error>;
+
+    async fn insert_dropped_tables(
+        &self,
+        maybe_table_id: Option<TableId>,
+        maybe_collection_id: Option<CollectionId>,
+        maybe_database_id: Option<DatabaseId>,
+    ) -> Result<(), Error>;
+
+    async fn delete_dropped_table(&self, uuid: Uuid) -> Result<(), Error>;
 }
 
 #[cfg(test)]

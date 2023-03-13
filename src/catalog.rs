@@ -46,6 +46,7 @@ pub enum Error {
     DatabaseDoesNotExist { id: DatabaseId },
     CollectionDoesNotExist { id: CollectionId },
     TableDoesNotExist { id: TableId },
+    TableUuidDoesNotExist { uuid: Uuid },
     TableVersionDoesNotExist { id: TableVersionId },
     // We were inserting a vector of partitions and can't find which one
     // caused the error without parsing the error message, so just
@@ -114,6 +115,9 @@ impl From<Error> for DataFusionError {
             }
             Error::TableDoesNotExist { id } => {
                 DataFusionError::Internal(format!("Table with ID {id} doesn't exist"))
+            }
+            Error::TableUuidDoesNotExist { uuid } => {
+                DataFusionError::Internal(format!("Table with UUID {uuid} doesn't exist"))
             }
             // Raised by append_partitions_to_table and create_new_table_version (non-existent version), also internal issue
             Error::TableVersionDoesNotExist { id } => DataFusionError::Internal(format!(
@@ -234,6 +238,8 @@ pub trait TableCatalog: Sync + Send {
     async fn drop_collection(&self, collection_id: CollectionId) -> Result<()>;
 
     async fn drop_database(&self, database_id: DatabaseId) -> Result<()>;
+
+    async fn delete_dropped_table(&self, uuid: Uuid) -> Result<()>;
 }
 
 #[cfg_attr(test, automock)]
@@ -720,6 +726,18 @@ impl TableCatalog for DefaultCatalog {
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
                     Error::DatabaseDoesNotExist { id: database_id }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
+    }
+
+    async fn delete_dropped_table(&self, uuid: Uuid) -> Result<()> {
+        self.repository
+            .delete_dropped_table(uuid)
+            .await
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::TableUuidDoesNotExist { uuid }
                 }
                 _ => Self::to_sqlx_error(e),
             })

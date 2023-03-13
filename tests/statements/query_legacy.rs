@@ -412,3 +412,149 @@ async fn test_legacy_tables() {
     ];
     assert_batches_eq!(expected, &results);
 }
+
+#[tokio::test]
+async fn test_vacuum_legacy_tables() {
+    let data_dir = TempDir::new().unwrap();
+
+    let context = Arc::new(
+        make_context_with_local_sqlite(data_dir.path().display().to_string()).await,
+    );
+
+    let plan = context
+        .plan_query("SELECT * FROM system.table_versions")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+--------------+------------+------------------+---------------------+",
+        "| table_schema | table_name | table_version_id | creation_time       |",
+        "+--------------+------------+------------------+---------------------+",
+        "| public       | test_table | 1                | 2023-03-07T08:44:49 |",
+        "| public       | test_table | 2                | 2023-03-07T08:44:49 |",
+        "| public       | test_table | 3                | 2023-03-07T08:44:51 |",
+        "| public       | test_table | 4                | 2023-03-07T08:44:53 |",
+        "| public       | test_table | 5                | 2023-03-07T08:44:55 |",
+        "+--------------+------------+------------------+---------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    context
+        .collect(context.plan_query("VACUUM TABLES").await.unwrap())
+        .await
+        .unwrap();
+
+    let plan = context
+        .plan_query("SELECT * FROM system.table_versions")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+--------------+------------+------------------+---------------------+",
+        "| table_schema | table_name | table_version_id | creation_time       |",
+        "+--------------+------------+------------------+---------------------+",
+        "| public       | test_table | 5                | 2023-03-07T08:44:55 |",
+        "+--------------+------------+------------------+---------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // Make sure vacuuming partitions and all tables changes nothing
+    context
+        .collect(context.plan_query("VACUUM PARTITIONS").await.unwrap())
+        .await
+        .unwrap();
+    context
+        .collect(context.plan_query("VACUUM TABLES").await.unwrap())
+        .await
+        .unwrap();
+
+    // Check the test_table is still queryable
+    let plan = context
+        .plan_query("SELECT some_value FROM test_table ORDER BY some_value LIMIT 4")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+------------+",
+        "| some_value |",
+        "+------------+",
+        "| 40         |",
+        "| 41         |",
+        "| 42         |",
+        "| 42         |",
+        "+------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // DROP TABLE
+    context
+        .collect(context.plan_query("DROP TABLE test_table").await.unwrap())
+        .await
+        .unwrap();
+
+    let plan = context
+        .plan_query("SELECT * FROM system.table_versions")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+--------------+------------+------------------+---------------+",
+        "| table_schema | table_name | table_version_id | creation_time |",
+        "+--------------+------------+------------------+---------------+",
+        "+--------------+------------+------------------+---------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    let get_object_metas = || async {
+        context
+            .internal_object_store
+            .inner
+            .list(None)
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+    };
+
+    // Check we have orphan partitions
+    // NB: we deduplicate object storage IDs here to avoid running the DELETE call
+    // twice, but we can have two different partition IDs with same object storage ID
+    // See https://github.com/splitgraph/seafowl/issues/5
+    let orphans = vec![
+        "ea192fa7ae3b4abca9ded70e480c188e2c260ece02a810e5f1e2be41b0d6c0f6.parquet",
+        "534e5cc396e5b24725993145821b864cbfb07c2d8d7116f3d60d28bc02900861.parquet",
+        "9ae6f4222893474551037d0e44ff223ca5ea8e703d141b14835025923a66ab50.parquet",
+        "7fbfeeeade71978b4ae82cd3d97b8c1bd9ae7ab9a7a78ee541b66209cfd7722d.parquet",
+    ];
+
+    assert_orphan_partitions(context.clone(), orphans.clone()).await;
+    let object_metas = get_object_metas().await;
+    assert_eq!(object_metas.len(), 7);
+    for object_meta in object_metas {
+        // We're skipping the 3 seafowl.sqlite* files
+        let path = object_meta.location.to_string();
+        if !path.starts_with("seafowl.sqlite") {
+            assert!(orphans.contains(&path.as_str()));
+        }
+    }
+
+    // Run vacuum on partitions
+    context
+        .collect(context.plan_query("VACUUM PARTITIONS").await.unwrap())
+        .await
+        .unwrap();
+
+    // Ensure no orphan partitions are left
+    assert_orphan_partitions(context.clone(), vec![]).await;
+    let object_metas = get_object_metas().await;
+    assert_eq!(object_metas.len(), 3);
+}

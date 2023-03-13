@@ -1945,8 +1945,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                         DataFusionError::Execution("Table {name} not found".to_string())
                     })?;
 
-                // TODO: We should keep track of dropped delta tables, so that we can do lazy deletion
-                // of actual files in that path via `VACUUM` at some point.
                 self.table_catalog.drop_table(table_id).await?;
                 Ok(make_dummy_exec())
             }
@@ -2057,9 +2055,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 .get_collection_id_by_name(&self.database, name)
                                 .await?
                             {
-                                // Similar as for DROP TABLE; we should really only flag all tables
+                                // TODO: as for DROP TABLE, we should really only flag all tables
                                 // in the schema as DROPED, and then try to lazy delete them during
-                                // subsequent `VACUUM`s. Only once all the contained tables directories
+                                // subsequent `VACUUM`s. Only once all the underlying table files
                                 // are deleted is it safe to drop the collection.
                                 self.table_catalog.drop_collection(collection_id).await?
                             };

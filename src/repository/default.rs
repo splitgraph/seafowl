@@ -605,12 +605,12 @@ impl Repository for $repo {
     }
 
     // Drop table/collection/database
-    // Currently we actually delete these, though we could mark them as deleted
-    // to allow for undeletion
 
     // In these methods, return the ID back so that we get an error if the
     // table/collection/schema didn't actually exist
     async fn drop_table(&self, table_id: TableId) -> Result<(), Error> {
+        self.insert_dropped_tables(Some(table_id), None, None).await?;
+
         sqlx::query("DELETE FROM \"table\" WHERE id = $1 RETURNING id")
             .bind(table_id)
             .fetch_one(&self.executor)
@@ -619,6 +619,8 @@ impl Repository for $repo {
     }
 
     async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error> {
+        self.insert_dropped_tables(None, Some(collection_id), None).await?;
+
         sqlx::query("DELETE FROM collection WHERE id = $1 RETURNING id")
             .bind(collection_id)
             .fetch_one(&self.executor)
@@ -627,8 +629,59 @@ impl Repository for $repo {
     }
 
     async fn drop_database(&self, database_id: DatabaseId) -> Result<(), Error> {
+        self.insert_dropped_tables(None, None, Some(database_id)).await?;
+
         sqlx::query("DELETE FROM database WHERE id = $1 RETURNING id")
             .bind(database_id)
+            .fetch_one(&self.executor)
+            .await.map_err($repo::interpret_error)?;
+        Ok(())
+    }
+
+    async fn insert_dropped_tables(
+        &self,
+        maybe_table_id: Option<TableId>,
+        maybe_collection_id: Option<CollectionId>,
+        maybe_database_id: Option<DatabaseId>,
+    ) -> Result<(), Error> {
+        // Currently we hard delete only legacy tables, the others are soft-deleted by moving
+        // them to a special table that is used for lazy cleanup of files via `VACUUM`.
+        // TODO: We could do this via a trigger, but then we'd lose the ability to actually
+        // perform hard deletes at the DB-level.
+        // NB: we also persist db/col name on the off chance that we want to add table restore/undrop
+        // at some point.
+        let mut builder: QueryBuilder<_> = QueryBuilder::new(
+            r#"INSERT INTO dropped_table(database_name, collection_name, name, uuid)
+            SELECT * FROM (
+                SELECT database.name, collection.name, "table".name, "table".uuid
+                FROM "table"
+                JOIN collection ON "table".collection_id = collection.id
+                JOIN database ON collection.database_id = database.id
+                WHERE "table".legacy IS FALSE AND "#,
+        );
+
+        if let Some(table_id) = maybe_table_id {
+            builder.push("\"table\".id = ");
+            builder.push_bind(table_id);
+        } else if let Some(collection_id) = maybe_collection_id {
+            builder.push("collection.id = ");
+            builder.push_bind(collection_id);
+        } else {
+            let database_id = maybe_database_id.unwrap();
+            builder.push("database.id = ");
+            builder.push_bind(database_id);
+        }
+
+        builder.push(") as table_to_drop");
+
+        let query = builder.build();
+        query.execute(&self.executor).await.map_err($repo::interpret_error)?;
+        Ok(())
+    }
+
+    async fn delete_dropped_table(&self, uuid: Uuid) -> Result<(), Error> {
+        sqlx::query("DELETE FROM dropped_table WHERE uuid = $1 RETURNING uuid")
+            .bind(uuid)
             .fetch_one(&self.executor)
             .await.map_err($repo::interpret_error)?;
         Ok(())
