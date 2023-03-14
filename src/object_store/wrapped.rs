@@ -133,7 +133,7 @@ impl InternalObjectStore {
 
 impl Display for InternalObjectStore {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FileStorageBackend({})", self.root_uri)
+        write!(f, "InternalObjectStore({})", self.root_uri)
     }
 }
 

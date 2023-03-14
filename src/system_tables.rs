@@ -2,9 +2,7 @@
 //! and datafusion's information_schema.
 
 use crate::catalog::TableCatalog;
-use crate::repository::interface::{
-    DroppedTablesResult, TablePartitionsResult, TableVersionsResult,
-};
+use crate::repository::interface::{DroppedTablesResult, TablePartitionsResult};
 use arrow::array::{
     Int32Builder, Int64Builder, StringBuilder, StructBuilder, TimestampSecondBuilder,
 };
@@ -165,7 +163,6 @@ impl TableVersionsTable {
                 Field::new("version", DataType::Int64, false),
                 Field::new(
                     "creation_time",
-                    // TODO: should we be using a concrete timezone here?
                     DataType::Timestamp(TimeUnit::Second, None),
                     false,
                 ),
@@ -185,9 +182,7 @@ impl SeafowlSystemTable for TableVersionsTable {
         let table_versions = self
             .table_catalog
             .get_all_table_versions(&self.database, None)
-            .await?
-            .into_iter()
-            .collect::<Vec<TableVersionsResult>>();
+            .await?;
 
         let mut builder = StructBuilder::from_fields(
             self.schema.fields().clone(),
@@ -330,7 +325,6 @@ impl DroppedTablesTable {
                 Field::new("deletion_status", DataType::Utf8, false),
                 Field::new(
                     "drop_time",
-                    // TODO: should we be using a concrete timezone here?
                     DataType::Timestamp(TimeUnit::Second, None),
                     false,
                 ),

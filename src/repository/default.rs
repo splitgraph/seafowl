@@ -663,7 +663,7 @@ impl Repository for $repo {
         // them to a special table that is used for lazy cleanup of files via `VACUUM`.
         // TODO: We could do this via a trigger, but then we'd lose the ability to actually
         // perform hard deletes at the DB-level.
-        // NB: We rally only need the uuid for cleanup, but we also persist db/col name on the off
+        // NB: We really only need the uuid for cleanup, but we also persist db/col name on the off
         // chance that we want to add table restore/undrop at some point.
         let mut builder: QueryBuilder<_> = QueryBuilder::new(
             r#"INSERT INTO dropped_table(database_name, collection_name, table_name, uuid)
