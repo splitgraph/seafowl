@@ -15,7 +15,6 @@ use datafusion::{
     execution::runtime_env::{RuntimeConfig, RuntimeEnv},
     prelude::{SessionConfig, SessionContext},
 };
-#[cfg(feature = "delta-tables")]
 use deltalake::delta_datafusion::DeltaTableFactory;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
@@ -34,6 +33,7 @@ use super::schema::{self, MEBIBYTES, MEMORY_FRACTION, S3};
 
 async fn build_catalog(
     config: &schema::SeafowlConfig,
+    object_store: Arc<InternalObjectStore>,
 ) -> (
     Arc<dyn TableCatalog>,
     Arc<dyn PartitionCatalog>,
@@ -67,7 +67,7 @@ async fn build_catalog(
         ),
     };
 
-    let catalog = Arc::new(DefaultCatalog::new(repository));
+    let catalog = Arc::new(DefaultCatalog::new(repository, object_store));
 
     (catalog.clone(), catalog.clone(), catalog)
 }
@@ -131,13 +131,10 @@ pub async fn build_context(
     // the default ones for PARQUET, CSV, etc.
     let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
         HashMap::new();
+    table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
     #[cfg(feature = "remote-tables")]
     {
         table_factories.insert("TABLE".to_string(), Arc::new(RemoteTableFactory {}));
-    }
-    #[cfg(feature = "delta-tables")]
-    {
-        table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
     }
 
     let mut runtime_env = RuntimeEnv::new(runtime_config)?;
@@ -152,10 +149,16 @@ pub async fn build_context(
         object_store.clone(),
     );
 
+    let internal_object_store = Arc::new(InternalObjectStore::new(
+        object_store.clone(),
+        cfg.object_store.clone(),
+    ));
+
     // Register the HTTP object store for external tables
     add_http_object_store(&context, &cfg.misc.ssl_cert_file);
 
-    let (tables, partitions, functions) = build_catalog(cfg).await;
+    let (tables, partitions, functions) =
+        build_catalog(cfg, internal_object_store.clone()).await;
 
     // Create default DB/collection
     let default_db = match tables.get_database_id_by_name(DEFAULT_DB).await? {
@@ -184,10 +187,7 @@ pub async fn build_context(
         table_catalog: tables,
         partition_catalog: partitions,
         function_catalog: functions,
-        internal_object_store: Arc::new(InternalObjectStore {
-            inner: object_store,
-            config: cfg.object_store.clone(),
-        }),
+        internal_object_store,
         database: DEFAULT_DB.to_string(),
         database_id: default_db,
         all_database_ids: Arc::from(RwLock::new(all_database_ids)),

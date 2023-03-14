@@ -50,7 +50,7 @@
 /// Queries that are different between SQLite and PG
 pub struct RepositoryQueries {
     pub latest_table_versions: &'static str,
-    pub all_table_versions: &'static str,
+    pub cast_timestamp: &'static str,
 }
 
 #[macro_export]
@@ -109,17 +109,21 @@ impl Repository for $repo {
 
         builder.push(r#"
         SELECT
+            database.name AS database_name,
             collection.name AS collection_name,
             "table".name AS table_name,
             "table".id AS table_id,
+            "table".uuid AS table_uuid,
+            "table".legacy AS table_legacy,
             desired_table_versions.id AS table_version_id,
             table_column.name AS column_name,
             table_column.type AS column_type
-        FROM collection
+        FROM database
+        INNER JOIN collection ON database.id = collection.database_id
         INNER JOIN "table" ON collection.id = "table".collection_id
         INNER JOIN desired_table_versions ON "table".id = desired_table_versions.table_id
         INNER JOIN table_column ON table_column.table_version_id = desired_table_versions.id
-        WHERE collection.database_id = "#);
+        WHERE database.id = "#);
         builder.push_bind(database_id);
 
         builder.push(r#"
@@ -207,6 +211,31 @@ impl Repository for $repo {
         Ok(id)
     }
 
+    async fn get_table_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+        table_name: &str,
+    ) -> Result<TableId, Error> {
+        let id = sqlx::query(
+            r#"
+        SELECT "table".id
+        FROM "table"
+        JOIN collection ON "table".collection_id = collection.id
+        JOIN database ON collection.database_id = database.id
+        WHERE database.name = $1 AND collection.name = $2 AND "table".name = $3
+        "#,
+        )
+        .bind(database_name)
+        .bind(collection_name)
+        .bind(table_name)
+        .fetch_one(&self.executor)
+        .await.map_err($repo::interpret_error)?
+        .try_get("id").map_err($repo::interpret_error)?;
+
+        Ok(id)
+    }
+
     async fn get_all_database_ids(&self) -> Result<Vec<(String, DatabaseId)>> {
         let all_db_ids = sqlx::query(r#"SELECT name, id FROM database"#)
             .fetch_all(&self.executor)
@@ -238,13 +267,15 @@ impl Repository for $repo {
         collection_id: CollectionId,
         table_name: &str,
         schema: &Schema,
+        uuid: Uuid,
     ) -> Result<(TableId, TableVersionId), Error> {
         // Create new (empty) table
         let new_table_id: i64 = sqlx::query(
-            r#"INSERT INTO "table" (collection_id, name) VALUES ($1, $2) RETURNING (id)"#,
+            r#"INSERT INTO "table" (collection_id, name, uuid) VALUES ($1, $2, $3) RETURNING (id)"#,
         )
         .bind(collection_id)
         .bind(table_name)
+        .bind(uuid)
         .fetch_one(&self.executor)
         .await.map_err($repo::interpret_error)?
         .try_get("id").map_err($repo::interpret_error)?;
@@ -405,15 +436,26 @@ impl Repository for $repo {
 
     async fn create_new_table_version(
         &self,
-        from_version: TableVersionId,
-        inherit_partitions: bool,
+        uuid: Uuid,
+        version: DeltaDataTypeVersion,
     ) -> Result<TableVersionId, Error> {
-        let new_version = sqlx::query(
-            "INSERT INTO table_version (table_id)
-            SELECT table_id FROM table_version WHERE id = $1
+        // For now we only support linear history
+        let last_version_id: TableVersionId = sqlx::query(r#"SELECT max(table_version.id) AS id
+                FROM table_version
+                JOIN "table" ON table_version.table_id = "table".id
+                WHERE "table".uuid = $1"#)
+            .bind(uuid)
+            .fetch_one(&self.executor)
+            .await.map_err($repo::interpret_error)?
+            .try_get("id").map_err($repo::interpret_error)?;
+
+        let new_version_id = sqlx::query(
+            "INSERT INTO table_version (table_id, version)
+            SELECT table_id, $1 FROM table_version WHERE id = $2
             RETURNING (id)",
         )
-        .bind(from_version)
+        .bind(version)
+        .bind(last_version_id)
         .fetch_one(&self.executor)
         .await.map_err($repo::interpret_error)?
         .try_get("id").map_err($repo::interpret_error)?;
@@ -422,23 +464,12 @@ impl Repository for $repo {
             "INSERT INTO table_column (table_version_id, name, type)
             SELECT $2, name, type FROM table_column WHERE table_version_id = $1;",
         )
-        .bind(from_version)
-        .bind(new_version)
+        .bind(last_version_id)
+        .bind(new_version_id)
         .execute(&self.executor)
         .await.map_err($repo::interpret_error)?;
 
-        if inherit_partitions {
-            sqlx::query(
-                "INSERT INTO table_partition (table_version_id, physical_partition_id)
-                SELECT $2, physical_partition_id FROM table_partition WHERE table_version_id = $1;",
-            )
-            .bind(from_version)
-            .bind(new_version)
-            .execute(&self.executor)
-            .await.map_err($repo::interpret_error)?;
-        }
-
-        Ok(new_version)
+        Ok(new_version_id)
     }
 
     async fn get_all_table_versions(
@@ -446,8 +477,23 @@ impl Repository for $repo {
         database_name: &str,
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>, Error> {
+        let query = format!(r#"SELECT
+                database.name AS database_name,
+                collection.name AS collection_name,
+                "table".name AS table_name,
+                table_version.id AS table_version_id,
+                table_version.version AS version,
+                "table".legacy AS table_legacy,
+                {} AS creation_time
+            FROM table_version
+            INNER JOIN "table" ON "table".id = table_version.table_id
+            INNER JOIN collection ON collection.id = "table".collection_id
+            INNER JOIN database ON database.id = collection.database_id"#,
+            $repo::QUERIES.cast_timestamp.replace("timestamp_column", "table_version.creation_time")
+        );
+
         // We have to manually construct the query since SQLite doesn't have the proper Encode trait
-        let mut builder: QueryBuilder<_> = QueryBuilder::new($repo::QUERIES.all_table_versions);
+        let mut builder: QueryBuilder<_> = QueryBuilder::new(&query);
 
         builder.push(" WHERE database.name = ");
         builder.push_bind(database_name);
@@ -483,6 +529,7 @@ impl Repository for $repo {
                 database.name AS database_name,
                 collection.name AS collection_name,
                 "table".name AS table_name,
+                "table".legacy AS table_legacy,
                 table_version.id AS table_version_id,
                 physical_partition.id AS table_partition_id,
                 physical_partition.object_storage_id,
@@ -573,12 +620,12 @@ impl Repository for $repo {
     }
 
     // Drop table/collection/database
-    // Currently we actually delete these, though we could mark them as deleted
-    // to allow for undeletion
 
     // In these methods, return the ID back so that we get an error if the
     // table/collection/schema didn't actually exist
     async fn drop_table(&self, table_id: TableId) -> Result<(), Error> {
+        self.insert_dropped_tables(Some(table_id), None, None).await?;
+
         sqlx::query("DELETE FROM \"table\" WHERE id = $1 RETURNING id")
             .bind(table_id)
             .fetch_one(&self.executor)
@@ -587,6 +634,8 @@ impl Repository for $repo {
     }
 
     async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error> {
+        self.insert_dropped_tables(None, Some(collection_id), None).await?;
+
         sqlx::query("DELETE FROM collection WHERE id = $1 RETURNING id")
             .bind(collection_id)
             .fetch_one(&self.executor)
@@ -595,8 +644,82 @@ impl Repository for $repo {
     }
 
     async fn drop_database(&self, database_id: DatabaseId) -> Result<(), Error> {
+        self.insert_dropped_tables(None, None, Some(database_id)).await?;
+
         sqlx::query("DELETE FROM database WHERE id = $1 RETURNING id")
             .bind(database_id)
+            .fetch_one(&self.executor)
+            .await.map_err($repo::interpret_error)?;
+        Ok(())
+    }
+
+    async fn insert_dropped_tables(
+        &self,
+        maybe_table_id: Option<TableId>,
+        maybe_collection_id: Option<CollectionId>,
+        maybe_database_id: Option<DatabaseId>,
+    ) -> Result<(), Error> {
+        // Currently we hard delete only legacy tables, the others are soft-deleted by moving
+        // them to a special table that is used for lazy cleanup of files via `VACUUM`.
+        // TODO: We could do this via a trigger, but then we'd lose the ability to actually
+        // perform hard deletes at the DB-level.
+        // NB: We really only need the uuid for cleanup, but we also persist db/col name on the off
+        // chance that we want to add table restore/undrop at some point.
+        let mut builder: QueryBuilder<_> = QueryBuilder::new(
+            r#"INSERT INTO dropped_table(database_name, collection_name, table_name, uuid)
+            SELECT * FROM (
+                SELECT database.name, collection.name, "table".name, "table".uuid
+                FROM "table"
+                JOIN collection ON "table".collection_id = collection.id
+                JOIN database ON collection.database_id = database.id
+                WHERE "table".legacy IS FALSE AND "#,
+        );
+
+        if let Some(table_id) = maybe_table_id {
+            builder.push("\"table\".id = ");
+            builder.push_bind(table_id);
+        } else if let Some(collection_id) = maybe_collection_id {
+            builder.push("collection.id = ");
+            builder.push_bind(collection_id);
+        } else {
+            let database_id = maybe_database_id.unwrap();
+            builder.push("database.id = ");
+            builder.push_bind(database_id);
+        }
+
+        builder.push(") as table_to_drop");
+
+        let query = builder.build();
+        query.execute(&self.executor).await.map_err($repo::interpret_error)?;
+        Ok(())
+    }
+
+    async fn get_dropped_tables(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<DroppedTablesResult>> {
+        let query = format!(r#"SELECT
+                database_name,
+                collection_name,
+                table_name,
+                uuid,
+                deletion_status,
+                {} AS drop_time
+            FROM dropped_table WHERE database_name = $1"#,
+            $repo::QUERIES.cast_timestamp.replace("timestamp_column", "drop_time")
+        );
+
+        let dropped_tables = sqlx::query_as(&query)
+        .bind(database_name)
+        .fetch_all(&self.executor)
+        .await.map_err($repo::interpret_error)?;
+
+        Ok(dropped_tables)
+    }
+
+    async fn delete_dropped_table(&self, uuid: Uuid) -> Result<(), Error> {
+        sqlx::query("DELETE FROM dropped_table WHERE uuid = $1 RETURNING uuid")
+            .bind(uuid)
             .fetch_one(&self.executor)
             .await.map_err($repo::interpret_error)?;
         Ok(())

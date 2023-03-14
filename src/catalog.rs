@@ -3,14 +3,18 @@ use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::catalog::schema::MemorySchemaProvider;
+use datafusion::datasource::TableProvider;
 use datafusion::error::DataFusionError;
+use deltalake::{DeltaDataTypeVersion, DeltaTable};
 use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
 use parking_lot::RwLock;
+use uuid::Uuid;
 
+use crate::object_store::wrapped::InternalObjectStore;
 use crate::provider::SeafowlFunction;
-use crate::repository::interface::TablePartitionsResult;
+use crate::repository::interface::{DroppedTablesResult, TablePartitionsResult};
 use crate::system_tables::SystemSchemaProvider;
 use crate::wasm_udf::data_types::{
     CreateFunctionDataType, CreateFunctionDetails, CreateFunctionLanguage,
@@ -42,6 +46,7 @@ pub enum Error {
     DatabaseDoesNotExist { id: DatabaseId },
     CollectionDoesNotExist { id: CollectionId },
     TableDoesNotExist { id: TableId },
+    TableUuidDoesNotExist { uuid: Uuid },
     TableVersionDoesNotExist { id: TableVersionId },
     // We were inserting a vector of partitions and can't find which one
     // caused the error without parsing the error message, so just
@@ -111,6 +116,9 @@ impl From<Error> for DataFusionError {
             Error::TableDoesNotExist { id } => {
                 DataFusionError::Internal(format!("Table with ID {id} doesn't exist"))
             }
+            Error::TableUuidDoesNotExist { uuid } => {
+                DataFusionError::Internal(format!("Table with UUID {uuid} doesn't exist"))
+            }
             // Raised by append_partitions_to_table and create_new_table_version (non-existent version), also internal issue
             Error::TableVersionDoesNotExist { id } => DataFusionError::Internal(format!(
                 "Table version with ID {id} doesn't exist"
@@ -173,6 +181,12 @@ pub trait TableCatalog: Sync + Send {
         database_name: &str,
         collection_name: &str,
     ) -> Result<Option<CollectionId>>;
+    async fn get_table_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+        table_name: &str,
+    ) -> Result<Option<TableId>>;
 
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId>;
 
@@ -187,6 +201,7 @@ pub trait TableCatalog: Sync + Send {
         collection_id: CollectionId,
         table_name: &str,
         schema: &Schema,
+        uuid: Uuid,
     ) -> Result<(TableId, TableVersionId)>;
 
     async fn delete_old_table_versions(
@@ -196,8 +211,8 @@ pub trait TableCatalog: Sync + Send {
 
     async fn create_new_table_version(
         &self,
-        from_version: TableVersionId,
-        inherit_partitions: bool,
+        uuid: Uuid,
+        version: DeltaDataTypeVersion,
     ) -> Result<TableVersionId>;
 
     async fn get_all_table_versions(
@@ -223,6 +238,13 @@ pub trait TableCatalog: Sync + Send {
     async fn drop_collection(&self, collection_id: CollectionId) -> Result<()>;
 
     async fn drop_database(&self, database_id: DatabaseId) -> Result<()>;
+
+    async fn get_dropped_tables(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<DroppedTablesResult>>;
+
+    async fn delete_dropped_table(&self, uuid: Uuid) -> Result<()>;
 }
 
 #[cfg_attr(test, automock)]
@@ -276,14 +298,19 @@ pub struct DefaultCatalog {
 
     // DataFusion's in-memory schema provider for staging external tables
     staging_schema: Arc<MemorySchemaProvider>,
+    object_store: Arc<InternalObjectStore>,
 }
 
 impl DefaultCatalog {
-    pub fn new(repository: Arc<dyn Repository>) -> Self {
+    pub fn new(
+        repository: Arc<dyn Repository>,
+        object_store: Arc<InternalObjectStore>,
+    ) -> Self {
         let staging_schema = Arc::new(MemorySchemaProvider::new());
         Self {
             repository,
             staging_schema,
+            object_store,
         }
     }
 
@@ -320,7 +347,7 @@ impl DefaultCatalog {
         }
     }
 
-    fn build_table<'a, I>(
+    fn build_legacy_table<'a, I>(
         &self,
         table_name: &str,
         table_columns: I,
@@ -337,7 +364,8 @@ impl DefaultCatalog {
         let table_columns_vec = table_columns.collect_vec();
 
         // Recover the table ID and version ID (this is going to be the same for all columns).
-        // TODO: if the table has no columns, the result set will be empty, so we use a fake version ID.
+        // TODO: if the table has no columns then we wouldn't be in this function since we originally
+        // grouped by the table name before stepping down into here.
         let (table_id, table_version_id) = table_columns_vec
             .get(0)
             .map_or_else(|| (0, 0), |v| (v.table_id, v.table_version_id));
@@ -358,6 +386,19 @@ impl DefaultCatalog {
         (Arc::from(table_name.to_string()), Arc::new(table))
     }
 
+    fn build_table(
+        &self,
+        table_name: &str,
+        table_uuid: Uuid,
+    ) -> (Arc<str>, Arc<dyn TableProvider>) {
+        // Build a delta table but don't load it yet; we'll do that only for tables that are
+        // actually referenced in a statement, via the async `table` method of the schema provider.
+        let table_object_store = self.object_store.for_delta_table(table_uuid);
+
+        let table = DeltaTable::new(table_object_store, Default::default());
+        (Arc::from(table_name.to_string()), Arc::new(table) as _)
+    }
+
     fn build_collection<'a, I>(
         &self,
         collection_name: &str,
@@ -366,16 +407,32 @@ impl DefaultCatalog {
     where
         I: Iterator<Item = &'a AllDatabaseColumnsResult>,
     {
-        let tables = collection_columns
+        let collection_columns_vec = collection_columns.collect_vec();
+
+        let legacy_tables = collection_columns_vec
+            .clone()
+            .into_iter()
+            .filter(|c| c.table_legacy)
             .group_by(|col| &col.table_name)
             .into_iter()
-            .map(|(tn, tc)| self.build_table(tn, tc))
+            .map(|(tn, tc)| self.build_legacy_table(tn, tc))
+            .collect::<HashMap<_, _>>();
+
+        let tables = collection_columns_vec
+            .into_iter()
+            .filter(|c| !c.table_legacy)
+            .group_by(|col| (&col.table_name, &col.table_uuid))
+            .into_iter()
+            .map(|((table_name, table_uuid), _)| {
+                self.build_table(table_name, *table_uuid)
+            })
             .collect::<HashMap<_, _>>();
 
         (
             Arc::from(collection_name.to_string()),
             Arc::new(SeafowlCollection {
                 name: Arc::from(collection_name.to_string()),
+                legacy_tables: RwLock::new(legacy_tables),
                 tables: RwLock::new(tables),
             }),
         )
@@ -440,9 +497,10 @@ impl TableCatalog for DefaultCatalog {
 
         let tables = table_columns
             .iter()
+            .filter(|col| col.table_legacy)
             .group_by(|col| (&col.table_name, &col.table_version_id))
             .into_iter()
-            .map(|((tn, &tv), tc)| (tv, self.build_table(tn, tc).1))
+            .map(|((tn, &tv), tc)| (tv, self.build_legacy_table(tn, tc).1))
             .collect();
 
         Ok(tables)
@@ -453,9 +511,10 @@ impl TableCatalog for DefaultCatalog {
         collection_id: CollectionId,
         table_name: &str,
         schema: &Schema,
+        uuid: Uuid,
     ) -> Result<(TableId, TableVersionId)> {
         self.repository
-            .create_table(collection_id, table_name, schema)
+            .create_table(collection_id, table_name, schema, uuid)
             .await
             .map_err(|e| match e {
                 RepositoryError::UniqueConstraintViolation(_) => {
@@ -485,7 +544,7 @@ impl TableCatalog for DefaultCatalog {
         database_name: &str,
         collection_name: &str,
     ) -> Result<Option<CollectionId>> {
-        if database_name == DEFAULT_DB && collection_name == STAGING_SCHEMA {
+        if collection_name == STAGING_SCHEMA {
             return Err(Error::UsedStagingSchema);
         }
 
@@ -505,6 +564,27 @@ impl TableCatalog for DefaultCatalog {
         database_name: &str,
     ) -> Result<Option<DatabaseId>> {
         match self.repository.get_database_id_by_name(database_name).await {
+            Ok(id) => Ok(Some(id)),
+            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => Ok(None),
+            Err(e) => Err(Self::to_sqlx_error(e)),
+        }
+    }
+
+    async fn get_table_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+        table_name: &str,
+    ) -> Result<Option<TableId>> {
+        if collection_name == STAGING_SCHEMA {
+            return Err(Error::UsedStagingSchema);
+        }
+
+        match self
+            .repository
+            .get_table_id_by_name(database_name, collection_name, table_name)
+            .await
+        {
             Ok(id) => Ok(Some(id)),
             Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => Ok(None),
             Err(e) => Err(Self::to_sqlx_error(e)),
@@ -549,15 +629,15 @@ impl TableCatalog for DefaultCatalog {
 
     async fn create_new_table_version(
         &self,
-        from_version: TableVersionId,
-        inherit_partitions: bool,
+        uuid: Uuid,
+        version: DeltaDataTypeVersion,
     ) -> Result<TableVersionId> {
         self.repository
-            .create_new_table_version(from_version, inherit_partitions)
+            .create_new_table_version(uuid, version)
             .await
             .map_err(|e| match e {
-                RepositoryError::FKConstraintViolation(_) => {
-                    Error::TableVersionDoesNotExist { id: from_version }
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::TableUuidDoesNotExist { uuid }
                 }
                 _ => Self::to_sqlx_error(e),
             })
@@ -643,6 +723,28 @@ impl TableCatalog for DefaultCatalog {
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
                     Error::DatabaseDoesNotExist { id: database_id }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
+    }
+
+    async fn get_dropped_tables(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<DroppedTablesResult>> {
+        self.repository
+            .get_dropped_tables(database_name)
+            .await
+            .map_err(Self::to_sqlx_error)
+    }
+
+    async fn delete_dropped_table(&self, uuid: Uuid) -> Result<()> {
+        self.repository
+            .delete_dropped_table(uuid)
+            .await
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::TableUuidDoesNotExist { uuid }
                 }
                 _ => Self::to_sqlx_error(e),
             })

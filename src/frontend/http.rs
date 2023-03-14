@@ -17,6 +17,8 @@ use datafusion::datasource::DefaultTableSource;
 use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion_expr::logical_plan::{LogicalPlan, PlanVisitor, TableScan};
+use deltalake::parquet::data_type::AsBytes;
+use deltalake::DeltaTable;
 use futures::{future, TryStreamExt};
 use hex::encode;
 use log::{debug, info};
@@ -36,8 +38,6 @@ use crate::{
     context::{
         is_read_only, is_statement_read_only, DefaultSeafowlContext, SeafowlContext,
     },
-    data_types::TableVersionId,
-    provider::SeafowlTable,
 };
 
 use super::http_utils::{handle_rejection, into_response, ApiError};
@@ -54,7 +54,7 @@ const VARY: &str = "Content-Type, Origin, X-Seafowl-Query";
 
 #[derive(Default)]
 struct ETagBuilderVisitor {
-    table_versions: Vec<TableVersionId>,
+    table_versions: Vec<u8>,
 }
 
 impl PlanVisitor for ETagBuilderVisitor {
@@ -69,9 +69,12 @@ impl PlanVisitor for ETagBuilderVisitor {
                 if let Some(table) = default_table_source
                     .table_provider
                     .as_any()
-                    .downcast_ref::<SeafowlTable>()
+                    .downcast_ref::<DeltaTable>()
                 {
-                    self.table_versions.push(table.table_version_id)
+                    self.table_versions
+                        .extend(table.table_uri().as_bytes().to_vec());
+                    self.table_versions
+                        .extend(table.version().as_bytes().to_vec());
                 }
             }
         }
@@ -548,7 +551,7 @@ pub async fn run_server(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use bytes::Bytes;
 
     use itertools::Itertools;
@@ -556,7 +559,13 @@ mod tests {
     use std::fmt::Display;
     use std::{collections::HashMap, sync::Arc};
 
+    use rand::{rngs::mock::StepRng, Rng};
+    use std::cell::RefCell;
+    use uuid::Builder;
+    thread_local!(static STEP_RNG: RefCell<StepRng> = RefCell::new(StepRng::new(1, 1)));
+
     use rstest::rstest;
+    use uuid::Uuid;
     use warp::{Filter, Rejection, Reply};
 
     use warp::http::Response;
@@ -683,9 +692,18 @@ mod tests {
     const SELECT_QUERY_HASH: &str =
         "7fbbf7dddfd330d03e5e08cc5885ad8ca823e1b56e7cbadd156daa0e21c288f6";
     const V1_ETAG: &str =
-        "038966de9f6b9a901b20b4c6ca8b2a46009feebe031babc842d43690c0bc222b";
+        "1230e7ce41e2f7c2050b75e36b6f313f5cc4dd99b255f2761f589d60a44eee00";
     const V2_ETAG: &str =
-        "06d033ece6645de592db973644cf7357255f24536ff7b03c3b2ace10736f7636";
+        "b17259a6a4e10c9a8b42ce23e683b919ada82b2ed1fafbbcd10ff42c63ff2443";
+
+    pub fn deterministic_uuid() -> Uuid {
+        // A crude hack to get reproducible bytes as source for table UUID generation, to enable
+        // transparent etag asserts
+        STEP_RNG.with(|rng| {
+            let bytes: [u8; 16] = rng.borrow_mut().gen();
+            Builder::from_random_bytes(bytes).into_uuid()
+        })
+    }
 
     #[rstest]
     #[tokio::test]
@@ -848,7 +866,7 @@ mod tests {
     async fn test_get_cached_reuse_etag(
         #[values(None, Some("test_db"))] new_db: Option<&str>,
     ) {
-        // Pass the same ETag as If-None-Match, should return a 301
+        // Pass the same ETag as If-None-Match, should return a 304
 
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));

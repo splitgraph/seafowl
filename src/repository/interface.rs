@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 
 use async_trait::async_trait;
+use deltalake::DeltaDataTypeVersion;
+use uuid::Uuid;
 
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
@@ -14,9 +16,12 @@ use crate::{
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct AllDatabaseColumnsResult {
+    pub database_name: String,
     pub collection_name: String,
     pub table_name: String,
     pub table_id: TableId,
+    pub table_uuid: Uuid,
+    pub table_legacy: bool,
     pub table_version_id: TableVersionId,
     pub column_name: String,
     pub column_type: String,
@@ -28,6 +33,8 @@ pub struct TableVersionsResult {
     pub collection_name: String,
     pub table_name: String,
     pub table_version_id: TableVersionId,
+    pub version: DeltaDataTypeVersion,
+    pub table_legacy: bool,
     pub creation_time: Timestamp,
 }
 
@@ -36,10 +43,21 @@ pub struct TablePartitionsResult {
     pub database_name: String,
     pub collection_name: String,
     pub table_name: String,
+    pub table_legacy: bool,
     pub table_version_id: TableVersionId,
     pub table_partition_id: Option<i64>,
     pub object_storage_id: Option<String>,
     pub row_count: Option<i32>,
+}
+
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
+pub struct DroppedTablesResult {
+    pub database_name: String,
+    pub collection_name: String,
+    pub table_name: String,
+    pub uuid: Uuid,
+    pub deletion_status: String,
+    pub drop_time: Timestamp,
 }
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
@@ -109,6 +127,13 @@ pub trait Repository: Send + Sync + Debug {
         database_name: &str,
     ) -> Result<DatabaseId, Error>;
 
+    async fn get_table_id_by_name(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+        table_name: &str,
+    ) -> Result<TableId, Error>;
+
     async fn get_all_database_ids(&self) -> Result<Vec<(String, DatabaseId)>, Error>;
 
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error>;
@@ -124,6 +149,7 @@ pub trait Repository: Send + Sync + Debug {
         collection_id: CollectionId,
         table_name: &str,
         schema: &Schema,
+        uuid: Uuid,
     ) -> Result<(TableId, TableVersionId), Error>;
 
     async fn delete_old_table_versions(
@@ -151,8 +177,8 @@ pub trait Repository: Send + Sync + Debug {
 
     async fn create_new_table_version(
         &self,
-        from_version: TableVersionId,
-        inherit_partitions: bool,
+        uuid: Uuid,
+        version: DeltaDataTypeVersion,
     ) -> Result<TableVersionId, Error>;
 
     async fn get_all_table_versions(
@@ -190,6 +216,20 @@ pub trait Repository: Send + Sync + Debug {
     async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error>;
 
     async fn drop_database(&self, database_id: DatabaseId) -> Result<(), Error>;
+
+    async fn insert_dropped_tables(
+        &self,
+        maybe_table_id: Option<TableId>,
+        maybe_collection_id: Option<CollectionId>,
+        maybe_database_id: Option<DatabaseId>,
+    ) -> Result<(), Error>;
+
+    async fn get_dropped_tables(
+        &self,
+        database_name: &str,
+    ) -> Result<Vec<DroppedTablesResult>>;
+
+    async fn delete_dropped_table(&self, uuid: Uuid) -> Result<(), Error>;
 }
 
 #[cfg(test)]
@@ -200,49 +240,11 @@ pub mod tests {
         DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     };
 
-    use crate::provider::PartitionColumn;
     use crate::wasm_udf::data_types::{
         CreateFunctionDataType, CreateFunctionLanguage, CreateFunctionVolatility,
     };
 
     use super::*;
-
-    const EXPECTED_FILE_NAME: &str =
-        "bdd6eef7340866d1ad99ed34ce0fa43c0d06bbed4dbcb027e9a51de48638b3ed.parquet";
-
-    fn get_test_partition() -> SeafowlPartition {
-        SeafowlPartition {
-            partition_id: Some(1),
-            object_storage_id: Arc::from(EXPECTED_FILE_NAME.to_string()),
-            row_count: 2,
-            columns: Arc::new(vec![
-                PartitionColumn {
-                    name: Arc::from("timestamp".to_string()),
-                    r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
-                    min_value: Arc::new(None),
-                    max_value: Arc::new(None),
-                    null_count: Some(1),
-                },
-                PartitionColumn {
-                    name: Arc::from("integer".to_string()),
-                    r#type: Arc::from(
-                        "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
-                            .to_string(),
-                    ),
-                    min_value: Arc::new(Some([49, 50].to_vec())),
-                    max_value: Arc::new(Some([52, 50].to_vec())),
-                    null_count: Some(0),
-                },
-                PartitionColumn {
-                    name: Arc::from("varchar".to_string()),
-                    r#type: Arc::from("{\"name\":\"utf8\"}".to_string()),
-                    min_value: Arc::new(None),
-                    max_value: Arc::new(None),
-                    null_count: None,
-                },
-            ]),
-        }
-    }
 
     async fn make_database_with_single_table(
         repository: Arc<dyn Repository>,
@@ -265,7 +267,7 @@ pub mod tests {
         };
 
         let (table_id, table_version_id) = repository
-            .create_table(collection_id, "testtable", &schema)
+            .create_table(collection_id, "testtable", &schema, Uuid::default())
             .await
             .expect("Error creating table");
 
@@ -276,11 +278,14 @@ pub mod tests {
         test_get_collections_empty(repository.clone()).await;
         let (database_id, table_id, table_version_id) =
             test_create_database_collection_table(repository.clone()).await;
-        let new_version_id =
-            test_create_append_partition(repository.clone(), table_version_id).await;
         test_create_functions(repository.clone(), database_id).await;
-        test_rename_table(repository.clone(), database_id, table_id, new_version_id)
-            .await;
+        test_rename_table(
+            repository.clone(),
+            database_id,
+            table_id,
+            table_version_id + 1,
+        )
+        .await;
         test_error_propagation(repository, table_id).await;
     }
 
@@ -296,22 +301,29 @@ pub mod tests {
 
     fn expected(
         version: TableVersionId,
+        database_name: String,
         collection_name: String,
         table_name: String,
     ) -> Vec<AllDatabaseColumnsResult> {
         vec![
             AllDatabaseColumnsResult {
+                database_name: database_name.clone(),
                 collection_name: collection_name.clone(),
                 table_name: table_name.clone(),
                 table_id: 1,
+                table_uuid: Default::default(),
+                table_legacy: false,
                 table_version_id: version,
                 column_name: "date".to_string(),
                 column_type: "{\"children\":[],\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}}".to_string(),
             },
             AllDatabaseColumnsResult {
+                database_name,
                 collection_name,
                 table_name,
                 table_id: 1,
+                table_uuid: Default::default(),
+                table_legacy: false,
                 table_version_id: version,
                 column_name: "value".to_string(),
                 column_type: "{\"children\":[],\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}}"
@@ -342,12 +354,17 @@ pub mod tests {
 
         assert_eq!(
             all_columns,
-            expected(1, "testcol".to_string(), "testtable".to_string())
+            expected(
+                1,
+                "testdb".to_string(),
+                "testcol".to_string(),
+                "testtable".to_string()
+            )
         );
 
         // Duplicate the table
         let new_version_id = repository
-            .create_new_table_version(table_version_id, true)
+            .create_new_table_version(Uuid::default(), 1)
             .await
             .unwrap();
 
@@ -361,6 +378,7 @@ pub mod tests {
             all_columns,
             expected(
                 new_version_id,
+                "testdb".to_string(),
                 "testcol".to_string(),
                 "testtable".to_string()
             )
@@ -374,7 +392,12 @@ pub mod tests {
 
         assert_eq!(
             all_columns,
-            expected(1, "testcol".to_string(), "testtable".to_string())
+            expected(
+                1,
+                "testdb".to_string(),
+                "testcol".to_string(),
+                "testtable".to_string()
+            )
         );
 
         // Check the existing table versions
@@ -389,88 +412,6 @@ pub mod tests {
         assert_eq!(all_table_versions, vec![1, new_version_id]);
 
         (database_id, table_id, table_version_id)
-    }
-
-    async fn test_create_append_partition(
-        repository: Arc<dyn Repository>,
-        table_version_id: TableVersionId,
-    ) -> TableVersionId {
-        let partition = get_test_partition();
-
-        // Create a partition
-        let partition_ids = repository.create_partitions(vec![partition]).await.unwrap();
-        assert_eq!(partition_ids.len(), 1);
-
-        let partition_id = partition_ids.first().unwrap();
-
-        // Test loading all table partitions when the partition is not yet attached
-        let all_partitions = repository
-            .get_all_table_partition_columns(table_version_id)
-            .await
-            .unwrap();
-        assert_eq!(all_partitions, Vec::<AllTablePartitionColumnsResult>::new());
-
-        // Attach the partition to the table
-        repository
-            .append_partitions_to_table(partition_ids.clone(), table_version_id)
-            .await
-            .unwrap();
-
-        // Load again
-        let all_partitions = repository
-            .get_all_table_partition_columns(table_version_id)
-            .await
-            .unwrap();
-
-        let expected_partitions = vec![
-            AllTablePartitionColumnsResult {
-                table_partition_id: *partition_id,
-                object_storage_id: EXPECTED_FILE_NAME.to_string(),
-                column_name: "timestamp".to_string(),
-                column_type: "{\"name\":\"utf8\"}".to_string(),
-                row_count: 2,
-                min_value: None,
-                max_value: None,
-                null_count: Some(1),
-            },
-            AllTablePartitionColumnsResult {
-                table_partition_id: *partition_id,
-                object_storage_id: EXPECTED_FILE_NAME.to_string(),
-                column_name: "integer".to_string(),
-                column_type: "{\"name\":\"int\",\"bitWidth\":64,\"isSigned\":true}"
-                    .to_string(),
-                row_count: 2,
-                min_value: Some([49, 50].to_vec()),
-                max_value: Some([52, 50].to_vec()),
-                null_count: Some(0),
-            },
-            AllTablePartitionColumnsResult {
-                table_partition_id: *partition_id,
-                object_storage_id: EXPECTED_FILE_NAME.to_string(),
-                column_name: "varchar".to_string(),
-                column_type: "{\"name\":\"utf8\"}".to_string(),
-                row_count: 2,
-                min_value: None,
-                max_value: None,
-                null_count: None,
-            },
-        ];
-        assert_eq!(all_partitions, expected_partitions);
-
-        // Duplicate the table, check it has the same partitions
-        let new_version_id = repository
-            .create_new_table_version(table_version_id, true)
-            .await
-            .unwrap();
-
-        let all_partitions = repository
-            .get_all_table_partition_columns(new_version_id)
-            .await
-            .unwrap();
-
-        assert_eq!(all_partitions, expected_partitions);
-
-        new_version_id
     }
 
     async fn test_create_functions(
@@ -537,6 +478,7 @@ pub mod tests {
             all_columns,
             expected(
                 table_version_id,
+                "testdb".to_string(),
                 "testcol".to_string(),
                 "testtable2".to_string()
             )
@@ -561,6 +503,7 @@ pub mod tests {
             all_columns,
             expected(
                 table_version_id,
+                "testdb".to_string(),
                 "testcol2".to_string(),
                 "testtable2".to_string()
             )
@@ -602,7 +545,7 @@ pub mod tests {
 
         assert!(matches!(
             repository
-                .create_table(collection_id_2, "testtable2", &schema)
+                .create_table(collection_id_2, "testtable2", &schema, Uuid::default())
                 .await
                 .unwrap_err(),
             Error::UniqueConstraintViolation(_)
@@ -610,7 +553,7 @@ pub mod tests {
 
         // Make a new table in the previous collection, try renaming
         let (new_table_id, _) = repository
-            .create_table(collection_id_1, "testtable2", &schema)
+            .create_table(collection_id_1, "testtable2", &schema, Uuid::default())
             .await
             .unwrap();
 

@@ -8,6 +8,7 @@ use assert_unordered::assert_eq_unordered_sort;
 use chrono::{TimeZone, Utc};
 use datafusion::assert_batches_eq;
 use datafusion_common::assert_contains;
+use deltalake::DeltaDataTypeVersion;
 use futures::TryStreamExt;
 use itertools::{sorted, Itertools};
 use object_store::path::Path;
@@ -20,13 +21,13 @@ use tokio::time::sleep;
 
 #[cfg(feature = "remote-tables")]
 use rstest::rstest;
+use tempfile::TempDir;
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::DefaultSeafowlContext;
 use seafowl::context::SeafowlContext;
 use seafowl::data_types::{TableVersionId, Timestamp};
-use seafowl::provider::SeafowlPartition;
 use seafowl::repository::postgres::testutils::get_random_schema;
 use seafowl::system_tables::SYSTEM_SCHEMA;
 
@@ -38,26 +39,40 @@ mod function;
 #[path = "../../src/object_store/testutils.rs"]
 mod http_testutils;
 mod query;
+mod query_legacy;
 mod vacuum;
 
 // Object store IDs for frequently-used test data
 const FILENAME_1: &str =
     "7fbfeeeade71978b4ae82cd3d97b8c1bd9ae7ab9a7a78ee541b66209cfd7722d.parquet";
-const FILENAME_2: &str =
-    "48b15ba6156370b0f4cf0522fcdaedebfedb3a99aca2222be722e49264c476c1.parquet";
-const FILENAME_RECHUNKED: &str =
-    "ece2031a3e121f8e4e31b2f2ef632a92b00dc479a6643172da8950def9fdb16e.parquet";
+
+enum ObjectStoreType {
+    Local(String),
+    InMemory,
+}
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
-/// (but uses an in-memory object store)
-async fn make_context_with_pg() -> DefaultSeafowlContext {
+async fn make_context_with_pg(
+    object_store_type: ObjectStoreType,
+) -> DefaultSeafowlContext {
     let dsn = env::var("DATABASE_URL").unwrap();
     let schema = get_random_schema();
+
+    let object_store_section = match object_store_type {
+        ObjectStoreType::Local(data_dir) => {
+            format!(
+                r#"type = "local"
+data_dir = "{}""#,
+                data_dir
+            )
+        }
+        ObjectStoreType::InMemory => r#"type = "memory""#.to_string(),
+    };
 
     let config_text = format!(
         r#"
 [object_store]
-type = "memory"
+{object_store_section}
 
 [catalog]
 type = "postgres"
@@ -152,19 +167,19 @@ async fn create_table_and_some_partitions(
     table_name: &str,
     delay: Option<Duration>,
 ) -> (
-    HashMap<TableVersionId, Vec<RecordBatch>>,
-    HashMap<TableVersionId, Timestamp>,
+    HashMap<DeltaDataTypeVersion, Vec<RecordBatch>>,
+    HashMap<DeltaDataTypeVersion, Timestamp>,
 ) {
-    let mut version_results = HashMap::<TableVersionId, Vec<RecordBatch>>::new();
-    let mut version_timestamps = HashMap::<TableVersionId, Timestamp>::new();
+    let mut version_results = HashMap::<DeltaDataTypeVersion, Vec<RecordBatch>>::new();
+    let mut version_timestamps = HashMap::<DeltaDataTypeVersion, Timestamp>::new();
 
     async fn record_latest_version_snapshot(
         context: &DefaultSeafowlContext,
-        version_id: TableVersionId,
+        version_id: DeltaDataTypeVersion,
         table_name: &str,
         delay: Option<Duration>,
-        version_results: &mut HashMap<TableVersionId, Vec<RecordBatch>>,
-        version_timestamps: &mut HashMap<TableVersionId, Timestamp>,
+        version_results: &mut HashMap<DeltaDataTypeVersion, Vec<RecordBatch>>,
+        version_timestamps: &mut HashMap<DeltaDataTypeVersion, Timestamp>,
     ) {
         if let Some(delay) = delay {
             let plan = context
@@ -182,11 +197,11 @@ async fn create_table_and_some_partitions(
         }
     }
 
-    // Creates table with table_versions 1 (empty) and 2
+    // Creates table with table versions 0 (empty) and 1
     create_table_and_insert(context, table_name).await;
     record_latest_version_snapshot(
         context,
-        2 as TableVersionId,
+        1 as DeltaDataTypeVersion,
         table_name,
         delay,
         &mut version_results,
@@ -194,7 +209,7 @@ async fn create_table_and_some_partitions(
     )
     .await;
 
-    // Add another partition for table_version 3
+    // Add another partition for table version 2
     let plan = context
         .plan_query(
             format!("INSERT INTO {table_name} (some_value) VALUES (45), (46), (47)")
@@ -205,7 +220,7 @@ async fn create_table_and_some_partitions(
     context.collect(plan).await.unwrap();
     record_latest_version_snapshot(
         context,
-        3 as TableVersionId,
+        2 as DeltaDataTypeVersion,
         table_name,
         delay,
         &mut version_results,
@@ -213,7 +228,7 @@ async fn create_table_and_some_partitions(
     )
     .await;
 
-    // Add another partition for table_version 4
+    // Add another partition for table_version 3
     let plan = context
         .plan_query(
             format!("INSERT INTO {table_name} (some_value) VALUES (46), (47), (48)")
@@ -224,7 +239,7 @@ async fn create_table_and_some_partitions(
     context.collect(plan).await.unwrap();
     record_latest_version_snapshot(
         context,
-        4 as TableVersionId,
+        3 as DeltaDataTypeVersion,
         table_name,
         delay,
         &mut version_results,
@@ -232,7 +247,7 @@ async fn create_table_and_some_partitions(
     )
     .await;
 
-    // Add another partition for table_version 5
+    // Add another partition for table_version 4
     let plan = context
         .plan_query(
             format!("INSERT INTO {table_name} (some_value) VALUES (42), (41), (40)")
@@ -243,7 +258,7 @@ async fn create_table_and_some_partitions(
     context.collect(plan).await.unwrap();
     record_latest_version_snapshot(
         context,
-        5 as TableVersionId,
+        4 as DeltaDataTypeVersion,
         table_name,
         delay,
         &mut version_results,
@@ -251,32 +266,7 @@ async fn create_table_and_some_partitions(
     )
     .await;
 
-    // We have 4 partitions from 4 INSERTS
-    assert_partition_ids(context, 5, vec![1, 2, 3, 4]).await;
-
     (version_results, version_timestamps)
-}
-
-// A helper function for asserting contents of a given partition
-async fn scan_partition(
-    context: &DefaultSeafowlContext,
-    projection: Option<&Vec<usize>>,
-    partition: SeafowlPartition,
-    table_name: &str,
-) -> Vec<RecordBatch> {
-    let table = context.try_get_seafowl_table(table_name).await.unwrap();
-    let plan = table
-        .partition_scan_plan(
-            projection,
-            vec![partition],
-            &[],
-            None,
-            context.internal_object_store.inner.clone(),
-        )
-        .await
-        .unwrap();
-
-    context.collect(plan).await.unwrap()
 }
 
 // Used for checking partition ids making up a given table version

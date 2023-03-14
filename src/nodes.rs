@@ -1,16 +1,17 @@
 use datafusion::common::DFSchemaRef;
 
+use arrow_schema::Schema;
 use std::{any::Any, fmt, sync::Arc, vec};
 
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 
 use crate::data_types::TableId;
-use crate::{provider::SeafowlTable, wasm_udf::data_types::CreateFunctionDetails};
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 #[derive(Debug, Clone)]
 pub struct CreateTable {
     /// The table schema
-    pub schema: DFSchemaRef,
+    pub schema: Schema,
     /// The table name
     pub name: String,
     /// Option to not error if table already exists
@@ -31,8 +32,8 @@ pub struct CreateFunction {
 
 #[derive(Debug, Clone)]
 pub struct RenameTable {
-    /// The table to rename
-    pub table: Arc<SeafowlTable>,
+    /// Old name
+    pub old_name: String,
     /// New name (including the schema name)
     pub new_name: String,
     /// Dummy result schema for the plan (empty)
@@ -121,9 +122,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 write!(f, "CreateFunction: {name}")
             }
             SeafowlExtensionNode::RenameTable(RenameTable {
-                table, new_name, ..
+                old_name, new_name, ..
             }) => {
-                write!(f, "RenameTable: {} to {}", table.name, new_name)
+                write!(f, "RenameTable: {} to {}", old_name, new_name)
             }
             SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
                 write!(f, "DropSchema: {name}")

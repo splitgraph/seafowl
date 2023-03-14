@@ -73,7 +73,7 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
                 // Timestamp Without Time zone
                 None
             };
-            Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz))
+            Ok(DataType::Timestamp(TimeUnit::Microsecond, tz))
         }
         SQLDataType::Date => Ok(DataType::Date32),
         SQLDataType::Time(None, tz_info) => {

@@ -2,7 +2,7 @@ use crate::statements::*;
 
 #[tokio::test]
 async fn test_create_table() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     let plan = context
         .plan_query(
@@ -21,15 +21,15 @@ async fn test_create_table() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+------------+------------------+-----------------------------+",
-        "| table_schema | table_name | column_name      | data_type                   |",
-        "+--------------+------------+------------------+-----------------------------+",
-        "| public       | test_table | some_bool_value  | Boolean                     |",
-        "| public       | test_table | some_int_value   | Int64                       |",
-        "| public       | test_table | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table | some_value       | Float32                     |",
-        "+--------------+------------+------------------+-----------------------------+",
+        "+--------------+------------+------------------+------------------------------+",
+        "| table_schema | table_name | column_name      | data_type                    |",
+        "+--------------+------------+------------------+------------------------------+",
+        "| public       | test_table | some_time        | Timestamp(Microsecond, None) |",
+        "| public       | test_table | some_value       | Float32                      |",
+        "| public       | test_table | some_other_value | Decimal128(38, 10)           |",
+        "| public       | test_table | some_bool_value  | Boolean                      |",
+        "| public       | test_table | some_int_value   | Int64                        |",
+        "+--------------+------------+------------------+------------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -37,7 +37,7 @@ async fn test_create_table() {
 
 #[tokio::test]
 async fn test_create_table_as() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
     create_table_and_insert(&context, "test_table").await;
 
     let plan = context
@@ -63,13 +63,13 @@ async fn test_create_table_as() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+----------------+-------------+------------+",
-        "| some_int_value | some_minute | some_value |",
-        "+----------------+-------------+------------+",
-        "| 3333           | 3           | 49         |",
-        "| 2222           | 2           | 48         |",
-        "| 1111           | 1           | 47         |",
-        "+----------------+-------------+------------+",
+        "+------------+----------------+-------------+",
+        "| some_value | some_int_value | some_minute |",
+        "+------------+----------------+-------------+",
+        "| 49.0       | 3333           | 3.0         |",
+        "| 48.0       | 2222           | 2.0         |",
+        "| 47.0       | 1111           | 1.0         |",
+        "+------------+----------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
 }
@@ -78,7 +78,7 @@ async fn test_create_table_as() {
 async fn test_create_table_move_and_drop() {
     // Create two tables, insert some data into them
 
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     for table_name in ["test_table_1", "test_table_2"] {
         create_table_and_insert(&context, table_name).await;
@@ -87,20 +87,20 @@ async fn test_create_table_move_and_drop() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| table_schema | table_name   | column_name      | data_type                   |",
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| public       | test_table_1 | some_bool_value  | Boolean                     |",
-        "| public       | test_table_1 | some_int_value   | Int64                       |",
-        "| public       | test_table_1 | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_1 | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_1 | some_value       | Float32                     |",
-        "| public       | test_table_2 | some_bool_value  | Boolean                     |",
-        "| public       | test_table_2 | some_int_value   | Int64                       |",
-        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_2 | some_value       | Float32                     |",
-        "+--------------+--------------+------------------+-----------------------------+",
+        "+--------------+--------------+------------------+------------------------------+",
+        "| table_schema | table_name   | column_name      | data_type                    |",
+        "+--------------+--------------+------------------+------------------------------+",
+        "| public       | test_table_1 | some_time        | Timestamp(Microsecond, None) |",
+        "| public       | test_table_1 | some_value       | Float32                      |",
+        "| public       | test_table_1 | some_other_value | Decimal128(38, 10)           |",
+        "| public       | test_table_1 | some_bool_value  | Boolean                      |",
+        "| public       | test_table_1 | some_int_value   | Int64                        |",
+        "| public       | test_table_2 | some_time        | Timestamp(Microsecond, None) |",
+        "| public       | test_table_2 | some_value       | Float32                      |",
+        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)           |",
+        "| public       | test_table_2 | some_bool_value  | Boolean                      |",
+        "| public       | test_table_2 | some_int_value   | Int64                        |",
+        "+--------------+--------------+------------------+------------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -195,15 +195,15 @@ async fn test_create_table_move_and_drop() {
     let results = list_columns_query(&context).await;
 
     let expected = vec![
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| table_schema | table_name   | column_name      | data_type                   |",
-        "+--------------+--------------+------------------+-----------------------------+",
-        "| public       | test_table_2 | some_bool_value  | Boolean                     |",
-        "| public       | test_table_2 | some_int_value   | Int64                       |",
-        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)          |",
-        "| public       | test_table_2 | some_time        | Timestamp(Nanosecond, None) |",
-        "| public       | test_table_2 | some_value       | Float32                     |",
-        "+--------------+--------------+------------------+-----------------------------+",
+        "+--------------+--------------+------------------+------------------------------+",
+        "| table_schema | table_name   | column_name      | data_type                    |",
+        "+--------------+--------------+------------------+------------------------------+",
+        "| public       | test_table_2 | some_time        | Timestamp(Microsecond, None) |",
+        "| public       | test_table_2 | some_value       | Float32                      |",
+        "| public       | test_table_2 | some_other_value | Decimal128(38, 10)           |",
+        "| public       | test_table_2 | some_bool_value  | Boolean                      |",
+        "| public       | test_table_2 | some_int_value   | Int64                        |",
+        "+--------------+--------------+------------------+------------------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -219,7 +219,11 @@ async fn test_create_table_move_and_drop() {
 
 #[tokio::test]
 async fn test_create_table_drop_schema() {
-    let context = make_context_with_pg().await;
+    let data_dir = TempDir::new().unwrap();
+    let context = make_context_with_pg(ObjectStoreType::Local(
+        data_dir.path().display().to_string(),
+    ))
+    .await;
 
     for table_name in ["test_table_1", "test_table_2"] {
         create_table_and_insert(&context, table_name).await;
@@ -303,6 +307,26 @@ async fn test_create_table_drop_schema() {
     ];
     assert_batches_eq!(expected, &results);
 
+    // Check tables from the dropped schemas are pending for deletion
+    let plan = context
+        .plan_query(
+            "SELECT table_schema, table_name, deletion_status FROM system.dropped_tables",
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+--------------+--------------+-----------------+",
+        "| table_schema | table_name   | deletion_status |",
+        "+--------------+--------------+-----------------+",
+        "| public       | test_table_1 | PENDING         |",
+        "| new_schema   | test_table_2 | PENDING         |",
+        "+--------------+--------------+-----------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
     // Recreate the public schema and add a table to it
     context
         .collect(context.plan_query("CREATE SCHEMA public").await.unwrap())
@@ -337,7 +361,7 @@ async fn test_create_table_drop_schema() {
 
 #[tokio::test]
 async fn test_create_table_schema_already_exists() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     context
         .collect(
@@ -369,7 +393,7 @@ async fn test_create_table_schema_already_exists() {
 
 #[tokio::test]
 async fn test_create_table_in_staging_schema() {
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
     context
         .collect(
             context
@@ -420,7 +444,7 @@ async fn test_create_external_table_http() {
         &mock_server.uri()
     );
 
-    let context = make_context_with_pg().await;
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     // Try creating a table in a non-staging schema
     let err = context
