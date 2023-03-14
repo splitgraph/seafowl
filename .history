@@ -1,0 +1,4 @@
+#V2
+create table test;
+create table test ();
+\\q

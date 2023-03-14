@@ -2470,6 +2470,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_table_without_columns_fails() {
+        let context = Arc::new(in_memory_context().await);
+        let err = context
+            .plan_query("CREATE TABLE test_table")
+            .await
+            .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("At least one column must be defined to create a table."));
+    }
+
+    #[tokio::test]
     async fn test_drop_table_pending_deletion() -> Result<()> {
         let context = Arc::new(in_memory_context().await);
         let plan = context

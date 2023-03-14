@@ -364,7 +364,8 @@ impl DefaultCatalog {
         let table_columns_vec = table_columns.collect_vec();
 
         // Recover the table ID and version ID (this is going to be the same for all columns).
-        // TODO: if the table has no columns, the result set will be empty, so we use a fake version ID.
+        // TODO: if the table has no columns then we wouldn't be in this function since we originally
+        // grouped by the table name before stepping down into here.
         let (table_id, table_version_id) = table_columns_vec
             .get(0)
             .map_or_else(|| (0, 0), |v| (v.table_id, v.table_version_id));
@@ -385,24 +386,13 @@ impl DefaultCatalog {
         (Arc::from(table_name.to_string()), Arc::new(table))
     }
 
-    fn build_table<'a, I>(
+    fn build_table(
         &self,
         table_name: &str,
-        table_columns: I,
-    ) -> (Arc<str>, Arc<dyn TableProvider>)
-    where
-        I: Iterator<Item = &'a AllDatabaseColumnsResult>,
-    {
-        let table_columns_vec = table_columns.collect_vec();
-
+        table_uuid: Uuid,
+    ) -> (Arc<str>, Arc<dyn TableProvider>) {
         // Build a delta table but don't load it yet; we'll do that only for tables that are
         // actually referenced in a statement, via the async `table` method of the schema provider.
-
-        // TODO: if the table has no columns, the result set will be empty, so we use the default UUID (all zeros).
-        let table_uuid = table_columns_vec
-            .get(0)
-            .map_or_else(Uuid::default, |v| v.table_uuid);
-
         let table_object_store = self.object_store.for_delta_table(table_uuid);
 
         let table = DeltaTable::new(table_object_store, Default::default());
@@ -431,9 +421,11 @@ impl DefaultCatalog {
         let tables = collection_columns_vec
             .into_iter()
             .filter(|c| !c.table_legacy)
-            .group_by(|col| &col.table_name)
+            .group_by(|col| (&col.table_name, &col.table_uuid))
             .into_iter()
-            .map(|(tn, tc)| self.build_table(tn, tc))
+            .map(|((table_name, table_uuid), _)| {
+                self.build_table(table_name, *table_uuid)
+            })
             .collect::<HashMap<_, _>>();
 
         (
