@@ -2406,9 +2406,9 @@ mod tests {
     use super::test_utils::{in_memory_context, mock_context};
 
     const PARTITION_1_FILE_NAME: &str =
-        "0d5bb8d787b39a501c1c677dc9cabf7fbdb5c10152e48499d8b365f41111aa54.parquet";
+        "da10a88bcaf38ae8cca631e4835b6d75d5a948272f7f4d49d586f00071400f35.parquet";
     const PARTITION_2_FILE_NAME: &str =
-        "27fc0c6574c0ffb3706e69abd5babac25a3773b30695a62d41621ddb698de7a6.parquet";
+        "59fb7f3c71f611a88b4f915b6d223f313ce91c53557ca11b2a6cdd224371ffa6.parquet";
 
     const EXPECTED_INSERT_FILE_NAME: &str =
         "67a68a0a8d05a07c80fc235ca42c63c21c853ba8f590a85220978e484118b322.parquet";
@@ -2700,9 +2700,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(format!("{plan:?}"), "Dml: op=[Insert] table=[testcol.some_table]\
-        \n  Projection: my_date AS date, my_value AS value\
-        \n    Projection: testdb.testcol.some_table.date AS my_date, testdb.testcol.some_table.value AS my_value\
-        \n      TableScan: testdb.testcol.some_table projection=[date, value]");
+        \n  Projection: testdb.testcol.some_table.date AS date, testdb.testcol.some_table.value AS value\
+        \n    TableScan: testdb.testcol.some_table projection=[date, value]");
     }
 
     #[tokio::test]
@@ -3033,11 +3032,11 @@ mod tests {
             "+-----+--------+",
             "| v   | sintau |",
             "+-----+--------+",
-            "| 0.1 | 59     |",
-            "| 0.2 | 95     |",
-            "| 0.3 | 95     |",
-            "| 0.4 | 59     |",
-            "| 0.5 | 0      |",
+            "| 0.1 | 59.0   |",
+            "| 0.2 | 95.0   |",
+            "| 0.3 | 95.0   |",
+            "| 0.4 | 59.0   |",
+            "| 0.5 | 0.0    |",
             "+-----+--------+",
         ];
 

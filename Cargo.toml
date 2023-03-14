@@ -28,13 +28,13 @@ object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
-arrow = "32.0.0"
-arrow-buffer = "32.0.0"
+arrow = "33.0.0"
+arrow-buffer = "33.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "32.0.0"
-arrow-schema = "32.0.0"
+arrow-integration-test = "33.0.0"
+arrow-schema = "33.0.0"
 async-trait = "0.1.64"
 base64 = "0.21.0"
 
@@ -44,18 +44,20 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.1"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-18-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-18-upgrade", package = "convergence-arrow", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-19-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-19-upgrade", package = "convergence-arrow", optional = true }
 
-datafusion = "18.0.0"
-datafusion-common = "18.0.0"
-datafusion-expr = "18.0.0"
-datafusion-proto = "18.0.0"
+datafusion = "19.0.0"
+datafusion-common = "19.0.0"
+datafusion-expr = "19.0.0"
+datafusion-proto = "19.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", hash = "8dcf46e614370b93a6d47402456621b713768674", features = ["s3-native-tls", "datafusion-ext"] }
-dynamodb_lock = { git = "https://github.com/delta-io/delta-rs", package = "dynamodb_lock", hash = "8dcf46e614370b93a6d47402456621b713768674", default_features = false, features = ["native-tls"] }
+
+# Pick up unique delta object store url: https://github.com/delta-io/delta-rs/pull/1212
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "cf95721866c3bf8e815cfa60195181f7282ea4fd", features = ["s3-native-tls", "datafusion-ext"] }
+dynamodb_lock = { git = "https://github.com/delta-io/delta-rs", package = "dynamodb_lock", rev = "cf95721866c3bf8e815cfa60195181f7282ea4fd", default_features = false, features = ["native-tls"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
@@ -96,15 +98,16 @@ wasmtime = "1.0.1"
 wasmtime-wasi = "1.0.1"
 
 [patch.crates-io]
-arrow-array = { git = "https://github.com/splitgraph/arrow-rs", package = "arrow-array", branch = "backport-cast-utf8-to-timestamp-microsecond" }
-arrow-buffer = { git = "https://github.com/splitgraph/arrow-rs", package = "arrow-buffer", branch = "backport-cast-utf8-to-timestamp-microsecond" }
-arrow-cast = { git = "https://github.com/splitgraph/arrow-rs", package = "arrow-cast", branch = "backport-cast-utf8-to-timestamp-microsecond" }
-arrow-data = { git = "https://github.com/splitgraph/arrow-rs", package = "arrow-data", branch = "backport-cast-utf8-to-timestamp-microsecond" }
-arrow-schema = { git = "https://github.com/splitgraph/arrow-rs", package = "arrow-schema", branch = "backport-cast-utf8-to-timestamp-microsecond" }
+# Post-33 version with string to us timestamp casting: https://github.com/apache/arrow-rs/pull/3752
+arrow-array = { git = "https://github.com/splitgraph/arrow-rs", rev = "57f79c03a8dee9d8bf8601bf555aa271746913fe", package = "arrow-array" }
+arrow-buffer = { git = "https://github.com/splitgraph/arrow-rs", rev = "57f79c03a8dee9d8bf8601bf555aa271746913fe", package = "arrow-buffer" }
+arrow-cast = { git = "https://github.com/splitgraph/arrow-rs", rev = "57f79c03a8dee9d8bf8601bf555aa271746913fe", package = "arrow-cast" }
+arrow-data = { git = "https://github.com/splitgraph/arrow-rs", rev = "57f79c03a8dee9d8bf8601bf555aa271746913fe", package = "arrow-data" }
+arrow-schema = { git = "https://github.com/splitgraph/arrow-rs", rev = "57f79c03a8dee9d8bf8601bf555aa271746913fe", package = "arrow-schema" }
 
 [dev-dependencies]
 assert_unordered = "0.3"
-datafusion-common = "18.0.0"
+datafusion-common = "19.0.0"
 mockall = "0.11.1"
 rstest = "*"
 wiremock = "0.5"
