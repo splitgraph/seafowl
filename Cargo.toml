@@ -94,7 +94,7 @@ warp = "0.3"
 wasi-common = "1.0.1"
 
 # For WASM user-defined functions
-wasmtime = "1.0.1"
+wasmtime = "6.0.1"
 wasmtime-wasi = "1.0.1"
 
 [patch.crates-io]
