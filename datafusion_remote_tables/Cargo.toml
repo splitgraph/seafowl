@@ -22,7 +22,7 @@ async-trait = "0.1.64"
 connectorx = { git = "https://github.com/splitgraph/connector-x", rev = "df8f50b3f53606717407c6677c7c0c2cbcc7f6ce", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
 
 datafusion = "19.0.0"
-datafusion-expr = "19.0.0"
+datafusion-expr = "20.0.0"
 itertools = ">=0.10.0"
 log = "0.4"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }

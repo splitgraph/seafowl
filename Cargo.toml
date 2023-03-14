@@ -49,7 +49,7 @@ convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch 
 
 datafusion = "19.0.0"
 datafusion-common = "19.0.0"
-datafusion-expr = "19.0.0"
+datafusion-expr = "20.0.0"
 datafusion-proto = "19.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
