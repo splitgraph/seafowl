@@ -1,4 +1,4 @@
-use std::{fmt::Debug, iter::zip, time::Duration};
+use std::{fmt::Debug, time::Duration};
 
 use async_trait::async_trait;
 use deltalake::DeltaDataTypeVersion;
@@ -11,12 +11,8 @@ use sqlx::{
 use uuid::Uuid;
 
 use crate::{
-    data_types::{
-        CollectionId, DatabaseId, FunctionId, PhysicalPartitionId, TableId,
-        TableVersionId,
-    },
+    data_types::{CollectionId, DatabaseId, FunctionId, TableId, TableVersionId},
     implement_repository,
-    provider::{PartitionColumn, SeafowlPartition},
     repository::interface::AllTablePartitionColumnsResult,
     schema::Schema,
     wasm_udf::data_types::CreateFunctionDetails,
