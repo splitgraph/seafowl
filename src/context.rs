@@ -42,7 +42,7 @@ use sqlparser::ast::{
 };
 
 use arrow_integration_test::field_to_json;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, FixedOffset, Utc};
 use std::iter::zip;
 use std::ops::Deref;
@@ -60,8 +60,9 @@ use datafusion::optimizer::optimizer::Optimizer;
 use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion::optimizer::type_coercion::TypeCoercion;
 use datafusion::optimizer::{OptimizerContext, OptimizerRule};
-use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_expr::execution_props::ExecutionProps;
+use datafusion::physical_expr::expressions::{cast, Column};
+use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -840,6 +841,38 @@ impl DefaultSeafowlContext {
         Ok(table)
     }
 
+    // Project incompatible data types if any to delta-rs compatible ones (for now ns -> us)
+    async fn coerce_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut incompatible_data_type = false;
+        let schema = plan.schema().as_ref().clone();
+        let projection = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(id, f)| {
+                let col = Arc::new(Column::new(f.name(), id));
+                match f.data_type() {
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                        incompatible_data_type = true;
+                        let data_type =
+                            DataType::Timestamp(TimeUnit::Microsecond, tz.clone());
+                        Ok((cast(col, &schema, data_type)?, f.name().to_string()))
+                    }
+                    _ => Ok((col as _, f.name().to_string())),
+                }
+            })
+            .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>>>()?;
+
+        if incompatible_data_type {
+            Ok(Arc::new(ProjectionExec::try_new(projection, plan)?))
+        } else {
+            Ok(plan)
+        }
+    }
+
     /// Generate the Delta table builder and execute the write
     pub async fn plan_to_delta_table<'a>(
         &self,
@@ -1442,17 +1475,18 @@ impl SeafowlContext for DefaultSeafowlContext {
                 or_replace: _,
             }) => {
                 // This is actually CREATE TABLE AS
-                let physical = self.create_physical_plan(input).await?;
+                let plan = self.create_physical_plan(input).await?;
+                let plan = self.coerce_plan(plan).await?;
 
                 // First create the table and then insert the data from the subquery
                 // TODO: this means we'll have 2 table versions at the end, 1st from the create
                 // and 2nd from the insert, while it seems more reasonable that in this case we have
                 // only one
                 let _table = self
-                    .create_delta_table(name, physical.schema().as_ref())
+                    .create_delta_table(name, plan.schema().as_ref())
                     .await?;
                 self.reload_schema().await?;
-                self.plan_to_delta_table(name, &physical).await?;
+                self.plan_to_delta_table(name, &plan).await?;
 
                 Ok(make_dummy_exec())
             }
@@ -1900,6 +1934,8 @@ impl SeafowlContext for DefaultSeafowlContext {
         // information on our tables)
         self.reload_schema().await?;
 
+        let plan = self.coerce_plan(plan).await?;
+
         // Check whether table already exists and ensure that the schema exists
         let table_exists = match self
             .inner
@@ -1913,7 +1949,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                     .await
                     .is_ok()
                 {
-                    return Err(DataFusionError::Execution("Cannot insert into legacy table {table_name}, please use a different name".to_string()));
+                    return Err(DataFusionError::Execution(
+                        "Cannot insert into legacy table, please use a different name"
+                            .to_string(),
+                    ));
                 }
 
                 // Schema exists, check if existing table's schema matches the new one

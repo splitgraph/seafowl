@@ -75,6 +75,61 @@ async fn test_create_table_as() {
 }
 
 #[tokio::test]
+async fn test_create_table_as_from_ns_column() {
+    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+
+    // Create an external table containing a timestamp column in nanoseconds
+    let plan = context
+        .plan_query("CREATE EXTERNAL TABLE table_with_ns_column \
+            STORED AS PARQUET LOCATION 'tests/data/seafowl-legacy-data/7fbfeeeade71978b4ae82cd3d97b8c1bd9ae7ab9a7a78ee541b66209cfd7722d.parquet'")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    // Create a table and check nanosecond is coerced into microsecond
+    let plan = context
+        .plan_query("CREATE TABLE table_with_us_column AS (SELECT * FROM staging.table_with_ns_column)")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    let results = list_columns_query(&context).await;
+
+    let expected = vec![
+        "+--------------+----------------------+----------------+------------------------------+",
+        "| table_schema | table_name           | column_name    | data_type                    |",
+        "+--------------+----------------------+----------------+------------------------------+",
+        "| staging      | table_with_ns_column | some_int_value | Int64                        |",
+        "| staging      | table_with_ns_column | some_time      | Timestamp(Nanosecond, None)  |",
+        "| staging      | table_with_ns_column | some_value     | Float32                      |",
+        "| public       | table_with_us_column | some_int_value | Int64                        |",
+        "| public       | table_with_us_column | some_time      | Timestamp(Microsecond, None) |",
+        "| public       | table_with_us_column | some_value     | Float32                      |",
+        "+--------------+----------------------+----------------+------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // Check table is queryable
+    let plan = context
+        .plan_query("SELECT * FROM table_with_us_column")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+----------------+---------------------+------------+",
+        "| some_int_value | some_time           | some_value |",
+        "+----------------+---------------------+------------+",
+        "| 1111           | 2022-01-01T20:01:01 | 42.0       |",
+        "| 2222           | 2022-01-01T20:02:02 | 43.0       |",
+        "| 3333           | 2022-01-01T20:03:03 | 44.0       |",
+        "+----------------+---------------------+------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+}
+
+#[tokio::test]
 async fn test_create_table_move_and_drop() {
     // Create two tables, insert some data into them
 
