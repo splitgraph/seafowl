@@ -7,10 +7,8 @@ use uuid::Uuid;
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     data_types::{
-        CollectionId, DatabaseId, FunctionId, PhysicalPartitionId, TableId,
-        TableVersionId, Timestamp,
+        CollectionId, DatabaseId, FunctionId, TableId, TableVersionId, Timestamp,
     },
-    provider::SeafowlPartition,
     schema::Schema,
 };
 
@@ -156,17 +154,6 @@ pub trait Repository: Send + Sync + Debug {
         &self,
         table_id: Option<TableId>,
     ) -> Result<u64, Error>;
-
-    async fn create_partitions(
-        &self,
-        partition: Vec<SeafowlPartition>,
-    ) -> Result<Vec<PhysicalPartitionId>, Error>;
-
-    async fn append_partitions_to_table(
-        &self,
-        partition_ids: Vec<PhysicalPartitionId>,
-        table_version_id: TableVersionId,
-    ) -> Result<(), Error>;
 
     async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>, Error>;
 
