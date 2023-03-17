@@ -5,87 +5,18 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::execution::context::{SessionState, TaskContext};
+use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::file_format::{partition_type_wrap, FileScanConfig};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Expr;
 use deltalake::action::Add;
-use deltalake::delta_datafusion::DeltaDataChecker;
-use deltalake::operations::writer::{DeltaWriter, WriterConfig};
-use deltalake::storage::DeltaObjectStore;
-use deltalake::{DeltaResult, DeltaTable};
-use futures::StreamExt;
+use deltalake::DeltaTable;
 use object_store::path::{Path, DELIMITER};
 use object_store::ObjectMeta;
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
-
-// Appropriated from https://github.com/delta-io/delta-rs/pull/1176; once the DELETE and UPDATE ops
-// are available through delta-rs this will be obsolete.
-/// Write the provide ExecutionPlan to the underlying storage
-/// The table's invariants are checked during this proccess
-pub async fn write_execution_plan(
-    table: &DeltaTable,
-    state: SessionState,
-    plan: Arc<dyn ExecutionPlan>,
-    partition_columns: Vec<String>,
-    object_store: Arc<DeltaObjectStore>,
-    target_file_size: Option<usize>,
-    write_batch_size: Option<usize>,
-) -> Result<Vec<Add>> {
-    let invariants = table
-        .get_metadata()
-        .and_then(|meta| meta.schema.get_invariants())
-        .unwrap_or_default();
-    let checker = DeltaDataChecker::new(invariants);
-
-    // Write data to disk
-    let mut tasks = vec![];
-    for i in 0..plan.output_partitioning().partition_count() {
-        let inner_plan = plan.clone();
-        let task_ctx = Arc::new(TaskContext::from(&state));
-
-        let config = WriterConfig::new(
-            inner_plan.schema(),
-            partition_columns.clone(),
-            None,
-            target_file_size,
-            write_batch_size,
-        );
-        let mut writer = DeltaWriter::new(object_store.clone(), config);
-        let checker_stream = checker.clone();
-        let mut stream = inner_plan.execute(i, task_ctx)?;
-        let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
-            tokio::task::spawn(async move {
-                while let Some(maybe_batch) = stream.next().await {
-                    let batch = maybe_batch?;
-                    checker_stream.check_batch(&batch).await?;
-                    writer.write(&batch).await?;
-                }
-                writer.close().await
-            });
-
-        tasks.push(handle);
-    }
-
-    // Collect add actions to add to commit
-    Ok(futures::future::join_all(tasks)
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| {
-            DataFusionError::Execution(format!(
-                "Failed writing to delta table {table}: {err}"
-            ))
-        })?
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?
-        .concat()
-        .into_iter()
-        .collect::<Vec<_>>())
-}
 
 // Appropriated from https://github.com/delta-io/delta-rs/pull/1176 with minor changes.
 // Once the DELETE and UPDATE ops are available through delta-rs this will be obsolete.
