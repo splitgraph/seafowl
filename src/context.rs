@@ -28,7 +28,7 @@ use crate::datafusion::parser::{DFParser, Statement as DFStatement};
 use crate::datafusion::utils::build_schema;
 use crate::object_store::http::try_prepare_http_url;
 use crate::object_store::wrapped::InternalObjectStore;
-use crate::utils::{gc_partitions, hash_file};
+use crate::utils::gc_partitions;
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 
@@ -41,7 +41,6 @@ use sqlparser::ast::{
     ObjectType, SchemaName, Statement, TableFactor, TableWithJoins,
 };
 
-use arrow_integration_test::field_to_json;
 use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, FixedOffset, Utc};
 use std::iter::zip;
@@ -91,9 +90,9 @@ use datafusion_expr::logical_plan::{
     DropTable, Extension, LogicalPlan, Projection,
 };
 use datafusion_expr::{DmlStatement, Filter, WriteOp};
-use deltalake::action::{Action, Add, Remove};
-use deltalake::operations::{create::CreateBuilder, write::WriteBuilder};
-use deltalake::{DeltaTable, Schema as DeltaSchema};
+use deltalake::action::{Action, Add, ColumnCountStat, DeltaOperation, Remove, SaveMode};
+use deltalake::operations::create::CreateBuilder;
+use deltalake::{DeltaDataTypeLong, DeltaTable, Schema as DeltaSchema};
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use prost::Message;
@@ -103,12 +102,11 @@ use uuid::Uuid;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::datafusion::visit::VisitorMut;
-use crate::delta_rs::backports::{parquet_scan_from_actions, write_execution_plan};
+use crate::delta_rs::backport_create_add::{create_add, NullCounts};
+use crate::delta_rs::backports::parquet_scan_from_actions;
 #[cfg(test)]
 use crate::frontend::http::tests::deterministic_uuid;
-use crate::provider::{
-    project_expressions, PartitionColumn, SeafowlPartition, SeafowlTable,
-};
+use crate::provider::{project_expressions, SeafowlTable};
 use crate::wasm_udf::data_types::{get_volatility, CreateFunctionDetails};
 use crate::{
     catalog::{FunctionCatalog, TableCatalog},
@@ -142,6 +140,16 @@ const PARTITION_FILE_MIN_PART_SIZE: usize = 5 * 1024 * 1024;
 // meaning that with 2 partition upload tasks x 8 part upload tasks x 5MB we have 80MB of memory usage
 const PARTITION_FILE_UPLOAD_MAX_CONCURRENCY: usize = 2;
 
+#[cfg(test)]
+fn get_uuid() -> Uuid {
+    deterministic_uuid()
+}
+
+#[cfg(not(test))]
+fn get_uuid() -> Uuid {
+    Uuid::new_v4()
+}
+
 pub fn internal_object_store_url() -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!("{INTERNAL_OBJECT_STORE_SCHEME}://")).unwrap()
 }
@@ -173,7 +181,7 @@ pub fn remove_quotes_from_schema_name(name: &SchemaName) -> SchemaName {
 async fn get_parquet_file_statistics_bytes(
     path: &std::path::Path,
     schema: SchemaRef,
-) -> Result<Statistics> {
+) -> Result<(DeltaDataTypeLong, Statistics)> {
     // DataFusion's methods for this are all private (see fetch_statistics / summarize_min_max)
     // and require the ObjectStore abstraction since they are normally used in the context
     // of a TableProvider sending a Range request to object storage to get min/max values
@@ -206,7 +214,7 @@ async fn get_parquet_file_statistics_bytes(
     let stats = parquet
         .infer_stats(&session_state, &dummy_object_store, schema, &meta)
         .await?;
-    Ok(stats)
+    Ok((meta.size as DeltaDataTypeLong, stats))
 }
 
 // Serialise min/max stats in the form of a given ScalarValue using Datafusion protobufs format
@@ -220,44 +228,27 @@ pub fn scalar_value_to_bytes(value: &ScalarValue) -> Option<Vec<u8>> {
     }
 }
 
-/// Serialize data for the physical partition index from Parquet file statistics
-fn build_partition_columns(
-    partition_stats: &Statistics,
-    schema: SchemaRef,
-) -> Vec<PartitionColumn> {
-    // TODO PartitionColumn might not be the right data structure here (lacks ID etc)
+// TODO: maybe we should do something along the lines of `apply_null_counts` from delta-rs
+/// Generate delta-rs `NullCounts` from Parquet `Statistics`.
+fn build_null_counts(partition_stats: &Statistics, schema: SchemaRef) -> NullCounts {
     match &partition_stats.column_statistics {
         // NB: Here we may end up with `null_count` being None, but DF pruning algorithm demands that
         // the null count field be not nullable itself. Consequently for any such cases the
         // pruning will fail, and we will default to using all partitions.
-        Some(column_statistics) => zip(column_statistics, schema.fields())
-            .map(|(stats, column)| {
-                // Since DF stats rely on Parquet stats we won't have stats on  Timestamp* values until
-                // 1) Parquet starts collecting stats for them (`parquet::file::statistics::Statistics` enum)
-                // 2) DF pattern matches those types in `summarize_min_max`.
-                let min_value = stats.min_value.as_ref().and_then(scalar_value_to_bytes);
-                let max_value = stats.max_value.as_ref().and_then(scalar_value_to_bytes);
-
-                PartitionColumn {
-                    name: Arc::from(column.name().to_string()),
-                    r#type: Arc::from(field_to_json(column).to_string()),
-                    min_value: Arc::new(min_value),
-                    max_value: Arc::new(max_value),
-                    null_count: stats.null_count.map(|nc| nc as i32),
-                }
-            })
-            .collect(),
-        None => schema
-            .fields()
-            .iter()
-            .map(|column| PartitionColumn {
-                name: Arc::from(column.name().to_string()),
-                r#type: Arc::from(field_to_json(column).to_string()),
-                min_value: Arc::new(None),
-                max_value: Arc::new(None),
-                null_count: None,
-            })
-            .collect(),
+        Some(column_statistics) => {
+            zip(column_statistics, schema.fields())
+                .filter(|(stats, _)| stats.null_count.is_some())
+                .map(|(stats, column)| {
+                    (
+                        column.name().to_string(),
+                        ColumnCountStat::Value(
+                            stats.null_count.unwrap() as DeltaDataTypeLong
+                        ),
+                    )
+                })
+                .collect::<NullCounts>()
+        }
+        None => NullCounts::default(),
     }
 }
 
@@ -315,19 +306,21 @@ pub async fn plan_to_object_store(
     plan: &Arc<dyn ExecutionPlan>,
     output_schema: Option<SchemaRef>,
     store: Arc<InternalObjectStore>,
+    prefix: String,
     disk_manager: Arc<DiskManager>,
     max_partition_size: u32,
-) -> Result<Vec<SeafowlPartition>> {
+) -> Result<Vec<Add>> {
     let mut current_partition_size = 0;
     let (mut current_partition_file_path, mut writer) = temp_partition_file_writer(
         disk_manager.clone(),
         output_schema.clone().unwrap_or_else(|| plan.schema()),
     )?;
     let mut partition_file_paths = vec![current_partition_file_path];
+    let mut partition_metadata = vec![];
     let mut tasks = vec![];
 
-    // Iterate over Datafusion partitions and rechuhk them into Seafowl partitions, since we want to
-    // enforce a pre-defined partition size limit, which is not guaranteed by DF.
+    // Iterate over Datafusion partitions and re-chunk them, since we want to enforce a pre-defined
+    // partition size limit, which is not guaranteed by DF.
     for i in 0..plan.output_partitioning().partition_count() {
         let task_ctx = Arc::new(TaskContext::from(state));
         let mut stream = plan.execute(i, task_ctx)?;
@@ -364,7 +357,9 @@ pub async fn plan_to_object_store(
 
                 // Roll-over into the next partition: close partition writer, reset partition size
                 // counter and open new temp file + writer.
-                writer.close().map_err(DataFusionError::from).map(|_| ())?;
+                let file_metadata = writer.close().map_err(DataFusionError::from)?;
+                partition_metadata.push(file_metadata);
+
                 current_partition_size = 0;
                 leftover_partition_capacity = max_partition_size as usize;
 
@@ -377,41 +372,49 @@ pub async fn plan_to_object_store(
             writer.write(&batch).map_err(DataFusionError::from)?;
         }
     }
-    writer.close().map_err(DataFusionError::from).map(|_| ())?;
+    let file_metadata = writer.close().map_err(DataFusionError::from)?;
+    partition_metadata.push(file_metadata);
 
     info!("Starting upload of partition objects");
+    let partitions_uuid = get_uuid();
 
     let sem = Arc::new(Semaphore::new(PARTITION_FILE_UPLOAD_MAX_CONCURRENCY));
-    for partition_file_path in partition_file_paths {
+    for (part, (partition_file_path, metadata)) in partition_file_paths
+        .into_iter()
+        .zip(partition_metadata)
+        .enumerate()
+    {
         let permit = Arc::clone(&sem).acquire_owned().await.ok();
 
         let physical = plan.clone();
         let store = store.clone();
-        let handle: tokio::task::JoinHandle<Result<SeafowlPartition>> =
+        let prefix = prefix.clone();
+        let handle: tokio::task::JoinHandle<Result<Add>> =
             tokio::task::spawn(async move {
                 // Move the ownership of the semaphore permit into the task
                 let _permit = permit;
 
-                // Index the Parquet file (get its min-max values)
-                let partition_stats = get_parquet_file_statistics_bytes(
+                // Index the Parquet file: get its min-max values and size
+                let (size, partition_stats) = get_parquet_file_statistics_bytes(
                     &partition_file_path,
                     physical.schema(),
                 )
                 .await?;
+                let null_counts = build_null_counts(&partition_stats, physical.schema());
 
-                let columns =
-                    build_partition_columns(&partition_stats, physical.schema());
-
-                let object_storage_id =
-                    hash_file(&partition_file_path).await? + ".parquet";
+                // This is taken from delta-rs `PartitionWriter::next_data_path`
+                let file_name =
+                    format!("part-{part:0>5}-{partitions_uuid}-c000.snappy.parquet");
+                // NB: in order to exploit the fast upload path for local FS store we need to use
+                // the internal object store here. However it is not rooted at the table directory
+                // root, so we need to fully qualify the path with the appropriate uuid prefix.
+                // On the other hand, when creating deltalake `Add`s below we only need the relative
+                // path (just the file name).
+                let location = Path::from(prefix).child(file_name.clone());
 
                 // For local FS stores, we can just move the file to the target location
-                if let Some(result) = store
-                    .fast_upload(
-                        &partition_file_path,
-                        &Path::from(object_storage_id.clone()),
-                    )
-                    .await
+                if let Some(result) =
+                    store.fast_upload(&partition_file_path, &location).await
                 {
                     result?;
                 } else {
@@ -421,7 +424,6 @@ pub async fn plan_to_object_store(
                     let mut part_buffer =
                         BytesMut::with_capacity(PARTITION_FILE_MIN_PART_SIZE);
 
-                    let location = Path::from(object_storage_id.clone());
                     let (multipart_id, mut writer) =
                         store.inner.put_multipart(&location).await?;
 
@@ -480,18 +482,17 @@ pub async fn plan_to_object_store(
                     writer.shutdown().await?;
                 }
 
-                let partition = SeafowlPartition {
-                    partition_id: None,
-                    object_storage_id: Arc::from(object_storage_id),
-                    row_count: partition_stats
-                        .num_rows
-                        .expect("Error counting rows in the written file")
-                        .try_into()
-                        .expect("row count greater than 2147483647"),
-                    columns: Arc::new(columns),
-                };
+                // Create the corresponding Add action; currently we don't support partition columns
+                // which simplifies things.
+                let add = create_add(
+                    &HashMap::default(),
+                    null_counts,
+                    file_name,
+                    size,
+                    &metadata,
+                )?;
 
-                Ok(partition)
+                Ok(add)
             });
         tasks.push(handle);
     }
@@ -813,12 +814,11 @@ impl DefaultSeafowlContext {
         // Then we could create the table in our catalog first and try to create the delta table itself
         // with the returned uuid (and delete the catalog entry if the object store creation fails).
         // On the other hand that would complicate etag testing logic.
-        #[cfg(test)]
-        let table_uuid = deterministic_uuid();
-        #[cfg(not(test))]
-        let table_uuid = Uuid::new_v4();
+        let table_uuid = get_uuid();
         let table_object_store = self.internal_object_store.for_delta_table(table_uuid);
 
+        // NB: there's also a uuid generated below for table's `DeltaTableMetaData::id`, so it would
+        // be nice if those two could match
         let table = CreateBuilder::new()
             .with_object_store(table_object_store)
             .with_table_name(&*table_name)
@@ -882,21 +882,40 @@ impl DefaultSeafowlContext {
         let table_uuid = self.get_table_uuid(name).await?;
         let table_object_store = self.internal_object_store.for_delta_table(table_uuid);
 
-        // We're not exposing `target_file_size` nor `write_batch_size` atm
-        let table = WriteBuilder::new()
-            .with_input_execution_plan(plan.clone())
-            .with_input_session_state(self.inner.state())
-            .with_object_store(table_object_store)
-            .await?;
+        // Upload partition files to table's root directory
+        let adds = plan_to_object_store(
+            &self.inner.state(),
+            plan,
+            None,
+            self.internal_object_store.clone(),
+            table_uuid.to_string(),
+            self.inner.runtime_env().disk_manager.clone(),
+            self.max_partition_size,
+        )
+        .await?;
+
+        // Commit the write into a new version
+        let mut table = DeltaTable::new(table_object_store, Default::default());
+        table.load().await?;
+        let mut tx = table.create_transaction(None);
+
+        let actions: Vec<Action> = adds.into_iter().map(Action::add).collect();
+        tx.add_actions(actions);
+        let op = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: None,
+            predicate: None,
+        };
+        let version = tx.commit(Some(op), None).await?;
 
         // TODO: if `DeltaTable::get_version_timestamp` was globally public we could also pass the
         // exact version timestamp, instead of creating one automatically in our own catalog (which
         // could lead to minor timestamp differences).
         self.table_catalog
-            .create_new_table_version(table_uuid, table.version())
+            .create_new_table_version(table_uuid, version)
             .await?;
 
-        debug!("Written table version {} for {table}", table.version());
+        debug!("Written table version {version} for {table}");
         Ok(table)
     }
 
@@ -1587,18 +1606,19 @@ impl SeafowlContext for DefaultSeafowlContext {
                 .await?;
 
                 // Apply the provided assignments
-                let update_plan =
+                let update_plan: Arc<dyn ExecutionPlan> =
                     Arc::new(ProjectionExec::try_new(projections.clone(), base_scan)?);
 
-                // Write the updated data
-                let adds = write_execution_plan(
-                    &table,
-                    state,
-                    update_plan,
-                    vec![],
-                    table.object_store(),
+                // Write the new files with updated data
+                let uuid = self.get_table_uuid(table_name).await?;
+                let adds = plan_to_object_store(
+                    &state,
+                    &update_plan,
                     None,
-                    None,
+                    self.internal_object_store.clone(),
+                    uuid.to_string(),
+                    self.inner.runtime_env().disk_manager.clone(),
+                    self.max_partition_size,
                 )
                 .await?;
 
@@ -1624,7 +1644,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                 let mut tx = table.create_transaction(None);
                 tx.add_actions(actions);
                 let version = tx.commit(None, None).await?;
-                let uuid = self.get_table_uuid(table_name).await?;
                 self.table_catalog
                     .create_new_table_version(uuid, version)
                     .await?;
@@ -1638,74 +1657,75 @@ impl SeafowlContext for DefaultSeafowlContext {
                 input,
             }) => {
                 // TODO: Once https://github.com/delta-io/delta-rs/pull/1176 is merged use that instead
+                let uuid = self.get_table_uuid(table_name).await?;
 
                 let mut table = self.try_get_delta_table(table_name).await?;
                 table.load().await?;
                 let schema_ref = SchemaRef::from(table_schema.deref().clone());
 
-                let (adds, removes) = if let LogicalPlan::Filter(Filter {
-                    predicate,
-                    ..
-                }) = &**input
-                {
-                    // A WHERE clause has been used; employ it to prune the filtration
-                    // down to only a subset of partitions, re-use the rest as is
+                let (adds, removes) =
+                    if let LogicalPlan::Filter(Filter { predicate, .. }) = &**input {
+                        // A WHERE clause has been used; employ it to prune the filtration
+                        // down to only a subset of partitions, re-use the rest as is
 
-                    let state = self.inner.state();
+                        let state = self.inner.state();
 
-                    // To simulate the effect of a WHERE clause from a DELETE, we
-                    // need to use the inverse clause in a SELECT when filtering
-                    let filter = create_physical_expr(
-                        &predicate.clone().not(),
-                        table_schema,
-                        schema_ref.as_ref(),
-                        &ExecutionProps::new(),
-                    )?;
+                        // To simulate the effect of a WHERE clause from a DELETE, we
+                        // need to use the inverse clause in a SELECT when filtering
+                        let filter = create_physical_expr(
+                            &predicate.clone().not(),
+                            table_schema,
+                            schema_ref.as_ref(),
+                            &ExecutionProps::new(),
+                        )?;
 
-                    let pruning_predicate =
-                        PruningPredicate::try_new(predicate.clone(), schema_ref.clone())?;
-                    let prune_map = pruning_predicate.prune(&table)?;
-                    let files_to_prune = table
-                        .get_state()
-                        .files()
-                        .iter()
-                        .zip(prune_map.into_iter())
-                        .filter_map(
-                            |(add, keep)| if keep { Some(add.clone()) } else { None },
+                        let pruning_predicate = PruningPredicate::try_new(
+                            predicate.clone(),
+                            schema_ref.clone(),
+                        )?;
+                        let prune_map = pruning_predicate.prune(&table)?;
+                        let files_to_prune = table
+                            .get_state()
+                            .files()
+                            .iter()
+                            .zip(prune_map.into_iter())
+                            .filter_map(
+                                |(add, keep)| if keep { Some(add.clone()) } else { None },
+                            )
+                            .collect::<Vec<Add>>();
+
+                        let base_scan = parquet_scan_from_actions(
+                            &table,
+                            files_to_prune.as_slice(),
+                            schema_ref.as_ref(),
+                            &[predicate.clone().not()],
+                            &state,
+                            None,
+                            None,
                         )
-                        .collect::<Vec<Add>>();
+                        .await?;
 
-                    let base_scan = parquet_scan_from_actions(
-                        &table,
-                        files_to_prune.as_slice(),
-                        schema_ref.as_ref(),
-                        &[predicate.clone().not()],
-                        &state,
-                        None,
-                        None,
-                    )
-                    .await?;
+                        let filter_plan: Arc<dyn ExecutionPlan> =
+                            Arc::new(FilterExec::try_new(filter, base_scan)?);
 
-                    let filter_plan = Arc::new(FilterExec::try_new(filter, base_scan)?);
+                        // Write the filtered out data
+                        let adds = plan_to_object_store(
+                            &state,
+                            &filter_plan,
+                            None,
+                            self.internal_object_store.clone(),
+                            uuid.to_string(),
+                            self.inner.runtime_env().disk_manager.clone(),
+                            self.max_partition_size,
+                        )
+                        .await?;
 
-                    // Write the filtered out data
-                    let adds = write_execution_plan(
-                        &table,
-                        state,
-                        filter_plan,
-                        vec![],
-                        table.object_store(),
-                        None,
-                        None,
-                    )
-                    .await?;
-
-                    (adds, files_to_prune)
-                } else {
-                    // If no qualifier is specified we're basically truncating the table.
-                    // Remove all files.
-                    (vec![], table.get_state().files().clone())
-                };
+                        (adds, files_to_prune)
+                    } else {
+                        // If no qualifier is specified we're basically truncating the table.
+                        // Remove all files.
+                        (vec![], table.get_state().files().clone())
+                    };
 
                 let deletion_timestamp = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -1729,7 +1749,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                 let mut tx = table.create_transaction(None);
                 tx.add_actions(actions);
                 let version = tx.commit(None, None).await?;
-                let uuid = self.get_table_uuid(table_name).await?;
                 self.table_catalog
                     .create_new_table_version(uuid, version)
                     .await?;
@@ -2004,54 +2023,12 @@ impl SeafowlContext for DefaultSeafowlContext {
 pub mod test_utils {
     use std::sync::Arc;
 
-    use mockall::predicate;
-    use object_store::memory::InMemory;
-    use parking_lot::RwLock;
-
-    use crate::{
-        catalog::{
-            MockFunctionCatalog, MockPartitionCatalog, MockTableCatalog, TableCatalog,
-            DEFAULT_SCHEMA,
-        },
-        object_store::http::add_http_object_store,
-        provider::{SeafowlCollection, SeafowlDatabase},
-    };
-
-    use datafusion::{
-        arrow::datatypes::{
-            DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
-        },
-        catalog::schema::MemorySchemaProvider,
-        prelude::SessionConfig,
-    };
-
     use crate::config::context::build_context;
     use crate::config::schema;
     use crate::config::schema::{Catalog, SeafowlConfig, Sqlite};
-    use crate::system_tables::SystemSchemaProvider;
     use sqlx::sqlite::SqliteJournalMode;
-    use std::collections::HashMap as StdHashMap;
 
     use super::*;
-
-    pub fn make_session() -> SessionContext {
-        let session_config = SessionConfig::new()
-            .with_information_schema(true)
-            .with_default_catalog_and_schema("testdb", DEFAULT_SCHEMA);
-
-        let context = SessionContext::with_config(session_config);
-        let object_store = Arc::new(InMemory::new());
-        context.runtime_env().register_object_store(
-            INTERNAL_OBJECT_STORE_SCHEME,
-            "",
-            object_store,
-        );
-
-        // Register the HTTP object store for external tables
-        add_http_object_store(&context, &None);
-
-        context
-    }
 
     /// Build a real (not mocked) in-memory context that uses SQLite
     pub async fn in_memory_context() -> DefaultSeafowlContext {
@@ -2069,117 +2046,26 @@ pub mod test_utils {
         build_context(&config).await.unwrap()
     }
 
-    pub async fn mock_context() -> DefaultSeafowlContext {
-        mock_context_with_catalog_assertions(|_| (), |_| ()).await
-    }
+    pub async fn in_memory_context_with_test_db() -> Arc<DefaultSeafowlContext> {
+        let context = in_memory_context().await;
 
-    pub async fn mock_context_with_catalog_assertions<FR, FT>(
-        mut setup_partition_catalog: FR,
-        mut setup_table_catalog: FT,
-    ) -> DefaultSeafowlContext
-    where
-        FR: FnMut(&mut MockPartitionCatalog),
-        FT: FnMut(&mut MockTableCatalog),
-    {
-        let session = make_session();
-        let arrow_schema = ArrowSchema::new(vec![
-            ArrowField::new("date", ArrowDataType::Date32, false),
-            ArrowField::new("value", ArrowDataType::Float64, false),
-        ]);
+        // Create new non-default database
+        let plan = context.plan_query("CREATE DATABASE testdb").await.unwrap();
+        context.collect(plan).await.unwrap();
+        let context = context.scope_to_database("testdb".to_string()).unwrap();
 
-        let mut partition_catalog = MockPartitionCatalog::new();
+        // Create new non-default collection
+        let plan = context.plan_query("CREATE SCHEMA testcol").await.unwrap();
+        context.collect(plan).await.unwrap();
 
-        partition_catalog
-            .expect_load_table_partitions()
-            .with(predicate::eq(1))
-            .returning(|_| {
-                Ok(vec![SeafowlPartition {
-                    partition_id: Some(1),
-                    object_storage_id: Arc::from("some-file.parquet"),
-                    row_count: 3,
-                    columns: Arc::new(vec![]),
-                }])
-            });
+        // Create table
+        let plan = context
+            .plan_query("CREATE TABLE testcol.some_table (date DATE, value DOUBLE)")
+            .await
+            .unwrap();
+        context.collect(plan).await.unwrap();
 
-        setup_partition_catalog(&mut partition_catalog);
-
-        let partition_catalog_ptr = Arc::new(partition_catalog);
-
-        let singleton_table = SeafowlTable {
-            name: Arc::from("some_table"),
-            schema: Arc::new(SeafowlSchema {
-                arrow_schema: Arc::new(arrow_schema.clone()),
-            }),
-            table_id: 0,
-            table_version_id: 0,
-            catalog: partition_catalog_ptr.clone(),
-        };
-        let tables =
-            StdHashMap::from([(Arc::from("some_table"), Arc::from(singleton_table))]);
-        let collections = StdHashMap::from([(
-            Arc::from("testcol"),
-            Arc::from(SeafowlCollection {
-                name: Arc::from("testcol"),
-                legacy_tables: RwLock::new(tables),
-                tables: Default::default(),
-            }),
-        )]);
-
-        let mut table_catalog = MockTableCatalog::new();
-        table_catalog
-            .expect_load_database()
-            .with(predicate::eq(0))
-            .returning(move |_| {
-                Ok(SeafowlDatabase {
-                    name: Arc::from("testdb"),
-                    collections: collections.clone(),
-                    staging_schema: Arc::new(MemorySchemaProvider::new()),
-                    system_schema: Arc::new(SystemSchemaProvider::new(
-                        Arc::from("testdb"),
-                        Arc::new(MockTableCatalog::new()),
-                    )),
-                })
-            });
-
-        let mut function_catalog = MockFunctionCatalog::new();
-        function_catalog
-            .expect_create_function()
-            .returning(move |_, _, _| Ok(1));
-        function_catalog
-            .expect_get_all_functions_in_database()
-            .returning(|_| Ok(vec![]));
-
-        session.register_catalog(
-            "testdb",
-            Arc::new(table_catalog.load_database(0).await.unwrap()),
-        );
-
-        setup_table_catalog(&mut table_catalog);
-
-        let object_store = Arc::new(InternalObjectStore::new(
-            Arc::new(InMemory::new()),
-            schema::ObjectStore::InMemory(schema::InMemory {}),
-        ));
-        session.runtime_env().register_object_store(
-            INTERNAL_OBJECT_STORE_SCHEME,
-            "",
-            object_store.inner.clone(),
-        );
-
-        DefaultSeafowlContext {
-            inner: session,
-            table_catalog: Arc::new(table_catalog),
-            partition_catalog: partition_catalog_ptr,
-            function_catalog: Arc::new(function_catalog),
-            internal_object_store: object_store,
-            database: "testdb".to_string(),
-            database_id: 0,
-            all_database_ids: Arc::from(RwLock::new(HashMap::from([(
-                "testdb".to_string(),
-                0 as DatabaseId,
-            )]))),
-            max_partition_size: 2,
-        }
+        context
     }
 }
 
@@ -2192,41 +2078,32 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::execution::disk_manager::DiskManagerConfig;
-    use mockall::predicate;
     use object_store::memory::InMemory;
     use rstest::rstest;
-
-    use crate::context::test_utils::mock_context_with_catalog_assertions;
 
     use crate::config::schema;
     use datafusion::assert_batches_eq;
     use datafusion::from_slice::FromSlice;
     use datafusion::physical_plan::memory::MemoryExec;
+    use deltalake::storage::DeltaObjectStore;
     use itertools::Itertools;
     use object_store::local::LocalFileSystem;
+    use serde_json::{json, Value};
 
     use super::*;
 
-    use super::test_utils::{in_memory_context, mock_context};
+    use super::test_utils::{in_memory_context, in_memory_context_with_test_db};
 
-    const PARTITION_1_FILE_NAME: &str =
-        "da10a88bcaf38ae8cca631e4835b6d75d5a948272f7f4d49d586f00071400f35.parquet";
-    const PARTITION_2_FILE_NAME: &str =
-        "59fb7f3c71f611a88b4f915b6d223f313ce91c53557ca11b2a6cdd224371ffa6.parquet";
-
-    const EXPECTED_INSERT_FILE_NAME: &str =
-        "67a68a0a8d05a07c80fc235ca42c63c21c853ba8f590a85220978e484118b322.parquet";
-
-    fn to_min_max_value(value: ScalarValue) -> Arc<Option<Vec<u8>>> {
-        Arc::from(scalar_value_to_bytes(&value))
-    }
+    const PART_0_FILE_NAME: &str =
+        "part-00000-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
+    const PART_1_FILE_NAME: &str =
+        "part-00001-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
 
     async fn assert_uploaded_objects(
-        object_store: Arc<InternalObjectStore>,
+        object_store: Arc<DeltaObjectStore>,
         expected: Vec<Path>,
     ) {
         let actual = object_store
-            .inner
             .list(None)
             .await
             .unwrap()
@@ -2243,7 +2120,7 @@ mod tests {
     #[case::local_object_store_test_renames(true)]
     #[tokio::test]
     async fn test_plan_to_object_storage(#[case] is_local: bool) {
-        let sf_context = mock_context().await;
+        let sf_context = in_memory_context().await;
 
         // Make a SELECT VALUES(...) query
         let execution_plan = sf_context
@@ -2283,96 +2160,105 @@ mod tests {
             )
         };
 
+        let table_uuid = Uuid::default();
         let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
-        let partitions = plan_to_object_store(
+        let adds = plan_to_object_store(
             &sf_context.inner.state(),
             &execution_plan,
             None,
             object_store.clone(),
+            table_uuid.to_string(),
             disk_manager,
             2,
         )
         .await
         .unwrap();
 
-        assert_eq!(partitions.len(), 2);
-
-        // - Timestamp didn't get converted since we'd need to cast the string to Timestamp in query
-        // or call a to_timestamp function, but neither is supported in the DF ValueExpr node.
-        // - Looks like utf8 is None because DF's summarize_min_max doesn't match ByteArray stats.
+        assert_eq!(adds.len(), 2);
         assert_eq!(
-            partitions,
             vec![
-                SeafowlPartition {
-                    partition_id: None,
-                    object_storage_id: Arc::from(PARTITION_1_FILE_NAME.to_string()),
-                    row_count: 2,
-                    columns: Arc::new(vec![
-                        PartitionColumn {
-                            name: Arc::from("timestamp".to_string()),
-                            r#type: Arc::from("{\"children\":[],\"name\":\"timestamp\",\"nullable\":true,\"type\":{\"name\":\"utf8\"}}".to_string()),
-                            min_value: Arc::new(None),
-                            max_value: Arc::new(None),
-                            null_count: Some(0),
+                (
+                    adds[0].path.clone(),
+                    adds[0].size,
+                    adds[0].partition_values.is_empty(),
+                    adds[0].partition_values_parsed.is_none(),
+                    adds[0].data_change,
+                    serde_json::from_str::<Value>(
+                        adds[0].stats.clone().unwrap().as_str()
+                    )
+                    .unwrap(),
+                ),
+                (
+                    adds[1].path.clone(),
+                    adds[1].size,
+                    adds[1].partition_values.is_empty(),
+                    adds[1].partition_values_parsed.is_none(),
+                    adds[1].data_change,
+                    serde_json::from_str::<Value>(
+                        adds[1].stats.clone().unwrap().as_str()
+                    )
+                    .unwrap(),
+                )
+            ],
+            vec![
+                (
+                    PART_0_FILE_NAME.to_string(),
+                    1266,
+                    true,
+                    true,
+                    true,
+                    json!({
+                        "numRecords": 2,
+                        "minValues": {
+                            "integer": 12,
+                            "timestamp": "2022-01-01",
+                            "varchar": "one",
                         },
-                        PartitionColumn {
-                            name: Arc::from("integer".to_string()),
-                            r#type: Arc::from(
-                                "{\"children\":[],\"name\":\"integer\",\"nullable\":true,\"type\":{\"bitWidth\":64,\"isSigned\":true,\"name\":\"int\"}}"
-                                    .to_string()
-                            ),
-                            min_value: to_min_max_value(ScalarValue::Int64(Some(12))),
-                            max_value: to_min_max_value(ScalarValue::Int64(Some(42))),
-                            null_count: Some(0),
+                        "maxValues": {
+                            "integer": 42,
+                            "timestamp": "2022-01-02",
+                            "varchar": "two",
                         },
-                        PartitionColumn {
-                            name: Arc::from("varchar".to_string()),
-                            r#type: Arc::from("{\"children\":[],\"name\":\"varchar\",\"nullable\":true,\"type\":{\"name\":\"utf8\"}}".to_string()),
-                            min_value: Arc::new(None),
-                            max_value: Arc::new(None),
-                            null_count: Some(0),
-                        }
-                    ])
-                },
-                SeafowlPartition {
-                    partition_id: None,
-                    object_storage_id: Arc::from(PARTITION_2_FILE_NAME.to_string()),
-                    row_count: 2,
-                    columns: Arc::new(vec![
-                        PartitionColumn {
-                            name: Arc::from("timestamp".to_string()),
-                            r#type: Arc::from("{\"children\":[],\"name\":\"timestamp\",\"nullable\":true,\"type\":{\"name\":\"utf8\"}}".to_string()),
-                            min_value: Arc::new(None),
-                            max_value: Arc::new(None),
-                            null_count: Some(0),
+                        "nullCount": {
+                            "integer": 0,
+                            "timestamp": 0,
+                            "varchar": 0,
                         },
-                        PartitionColumn {
-                            name: Arc::from("integer".to_string()),
-                            r#type: Arc::from(
-                                "{\"children\":[],\"name\":\"integer\",\"nullable\":true,\"type\":{\"bitWidth\":64,\"isSigned\":true,\"name\":\"int\"}}"
-                                    .to_string()
-                            ),
-                            min_value: to_min_max_value(ScalarValue::Int64(Some(22))),
-                            max_value: to_min_max_value(ScalarValue::Int64(Some(32))),
-                            null_count: Some(0),
+                    }),
+                ),
+                (
+                    PART_1_FILE_NAME.to_string(),
+                    1281,
+                    true,
+                    true,
+                    true,
+                    json!({
+                        "numRecords": 2,
+                        "minValues": {
+                            "integer": 22,
+                            "timestamp": "2022-01-03",
+                            "varchar": "four",
                         },
-                        PartitionColumn {
-                            name: Arc::from("varchar".to_string()),
-                            r#type: Arc::from("{\"children\":[],\"name\":\"varchar\",\"nullable\":true,\"type\":{\"name\":\"utf8\"}}".to_string()),
-                            min_value: Arc::new(None),
-                            max_value: Arc::new(None),
-                            null_count: Some(0),
-                        }
-                    ])
-                },
+                        "maxValues": {
+                            "integer": 32,
+                            "timestamp": "2022-01-04",
+                            "varchar": "three",
+                        },
+                        "nullCount": {
+                            "integer": 0,
+                            "timestamp": 0,
+                            "varchar": 0,
+                        },
+                    }),
+                )
             ]
         );
 
         assert_uploaded_objects(
-            object_store,
+            object_store.for_delta_table(table_uuid),
             vec![
-                Path::from(PARTITION_1_FILE_NAME.to_string()),
-                Path::from(PARTITION_2_FILE_NAME.to_string()),
+                Path::from(PART_0_FILE_NAME.to_string()),
+                Path::from(PART_1_FILE_NAME.to_string()),
             ],
         )
         .await;
@@ -2405,7 +2291,7 @@ mod tests {
         #[case] input_partitions: Vec<Vec<Vec<i32>>>,
         #[case] output_partitions: Vec<Vec<i32>>,
     ) {
-        let sf_context = mock_context().await;
+        let sf_context = in_memory_context_with_test_db().await;
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "some_number",
@@ -2439,42 +2325,43 @@ mod tests {
             schema::ObjectStore::InMemory(schema::InMemory {}),
         ));
         let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
-        let partitions = plan_to_object_store(
+        let adds = plan_to_object_store(
             &sf_context.inner.state(),
             &execution_plan,
             None,
             object_store,
+            "test".to_string(),
             disk_manager,
             max_partition_size,
         )
         .await
         .unwrap();
 
-        for i in 0..output_partitions.len() {
-            assert_eq!(partitions[i].row_count, output_partitions[i].len() as i32);
+        assert_eq!(adds.len(), output_partitions.len(),);
 
+        for i in 0..output_partitions.len() {
             assert_eq!(
-                partitions[i].columns,
-                Arc::new(vec![PartitionColumn {
-                    name: Arc::from("some_number"),
-                    r#type: Arc::from(
-                        r#"{"children":[],"name":"some_number","nullable":true,"type":{"bitWidth":32,"isSigned":true,"name":"int"}}"#
-                    ),
-                    min_value: to_min_max_value(ScalarValue::Int32(
-                        output_partitions[i].iter().min().copied()
-                    )),
-                    max_value: to_min_max_value(ScalarValue::Int32(
-                        output_partitions[i].iter().max().copied()
-                    )),
-                    null_count: Some(0),
-                }])
-            );
+                serde_json::from_str::<Value>(adds[i].stats.clone().unwrap().as_str())
+                    .unwrap(),
+                json!({
+                    "numRecords": output_partitions[i].len(),
+                    "minValues": {
+                        "some_number": output_partitions[i].iter().min(),
+                    },
+                    "maxValues": {
+                        "some_number": output_partitions[i].iter().max(),
+                    },
+                    "nullCount": {
+                        "some_number": 0,
+                    },
+                }),
+            )
         }
     }
 
     #[tokio::test]
     async fn test_plan_insert_normal() {
-        let sf_context = mock_context().await;
+        let sf_context = in_memory_context_with_test_db().await;
 
         let plan = sf_context
             .create_logical_plan(
@@ -2493,7 +2380,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plan_insert_renaming() {
-        let sf_context = mock_context().await;
+        let sf_context = in_memory_context_with_test_db().await;
 
         let plan = sf_context
             .create_logical_plan(
@@ -2655,7 +2542,7 @@ mod tests {
     }
 
     async fn get_logical_plan(query: &str) -> String {
-        let sf_context = mock_context().await;
+        let sf_context = in_memory_context_with_test_db().await;
 
         let plan = sf_context.create_logical_plan(query).await.unwrap();
         format!("{plan:?}")
@@ -2691,7 +2578,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plan_insert_all() {
-        let sf_context = mock_context().await;
+        let sf_context = in_memory_context_with_test_db().await;
 
         let plan = sf_context
             .create_logical_plan(
@@ -2710,7 +2597,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plan_insert_type_mismatch() {
-        let sf_context = mock_context().await;
+        let sf_context = in_memory_context_with_test_db().await;
 
         // Try inserting a timestamp into a number (note this will work fine for inserting
         // e.g. Utf-8 into numbers at plan time but should fail at execution time if the value
@@ -2723,7 +2610,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plan_insert_values_wrong_number() {
-        let sf_context = mock_context().await;
+        let sf_context = in_memory_context_with_test_db().await;
 
         let err = sf_context
             .create_logical_plan(
@@ -2739,7 +2626,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plan_insert_values_duplicate_columns() {
-        let sf_context = mock_context().await;
+        let sf_context = in_memory_context_with_test_db().await;
 
         let err = sf_context
             .create_logical_plan("INSERT INTO testcol.some_table(date, date, value) VALUES('2022-01-01T12:00:00', '2022-01-01T12:00:00', 42)")
@@ -2750,75 +2637,9 @@ mod tests {
         );
     }
 
-    #[ignore = "fails since '2022-01-01T12:00:00' can't be cast to Date32 in chrono"]
-    #[tokio::test]
-    async fn test_preexec_insert() {
-        let sf_context = mock_context_with_catalog_assertions(
-            |partitions| {
-                partitions
-                    .expect_create_partitions()
-                    .withf(|partitions| {
-                        // TODO: the ergonomics of these mocks are pretty bad, standard with(predicate::eq(...)) doesn't
-                        // show the actual value so we have to resort to this.
-                        assert_eq!(*partitions, vec![SeafowlPartition {
-                            partition_id: None,
-                            object_storage_id: Arc::from(EXPECTED_INSERT_FILE_NAME),
-                                row_count: 1,
-                                columns: Arc::new(vec![
-                                    PartitionColumn {
-                                        name: Arc::from("date"),
-                                        r#type: Arc::from("{\"children\":[],\"name\":\"date\",\"nullable\":true,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}}"),
-                                        min_value: Arc::new(None),
-                                        max_value: Arc::new(None),
-                                        null_count: Some(0),
-                                    },
-                                    PartitionColumn {
-                                        name: Arc::from("value"),
-                                        r#type: Arc::from("{\"children\":[],\"name\":\"value\",\"nullable\":true,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}}"),
-                                        min_value: Arc::new(scalar_value_to_bytes(&ScalarValue::Float64(Some(42.0)))),
-                                        max_value: Arc::new(scalar_value_to_bytes(&ScalarValue::Float64(Some(42.0)))),
-                                        null_count: Some(0),
-                                    },
-                                ],)
-                            },]);
-                        true
-                    })
-                    .return_once(|_| Ok(vec![2]));
-
-                // NB: even though this result isn't consumed by the caller, we need
-                // to return a unit here, otherwise this will fail pretending the
-                // expectation failed.
-                partitions
-                    .expect_append_partitions_to_table()
-                    .with(predicate::eq(vec![2]), predicate::eq(1)).return_once(|_, _| Ok(()));
-            },
-            |tables| {
-                tables
-                    .expect_create_new_table_version()
-                    .with(predicate::eq(Uuid::parse_str("01020304-0506-4708-890a-0b0c0d0e0f10").unwrap()), predicate::eq(1))
-                    .return_once(|_, _| Ok(1));
-            },
-        )
-        .await;
-
-        sf_context
-            .plan_query(
-                "INSERT INTO testcol.some_table (date, value) VALUES('2022-01-01T12:00:00', 42)",
-            )
-            .await
-            .unwrap();
-
-        let store = sf_context.internal_object_store.clone();
-        assert_uploaded_objects(
-            store,
-            vec![Path::from(EXPECTED_INSERT_FILE_NAME.to_string())],
-        )
-        .await;
-    }
-
     #[tokio::test]
     async fn test_register_udf() -> Result<()> {
-        let sf_context = mock_context().await;
+        let sf_context = in_memory_context().await;
 
         // Source: https://gist.github.com/going-digital/02e46c44d89237c07bc99cd440ebfa43
         sf_context.collect(sf_context.plan_query(
@@ -2864,7 +2685,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_invalid_udf() -> Result<()> {
-        let sf_context = mock_context().await;
+        let sf_context = in_memory_context().await;
 
         // Source: https://gist.github.com/going-digital/02e46c44d89237c07bc99cd440ebfa43
         let plan = sf_context

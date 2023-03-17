@@ -1,3 +1,5 @@
+#![feature(let_chains)]
+
 pub mod auth;
 pub mod catalog;
 pub mod config;

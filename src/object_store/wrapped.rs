@@ -11,7 +11,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use tokio::io::AsyncWrite;
 
-use tokio::fs::{copy, remove_file, rename};
+use tokio::fs::{copy, create_dir_all, remove_file, rename};
 
 use deltalake::storage::DeltaObjectStore;
 use object_store::prefix::PrefixObjectStore;
@@ -99,6 +99,11 @@ impl InternalObjectStore {
 
         let target_path =
             StdPath::new(&object_store_path).join(StdPath::new(to.to_string().as_str()));
+
+        // Ensure all directories on the target path exist
+        if let Some(parent_dir) = target_path.parent() && parent_dir != StdPath::new("") {
+            create_dir_all(parent_dir).await.ok();
+        }
 
         debug!(
             "Moving temporary partition file from {} to {}",
