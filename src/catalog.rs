@@ -47,6 +47,11 @@ pub enum Error {
     CollectionDoesNotExist { id: CollectionId },
     TableDoesNotExist { id: TableId },
     TableUuidDoesNotExist { uuid: Uuid },
+    TableVersionDoesNotExist { id: TableVersionId },
+    // We were inserting a vector of partitions and can't find which one
+    // caused the error without parsing the error message, so just
+    // pretend we don't know.
+    PartitionDoesNotExist,
     TableAlreadyExists { name: String },
     DatabaseAlreadyExists { name: String },
     CollectionAlreadyExists { name: String },
@@ -114,6 +119,14 @@ impl From<Error> for DataFusionError {
             Error::TableUuidDoesNotExist { uuid } => {
                 DataFusionError::Internal(format!("Table with UUID {uuid} doesn't exist"))
             }
+            // Raised by append_partitions_to_table and create_new_table_version (non-existent version), also internal issue
+            Error::TableVersionDoesNotExist { id } => DataFusionError::Internal(format!(
+                "Table version with ID {id} doesn't exist"
+            )),
+            // Raised by append_partitions_to_table (partition not created before appending it)
+            Error::PartitionDoesNotExist => DataFusionError::Internal(
+                "Error linking partitions: unknown partition ID".to_string(),
+            ),
             Error::FunctionDeserializationError { reason } => DataFusionError::Internal(
                 format!("Error deserializing function: {reason:?}"),
             ),
@@ -237,10 +250,23 @@ pub trait TableCatalog: Sync + Send {
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait PartitionCatalog: Sync + Send {
+    // TODO: figure out content addressability (currently we'll create new partition meta records
+    // even if the same partition already exists)
+    async fn create_partitions(
+        &self,
+        partitions: Vec<SeafowlPartition>,
+    ) -> Result<Vec<PhysicalPartitionId>>;
+
     async fn load_table_partitions(
         &self,
         table_version_id: TableVersionId,
     ) -> Result<Vec<SeafowlPartition>>;
+
+    async fn append_partitions_to_table(
+        &self,
+        partition_ids: Vec<PhysicalPartitionId>,
+        table_version_id: TableVersionId,
+    ) -> Result<()>;
 
     async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>>;
 
@@ -727,6 +753,16 @@ impl TableCatalog for DefaultCatalog {
 
 #[async_trait]
 impl PartitionCatalog for DefaultCatalog {
+    async fn create_partitions(
+        &self,
+        partitions: Vec<SeafowlPartition>,
+    ) -> Result<Vec<PhysicalPartitionId>> {
+        self.repository
+            .create_partitions(partitions)
+            .await
+            .map_err(Self::to_sqlx_error)
+    }
+
     async fn load_table_partitions(
         &self,
         table_version_id: TableVersionId,
@@ -745,6 +781,32 @@ impl PartitionCatalog for DefaultCatalog {
             .into_iter()
             .map(|(_, cs)| self.build_partition(cs))
             .collect())
+    }
+
+    async fn append_partitions_to_table(
+        &self,
+        partition_ids: Vec<PhysicalPartitionId>,
+        table_version_id: TableVersionId,
+    ) -> Result<()> {
+        self.repository
+            .append_partitions_to_table(partition_ids, table_version_id)
+            .await
+            .map_err(|e| match e {
+                RepositoryError::FKConstraintViolation(ref se) => {
+                    // Kinda janky but we'd prefer to be able to know if the error is because
+                    // a table version or a physical partition doesn't exist
+                    if se.to_string().contains("table_version_id") {
+                        Error::TableVersionDoesNotExist {
+                            id: table_version_id,
+                        }
+                    } else if se.to_string().contains("physical_partition_id") {
+                        Error::PartitionDoesNotExist
+                    } else {
+                        Self::to_sqlx_error(e)
+                    }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 
     async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>, Error> {

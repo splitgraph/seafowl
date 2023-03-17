@@ -12,6 +12,7 @@ use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_expr::expressions::{case, cast, col};
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::DisplayFormatType;
 use datafusion::prelude::SessionConfig;
 use datafusion::scalar::ScalarValue;
@@ -285,6 +286,21 @@ impl SeafowlTable {
         format
             .create_physical_plan(&session_state, config, filters)
             .await
+    }
+
+    // Wrap a base scan over the supplied partitions with a filter plan
+    pub async fn partition_filter_plan(
+        &self,
+        partitions: Vec<SeafowlPartition>,
+        filter: Arc<dyn PhysicalExpr>,
+        scan_filters: &[Expr],
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let base_scan = self
+            .partition_scan_plan(None, partitions, scan_filters, None, object_store)
+            .await?;
+
+        Ok(Arc::new(FilterExec::try_new(filter, base_scan)?))
     }
 }
 
