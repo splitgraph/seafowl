@@ -21,8 +21,9 @@ use crate::{
 use super::{
     default::RepositoryQueries,
     interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, DroppedTablesResult, Error,
-        Repository, Result, TablePartitionsResult, TableVersionsResult,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, DroppedTableDeletionStatus,
+        DroppedTablesResult, Error, Repository, Result, TablePartitionsResult,
+        TableVersionsResult,
     },
 };
 

@@ -1,7 +1,10 @@
 use std::fmt::Debug;
+use std::str::FromStr;
 
 use async_trait::async_trait;
 use deltalake::DeltaDataTypeVersion;
+use strum::ParseError;
+use strum_macros::{Display, EnumString};
 use uuid::Uuid;
 
 use crate::wasm_udf::data_types::CreateFunctionDetails;
@@ -54,8 +57,25 @@ pub struct DroppedTablesResult {
     pub collection_name: String,
     pub table_name: String,
     pub uuid: Uuid,
-    pub deletion_status: String,
+    #[sqlx(try_from = "String")]
+    pub deletion_status: DroppedTableDeletionStatus,
     pub drop_time: Timestamp,
+}
+
+#[derive(sqlx::Type, Debug, PartialEq, Eq, Clone, Copy, Display, EnumString)]
+#[strum(serialize_all = "UPPERCASE")]
+pub enum DroppedTableDeletionStatus {
+    Pending,
+    Retry,
+    Failed,
+}
+
+// Not compatible with SQL type `VARCHAR` without this
+impl TryFrom<String> for DroppedTableDeletionStatus {
+    type Error = ParseError;
+    fn try_from(value: String) -> Result<Self, ParseError> {
+        DroppedTableDeletionStatus::from_str(value.as_str())
+    }
 }
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
@@ -215,6 +235,12 @@ pub trait Repository: Send + Sync + Debug {
         &self,
         database_name: &str,
     ) -> Result<Vec<DroppedTablesResult>>;
+
+    async fn update_dropped_table(
+        &self,
+        uuid: Uuid,
+        deletion_status: DroppedTableDeletionStatus,
+    ) -> Result<(), Error>;
 
     async fn delete_dropped_table(&self, uuid: Uuid) -> Result<(), Error>;
 }

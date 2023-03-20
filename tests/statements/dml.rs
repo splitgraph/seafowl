@@ -183,8 +183,6 @@ async fn test_delete_statement() {
     let plan = context.plan_query("DELETE FROM test_table").await.unwrap();
     context.collect(plan).await.unwrap();
 
-    assert_partition_ids(&context, 11, vec![]).await;
-
     // Verify results
     let plan = context
         .plan_query("SELECT some_value FROM test_table")

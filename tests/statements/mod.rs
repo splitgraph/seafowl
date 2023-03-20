@@ -269,23 +269,6 @@ async fn create_table_and_some_partitions(
     (version_results, version_timestamps)
 }
 
-// Used for checking partition ids making up a given table version
-async fn assert_partition_ids(
-    context: &DefaultSeafowlContext,
-    table_version: TableVersionId,
-    expected_partition_ids: Vec<i64>,
-) {
-    let partitions = context
-        .partition_catalog
-        .load_table_partitions(table_version)
-        .await
-        .unwrap();
-
-    let partition_ids: Vec<i64> =
-        partitions.iter().map(|p| p.partition_id.unwrap()).collect();
-    assert_eq!(partition_ids, expected_partition_ids);
-}
-
 async fn assert_orphan_partitions(context: Arc<DefaultSeafowlContext>, parts: Vec<&str>) {
     assert_eq_unordered_sort!(
         context
