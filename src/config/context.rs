@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::env;
 
 use crate::{
     catalog::{
@@ -27,6 +28,7 @@ use crate::object_store::wrapped::InternalObjectStore;
 use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
+use object_store::gcp::GoogleCloudStorageBuilder;
 use parking_lot::lock_api::RwLock;
 
 use super::schema::{self, MEBIBYTES, MEMORY_FRACTION, S3};
@@ -87,17 +89,28 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             endpoint,
             bucket,
         }) => {
-            let mut builder = AmazonS3Builder::new()
-                .with_access_key_id(access_key_id)
-                .with_secret_access_key(secret_access_key)
-                .with_region(region.clone().unwrap_or("".to_string()))
+            // TODO: Consider some way to choose object_store code path
+            // ebased on URL e.g. "s3://" vs "gs://""
+            
+            // let mut builder = AmazonS3Builder::new()
+            //     .with_access_key_id(access_key_id)
+            //     .with_secret_access_key(secret_access_key)
+            //     .with_region(region.clone().unwrap_or("".to_string()))
+            //     .with_bucket_name(bucket)
+            //     .with_allow_http(true);
+            
+
+            // if let Some(endpoint) = endpoint {
+            //     builder = builder.with_endpoint(endpoint);
+            // }
+            
+            let google_application_credentials = env::var("GOOGLE_APPLICATION_CREDENTIALS")
+                .expect("Could not find GOOGLE_APPLICATION_CREDENTIALS env variable");
+
+            let builder = GoogleCloudStorageBuilder::new()
                 .with_bucket_name(bucket)
-                .with_allow_http(true);
-
-            if let Some(endpoint) = endpoint {
-                builder = builder.with_endpoint(endpoint);
-            }
-
+                .with_service_account_path(google_application_credentials);
+            
             let store = builder.build().expect("Error creating object store");
             Arc::new(store)
         }
