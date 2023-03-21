@@ -37,8 +37,8 @@ use mockall::automock;
 use object_store::{path::Path, ObjectStore};
 
 use sqlparser::ast::{
-    AlterTableOperation, CreateFunctionBody, FunctionDefinition, Ident, ObjectName,
-    ObjectType, SchemaName, Statement, TableFactor, TableWithJoins,
+    AlterTableOperation, CreateFunctionBody, Expr as SqlExpr, FunctionDefinition, Ident,
+    ObjectName, ObjectType, SchemaName, Statement, TableFactor, TableWithJoins,
 };
 
 use arrow_schema::{DataType, TimeUnit};
@@ -107,6 +107,7 @@ use crate::delta_rs::backports::parquet_scan_from_actions;
 #[cfg(test)]
 use crate::frontend::http::tests::deterministic_uuid;
 use crate::provider::{project_expressions, SeafowlTable};
+use crate::repository::interface::DroppedTableDeletionStatus;
 use crate::wasm_udf::data_types::{get_volatility, CreateFunctionDetails};
 use crate::{
     catalog::{FunctionCatalog, TableCatalog},
@@ -751,7 +752,7 @@ impl DefaultSeafowlContext {
     }
 
     // Parse the uuid from the Delta table uri if available
-    async fn get_table_uuid<'a>(
+    pub async fn get_table_uuid<'a>(
         &self,
         name: impl Into<TableReference<'a>>,
     ) -> Result<Uuid> {
@@ -1348,6 +1349,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     },
                 Statement::Truncate { table_name, partitions} => {
                     let table_name = table_name.to_string();
+
                     let table_id = if partitions.is_none() && !table_name.is_empty() {
                         match self.try_get_seafowl_table(&table_name).await {
                             Ok(seafowl_table) => Some(seafowl_table.table_id),
@@ -1359,9 +1361,17 @@ impl SeafowlContext for DefaultSeafowlContext {
                         None
                     };
 
+                    let mut database = None;
+                    if partitions.is_some() && !partitions.clone().unwrap().is_empty() {
+                        if let SqlExpr::Identifier(name) = &partitions.clone().unwrap()[0] {
+                            database = Some(name.value.clone());
+                        }
+                    }
+
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Vacuum(Vacuum {
-                            partitions: partitions.is_some(),
+                            partitions: partitions.is_some() && partitions.clone().unwrap().is_empty(),
+                            database,
                             table_id,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
@@ -1898,10 +1908,81 @@ impl SeafowlContext for DefaultSeafowlContext {
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::Vacuum(Vacuum {
+                            database,
                             partitions,
                             table_id,
                             ..
                         }) => {
+                            if let Some(database) = database {
+                                // Physically delete dropped tables
+                                // TODO: Add this to cleanup job alongside `gc_partitions`
+                                let mut dropped_tables = self
+                                    .table_catalog
+                                    .get_dropped_tables(database)
+                                    .await?;
+
+                                for mut dt in dropped_tables.iter_mut().filter(|dt| {
+                                    dt.deletion_status
+                                        != DroppedTableDeletionStatus::Failed
+                                }) {
+                                    // TODO: Use batch delete when the object store crate starts supporting it
+                                    info!(
+                                        "Trying to cleanup table {}.{}.{} with UUID (directory name) {}",
+                                        dt.database_name,
+                                        dt.collection_name,
+                                        dt.table_name,
+                                        dt.uuid,
+                                    );
+
+                                    let result = self
+                                        .internal_object_store
+                                        .delete_in_prefix(&Path::from(
+                                            dt.uuid.to_string(),
+                                        ))
+                                        .await;
+
+                                    if let Err(err) = result {
+                                        warn!("Encountered error while trying to delete table in directory {}: {err}", dt.uuid);
+                                        if dt.deletion_status
+                                            != DroppedTableDeletionStatus::Pending
+                                        {
+                                            dt.deletion_status =
+                                                DroppedTableDeletionStatus::Retry;
+                                        } else {
+                                            dt.deletion_status =
+                                                DroppedTableDeletionStatus::Failed;
+                                        }
+
+                                        self.table_catalog
+                                            .update_dropped_table(
+                                                dt.uuid,
+                                                dt.deletion_status,
+                                            )
+                                            .await?;
+                                    } else {
+                                        // Successfully cleaned up the table's directory in the object store
+                                        self.table_catalog
+                                            .delete_dropped_table(dt.uuid)
+                                            .await?;
+                                    }
+                                }
+
+                                // Warn about cleanup errors that need manual intervention
+                                dropped_tables.iter()
+                                    .filter(|dt| dt.deletion_status == DroppedTableDeletionStatus::Failed)
+                                    .for_each(|dt|
+                                        warn!(
+                                            "Failed to cleanup table {}.{}.{} with UUID (directory name) {}. \
+                                            Please manually delete the corresponding directory in the object store \
+                                            and then delete the entry in the `dropped_tables` catalog table.",
+                                            dt.database_name,
+                                            dt.collection_name,
+                                            dt.table_name,
+                                            dt.uuid,
+                                        )
+                                    )
+                            }
+
                             if *partitions {
                                 gc_partitions(self).await
                             } else {
@@ -2085,8 +2166,6 @@ mod tests {
     use datafusion::assert_batches_eq;
     use datafusion::from_slice::FromSlice;
     use datafusion::physical_plan::memory::MemoryExec;
-    use deltalake::storage::DeltaObjectStore;
-    use itertools::Itertools;
     use object_store::local::LocalFileSystem;
     use serde_json::{json, Value};
 
@@ -2099,21 +2178,7 @@ mod tests {
     const PART_1_FILE_NAME: &str =
         "part-00001-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
 
-    async fn assert_uploaded_objects(
-        object_store: Arc<DeltaObjectStore>,
-        expected: Vec<Path>,
-    ) {
-        let actual = object_store
-            .list(None)
-            .await
-            .unwrap()
-            .map_ok(|meta| meta.location)
-            .try_collect::<Vec<Path>>()
-            .await
-            .map(|p| p.into_iter().sorted().collect_vec())
-            .unwrap();
-        assert_eq!(expected.into_iter().sorted().collect_vec(), actual);
-    }
+    use crate::object_store::testutils::assert_uploaded_objects;
 
     #[rstest]
     #[case::in_memory_object_store_standard(false)]

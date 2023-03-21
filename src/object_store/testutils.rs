@@ -6,6 +6,11 @@ use arrow::datatypes::{DataType, Field, Schema};
 
 use arrow::record_batch::RecordBatch;
 use datafusion::parquet::arrow::ArrowWriter;
+use deltalake::storage::DeltaObjectStore;
+use futures::TryStreamExt;
+use itertools::Itertools;
+use object_store::path::Path;
+use object_store::ObjectStore;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -117,4 +122,20 @@ pub async fn make_mock_parquet_server(
     }
 
     (mock_server, body)
+}
+
+pub async fn assert_uploaded_objects(
+    object_store: Arc<DeltaObjectStore>,
+    expected: Vec<Path>,
+) {
+    let actual = object_store
+        .list(None)
+        .await
+        .unwrap()
+        .map_ok(|meta| meta.location)
+        .try_collect::<Vec<Path>>()
+        .await
+        .map(|p| p.into_iter().sorted().collect_vec())
+        .unwrap();
+    assert_eq!(expected.into_iter().sorted().collect_vec(), actual);
 }

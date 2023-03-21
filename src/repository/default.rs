@@ -650,6 +650,15 @@ impl Repository for $repo {
         Ok(dropped_tables)
     }
 
+    async fn update_dropped_table(&self, uuid: Uuid, deletion_status: DroppedTableDeletionStatus) -> Result<(), Error> {
+        sqlx::query("UPDATE dropped_table SET deletion_status = $1 WHERE uuid = $2 RETURNING uuid")
+            .bind(deletion_status)
+            .bind(uuid)
+            .fetch_one(&self.executor)
+            .await.map_err($repo::interpret_error)?;
+        Ok(())
+    }
+
     async fn delete_dropped_table(&self, uuid: Uuid) -> Result<(), Error> {
         sqlx::query("DELETE FROM dropped_table WHERE uuid = $1 RETURNING uuid")
             .bind(uuid)

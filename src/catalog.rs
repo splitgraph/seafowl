@@ -14,7 +14,9 @@ use uuid::Uuid;
 
 use crate::object_store::wrapped::InternalObjectStore;
 use crate::provider::SeafowlFunction;
-use crate::repository::interface::{DroppedTablesResult, TablePartitionsResult};
+use crate::repository::interface::{
+    DroppedTableDeletionStatus, DroppedTablesResult, TablePartitionsResult,
+};
 use crate::system_tables::SystemSchemaProvider;
 use crate::wasm_udf::data_types::{
     CreateFunctionDataType, CreateFunctionDetails, CreateFunctionLanguage,
@@ -230,6 +232,12 @@ pub trait TableCatalog: Sync + Send {
         &self,
         database_name: &str,
     ) -> Result<Vec<DroppedTablesResult>>;
+
+    async fn update_dropped_table(
+        &self,
+        uuid: Uuid,
+        deletion_status: DroppedTableDeletionStatus,
+    ) -> Result<(), Error>;
 
     async fn delete_dropped_table(&self, uuid: Uuid) -> Result<()>;
 }
@@ -710,6 +718,22 @@ impl TableCatalog for DefaultCatalog {
             .get_dropped_tables(database_name)
             .await
             .map_err(Self::to_sqlx_error)
+    }
+
+    async fn update_dropped_table(
+        &self,
+        uuid: Uuid,
+        deletion_status: DroppedTableDeletionStatus,
+    ) -> Result<(), Error> {
+        self.repository
+            .update_dropped_table(uuid, deletion_status)
+            .await
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::TableUuidDoesNotExist { uuid }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 
     async fn delete_dropped_table(&self, uuid: Uuid) -> Result<()> {

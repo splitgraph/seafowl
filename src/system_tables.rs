@@ -370,7 +370,7 @@ impl SeafowlSystemTable for DroppedTablesTable {
             builder
                 .field_builder::<StringBuilder>(3)
                 .unwrap()
-                .append_value(dropped_table.deletion_status.clone());
+                .append_value(dropped_table.deletion_status.to_string().clone());
             builder
                 .field_builder::<TimestampSecondBuilder>(4)
                 .unwrap()

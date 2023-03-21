@@ -28,7 +28,7 @@
 pub use datafusion::sql::parser::Statement;
 use datafusion::sql::parser::{CreateExternalTable, DescribeTableStmt};
 use datafusion_common::parsers::CompressionTypeVariant;
-use sqlparser::ast::{CreateFunctionBody, ObjectName};
+use sqlparser::ast::{CreateFunctionBody, Expr, ObjectName};
 use sqlparser::tokenizer::{TokenWithLocation, Word};
 use sqlparser::{
     ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
@@ -188,7 +188,7 @@ impl<'a> DFParser<'a> {
 
     pub fn parse_vacuum(&mut self) -> Result<Statement, ParserError> {
         // Since `VACUUM` is not a supported keyword by sqlparser, we abuse the semantically related
-        // TRUNCATE to smuggle the info on whether we want GC of tables or only partitions.
+        // TRUNCATE to smuggle the info on whether we want GC of tables, partitions or the DB itself.
         let mut table_name = ObjectName(vec![]);
         let mut partitions = None;
 
@@ -198,9 +198,12 @@ impl<'a> DFParser<'a> {
             // The default case is fine here
         } else if self.parser.parse_keyword(Keyword::TABLE) {
             table_name = self.parser.parse_object_name()?;
+        } else if self.parser.parse_keyword(Keyword::DATABASE) {
+            let database_name = self.parser.parse_object_name()?.0[0].clone();
+            partitions = Some(vec![Expr::Identifier(database_name)]);
         } else {
             return self.expected(
-                "PARTITIONS, TABLES or TABLE are supported VACUUM targets",
+                "PARTITIONS, TABLES, TABLE or DATABASE are supported VACUUM targets",
                 self.parser.peek_token(),
             );
         }

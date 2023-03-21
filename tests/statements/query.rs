@@ -2,7 +2,7 @@ use crate::statements::*;
 
 #[tokio::test]
 async fn test_information_schema() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     let plan = context
         .plan_query(
@@ -69,7 +69,7 @@ async fn test_information_schema() {
 
 #[tokio::test]
 async fn test_create_table_and_insert() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     // TODO: insert into nonexistent table outputs a wrong error (schema "public" does not exist)
     create_table_and_insert(&context, "test_table").await;
@@ -129,11 +129,7 @@ async fn test_create_table_and_insert() {
 
 #[tokio::test]
 async fn test_table_time_travel() {
-    let data_dir = TempDir::new().unwrap();
-    let context = make_context_with_pg(ObjectStoreType::Local(
-        data_dir.path().display().to_string(),
-    ))
-    .await;
+    let (context, _temp_dir) = make_context_with_pg(ObjectStoreType::Local).await;
     let (version_results, version_timestamps) = create_table_and_some_partitions(
         &context,
         "test_table",
@@ -364,7 +360,7 @@ async fn test_remote_table_querying(
     #[case] db_type: &str,
     #[case] introspect_schema: bool,
 ) {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     let schema = get_random_schema();
     let _temp_path: TempPath;
@@ -543,7 +539,7 @@ async fn test_remote_table_querying(
 
 #[tokio::test]
 async fn test_delta_tables() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     let plan = context
         .plan_query(

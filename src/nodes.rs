@@ -50,6 +50,8 @@ pub struct DropSchema {
 
 #[derive(Debug, Clone)]
 pub struct Vacuum {
+    /// Denotes whether to vacuum dropped tables in a particular database
+    pub database: Option<String>,
     /// Denotes whether to vacuum the partitions
     pub partitions: bool,
     /// If the vacuum target are not the partitions, denotes whether it applies to all tables, or a
