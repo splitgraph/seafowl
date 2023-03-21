@@ -51,7 +51,7 @@ pub struct TablePartitionsResult {
     pub row_count: Option<i32>,
 }
 
-#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
+#[derive(sqlx::FromRow, Clone, Debug, PartialEq, Eq)]
 pub struct DroppedTablesResult {
     pub database_name: String,
     pub collection_name: String,

@@ -752,7 +752,7 @@ impl DefaultSeafowlContext {
     }
 
     // Parse the uuid from the Delta table uri if available
-    async fn get_table_uuid<'a>(
+    pub async fn get_table_uuid<'a>(
         &self,
         name: impl Into<TableReference<'a>>,
     ) -> Result<Uuid> {
@@ -2166,8 +2166,6 @@ mod tests {
     use datafusion::assert_batches_eq;
     use datafusion::from_slice::FromSlice;
     use datafusion::physical_plan::memory::MemoryExec;
-    use deltalake::storage::DeltaObjectStore;
-    use itertools::Itertools;
     use object_store::local::LocalFileSystem;
     use serde_json::{json, Value};
 
@@ -2175,31 +2173,12 @@ mod tests {
 
     use super::test_utils::{in_memory_context, in_memory_context_with_test_db};
 
-    const UUID_0: &str = "01020304-0506-4708-890a-0b0c0d0e0f10";
-    const UUID_1: &str = "11121314-1516-4718-991a-1b1c1d1e1f20";
-    const UUID_2: &str = "21222324-2526-4728-a92a-2b2c2d2e2f30";
-    const UUID_3: &str = "31323334-3536-4738-b93a-3b3c3d3e3f40";
-
     const PART_0_FILE_NAME: &str =
         "part-00000-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
     const PART_1_FILE_NAME: &str =
         "part-00001-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
 
-    async fn assert_uploaded_objects(
-        object_store: Arc<DeltaObjectStore>,
-        expected: Vec<Path>,
-    ) {
-        let actual = object_store
-            .list(None)
-            .await
-            .unwrap()
-            .map_ok(|meta| meta.location)
-            .try_collect::<Vec<Path>>()
-            .await
-            .map(|p| p.into_iter().sorted().collect_vec())
-            .unwrap();
-        assert_eq!(expected.into_iter().sorted().collect_vec(), actual);
-    }
+    use crate::object_store::testutils::assert_uploaded_objects;
 
     #[rstest]
     #[case::in_memory_object_store_standard(false)]
@@ -2789,129 +2768,6 @@ mod tests {
         assert!(plan.is_err());
         assert!(plan.err().unwrap().to_string().starts_with(
             "Internal error: Error initializing WASM + MessagePack UDF \"invalidfn\": Internal(\"Error loading WASM module: failed to parse WebAssembly module"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_vacuum_database() -> Result<(), DataFusionError> {
-        let context = in_memory_context().await;
-
-        // Create two tables (one in new schema), and drop the table/schema
-        context
-            .collect(
-                context
-                    .plan_query(
-                        "CREATE TABLE test_table AS VALUES ('one', 1), ('two', 2)",
-                    )
-                    .await
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        context
-            .collect(
-                context
-                    .plan_query("CREATE SCHEMA test_schema")
-                    .await
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        context
-            .collect(context.plan_query("CREATE TABLE test_schema.test_table AS (SELECT * FROM test_table)").await.unwrap())
-            .await
-            .unwrap();
-        context
-            .collect(context.plan_query("DROP TABLE test_table").await.unwrap())
-            .await
-            .unwrap();
-        context
-            .collect(context.plan_query("DROP SCHEMA test_schema").await.unwrap())
-            .await
-            .unwrap();
-
-        // Check that tables are pending for physical deletion
-        let plan = context
-            .plan_query("SELECT table_schema, table_name, uuid, deletion_status FROM system.dropped_tables")
-            .await
-            .unwrap();
-        let results = context.collect(plan).await.unwrap();
-
-        let expected = vec![
-            "+--------------+------------+--------------------------------------+-----------------+",
-            "| table_schema | table_name | uuid                                 | deletion_status |",
-            "+--------------+------------+--------------------------------------+-----------------+",
-            "| public       | test_table | 01020304-0506-4708-890a-0b0c0d0e0f10 | PENDING         |",
-            "| test_schema  | test_table | 21222324-2526-4728-a92a-2b2c2d2e2f30 | PENDING         |",
-            "+--------------+------------+--------------------------------------+-----------------+",
-        ];
-        assert_batches_eq!(expected, &results);
-
-        // Check that objects are still there physically
-        assert_uploaded_objects(
-            context
-                .internal_object_store
-                .for_delta_table(Uuid::try_parse(UUID_0).unwrap()),
-            vec![
-                Path::from("_delta_log/00000000000000000000.json"),
-                Path::from("_delta_log/00000000000000000001.json"),
-                Path::from(format!("part-00000-{}-c000.snappy.parquet", UUID_1)),
-            ],
-        )
-        .await;
-        assert_uploaded_objects(
-            context
-                .internal_object_store
-                .for_delta_table(Uuid::try_parse(UUID_2).unwrap()),
-            vec![
-                Path::from("_delta_log/00000000000000000000.json"),
-                Path::from("_delta_log/00000000000000000001.json"),
-                Path::from(format!("part-00000-{}-c000.snappy.parquet", UUID_3)),
-            ],
-        )
-        .await;
-
-        // Now run vacuum on database to clean up all dropped tables
-        context
-            .collect(
-                context
-                    .plan_query(format!("VACUUM DATABASE {}", context.database).as_str())
-                    .await
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        // Ensure there are no entries in the `dropped_tables` table
-        let plan = context
-            .plan_query("SELECT table_schema, table_name, uuid, deletion_status FROM system.dropped_tables")
-            .await
-            .unwrap();
-        let results = context.collect(plan).await.unwrap();
-        let expected = vec![
-            "+--------------+------------+------+-----------------+",
-            "| table_schema | table_name | uuid | deletion_status |",
-            "+--------------+------------+------+-----------------+",
-            "+--------------+------------+------+-----------------+",
-        ];
-        assert_batches_eq!(expected, &results);
-
-        // Check that objects have been physically deleted as well
-        assert_uploaded_objects(
-            context
-                .internal_object_store
-                .for_delta_table(Uuid::try_parse(UUID_0).unwrap()),
-            vec![],
-        )
-        .await;
-        assert_uploaded_objects(
-            context
-                .internal_object_store
-                .for_delta_table(Uuid::try_parse(UUID_2).unwrap()),
-            vec![],
-        )
-        .await;
-
         Ok(())
     }
 }

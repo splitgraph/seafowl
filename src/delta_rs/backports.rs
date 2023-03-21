@@ -4,7 +4,6 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::file_format::{partition_type_wrap, FileScanConfig};
 use datafusion::physical_plan::ExecutionPlan;
@@ -12,7 +11,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Expr;
 use deltalake::action::Add;
 use deltalake::DeltaTable;
-use object_store::path::{Path, DELIMITER};
+use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,17 +51,13 @@ pub async fn parquet_scan_from_actions(
             .collect(),
     ));
 
-    let url = Url::parse(&table.table_uri()).unwrap();
-    let host = format!(
-        "{}-{}{}",
+    let object_store_url = table.object_store().object_store_url();
+    let url: &Url = object_store_url.as_ref();
+    state.runtime_env().register_object_store(
         url.scheme(),
         url.host_str().unwrap_or_default(),
-        url.path().replace(DELIMITER, "-").replace(':', "-")
+        table.object_store(),
     );
-    state
-        .runtime_env()
-        .register_object_store("delta-rs", &host, table.object_store());
-    let object_store_url = ObjectStoreUrl::parse(format!("delta-rs://{host}"))?;
 
     ParquetFormat::new()
         .create_physical_plan(

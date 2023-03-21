@@ -7,7 +7,7 @@ use arrow::record_batch::RecordBatch;
 use assert_unordered::assert_eq_unordered_sort;
 use chrono::{TimeZone, Utc};
 use datafusion::assert_batches_eq;
-use datafusion_common::assert_contains;
+use datafusion_common::{assert_contains, DataFusionError};
 use deltalake::DeltaDataTypeVersion;
 use futures::TryStreamExt;
 use itertools::{sorted, Itertools};
@@ -19,27 +19,25 @@ use sqlx::{AnyPool, Executor};
 use tempfile::{NamedTempFile, TempPath};
 use tokio::time::sleep;
 
-#[cfg(feature = "remote-tables")]
 use rstest::rstest;
 use tempfile::TempDir;
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
-use seafowl::context::DefaultSeafowlContext;
-use seafowl::context::SeafowlContext;
+use seafowl::context::{DefaultSeafowlContext, SeafowlContext};
 use seafowl::data_types::{TableVersionId, Timestamp};
 use seafowl::repository::postgres::testutils::get_random_schema;
 use seafowl::system_tables::SYSTEM_SCHEMA;
 
-// Hack because integration tests do not set cfg(test)
-// https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
 mod ddl;
 mod dml;
 mod function;
-#[path = "../../src/object_store/testutils.rs"]
-mod http_testutils;
+// Hack because integration tests do not set cfg(test)
+// https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
 mod query;
 mod query_legacy;
+#[path = "../../src/object_store/testutils.rs"]
+mod testutils;
 mod vacuum;
 
 // Object store IDs for frequently-used test data
@@ -47,26 +45,31 @@ const FILENAME_1: &str =
     "7fbfeeeade71978b4ae82cd3d97b8c1bd9ae7ab9a7a78ee541b66209cfd7722d.parquet";
 
 enum ObjectStoreType {
-    Local(String),
+    Local,
     InMemory,
 }
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 async fn make_context_with_pg(
     object_store_type: ObjectStoreType,
-) -> DefaultSeafowlContext {
+) -> (DefaultSeafowlContext, Option<TempDir>) {
     let dsn = env::var("DATABASE_URL").unwrap();
     let schema = get_random_schema();
 
-    let object_store_section = match object_store_type {
-        ObjectStoreType::Local(data_dir) => {
-            format!(
-                r#"type = "local"
+    // We need to return the temp dir in order for it to last throughout the test
+    let (object_store_section, maybe_temp_dir) = match object_store_type {
+        ObjectStoreType::Local => {
+            let temp_dir = TempDir::new().unwrap();
+            (
+                format!(
+                    r#"type = "local"
 data_dir = "{}""#,
-                data_dir
+                    temp_dir.path().display()
+                ),
+                Some(temp_dir),
             )
         }
-        ObjectStoreType::InMemory => r#"type = "memory""#.to_string(),
+        ObjectStoreType::InMemory => (r#"type = "memory""#.to_string(), None),
     };
 
     let config_text = format!(
@@ -83,7 +86,7 @@ schema = "{schema}""#
     // Ignore the "in-memory object store / persistent catalog" error in e2e tests (we'll discard
     // the PG instance anyway)
     let config = load_config_from_string(&config_text, true, None).unwrap();
-    build_context(&config).await.unwrap()
+    (build_context(&config).await.unwrap(), maybe_temp_dir)
 }
 
 /// Get a batch of results with all tables and columns in a database

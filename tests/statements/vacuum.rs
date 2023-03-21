@@ -3,7 +3,8 @@ use crate::statements::*;
 #[ignore = "not yet implemented"]
 #[tokio::test]
 async fn test_vacuum_command() {
-    let context = Arc::new(make_context_with_pg(ObjectStoreType::InMemory).await);
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let context = Arc::new(context);
 
     let get_object_metas = || async {
         context
@@ -119,4 +120,139 @@ async fn test_vacuum_command() {
     assert_orphan_partitions(context.clone(), vec![]).await;
     let object_metas = get_object_metas().await;
     assert_eq!(object_metas.len(), 0);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_vacuum_database(
+    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local)]
+    object_store_type: ObjectStoreType,
+) -> Result<(), DataFusionError> {
+    let (context, _temp_dir) = make_context_with_pg(object_store_type).await;
+
+    // Create two tables (one in new schema), and then drop the table/schema
+    context
+        .collect(
+            context
+                .plan_query("CREATE TABLE test_table AS VALUES ('one', 1), ('two', 2)")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    context
+        .collect(
+            context
+                .plan_query("CREATE SCHEMA test_schema")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    context
+        .collect(
+            context
+                .plan_query(
+                    "CREATE TABLE test_schema.test_table AS (SELECT * FROM test_table)",
+                )
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let table_1_uuid = context.get_table_uuid("test_table").await?;
+    let table_2_uuid = context.get_table_uuid("test_schema.test_table").await?;
+    let mut table_1 = context.try_get_delta_table("test_table").await?;
+    let mut table_2 = context
+        .try_get_delta_table("test_schema.test_table")
+        .await?;
+    table_1.load().await?;
+    table_2.load().await?;
+
+    context
+        .collect(context.plan_query("DROP TABLE test_table").await.unwrap())
+        .await
+        .unwrap();
+    context
+        .collect(context.plan_query("DROP SCHEMA test_schema").await.unwrap())
+        .await
+        .unwrap();
+
+    // Check that tables are pending for physical deletion
+    let plan = context
+        .plan_query(
+            "SELECT table_schema, table_name, deletion_status FROM system.dropped_tables",
+        )
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+--------------+------------+-----------------+",
+        "| table_schema | table_name | deletion_status |",
+        "+--------------+------------+-----------------+",
+        "| public       | test_table | PENDING         |",
+        "| test_schema  | test_table | PENDING         |",
+        "+--------------+------------+-----------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Check that objects are still there physically
+    testutils::assert_uploaded_objects(
+        context.internal_object_store.for_delta_table(table_1_uuid),
+        vec![
+            Path::from("_delta_log/00000000000000000000.json"),
+            Path::from("_delta_log/00000000000000000001.json"),
+            table_1.get_files()[0].clone(),
+        ],
+    )
+    .await;
+    testutils::assert_uploaded_objects(
+        context.internal_object_store.for_delta_table(table_2_uuid),
+        vec![
+            Path::from("_delta_log/00000000000000000000.json"),
+            Path::from("_delta_log/00000000000000000001.json"),
+            table_2.get_files()[0].clone(),
+        ],
+    )
+    .await;
+
+    // Now run vacuum on database to clean up all dropped tables
+    context
+        .collect(
+            context
+                .plan_query(format!("VACUUM DATABASE {}", context.database).as_str())
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Ensure there are no entries in the `dropped_tables` table
+    let plan = context
+        .plan_query("SELECT table_schema, table_name, uuid, deletion_status FROM system.dropped_tables")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+    let expected = vec![
+        "+--------------+------------+------+-----------------+",
+        "| table_schema | table_name | uuid | deletion_status |",
+        "+--------------+------------+------+-----------------+",
+        "+--------------+------------+------+-----------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Check that objects have been physically deleted as well
+    testutils::assert_uploaded_objects(
+        context.internal_object_store.for_delta_table(table_1_uuid),
+        vec![],
+    )
+    .await;
+    testutils::assert_uploaded_objects(
+        context.internal_object_store.for_delta_table(table_2_uuid),
+        vec![],
+    )
+    .await;
+
+    Ok(())
 }

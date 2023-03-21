@@ -1,8 +1,12 @@
 use crate::statements::*;
 
+#[rstest]
 #[tokio::test]
-async fn test_insert_two_different_schemas() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+async fn test_insert_two_different_schemas(
+    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local)]
+    object_store_type: ObjectStoreType,
+) {
+    let (context, _) = make_context_with_pg(object_store_type).await;
     create_table_and_insert(&context, "test_table").await;
 
     let plan = context
@@ -37,9 +41,13 @@ async fn test_insert_two_different_schemas() {
     assert_batches_eq!(expected, &results);
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_delete_statement() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+async fn test_delete_statement(
+    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local)]
+    object_store_type: ObjectStoreType,
+) {
+    let (context, _) = make_context_with_pg(object_store_type).await;
 
     create_table_and_some_partitions(&context, "test_table", None).await;
 
@@ -195,7 +203,7 @@ async fn test_delete_statement() {
 
 #[tokio::test]
 async fn test_delete_with_string_filter_exact_match() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     context
         .collect(
@@ -262,9 +270,13 @@ async fn test_delete_with_string_filter_exact_match() {
     assert_batches_eq!(expected, &results);
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_update_statement() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+async fn test_update_statement(
+    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local)]
+    object_store_type: ObjectStoreType,
+) {
+    let (context, _) = make_context_with_pg(object_store_type).await;
 
     create_table_and_some_partitions(&context, "test_table", None).await;
 
@@ -386,7 +398,7 @@ async fn test_update_statement() {
 
 #[tokio::test]
 async fn test_update_statement_errors() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     // Creates table with table_versions 1 (empty) and 2
     create_table_and_insert(&context, "test_table").await;

@@ -2,7 +2,7 @@ use crate::statements::*;
 
 #[tokio::test]
 async fn test_create_table() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     let plan = context
         .plan_query(
@@ -37,7 +37,7 @@ async fn test_create_table() {
 
 #[tokio::test]
 async fn test_create_table_as() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
     create_table_and_insert(&context, "test_table").await;
 
     let plan = context
@@ -76,7 +76,7 @@ async fn test_create_table_as() {
 
 #[tokio::test]
 async fn test_create_table_as_from_ns_column() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     // Create an external table containing a timestamp column in nanoseconds
     let plan = context
@@ -129,11 +129,15 @@ async fn test_create_table_as_from_ns_column() {
     assert_batches_eq!(expected, &results);
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_create_table_move_and_drop() {
+async fn test_create_table_move_and_drop(
+    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local)]
+    object_store_type: ObjectStoreType,
+) {
     // Create two tables, insert some data into them
 
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(object_store_type).await;
 
     for table_name in ["test_table_1", "test_table_2"] {
         create_table_and_insert(&context, table_name).await;
@@ -272,13 +276,13 @@ async fn test_create_table_move_and_drop() {
     assert!(results.is_empty())
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_create_table_drop_schema() {
-    let data_dir = TempDir::new().unwrap();
-    let context = make_context_with_pg(ObjectStoreType::Local(
-        data_dir.path().display().to_string(),
-    ))
-    .await;
+async fn test_create_table_drop_schema(
+    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local)]
+    object_store_type: ObjectStoreType,
+) {
+    let (context, _temp_dir) = make_context_with_pg(object_store_type).await;
 
     for table_name in ["test_table_1", "test_table_2"] {
         create_table_and_insert(&context, table_name).await;
@@ -416,7 +420,7 @@ async fn test_create_table_drop_schema() {
 
 #[tokio::test]
 async fn test_create_table_schema_already_exists() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     context
         .collect(
@@ -448,7 +452,7 @@ async fn test_create_table_schema_already_exists() {
 
 #[tokio::test]
 async fn test_create_table_in_staging_schema() {
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
     context
         .collect(
             context
@@ -492,14 +496,14 @@ async fn test_create_external_table_http() {
     bytes_scanned{filename=seafowl-public.s3.eu-west-1.amazonaws.com/tutorial/trase-supply-chains.parquet}=232699
     */
 
-    let (mock_server, _) = http_testutils::make_mock_parquet_server(true, true).await;
+    let (mock_server, _) = testutils::make_mock_parquet_server(true, true).await;
     // Add a query string that's ignored by the mock (make sure DataFusion doesn't eat the whole URL)
     let url = format!(
         "{}/some/file.parquet?query_string=ignore",
         &mock_server.uri()
     );
 
-    let context = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     // Try creating a table in a non-staging schema
     let err = context
