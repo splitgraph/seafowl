@@ -7,10 +7,11 @@ use arrow::record_batch::RecordBatch;
 use assert_unordered::assert_eq_unordered_sort;
 use chrono::{TimeZone, Utc};
 use datafusion::assert_batches_eq;
+use datafusion::datasource::TableProvider;
 use datafusion_common::{assert_contains, DataFusionError};
 use deltalake::DeltaDataTypeVersion;
 use futures::TryStreamExt;
-use itertools::{sorted, Itertools};
+use itertools::sorted;
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
 #[cfg(feature = "remote-tables")]
@@ -39,10 +40,6 @@ mod query_legacy;
 #[path = "../../src/object_store/testutils.rs"]
 mod testutils;
 mod vacuum;
-
-// Object store IDs for frequently-used test data
-const FILENAME_1: &str =
-    "7fbfeeeade71978b4ae82cd3d97b8c1bd9ae7ab9a7a78ee541b66209cfd7722d.parquet";
 
 enum ObjectStoreType {
     Local,
@@ -285,16 +282,4 @@ async fn assert_orphan_partitions(context: Arc<DefaultSeafowlContext>, parts: Ve
             .collect(),
         parts
     );
-}
-
-async fn get_partition_count(
-    context: Arc<DefaultSeafowlContext>,
-    table_version_id: i32,
-) -> usize {
-    context
-        .partition_catalog
-        .load_table_partitions(table_version_id as TableVersionId)
-        .await
-        .unwrap()
-        .len()
 }

@@ -309,21 +309,14 @@ impl Repository for $repo {
 
     async fn delete_old_table_versions(
         &self,
-        table_id: Option<TableId>,
+        table_id: TableId,
     ) -> Result<u64, Error> {
-        let query = if let Some(table_id) = table_id {
-            sqlx::query(
-                "DELETE FROM table_version WHERE table_id = $1 AND id NOT IN \
-                (SELECT DISTINCT first_value(id) OVER (PARTITION BY table_id ORDER BY creation_time DESC, id DESC) FROM table_version)"
-            ).bind(table_id)
-        } else {
-            sqlx::query(
-                "DELETE FROM table_version WHERE id NOT IN \
-                (SELECT DISTINCT first_value(id) OVER (PARTITION BY table_id ORDER BY creation_time DESC, id DESC) FROM table_version)"
-            )
-        };
-
-        let delete_result = query.execute(&self.executor)
+        let delete_result = sqlx::query(
+            "DELETE FROM table_version WHERE table_id = $1 AND id NOT IN \
+            (SELECT DISTINCT first_value(id) OVER (PARTITION BY table_id ORDER BY creation_time DESC, id DESC) FROM table_version)"
+        )
+            .bind(table_id)
+            .execute(&self.executor)
             .await
             .map_err($repo::interpret_error)?;
 

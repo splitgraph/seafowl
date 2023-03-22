@@ -3,10 +3,8 @@ use datafusion::common::DFSchemaRef;
 use arrow_schema::Schema;
 use std::{any::Any, fmt, sync::Arc, vec};
 
-use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
-
-use crate::data_types::TableId;
 use crate::wasm_udf::data_types::CreateFunctionDetails;
+use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 
 #[derive(Debug, Clone)]
 pub struct CreateTable {
@@ -54,9 +52,8 @@ pub struct Vacuum {
     pub database: Option<String>,
     /// Denotes whether to vacuum the partitions
     pub partitions: bool,
-    /// If the vacuum target are not the partitions, denotes whether it applies to all tables, or a
-    /// specific one
-    pub table_id: Option<TableId>,
+    /// If the vacuum target are not the partitions or the db, denotes which table it applies to
+    pub table_name: Option<String>,
     /// Dummy result schema for the plan (empty)
     pub output_schema: DFSchemaRef,
 }
