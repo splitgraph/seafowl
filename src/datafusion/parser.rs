@@ -194,8 +194,6 @@ impl<'a> DFParser<'a> {
 
         if self.parser.parse_keyword(Keyword::PARTITIONS) {
             partitions = Some(vec![]);
-        } else if self.parser.parse_keyword(Keyword::TABLES) {
-            // The default case is fine here
         } else if self.parser.parse_keyword(Keyword::TABLE) {
             table_name = self.parser.parse_object_name()?;
         } else if self.parser.parse_keyword(Keyword::DATABASE) {
@@ -203,7 +201,7 @@ impl<'a> DFParser<'a> {
             partitions = Some(vec![Expr::Identifier(database_name)]);
         } else {
             return self.expected(
-                "PARTITIONS, TABLES, TABLE or DATABASE are supported VACUUM targets",
+                "PARTITIONS, TABLE or DATABASE are supported VACUUM targets",
                 self.parser.peek_token(),
             );
         }

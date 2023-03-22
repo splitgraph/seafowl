@@ -442,7 +442,7 @@ async fn test_vacuum_legacy_tables() {
     assert_batches_eq!(expected, &results);
 
     context
-        .collect(context.plan_query("VACUUM TABLES").await.unwrap())
+        .collect(context.plan_query("VACUUM TABLE test_table").await.unwrap())
         .await
         .unwrap();
 
@@ -468,7 +468,7 @@ async fn test_vacuum_legacy_tables() {
         .await
         .unwrap();
     context
-        .collect(context.plan_query("VACUUM TABLES").await.unwrap())
+        .collect(context.plan_query("VACUUM TABLE test_table").await.unwrap())
         .await
         .unwrap();
 

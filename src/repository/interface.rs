@@ -170,10 +170,7 @@ pub trait Repository: Send + Sync + Debug {
         uuid: Uuid,
     ) -> Result<(TableId, TableVersionId), Error>;
 
-    async fn delete_old_table_versions(
-        &self,
-        table_id: Option<TableId>,
-    ) -> Result<u64, Error>;
+    async fn delete_old_table_versions(&self, table_id: TableId) -> Result<u64, Error>;
 
     async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>, Error>;
 

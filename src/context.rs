@@ -1348,15 +1348,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                         }))
                     },
                 Statement::Truncate { table_name, partitions} => {
-                    let table_name = table_name.to_string();
-
-                    let table_id = if partitions.is_none() && !table_name.is_empty() {
-                        match self.try_get_seafowl_table(&table_name).await {
-                            Ok(seafowl_table) => Some(seafowl_table.table_id),
-                            Err(_) => return Err(Error::Internal(format!(
-                                "Table with name {table_name} not found"
-                            )))
-                        }
+                    let table_name = if partitions.is_none() {
+                        Some(table_name.to_string())
                     } else {
                         None
                     };
@@ -1370,9 +1363,9 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Vacuum(Vacuum {
-                            partitions: partitions.is_some() && partitions.clone().unwrap().is_empty(),
+                            partitions: partitions.is_some() && partitions.unwrap().is_empty(),
                             database,
-                            table_id,
+                            table_name,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
@@ -1910,7 +1903,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         SeafowlExtensionNode::Vacuum(Vacuum {
                             database,
                             partitions,
-                            table_id,
+                            table_name,
                             ..
                         }) => {
                             if let Some(database) = database {
@@ -1981,19 +1974,52 @@ impl SeafowlContext for DefaultSeafowlContext {
                                             dt.uuid,
                                         )
                                     )
-                            }
-
-                            if *partitions {
+                            } else if *partitions {
                                 gc_partitions(self).await
-                            } else {
+                            } else if let Some(table_name) = table_name {
+                                let table_ref = TableReference::from(table_name.as_str());
+                                let resolved_ref =
+                                    table_ref.resolve(&self.database, DEFAULT_SCHEMA);
+
+                                let table_id = self
+                                    .table_catalog
+                                    .get_table_id_by_name(
+                                        &resolved_ref.catalog,
+                                        &resolved_ref.schema,
+                                        &resolved_ref.table,
+                                    )
+                                    .await?
+                                    .ok_or_else(|| {
+                                        DataFusionError::Execution(
+                                            "Table {table_name} not found".to_string(),
+                                        )
+                                    })?;
+
+                                if let Ok(mut delta_table) =
+                                    self.try_get_delta_table(resolved_ref).await
+                                {
+                                    // TODO: The Delta protocol doesn't vacuum old table versions per se, but only files no longer tied to the latest table version.
+                                    // This means that the VACUUM could be a no-op, for instance, in the case when append-only writes have been performed.
+                                    // Furthermore, even when it does GC some files, there's no API to determine which table versions are still valid; the
+                                    // vacuum command doesn't change anything in the `_delta_log` folder: https://github.com/delta-io/delta-rs/issues/1013#issuecomment-1416911514
+                                    // In turn, this means that after a vacuum we cannot represent any other version but latest with confidence, so in our own
+                                    // catalog we simply delete all table versions older than the latest one.
+                                    // This all means that there are potential table versions which are still functional (and can be queried using
+                                    // time-travel querying syntax), but are not represented in `system.table_versions` table.
+                                    delta_table.load().await?;
+                                    let deleted_files =
+                                        delta_table.vacuum(Some(0), false, false).await?;
+                                    info!("Deleted Delta table tombstones {deleted_files:?}");
+                                }
+
                                 match self
                                     .table_catalog
-                                    .delete_old_table_versions(*table_id)
+                                    .delete_old_table_versions(table_id)
                                     .await
                                 {
                                     Ok(row_count) => {
-                                        info!("Deleted {} old table versions, cleaning up partitions", row_count);
-                                        gc_partitions(self).await
+                                        info!("Deleted {} old table versions", row_count);
+                                        gc_partitions(self).await;
                                     }
                                     Err(error) => {
                                         return Err(Error::Internal(format!(

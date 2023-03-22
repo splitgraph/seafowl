@@ -193,10 +193,7 @@ pub trait TableCatalog: Sync + Send {
         uuid: Uuid,
     ) -> Result<(TableId, TableVersionId)>;
 
-    async fn delete_old_table_versions(
-        &self,
-        table_id: Option<TableId>,
-    ) -> Result<u64, Error>;
+    async fn delete_old_table_versions(&self, table_id: TableId) -> Result<u64, Error>;
 
     async fn create_new_table_version(
         &self,
@@ -511,10 +508,7 @@ impl TableCatalog for DefaultCatalog {
             })
     }
 
-    async fn delete_old_table_versions(
-        &self,
-        table_id: Option<TableId>,
-    ) -> Result<u64, Error> {
+    async fn delete_old_table_versions(&self, table_id: TableId) -> Result<u64, Error> {
         self.repository
             .delete_old_table_versions(table_id)
             .await
