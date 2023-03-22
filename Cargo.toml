@@ -91,11 +91,11 @@ tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signa
 url = "2.2"
 uuid = "1.2.1"
 warp = "0.3"
-wasi-common = "1.0.1"
+wasi-common = "7.0.0"
 
 # For WASM user-defined functions
-wasmtime = "1.0.1"
-wasmtime-wasi = "1.0.1"
+wasmtime = "7.0.0"
+wasmtime-wasi = "7.0.0"
 
 [patch.crates-io]
 # Post-33 version with string to us timestamp casting: https://github.com/apache/arrow-rs/pull/3752

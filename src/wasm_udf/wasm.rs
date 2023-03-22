@@ -73,7 +73,7 @@ where
     Results: wasmtime::WasmResults,
 {
     instance
-        .get_typed_func::<Params, Results, _>(store, export_name)
+        .get_typed_func::<Params, Results>(store, export_name)
         .map_err(|err| {
             DataFusionError::Internal(
                 format!("Required export '{export_name:?}' could not be located in WASM module exports: {err:?}"))
@@ -1085,7 +1085,7 @@ c40201087f230041206b2203240020032002370318200320013703102003\
             .collect()
             .await;
         assert!(results.is_err());
-        assert!(results.err().unwrap().to_string().starts_with("Internal error: Error invoking function \"panic_if_negative\": Internal(\"Error invoking WASM UDF: Trap"));
+        assert!(results.err().unwrap().to_string().starts_with("Internal error: Error invoking function \"panic_if_negative\": Internal(\"Error invoking WASM UDF"));
     }
 
     #[tokio::test]
