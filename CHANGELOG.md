@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.3.0] - 2023-03-22
+
 - Migration of storage layer to delta-rs (<https://github.com/splitgraph/seafowl/pull/307>)
 - Purge legacy logic (<https://github.com/splitgraph/seafowl/pull/313>)
 - Deltify parquet writing logic (<https://github.com/splitgraph/seafowl/pull/316>)
@@ -120,7 +122,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.2.12...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/splitgraph/seafowl/compare/v0.2.12...v0.3.0
 [0.2.12]: https://github.com/splitgraph/seafowl/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/splitgraph/seafowl/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/splitgraph/seafowl/compare/v0.2.10...v0.2.10
