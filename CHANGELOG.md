@@ -4,6 +4,12 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Migration of storage layer to delta-rs (<https://github.com/splitgraph/seafowl/pull/307>)
+- Purge legacy logic (<https://github.com/splitgraph/seafowl/pull/313>)
+- Deltify parquet writing logic (<https://github.com/splitgraph/seafowl/pull/316>)
+- Implement `VACUUM DATABASE` command (<https://github.com/splitgraph/seafowl/pull/320>)
+- Enable `VACUUM` for Delta tables (<https://github.com/splitgraph/seafowl/pull/322>)
+
 ## [0.2.12] - 2023-02-14
 
 - Upgrade to DataFusion 18.0.0 (<https://github.com/splitgraph/seafowl/pull/297>)
