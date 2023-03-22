@@ -67,7 +67,9 @@ jobs:
 
       - name: Checkout the repository
         uses: actions/checkout@v3
-      - run: rustup toolchain install stable --profile minimal
+      - run: |
+          rustup toolchain install nightly --profile minimal
+          rustup default nightly
 
       - uses: Swatinem/rust-cache@v2
         with:
