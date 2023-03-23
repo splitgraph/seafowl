@@ -569,6 +569,26 @@ async fn test_create_external_table_http() {
 
     assert_batches_eq!(expected, &results);
 
+    // Test dropping the external table works
+    context
+        .collect(context.plan_query("DROP TABLE staging.file").await.unwrap())
+        .await
+        .unwrap();
+
+    let results = list_tables_query(&context).await;
+
+    let expected = vec![
+        "+--------------------+-------------+",
+        "| table_schema       | table_name  |",
+        "+--------------------+-------------+",
+        "| information_schema | columns     |",
+        "| information_schema | df_settings |",
+        "| information_schema | tables      |",
+        "| information_schema | views       |",
+        "+--------------------+-------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
     // Test we can't hit the Seafowl object store directly via CREATE EXTERNAL TABLE
     let err = context
         .plan_query(

@@ -50,7 +50,7 @@ const CORS_MAXAGE: u32 = 86400;
 
 // Vary on Origin, as warp's CORS responds with Access-Control-Allow-Origin: [origin],
 // so we can't cache the response in the browser if the origin changes.
-const VARY: &str = "Content-Type, Origin, X-Seafowl-Query";
+const VARY: &str = "Authorization, Content-Type, Origin, X-Seafowl-Query";
 
 #[derive(Default)]
 struct ETagBuilderVisitor {
@@ -212,15 +212,24 @@ pub fn with_auth(
     )
 }
 
-// Disable the cached GET endpoint if we require auth for reads / they're disabled.
-// (since caching + auth is yet another can of worms)
+// Disable the cached GET endpoint if the reads are disabled. Otherwise extract the principle and
+// check whether it is allowed to perform reads.
 pub fn cached_read_query_authz(
     policy: AccessPolicy,
 ) -> impl Filter<Extract = (), Error = Rejection> + Clone {
     warp::any()
-        .and_then(move || match policy.read {
-            AccessSettings::Any => future::ok(()),
-            _ => future::err(warp::reject::custom(ApiError::ReadOnlyEndpointDisabled)),
+        .and(with_auth(policy.clone()))
+        .and_then(move |user_context: UserContext| match policy.read {
+            AccessSettings::Off => {
+                future::err(warp::reject::custom(ApiError::ReadOnlyEndpointDisabled))
+            }
+            _ => {
+                if user_context.can_perform_action(Action::Read) {
+                    future::ok(())
+                } else {
+                    future::err(warp::reject::custom(ApiError::ReadForbidden))
+                }
+            }
         })
         .untuple_one()
 }
@@ -1112,7 +1121,7 @@ pub mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn test_password_read_disables_cached_get(
+    async fn test_password_read_anonymous_cant_cached_get(
         #[values(None, Some("test_db"))] new_db: Option<&str>,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
@@ -1120,6 +1129,53 @@ pub mod tests {
             context,
             http_config_from_access_policy(
                 AccessPolicy::free_for_all().with_read_password("somepw"),
+            ),
+        );
+
+        let resp = request()
+            .method("GET")
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
+            .header(QUERY_HEADER, SELECT_QUERY)
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.body(), "READ_FORBIDDEN");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_password_read_reader_can_cached_get(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
+        let handler = filters(
+            context,
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_read_password("somepw"),
+            ),
+        );
+
+        let resp = request()
+            .method("GET")
+            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
+            .header(QUERY_HEADER, SELECT_QUERY)
+            .header(header::AUTHORIZATION, "Bearer somepw")
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.body(), "{\"c\":1}\n");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_disabled_read_disabled_cached_get(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
+        let handler = filters(
+            context,
+            http_config_from_access_policy(
+                AccessPolicy::free_for_all().with_read_disabled(),
             ),
         );
 
