@@ -305,17 +305,14 @@ fn temp_partition_file_writer(
 pub async fn plan_to_object_store(
     state: &SessionState,
     plan: &Arc<dyn ExecutionPlan>,
-    output_schema: Option<SchemaRef>,
     store: Arc<InternalObjectStore>,
     prefix: String,
     disk_manager: Arc<DiskManager>,
     max_partition_size: u32,
 ) -> Result<Vec<Add>> {
     let mut current_partition_size = 0;
-    let (mut current_partition_file_path, mut writer) = temp_partition_file_writer(
-        disk_manager.clone(),
-        output_schema.clone().unwrap_or_else(|| plan.schema()),
-    )?;
+    let (mut current_partition_file_path, mut writer) =
+        temp_partition_file_writer(disk_manager.clone(), plan.schema())?;
     let mut partition_file_paths = vec![current_partition_file_path];
     let mut partition_metadata = vec![];
     let mut tasks = vec![];
@@ -328,17 +325,6 @@ pub async fn plan_to_object_store(
 
         while let Some(batch) = stream.next().await {
             let mut batch = batch?;
-
-            // If the output schema is provided, and the batch is not aligned with it, try to coerce
-            // the batch to it (aligning only nullability info).
-            // This comes up when the UPDATE has a literal assignment for a nullable field; the used
-            // projection plan inherits the nullability from the `Literal`, which in turn just looks
-            // at whether the used value is null, disregarding the corresponding column/schema.
-            if let Some(schema) = output_schema.clone() {
-                if batch.schema() != schema {
-                    batch = RecordBatch::try_new(schema, batch.columns().to_vec())?;
-                }
-            }
 
             let mut leftover_partition_capacity =
                 (max_partition_size - current_partition_size) as usize;
@@ -887,7 +873,6 @@ impl DefaultSeafowlContext {
         let adds = plan_to_object_store(
             &self.inner.state(),
             plan,
-            None,
             self.internal_object_store.clone(),
             table_uuid.to_string(),
             self.inner.runtime_env().disk_manager.clone(),
@@ -1617,7 +1602,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                 let adds = plan_to_object_store(
                     &state,
                     &update_plan,
-                    None,
                     self.internal_object_store.clone(),
                     uuid.to_string(),
                     self.inner.runtime_env().disk_manager.clone(),
@@ -1715,7 +1699,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                         let adds = plan_to_object_store(
                             &state,
                             &filter_plan,
-                            None,
                             self.internal_object_store.clone(),
                             uuid.to_string(),
                             self.inner.runtime_env().disk_manager.clone(),
@@ -1772,6 +1755,12 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 let table_ref = TableReference::from(name);
                 let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
+
+                if resolved_ref.schema == STAGING_SCHEMA {
+                    // Dropping a staging table is a in-memory only op
+                    self.inner.deregister_table(resolved_ref)?;
+                    return Ok(make_dummy_exec());
+                }
 
                 let table_id = self
                     .table_catalog
@@ -2256,7 +2245,6 @@ mod tests {
         let adds = plan_to_object_store(
             &sf_context.inner.state(),
             &execution_plan,
-            None,
             object_store.clone(),
             table_uuid.to_string(),
             disk_manager,
@@ -2419,7 +2407,6 @@ mod tests {
         let adds = plan_to_object_store(
             &sf_context.inner.state(),
             &execution_plan,
-            None,
             object_store,
             "test".to_string(),
             disk_manager,
