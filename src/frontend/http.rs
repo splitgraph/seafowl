@@ -50,7 +50,10 @@ const CORS_MAXAGE: u32 = 86400;
 
 // Vary on Origin, as warp's CORS responds with Access-Control-Allow-Origin: [origin],
 // so we can't cache the response in the browser if the origin changes.
-const VARY: &str = "Authorization, Content-Type, Origin, X-Seafowl-Query";
+// NB: We can't vary by `Authorization` in here since Cloudflare states that it doesn't
+// take the vary values into account in caching decisions:
+// https://developers.cloudflare.com/cache/about/cache-control/#other
+const VARY: &str = "Content-Type, Origin, X-Seafowl-Query";
 
 #[derive(Default)]
 struct ETagBuilderVisitor {
@@ -212,7 +215,7 @@ pub fn with_auth(
     )
 }
 
-// Disable the cached GET endpoint if the reads are disabled. Otherwise extract the principle and
+// Disable the cached GET endpoint if the reads are disabled. Otherwise extract the principal and
 // check whether it is allowed to perform reads.
 pub fn cached_read_query_authz(
     policy: AccessPolicy,
