@@ -6,7 +6,7 @@ on:
 jobs:
   CI:
     name: Lint, build, test
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     container:
       image: amd64/rust
       env:
@@ -84,7 +84,7 @@ jobs:
           cargo build
 
       - name: Spin up the test object stores
-        run: docker-compose up -d
+        run: docker compose up -d
 
       # TODO split tests into unit and integration (one requires postgres?)
       - name: Run tests
