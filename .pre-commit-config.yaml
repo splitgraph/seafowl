@@ -14,6 +14,12 @@ repos:
         types: [rust]
         args: ["--"]
 
+      - id: tomlfmt
+        name: tomlfmt
+        entry: find . -name 'Cargo.toml' -exec cargo tomlfmt -p {} \;
+        language: system
+        pass_filenames: false
+
       # Run Clippy (lint), which also runs cargo check (check the code compiles)
       - id: clippy
         name: clippy

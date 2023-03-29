@@ -44,6 +44,7 @@ mod vacuum;
 enum ObjectStoreType {
     Local,
     InMemory,
+    S3,
 }
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
@@ -67,6 +68,15 @@ data_dir = "{}""#,
             )
         }
         ObjectStoreType::InMemory => (r#"type = "memory""#.to_string(), None),
+        ObjectStoreType::S3 => (
+            r#"type = "s3"
+access_key_id = "minioadmin"
+secret_access_key = "minioadmin"
+endpoint = "http://127.0.0.1:9000"
+bucket = "seafowl-test-bucket""#
+                .to_string(),
+            None,
+        ),
     };
 
     let config_text = format!(

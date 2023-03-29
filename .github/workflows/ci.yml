@@ -6,12 +6,10 @@ on:
 jobs:
   CI:
     name: Lint, build, test
-    runs-on: ubuntu-22.04
-    container:
-      image: amd64/rust
-      env:
-        # set debuginfo to 1 (line tables only, for panic tracebacks)
-        RUSTFLAGS: "-C debuginfo=1"
+    runs-on: ubuntu-latest
+    env:
+      # set debuginfo to 1 (line tables only, for panic tracebacks)
+      RUSTFLAGS: "-C debuginfo=1"
 
     services:
       postgres:
@@ -30,8 +28,8 @@ jobs:
       # Setup pre-commit
       - name: Install pre-commit
         run: |
-          apt-get update
-          apt-get install -y pre-commit
+          sudo apt-get update
+          sudo apt-get install -y pre-commit
       - name: Configure pre-commit cache
         uses: actions/cache@v3
         with:
@@ -39,15 +37,24 @@ jobs:
           key: pre-commit-${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
       # TODO: bake this into the CI image
       - name: Install cmake
-        run: apt-get update && apt-get install -y cmake
+        run: sudo apt-get update && sudo apt-get install -y cmake
       - name: Install protoc
-        run: apt install -y protobuf-compiler
+        run: sudo apt install -y protobuf-compiler
 
       # Use https://github.com/marketplace/actions/rust-cache
 
       # selecting a toolchain either by action or manual `rustup` calls should happen
       # before the plugin, as the cache uses the current rustc version as its cache key
-      - run: rustup toolchain install nightly --profile minimal
+      - name: Install minimal nightly with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: rustfmt, clippy
+
+      - name: Install tool for formatting Cargo.toml files
+        run: cargo install cargo-tomlfmt
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -59,37 +66,26 @@ jobs:
           # Determines if the cache should be saved even when the workflow has failed.
           cache-on-failure: "true"
 
-      # Setup the rest of the toolchain
-      - name: Setup toolchain
-        run: |
-          rustup toolchain install nightly
-          rustup default nightly
-          rustup component add rustfmt clippy
-
       - name: Check pre-commit hooks (formatting and Clippy)
-        # First command is temp fix for FatalError: git failed. Is it installed, and are you in a Git repository directory?
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          pre-commit run --all
-
-      # NB this one doesn't run as a pre-commit hook
-      - name: Check Cargo.toml formatting
-        run: |
-          cargo install cargo-tomlfmt
-          find . -name 'Cargo.toml' -exec cargo tomlfmt -p {} \;
-          git diff --exit-code
+        run: pre-commit run --all
 
       - name: Build workspace in debug mode
         run: |
           cargo build
+
+      - name: Spin up the test object stores
+        run: docker compose up -d
 
       # TODO split tests into unit and integration (one requires postgres?)
       - name: Run tests
         run: |
           cargo test --workspace
         env:
-          # database URL for end-to-end + postgres repository tests
-          DATABASE_URL: "postgres://postgres:postgres@postgres:5432/db_test"
+          # Database URL for end-to-end + postgres repository tests; the host is `localhost` since we don't specify
+          # a child container to run the job in (and instead run everything in the root specified by `runs-on`).
+          # The port has been randomly assigned so we need to fetch it.
+          DATABASE_URL:
+            "postgres://postgres:postgres@localhost:${{ job.services.postgres.ports[5432] }}/db_test"
 
       # TODO recompiles the whole thing with different flags (busting the cache?,
       #      also codecov needs a token for private repos; also this breaks in Docker

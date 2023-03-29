@@ -3,7 +3,7 @@ use crate::statements::*;
 #[rstest]
 #[tokio::test]
 async fn test_insert_two_different_schemas(
-    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local)]
+    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local, ObjectStoreType::S3)]
     object_store_type: ObjectStoreType,
 ) {
     let (context, _) = make_context_with_pg(object_store_type).await;
@@ -44,7 +44,7 @@ async fn test_insert_two_different_schemas(
 #[rstest]
 #[tokio::test]
 async fn test_delete_statement(
-    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local)]
+    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local, ObjectStoreType::S3)]
     object_store_type: ObjectStoreType,
 ) {
     let (context, _) = make_context_with_pg(object_store_type).await;
@@ -273,7 +273,7 @@ async fn test_delete_with_string_filter_exact_match() {
 #[rstest]
 #[tokio::test]
 async fn test_update_statement(
-    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local)]
+    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local, ObjectStoreType::S3)]
     object_store_type: ObjectStoreType,
 ) {
     let (context, _) = make_context_with_pg(object_store_type).await;
