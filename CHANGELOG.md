@@ -4,6 +4,12 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Fix unimplemented method in AWS object store, and broaden integration test coverage by extending
+  target object stores to include a MinIO instance
+  (<https://github.com/splitgraph/seafowl/pull/331>)
+- Enable cached GET endpoint for authorized requests, and enable dropping of external tables
+  (<https://github.com/splitgraph/seafowl/pull/326>)
+
 ## [0.3.0] - 2023-03-22
 
 - Migration of storage layer to delta-rs (<https://github.com/splitgraph/seafowl/pull/307>)
