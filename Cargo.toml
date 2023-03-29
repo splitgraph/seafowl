@@ -33,7 +33,7 @@ arrow-buffer = "33.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "33.0.0"
+arrow-integration-test = "36.0.0"
 arrow-schema = "33.0.0"
 async-trait = "0.1.64"
 base64 = "0.21.0"
