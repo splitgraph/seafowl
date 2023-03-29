@@ -178,7 +178,7 @@ async fn test_vacuum_table() -> Result<(), DataFusionError> {
 #[rstest]
 #[tokio::test]
 async fn test_vacuum_database(
-    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local)]
+    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local, ObjectStoreType::S3)]
     object_store_type: ObjectStoreType,
 ) -> Result<(), DataFusionError> {
     let (context, _temp_dir) = make_context_with_pg(object_store_type).await;

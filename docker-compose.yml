@@ -1,0 +1,17 @@
+version: "3.9"
+services:
+  minio:
+    image: minio/minio:latest
+    ports:
+      - 9000:9000
+    command: minio server /data
+
+  createbuckets:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c " /usr/bin/mc config host add test-minio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc rm -r --force test-minio/seafowl-test-bucket; /usr/bin/mc mb
+      test-minio/seafowl-test-bucket; /usr/bin/mc policy download test-minio/seafowl-test-bucket;
+      exit 0; "

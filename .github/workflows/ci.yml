@@ -83,6 +83,9 @@ jobs:
         run: |
           cargo build
 
+      - name: Spin up the test object stores
+        run: docker-compose up -d
+
       # TODO split tests into unit and integration (one requires postgres?)
       - name: Run tests
         run: |

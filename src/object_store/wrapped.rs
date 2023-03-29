@@ -224,6 +224,14 @@ impl ObjectStore for InternalObjectStore {
     ///
     /// Will return an error if the destination already has an object.
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        if let schema::ObjectStore::S3(_) = self.config {
+            // TODO: AWS object store doesn't provide `copy_if_not_exists`, which gets called by the
+            // the default implementation of this method, since it requires dynamodb lock to be
+            // handled properly, so just do the unsafe thing for now.
+            // There is a delta-rs wrapper (`S3StorageBackend`) which provides the ability to do
+            // this with a lock too, so look into using that down the line instead.
+            return self.inner.rename(from, to).await;
+        }
         self.inner.rename_if_not_exists(from, to).await
     }
 }
