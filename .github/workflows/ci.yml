@@ -7,11 +7,9 @@ jobs:
   CI:
     name: Lint, build, test
     runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-      env:
-        # set debuginfo to 1 (line tables only, for panic tracebacks)
-        RUSTFLAGS: "-C debuginfo=1"
+    env:
+      # set debuginfo to 1 (line tables only, for panic tracebacks)
+      RUSTFLAGS: "-C debuginfo=1"
 
     services:
       postgres:
