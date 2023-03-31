@@ -1279,7 +1279,7 @@ dependencies = [
 [[package]]
 name = "connectorx"
 version = "0.3.2-alpha.2"
-source = "git+https://github.com/splitgraph/connector-x?rev=df8f50b3f53606717407c6677c7c0c2cbcc7f6ce#df8f50b3f53606717407c6677c7c0c2cbcc7f6ce"
+source = "git+https://github.com/splitgraph/connector-x?branch=datafusion-19-upgrade#72e1823bb86e751c8367029001d94faa71e8f702"
 dependencies = [
  "anyhow",
  "arrow",
