@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
+use tokio::runtime::Handle;
 use tokio::{fs, sync::RwLock};
 
 #[derive(Debug)]
@@ -121,6 +122,7 @@ pub struct CachingObjectStore {
 
 impl CachingObjectStore {
     fn on_evict(
+        rt_handle: Handle,
         file_manager: &Arc<RwLock<CacheFileManager>>,
         key: Arc<CacheKey>,
         value: CacheValue,
@@ -131,9 +133,8 @@ impl CachingObjectStore {
             key, value, cause
         );
 
-        let rt = tokio::runtime::Handle::current();
-        let _guard = rt.enter();
-        rt.block_on(async {
+        let _guard = rt_handle.enter();
+        rt_handle.block_on(async {
             // Acquire the write lock of the DataFileManager.
             let mut manager = file_manager.write().await;
 
@@ -157,10 +158,16 @@ impl CachingObjectStore {
         // Clone the pointer since we can't pass the whole struct to the cache
         let eviction_file_manager = file_manager.clone();
 
+        // Runtime handle needed for the eviction hook to block on cached file cleanup. We must
+        // create this outside of the eviction hook itself, otherwise moka will silently panic with
+        // "there is no reactor running, must be called from the context of a Tokio 1.x runtime",
+        // after which point no further evictions will be attempted.
+        let rt_handle = Handle::current();
+
         let cache: Cache<CacheKey, CacheValue> = CacheBuilder::new(max_cache_size)
             .weigher(|_, v: &CacheValue| v.size as u32)
             .eviction_listener_with_queued_delivery_mode(move |k, v, cause| {
-                Self::on_evict(&eviction_file_manager, k, v, cause)
+                Self::on_evict(rt_handle.clone(), &eviction_file_manager, k, v, cause)
             })
             .build();
 
@@ -384,6 +391,7 @@ mod tests {
     use std::sync::Arc;
 
     use rstest::rstest;
+    use std::time::Duration;
     use std::{cmp::min, fs, ops::Range};
     use tempfile::TempDir;
 
@@ -470,7 +478,7 @@ mod tests {
         //   - request a range
         //   - check the amount of requests that the mock received in total
         //   - sync() the cache (doesn't look like we need to do it for normal operations,
-        //     but we want to make sure all counts are currect and evictions have been done)
+        //     but we want to make sure all counts are correct and evictions have been done)
         //     - NOTE: if an assertion fails in the main test, this can cause a cache thread to crash with
         //          thread 'moka-notifier-2' panicked at 'there is no reactor running, must be called
         //          from the context of a Tokio 1.x runtime'
@@ -516,7 +524,7 @@ mod tests {
         assert_eq!(store.cache.entry_count(), 4);
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3, 4]);
 
-        // Request 80..85 (chunk 5, evicts chunk 1 since it's least recently used)
+        // Request 80..85 (chunk 5)
         store
             .get_range(&Path::from(url.as_str()), 80..85)
             .await
@@ -526,10 +534,26 @@ mod tests {
         assert_eq!(server.received_requests().await.unwrap().len(), 5);
         assert_eq!(store.cache.entry_count(), 4);
 
-        // We can't seem to be able to make sure that eviction works properly here
-        // due to some weird Moka eventual consistency. Even when calling sync(),
-        // loading chunk 1 again results in a cache hit (despite that it was
-        // supposed to be evicted) and our eviction code crashes if the main test crashes.
-        // assert_ranges_in_cache(&store.base_path, &url, vec![2, 3, 4, 5]);
+        // Give time to moka to evict one extra entry as it's done via a hook running in a separate
+        // thread.
+        let _ = tokio::time::sleep(Duration::from_secs(1)).await;
+
+        // Counter-intuitively, the evicted entry is the last one inserted (chunk 5).
+        // The reason is the default eviction policy in moka (citing from https://github.com/moka-rs/moka/issues/147#issuecomment-1162899784):
+        // "TinyLFU policy may not work very well for certain access patterns. I wonder if you are hitting this problem.
+        // The access pattern is like the followings:
+        //
+        //     Inserting an entry whose key has never been accessed before.
+        //     But once inserted, the key will be accessed often for a while.
+        //
+        // While the cache has enough capacity, everything will be okay because new entries will be admitted anyway.
+        // After the admission, they will be accessed so they will build up popularity. However, once the cache
+        // becomes full, this will become a problem. New entries will not be admitted because their keys were
+        // never accessed before; they are less popular than the old ones. They will be evicted immediately after
+        // the insertion."
+        // TODO: This may actually be a problem for us until the `W-TinyLFU` policy is implemented,
+        // since once we hit `max_cache_size` no further entries will end up being cached; this may
+        // in part be countered by specifying an explicit TTL or TTI as a temporary workaround.
+        assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3, 4]);
     }
 }
