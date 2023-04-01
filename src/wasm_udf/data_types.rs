@@ -103,7 +103,7 @@ impl<'de> Visitor<'de> for DataTypeVecDeserializer {
             let parsed = parse_create_function_data_type(key);
             match parsed {
                 Ok(dt) => new_obj.push(dt),
-                Err(_) => return Err(A::Error::custom(format!("couldnt decode {key}"))),
+                Err(_) => return Err(A::Error::custom(format!("couldn't decode {key}"))),
             }
         }
 

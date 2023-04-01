@@ -82,7 +82,7 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
             {
                 Ok(DataType::Time64(TimeUnit::Nanosecond))
             } else {
-                // We dont support TIMETZ and TIME WITH TIME ZONE for now
+                // We don't support TIMETZ and TIME WITH TIME ZONE for now.
                 Err(Error::NotImplemented(format!(
                     "Unsupported SQL type {sql_type:?}"
                 )))
