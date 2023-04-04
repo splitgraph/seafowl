@@ -20,9 +20,14 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::AsyncWrite;
 use tokio::runtime::Handle;
 use tokio::{fs, sync::RwLock};
+
+pub const DEFAULT_MIN_FETCH_SIZE: u64 = 2 * 1024 * 1024;
+pub const DEFAULT_CACHE_CAPACITY: u64 = 512 * 1024 * 1024;
+pub const DEFAULT_CACHE_ENTRY_TTL: Duration = Duration::from_secs(3 * 60);
 
 #[derive(Debug)]
 struct CacheFileManager {
@@ -151,6 +156,7 @@ impl CachingObjectStore {
         base_path: &Path,
         min_fetch_size: u64,
         max_cache_size: u64,
+        ttl: Duration,
     ) -> Self {
         let file_manager =
             Arc::new(RwLock::new(CacheFileManager::new(base_path.to_owned())));
@@ -169,6 +175,8 @@ impl CachingObjectStore {
             .eviction_listener_with_queued_delivery_mode(move |k, v, cause| {
                 Self::on_evict(rt_handle.clone(), &eviction_file_manager, k, v, cause)
             })
+            // TODO: This should be redundant once the `W-TinyLFU` policy is implemented in `moka`.
+            .time_to_live(ttl)
             .build();
 
         Self {
@@ -390,6 +398,7 @@ mod tests {
     use std::path::Path as FSPath;
     use std::sync::Arc;
 
+    use crate::object_store::cache::DEFAULT_CACHE_ENTRY_TTL;
     use rstest::rstest;
     use std::time::Duration;
     use std::{cmp::min, fs, ops::Range};
@@ -406,6 +415,7 @@ mod tests {
             &path,
             16,
             512,
+            DEFAULT_CACHE_ENTRY_TTL,
         )
     }
 
@@ -418,6 +428,7 @@ mod tests {
             &path,
             16,
             4 * 16, // Max capacity 4 chunks
+            Duration::from_secs(1),
         )
     }
 
@@ -536,7 +547,7 @@ mod tests {
 
         // Give time to moka to evict one extra entry as it's done via a hook running in a separate
         // thread.
-        let _ = tokio::time::sleep(Duration::from_secs(1)).await;
+        let _ = tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Counter-intuitively, the evicted entry is the last one inserted (chunk 5).
         // The reason is the default eviction policy in moka (citing from https://github.com/moka-rs/moka/issues/147#issuecomment-1162899784):
@@ -551,9 +562,13 @@ mod tests {
         // becomes full, this will become a problem. New entries will not be admitted because their keys were
         // never accessed before; they are less popular than the old ones. They will be evicted immediately after
         // the insertion."
-        // TODO: This may actually be a problem for us until the `W-TinyLFU` policy is implemented,
-        // since once we hit `max_cache_size` no further entries will end up being cached; this may
-        // in part be countered by specifying an explicit TTL or TTI as a temporary workaround.
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3, 4]);
+
+        // Ensure that our TTL parameter is honored, so that we don't get a frozen cache after it
+        // gets filled up once.
+        let _ = tokio::time::sleep(Duration::from_secs(1)).await;
+
+        assert_eq!(store.cache.entry_count(), 0);
+        assert_ranges_in_cache(&store.base_path, &url, vec![]);
     }
 }

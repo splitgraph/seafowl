@@ -1771,7 +1771,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     )
                     .await?
                     .ok_or_else(|| {
-                        DataFusionError::Execution("Table {name} not found".to_string())
+                        DataFusionError::Execution(format!("Table {name} not found"))
                     })?;
 
                 self.table_catalog.drop_table(table_id).await?;

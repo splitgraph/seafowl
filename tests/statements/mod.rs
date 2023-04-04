@@ -73,8 +73,12 @@ data_dir = "{}""#,
 access_key_id = "minioadmin"
 secret_access_key = "minioadmin"
 endpoint = "http://127.0.0.1:9000"
-bucket = "seafowl-test-bucket""#
-                .to_string(),
+bucket = "seafowl-test-bucket"
+
+[object_store.cache_properties]
+ttl = 30
+"#
+            .to_string(),
             None,
         ),
     };
