@@ -19,10 +19,10 @@ jobs:
         build: [linux, macos, win-msvc]
         include:
           - build: linux
-            os: ubuntu-18.04
+            os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - build: macos
-            os: macos-11
+            os: macos-latest
             target: x86_64-apple-darwin
           - build: win-msvc
             os: windows-latest
