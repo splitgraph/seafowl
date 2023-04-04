@@ -113,7 +113,7 @@ rstest = "*"
 wiremock = "0.5"
 
 [build-dependencies]
-anyhow = "1.0.63"  # for build.rs
+anyhow = "1.0.70"  # for build.rs
 prost-build = "0.11.6"
 vergen = "7"
 
