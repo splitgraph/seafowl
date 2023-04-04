@@ -13,7 +13,7 @@ license = "Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arrow = "33.0.0"
+arrow = "36.0.0"
 arrow-buffer = "33.0.0"
 arrow-schema = "33.0.0"
 async-trait = "0.1.64"
