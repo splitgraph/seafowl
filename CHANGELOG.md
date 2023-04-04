@@ -4,6 +4,10 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Enable caching of S3 objects in the local FS (<https://github.com/splitgraph/seafowl/pull/341>)
+- Fix the silent panic in the cache eviction hook rendering it useless
+  (<https://github.com/splitgraph/seafowl/pull/334>)
+
 ## [0.3.1] - 2023-03-29
 
 - Fix unimplemented method in AWS object store, and broaden integration test coverage by extending
