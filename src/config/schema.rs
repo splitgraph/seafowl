@@ -128,7 +128,7 @@ pub struct S3 {
 pub struct ObjectCacheProperties {
     pub capacity: u64,
     pub min_fetch_size: u64,
-    pub ttl: u64, // We could use humantime_serde crate to parse directly into `std::time::Duration`
+    pub ttl_s: u64, // We could use humantime_serde crate to parse directly into `std::time::Duration`
 }
 
 impl Default for ObjectCacheProperties {
@@ -136,7 +136,7 @@ impl Default for ObjectCacheProperties {
         Self {
             capacity: DEFAULT_CACHE_CAPACITY,
             min_fetch_size: DEFAULT_MIN_FETCH_SIZE,
-            ttl: DEFAULT_CACHE_ENTRY_TTL.as_secs(),
+            ttl_s: DEFAULT_CACHE_ENTRY_TTL.as_secs(),
         }
     }
 }
@@ -412,7 +412,7 @@ bucket = "seafowl"
 
 [object_store.cache_properties]
 min_fetch_size = 4096
-ttl = 10
+ttl_s = 10
 
 [catalog]
 type = "postgres"
@@ -482,7 +482,7 @@ upload_data_max_length = 1
     #[case::basic_s3(TEST_CONFIG_S3, None)]
     #[case::basic_s3_with_cache(
         TEST_CONFIG_S3_WITH_CACHE,
-        Some(ObjectCacheProperties{ capacity: DEFAULT_CACHE_CAPACITY, min_fetch_size: 4096, ttl: 10 }))
+        Some(ObjectCacheProperties{ capacity: DEFAULT_CACHE_CAPACITY, min_fetch_size: 4096, ttl_s: 10 }))
     ]
     fn test_parse_config_with_s3(
         #[case] config_str: &str,

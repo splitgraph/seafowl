@@ -108,7 +108,7 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             if let Some(ObjectCacheProperties {
                 capacity,
                 min_fetch_size,
-                ttl,
+                ttl_s,
             }) = cache_properties
             {
                 let tmp_dir = TempDir::new().unwrap();
@@ -119,7 +119,7 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
                     &path,
                     *capacity,
                     *min_fetch_size,
-                    Duration::from_secs(*ttl),
+                    Duration::from_secs(*ttl_s),
                 ));
             }
 
