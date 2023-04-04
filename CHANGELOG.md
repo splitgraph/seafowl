@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.3.2] - 2023-04-04
+
 - Enable caching of S3 objects in the local FS (<https://github.com/splitgraph/seafowl/pull/341>)
 - Fix the silent panic in the cache eviction hook rendering it useless
   (<https://github.com/splitgraph/seafowl/pull/334>)
@@ -134,7 +136,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.3.1...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/splitgraph/seafowl/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/splitgraph/seafowl/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/splitgraph/seafowl/compare/v0.2.12...v0.3.0
 [0.2.12]: https://github.com/splitgraph/seafowl/compare/v0.2.11...v0.2.12
