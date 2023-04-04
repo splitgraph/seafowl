@@ -3,6 +3,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::object_store::cache::{
+    DEFAULT_CACHE_CAPACITY, DEFAULT_CACHE_ENTRY_TTL, DEFAULT_MIN_FETCH_SIZE,
+};
 use config::{Config, ConfigError, Environment, File, FileFormat, Map};
 use hex::encode;
 use log::info;
@@ -117,6 +120,25 @@ pub struct S3 {
     pub secret_access_key: String,
     pub endpoint: Option<String>,
     pub bucket: String,
+    pub cache_properties: Option<ObjectCacheProperties>,
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(default)]
+pub struct ObjectCacheProperties {
+    pub capacity: u64,
+    pub min_fetch_size: u64,
+    pub ttl: u64, // We could use humantime_serde crate to parse directly into `std::time::Duration`
+}
+
+impl Default for ObjectCacheProperties {
+    fn default() -> Self {
+        Self {
+            capacity: DEFAULT_CACHE_CAPACITY,
+            min_fetch_size: DEFAULT_MIN_FETCH_SIZE,
+            ttl: DEFAULT_CACHE_ENTRY_TTL.as_secs(),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -360,9 +382,12 @@ mod tests {
         build_default_config, load_config_from_string, AccessSettings, Catalog, Frontend,
         HttpFrontend, Local, ObjectStore, Postgres, Runtime, SeafowlConfig, S3,
     };
-    use crate::config::schema::{Misc, Sqlite};
+    use crate::config::schema::{Misc, ObjectCacheProperties, Sqlite};
+    use crate::object_store::cache::DEFAULT_CACHE_CAPACITY;
     use sqlx::sqlite::SqliteJournalMode;
     use std::{collections::HashMap, path::PathBuf};
+
+    use rstest::rstest;
 
     const TEST_CONFIG_S3: &str = r#"
 [object_store]
@@ -375,10 +400,23 @@ bucket = "seafowl"
 [catalog]
 type = "postgres"
 dsn = "postgresql://user:pass@localhost:5432/somedb"
+"#;
 
-[frontend.http]
-bind_host = "0.0.0.0"
-bind_port = 80
+    const TEST_CONFIG_S3_WITH_CACHE: &str = r#"
+[object_store]
+type = "s3"
+access_key_id = "AKI..."
+secret_access_key = "ABC..."
+endpoint = "https://s3.amazonaws.com:9000"
+bucket = "seafowl"
+
+[object_store.cache_properties]
+min_fetch_size = 4096
+ttl = 10
+
+[catalog]
+type = "postgres"
+dsn = "postgresql://user:pass@localhost:5432/somedb"
 "#;
 
     const TEST_CONFIG_BASIC: &str = r#"
@@ -440,9 +478,17 @@ upload_data_max_length = 1
     dsn = "postgresql://user:pass@localhost:5432/somedb""#;
 
     #[cfg(feature = "object-store-s3")]
-    #[test]
-    fn test_parse_config_with_s3() {
-        let config = load_config_from_string(TEST_CONFIG_S3, false, None).unwrap();
+    #[rstest]
+    #[case::basic_s3(TEST_CONFIG_S3, None)]
+    #[case::basic_s3_with_cache(
+        TEST_CONFIG_S3_WITH_CACHE,
+        Some(ObjectCacheProperties{ capacity: DEFAULT_CACHE_CAPACITY, min_fetch_size: 4096, ttl: 10 }))
+    ]
+    fn test_parse_config_with_s3(
+        #[case] config_str: &str,
+        #[case] cache_props: Option<ObjectCacheProperties>,
+    ) {
+        let config = load_config_from_string(config_str, false, None).unwrap();
 
         assert_eq!(
             config.object_store,
@@ -451,7 +497,8 @@ upload_data_max_length = 1
                 access_key_id: "AKI...".to_string(),
                 secret_access_key: "ABC...".to_string(),
                 endpoint: Some("https://s3.amazonaws.com:9000".to_string()),
-                bucket: "seafowl".to_string()
+                bucket: "seafowl".to_string(),
+                cache_properties: cache_props,
             })
         );
     }

@@ -9,7 +9,10 @@ use object_store::path::Path;
 use object_store::{GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 
-use crate::object_store::cache::CachingObjectStore;
+use crate::object_store::cache::{
+    CachingObjectStore, DEFAULT_CACHE_CAPACITY, DEFAULT_CACHE_ENTRY_TTL,
+    DEFAULT_MIN_FETCH_SIZE,
+};
 use datafusion::prelude::SessionContext;
 use lazy_static::lazy_static;
 use log::warn;
@@ -26,8 +29,6 @@ use tempfile::TempDir;
 use tokio::io::AsyncWrite;
 
 pub const ANYHOST: &str = "anyhost";
-pub const MIN_FETCH_SIZE: u64 = 2 * 1024 * 1024;
-pub const HTTP_CACHE_CAPACITY: u64 = 512 * 1024 * 1024;
 
 lazy_static! {
     static ref CONTENT_RANGE_RE: Regex =
@@ -362,8 +363,9 @@ pub fn add_http_object_store(context: &SessionContext, ssl_cert_file: &Option<St
     let http_object_store = CachingObjectStore::new(
         Arc::new(HttpObjectStore::new("http".to_string(), ssl_cert_file)),
         &path,
-        MIN_FETCH_SIZE,
-        HTTP_CACHE_CAPACITY,
+        DEFAULT_MIN_FETCH_SIZE,
+        DEFAULT_CACHE_CAPACITY,
+        DEFAULT_CACHE_ENTRY_TTL,
     );
     let https_object_store = CachingObjectStore::new_from_sibling(
         &http_object_store,
@@ -423,12 +425,15 @@ pub fn try_prepare_http_url(location: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::object_store::cache::CachingObjectStore;
+    use crate::object_store::cache::{
+        CachingObjectStore, DEFAULT_CACHE_CAPACITY, DEFAULT_CACHE_ENTRY_TTL,
+        DEFAULT_MIN_FETCH_SIZE,
+    };
     use object_store::{path::Path, ObjectStore};
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    use super::{HttpObjectStore, HTTP_CACHE_CAPACITY, MIN_FETCH_SIZE};
+    use super::HttpObjectStore;
     use crate::object_store::testutils::make_mock_parquet_server;
 
     fn make_cached_object_store() -> CachingObjectStore {
@@ -440,8 +445,9 @@ mod tests {
         CachingObjectStore::new(
             Arc::new(HttpObjectStore::new("http".to_string(), &None)),
             &path,
-            MIN_FETCH_SIZE,
-            HTTP_CACHE_CAPACITY,
+            DEFAULT_MIN_FETCH_SIZE,
+            DEFAULT_CACHE_CAPACITY,
+            DEFAULT_CACHE_ENTRY_TTL,
         )
     }
 

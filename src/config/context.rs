@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::{
     catalog::{
@@ -21,6 +22,8 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
 
+use crate::config::schema::ObjectCacheProperties;
+use crate::object_store::cache::CachingObjectStore;
 use crate::object_store::http::add_http_object_store;
 use crate::object_store::wrapped::InternalObjectStore;
 #[cfg(feature = "remote-tables")]
@@ -28,6 +31,7 @@ use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
 use parking_lot::lock_api::RwLock;
+use tempfile::TempDir;
 
 use super::schema::{self, MEBIBYTES, MEMORY_FRACTION, S3};
 
@@ -86,6 +90,7 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             secret_access_key,
             endpoint,
             bucket,
+            cache_properties,
         }) => {
             let mut builder = AmazonS3Builder::new()
                 .with_access_key_id(access_key_id)
@@ -99,6 +104,25 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             }
 
             let store = builder.build().expect("Error creating object store");
+
+            if let Some(ObjectCacheProperties {
+                capacity,
+                min_fetch_size,
+                ttl,
+            }) = cache_properties
+            {
+                let tmp_dir = TempDir::new().unwrap();
+                let path = tmp_dir.into_path();
+
+                return Arc::new(CachingObjectStore::new(
+                    Arc::new(store),
+                    &path,
+                    *capacity,
+                    *min_fetch_size,
+                    Duration::from_secs(*ttl),
+                ));
+            }
+
             Arc::new(store)
         }
     }
