@@ -10,7 +10,7 @@
 # cargo build --release
 # DOCKER_BUILDKIT=1 docker build . -t splitgraph/seafowl:nightly
 
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 COPY target/release/seafowl /usr/local/bin/seafowl
 
