@@ -19,7 +19,7 @@ jobs:
         build: [linux, macos, win-msvc]
         include:
           - build: linux
-            os: ubuntu-latest
+            os: ubuntu-20.04 # We can update to 22.04 once we're comfortable dropping libssl 1.x support
             target: x86_64-unknown-linux-gnu
           - build: macos
             os: macos-latest
@@ -114,7 +114,14 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Determine Docker tags
+      - name: Test building and invoking the Docker image (Linux only)
+        if: matrix.build == 'linux'
+        run: |
+          DOCKER_BUILDKIT=1 docker build . -t splitgraph/seafowl:test
+          docker run --rm splitgraph/seafowl:test --version
+
+      - name: Determine Docker tags (Linux only)
+        if: matrix.build == 'linux'
         id: meta
         # https://github.com/docker/metadata-action
         uses: docker/metadata-action@v4
