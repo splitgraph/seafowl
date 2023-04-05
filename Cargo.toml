@@ -47,7 +47,7 @@ config = "0.13.3"
 convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-19-upgrade", optional = true }
 convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-19-upgrade", package = "convergence-arrow", optional = true }
 
-datafusion = "19.0.0"
+datafusion = "21.1.0"
 datafusion-common = "19.0.0"
 datafusion-expr = "19.0.0"
 datafusion-proto = "19.0.0"
