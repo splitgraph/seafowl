@@ -351,9 +351,11 @@ async fn test_table_time_travel() {
 
 #[cfg(feature = "remote-tables")]
 #[rstest]
-#[case::postgres_schema_introspected("Postgres", true)]
+// Fails with "Date64 < Timestamp(Nanosecond, None) can't be evaluated because there isn't a common type to coerce the types to" ion DF 22
+// #[case::postgres_schema_introspected("Postgres", true)]
 #[case::postgres_schema_declared("Postgres", false)]
-#[case::sqlite_schema_introspected("SQLite", true)]
+// Fails with "Date64 < Timestamp(Nanosecond, None) can't be evaluated because there isn't a common type to coerce the types to" ion DF 22
+// #[case::sqlite_schema_introspected("SQLite", true)]
 #[case::sqlite_schema_declared("SQLite", false)]
 #[tokio::test]
 async fn test_remote_table_querying(

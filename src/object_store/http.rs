@@ -27,6 +27,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::AsyncWrite;
+use url::Url;
 
 pub const ANYHOST: &str = "anyhost";
 
@@ -373,14 +374,12 @@ pub fn add_http_object_store(context: &SessionContext, ssl_cert_file: &Option<St
     );
 
     context.runtime_env().register_object_store(
-        "http",
-        ANYHOST,
+        &Url::parse(format!("http://{ANYHOST}").as_str()).unwrap(),
         Arc::new(http_object_store),
     );
 
     context.runtime_env().register_object_store(
-        "https",
-        ANYHOST,
+        &Url::parse(format!("https://{ANYHOST}").as_str()).unwrap(),
         Arc::new(https_object_store),
     );
 }

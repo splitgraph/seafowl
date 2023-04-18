@@ -5,10 +5,12 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::execution::context::SessionState;
-use datafusion::physical_plan::file_format::{partition_type_wrap, FileScanConfig};
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::file_format::{
+    wrap_partition_type_in_dict, FileScanConfig,
+};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::Expr;
 use deltalake::action::Add;
 use deltalake::DeltaTable;
 use object_store::path::Path;
@@ -24,7 +26,7 @@ pub async fn parquet_scan_from_actions(
     table: &DeltaTable,
     actions: &[Add],
     schema: &Schema,
-    filters: &[Expr],
+    filter_expr: Option<Arc<dyn PhysicalExpr>>,
     state: &SessionState,
     projection: Option<&Vec<usize>>,
     limit: Option<usize>,
@@ -53,11 +55,9 @@ pub async fn parquet_scan_from_actions(
 
     let object_store_url = table.object_store().object_store_url();
     let url: &Url = object_store_url.as_ref();
-    state.runtime_env().register_object_store(
-        url.scheme(),
-        url.host_str().unwrap_or_default(),
-        table.object_store(),
-    );
+    state
+        .runtime_env()
+        .register_object_store(url, table.object_store());
 
     ParquetFormat::new()
         .create_physical_plan(
@@ -74,7 +74,7 @@ pub async fn parquet_scan_from_actions(
                     .map(|c| {
                         Ok((
                             c.to_owned(),
-                            partition_type_wrap(
+                            wrap_partition_type_in_dict(
                                 schema.field_with_name(c)?.data_type().clone(),
                             ),
                         ))
@@ -83,7 +83,7 @@ pub async fn parquet_scan_from_actions(
                 output_ordering: None,
                 infinite_source: false,
             },
-            filters,
+            (&filter_expr).into(),
         )
         .await
 }

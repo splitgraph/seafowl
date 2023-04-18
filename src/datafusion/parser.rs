@@ -406,6 +406,7 @@ impl<'a> DFParser<'a> {
             delimiter,
             location,
             table_partition_cols,
+            order_exprs: vec![],
             if_not_exists,
             file_compression_type,
             options,
@@ -429,7 +430,7 @@ impl<'a> DFParser<'a> {
         let token = self.parser.next_token();
         match &token.token {
             Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
-            _ => self.expected("one of GZIP, BZIP2, XZ", token),
+            _ => self.expected("one of GZIP, BZIP2, XZ, ZSTD", token),
         }
     }
 

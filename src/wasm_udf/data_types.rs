@@ -36,7 +36,9 @@ pub fn get_volatility(t: &CreateFunctionVolatility) -> Volatility {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, EnumString, Display, Clone)]
+#[derive(
+    Serialize, Deserialize, Debug, PartialEq, Eq, EnumString, Display, Clone, Hash,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum CreateFunctionDataType {
     // temporary support for legacy WASM-native names:
@@ -60,7 +62,9 @@ pub enum CreateFunctionDataType {
     TIMESTAMP,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, EnumString, Display, Clone)]
+#[derive(
+    Serialize, Deserialize, Debug, PartialEq, Eq, EnumString, Display, Clone, Hash,
+)]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
 pub enum CreateFunctionVolatility {
@@ -72,7 +76,7 @@ pub enum CreateFunctionVolatility {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, EnumString, Display, Clone)]
 #[serde(rename_all = "camelCase")]
-#[derive(Default)]
+#[derive(Default, Hash)]
 pub enum CreateFunctionLanguage {
     Wasm,
     #[default]
@@ -131,7 +135,7 @@ where
         .map_err(|_| D::Error::custom(format!("unsupported data type: {s}")))
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Hash)]
 pub struct CreateFunctionDetails {
     pub entrypoint: String,
     #[serde(default)]

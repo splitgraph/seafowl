@@ -412,18 +412,20 @@ async fn test_update_statement_errors() {
         .await
         .unwrap_err();
 
-    assert!(err
-        .to_string()
-        .contains("Schema error: No field named 'nonexistent'"));
+    assert_eq!(
+        err.to_string(),
+        "Schema error: No field named nonexistent. Valid fields are some_time, some_value, some_other_value, some_bool_value, some_int_value."
+    );
 
     let err = context
         .plan_query("UPDATE test_table SET some_value = 42 WHERE nonexistent = 32")
         .await
         .unwrap_err();
 
-    assert!(err
-        .to_string()
-        .contains("Schema error: No field named 'nonexistent'"));
+    assert_eq!(
+        err.to_string(),
+        "Schema error: No field named nonexistent. Valid fields are some_time, some_value, some_other_value, some_bool_value, some_int_value."
+    );
 
     let err = context
         .plan_query("UPDATE test_table SET some_int_value = 'nope'")

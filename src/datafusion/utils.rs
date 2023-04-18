@@ -106,10 +106,13 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         SQLDataType::Nvarchar(_)
         | SQLDataType::Uuid
         | SQLDataType::Binary(_)
+        | SQLDataType::BigNumeric(_)
+        | SQLDataType::BigDecimal(_)
         | SQLDataType::Varbinary(_)
         | SQLDataType::Blob(_)
         | SQLDataType::Datetime(_)
         | SQLDataType::Interval
+        | SQLDataType::JSON
         | SQLDataType::Regclass
         | SQLDataType::Custom(_, _)
         | SQLDataType::Array(_)
