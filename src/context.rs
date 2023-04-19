@@ -1279,8 +1279,8 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 // ALTER TABLE ... RENAME TO
                 Statement::AlterTable { name, operation: AlterTableOperation::RenameTable {table_name: new_name }} => {
-                    let old_table_name = remove_quotes_from_object_name(&name).to_string();
-                    let new_table_name = remove_quotes_from_object_name(&new_name).to_string();
+                    let old_table_name = name.to_string();
+                    let new_table_name = new_name.to_string();
 
                     if self.get_table_provider(old_table_name.to_owned()).await.is_err() {
                         return Err(Error::Plan(
@@ -1837,9 +1837,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 )
                                 .await?
                                 .ok_or_else(|| {
-                                    DataFusionError::Execution(
-                                        "Table {old_name} not found".to_string(),
-                                    )
+                                    DataFusionError::Execution(format!(
+                                        "Table {old_name} not found"
+                                    ))
                                 })?;
 
                             // If the old and new table schema is different check that the
@@ -1872,8 +1872,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     new_schema_id,
                                 )
                                 .await?;
-
-                            // TODO: Update table metadata with the new table name during writes,
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
@@ -2640,7 +2638,7 @@ mod tests {
     async fn test_plan_rename_table_name_in_quotes() {
         assert_eq!(
             get_logical_plan("ALTER TABLE \"testcol\".\"some_table\" RENAME TO \"testcol\".\"some_table_2\"").await,
-            "RenameTable: testcol.some_table to testcol.some_table_2"
+            "RenameTable: \"testcol\".\"some_table\" to \"testcol\".\"some_table_2\""
         );
     }
 
@@ -2711,6 +2709,49 @@ mod tests {
             err.to_string(),
             "Schema error: Schema contains duplicate unqualified field name date"
         );
+    }
+
+    #[tokio::test]
+    async fn test_rename_table_special_characters() {
+        let context = in_memory_context().await;
+
+        let plan = context
+            .plan_query("CREATE TABLE test_table AS VALUES (1, 'one')")
+            .await
+            .unwrap();
+        context.collect(plan).await.unwrap();
+
+        let plan = context
+            .plan_query(format!(r#"CREATE SCHEMA "schema/slash-dash:colon""#).as_str())
+            .await
+            .unwrap();
+        context.collect(plan).await.unwrap();
+
+        let plan = context
+            .plan_query(format!(r#"ALTER TABLE test_table RENAME TO "schema/slash-dash:colon"."table/slash-dash:colon""#).as_str())
+            .await
+            .unwrap();
+        context.collect(plan).await.unwrap();
+
+        let plan = context
+            .plan_query(
+                format!(
+                    r#"SELECT * FROM "schema/slash-dash:colon"."table/slash-dash:colon""#
+                )
+                .as_str(),
+            )
+            .await
+            .unwrap();
+        let results = context.collect(plan).await.unwrap();
+
+        let expected = vec![
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "| 1       | one     |",
+            "+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &results);
     }
 
     #[tokio::test]
