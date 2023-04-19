@@ -5,7 +5,7 @@ use arrow::temporal_conversions::{
 use datafusion::common::{Column, DataFusionError};
 use datafusion::error::Result;
 use datafusion::scalar::ScalarValue;
-use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_expr::{BinaryExpr, Expr, Operator};
 use itertools::Itertools;
 
@@ -107,8 +107,10 @@ pub trait FilterPushdownConverter {
     }
 }
 
-impl<T: FilterPushdownConverter> ExpressionVisitor for FilterPushdownVisitor<T> {
-    fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
+impl<T: FilterPushdownConverter> TreeNodeVisitor for FilterPushdownVisitor<T> {
+    type N = Expr;
+
+    fn pre_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
         match expr {
             Expr::Column(_)
             | Expr::Literal(_)
@@ -137,10 +139,10 @@ impl<T: FilterPushdownConverter> ExpressionVisitor for FilterPushdownVisitor<T> 
                 )));
             }
         };
-        Ok(Recursion::Continue(self))
+        Ok(VisitRecursion::Continue)
     }
 
-    fn post_visit(mut self, expr: &Expr) -> Result<Self> {
+    fn post_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
         match expr {
             // Column and Literal are the only two leaf nodes atm - they don't depend on any SQL
             // expression being on the stack.
@@ -163,14 +165,14 @@ impl<T: FilterPushdownConverter> ExpressionVisitor for FilterPushdownVisitor<T> 
                 // precedence we need to convert it to an explicit one using extra parenthesis if the
                 // left/right expression is also a BinaryExpr of lower operator precedence.
                 if let Expr::BinaryExpr(right_be @ BinaryExpr { .. }) = &*be.right {
-                    let p = right_be.precedence();
-                    if p == 0 || p < be.precedence() {
+                    let p = right_be.op.precedence();
+                    if p == 0 || p < be.op.precedence() {
                         right_sql = format!("({right_sql})")
                     }
                 }
                 if let Expr::BinaryExpr(left_be @ BinaryExpr { .. }) = &*be.left {
-                    let p = left_be.precedence();
-                    if p == 0 || p < be.precedence() {
+                    let p = left_be.op.precedence();
+                    if p == 0 || p < be.op.precedence() {
                         left_sql = format!("({left_sql})")
                     }
                 }
@@ -232,7 +234,7 @@ impl<T: FilterPushdownConverter> ExpressionVisitor for FilterPushdownVisitor<T> 
             }
             _ => {}
         };
-        Ok(self)
+        Ok(VisitRecursion::Continue)
     }
 }
 
@@ -252,14 +254,15 @@ pub fn filter_expr_to_sql<T: FilterPushdownConverter>(
     source: T,
 ) -> Result<String> {
     // Construct the initial visitor state
-    let visitor = FilterPushdownVisitor {
+    let mut visitor = FilterPushdownVisitor {
         source,
         sql_exprs: vec![],
     };
 
     // Perform the walk through the expr AST trying to construct the equivalent SQL for the
     // particular source type at hand.
-    let FilterPushdownVisitor { sql_exprs, .. } = filter.accept(visitor)?;
+    filter.visit(&mut visitor)?;
+    let sql_exprs = visitor.sql_exprs;
 
     if sql_exprs.len() != 1 {
         return Err(DataFusionError::Execution(format!(

@@ -1,12 +1,14 @@
 use datafusion::common::DFSchemaRef;
 
 use arrow_schema::Schema;
+use std::hash::{Hash, Hasher};
 use std::{any::Any, fmt, sync::Arc, vec};
 
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
+use strum_macros::AsRefStr;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct CreateTable {
     /// The table schema
     pub schema: Schema,
@@ -19,7 +21,7 @@ pub struct CreateTable {
     pub output_schema: DFSchemaRef,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct CreateFunction {
     /// The function name
     pub name: String,
@@ -28,7 +30,7 @@ pub struct CreateFunction {
     pub output_schema: DFSchemaRef,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RenameTable {
     /// Old name
     pub old_name: String,
@@ -38,7 +40,7 @@ pub struct RenameTable {
     pub output_schema: DFSchemaRef,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DropSchema {
     /// The schema to drop
     pub name: String,
@@ -46,7 +48,7 @@ pub struct DropSchema {
     pub output_schema: DFSchemaRef,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Vacuum {
     /// Denotes whether to vacuum dropped tables in a particular database
     pub database: Option<String>,
@@ -58,7 +60,7 @@ pub struct Vacuum {
     pub output_schema: DFSchemaRef,
 }
 
-#[derive(Debug, Clone)]
+#[derive(AsRefStr, Debug, Clone, Hash, PartialEq, Eq)]
 pub enum SeafowlExtensionNode {
     CreateTable(CreateTable),
     CreateFunction(CreateFunction),
@@ -76,6 +78,10 @@ impl SeafowlExtensionNode {
 impl UserDefinedLogicalNode for SeafowlExtensionNode {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn name(&self) -> &str {
+        self.as_ref()
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -144,5 +150,17 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
         _inputs: &[LogicalPlan],
     ) -> Arc<dyn UserDefinedLogicalNode> {
         Arc::from(self.clone())
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s)
+    }
+
+    fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
+        match other.as_any().downcast_ref::<Self>() {
+            Some(o) => self == o,
+            None => false,
+        }
     }
 }

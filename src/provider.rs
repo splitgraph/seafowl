@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use datafusion::common::Column;
 use datafusion::execution::context::{default_session_builder, ExecutionProps};
 use datafusion::logical_expr::TableProviderFilterPushDown;
+use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::expressions::{case, cast, col};
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
@@ -250,7 +251,7 @@ impl SeafowlTable {
         &self,
         projection: Option<&Vec<usize>>,
         partitions: Vec<SeafowlPartition>,
-        filters: &[Expr],
+        filter_expr: Option<Arc<dyn PhysicalExpr>>,
         limit: Option<usize>,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -283,7 +284,7 @@ impl SeafowlTable {
         let format = ParquetFormat::new();
         let session_state = default_session_builder(SessionConfig::default());
         format
-            .create_physical_plan(&session_state, config, filters)
+            .create_physical_plan(&session_state, config, (&filter_expr).into())
             .await
     }
 }
@@ -315,20 +316,37 @@ impl TableProvider for SeafowlTable {
             .await?;
 
         // Try to prune away redundant partitions
-        if !filters.is_empty() {
+        let filter_expr = if !filters.is_empty() {
             match SeafowlPruningStatistics::from_partitions(
                 partitions.clone(),
                 self.schema(),
             ) {
-                Ok(pruning_stats) => partitions = pruning_stats.prune(filters).await,
+                Ok(pruning_stats) => {
+                    let filter_expr = conjunction(filters.iter().cloned())
+                        .map(|expr| {
+                            create_physical_expr(
+                                &expr,
+                                &DFSchema::try_from(self.schema().as_ref().clone())
+                                    .unwrap(),
+                                self.schema().as_ref(),
+                                &ExecutionProps::new(),
+                            )
+                        })
+                        .unwrap()?;
+                    partitions = pruning_stats.prune(filter_expr.clone()).await;
+                    Some(filter_expr)
+                }
                 Err(error) => {
                     warn!(
                         "Failed constructing pruning statistics for table {} (version: {}): {}",
                         self.name, self.table_version_id, error
-                    )
+                    );
+                    None
                 }
-            };
-        }
+            }
+        } else {
+            None
+        };
 
         // Get our object store (with a hardcoded scheme)
         let object_store_url = internal_object_store_url();
@@ -337,7 +355,7 @@ impl TableProvider for SeafowlTable {
         Ok(Arc::new(SeafowlBaseTableScanNode {
             partitions: Arc::new(partitions.clone()),
             inner: self
-                .partition_scan_plan(projection, partitions, filters, limit, store)
+                .partition_scan_plan(projection, partitions, filter_expr, limit, store)
                 .await?,
         }))
     }
@@ -469,34 +487,33 @@ impl SeafowlPruningStatistics {
     }
 
     // Prune away partitions that are refuted by the provided filter expressions
-    pub async fn prune(&self, filters: &[Expr]) -> Vec<SeafowlPartition> {
+    pub async fn prune(
+        &self,
+        filter_expr: Arc<dyn PhysicalExpr>,
+    ) -> Vec<SeafowlPartition> {
         let mut partition_mask = vec![true; self.partition_count];
 
-        if !filters.is_empty() {
-            for expr in filters {
-                match PruningPredicate::try_new(expr.clone(), self.schema.clone()) {
-                    Ok(predicate) => match predicate.prune(self) {
-                        Ok(expr_mask) => {
-                            partition_mask = partition_mask
-                                .iter()
-                                .zip(expr_mask)
-                                .map(|(&a, b)| a && b)
-                                .collect()
-                        }
-                        Err(error) => {
-                            warn!(
-                                "Failed pruning the partitions for expr {:?}: {}",
-                                expr, error
-                            );
-                        }
-                    },
-                    Err(error) => {
-                        warn!(
-                            "Failed constructing a pruning predicate for expr {:?}: {}",
-                            expr, error
-                        );
-                    }
+        match PruningPredicate::try_new(filter_expr.clone(), self.schema.clone()) {
+            Ok(predicate) => match predicate.prune(self) {
+                Ok(expr_mask) => {
+                    partition_mask = partition_mask
+                        .iter()
+                        .zip(expr_mask)
+                        .map(|(&a, b)| a && b)
+                        .collect()
                 }
+                Err(error) => {
+                    warn!(
+                        "Failed pruning the partitions for expr {:?}: {}",
+                        filter_expr, error
+                    );
+                }
+            },
+            Err(error) => {
+                warn!(
+                    "Failed constructing a pruning predicate for expr {:?}: {}",
+                    filter_expr, error
+                );
             }
         }
 
@@ -657,7 +674,10 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::{BufMut, Bytes, BytesMut};
     use datafusion::common::ScalarValue;
+    use datafusion::execution::context::ExecutionProps;
     use datafusion::logical_expr::{col, lit, or, Expr};
+    use datafusion::optimizer::utils::conjunction;
+    use datafusion::physical_expr::create_physical_expr;
     use datafusion::{
         arrow::{
             array::{ArrayRef, Int64Array},
@@ -669,9 +689,11 @@ mod tests {
         physical_plan::collect,
         prelude::{SessionConfig, SessionContext},
     };
+    use datafusion_common::DFSchema;
     use mockall::predicate;
     use object_store::{memory::InMemory, path::Path, ObjectStore};
     use rstest::rstest;
+    use url::Url;
 
     use crate::data_types::PhysicalPartitionId;
     use crate::provider::{PartitionColumn, SeafowlPruningStatistics};
@@ -714,8 +736,7 @@ mod tests {
         let session_config = SessionConfig::new().with_information_schema(true);
         let context = SessionContext::with_config(session_config);
         context.runtime_env().register_object_store(
-            INTERNAL_OBJECT_STORE_SCHEME,
-            "",
+            &Url::parse(INTERNAL_OBJECT_STORE_SCHEME).unwrap(),
             Arc::new(object_store),
         );
 
@@ -865,11 +886,23 @@ mod tests {
 
         // Create the main partition pruning handler
         let pruning_stats =
-            SeafowlPruningStatistics::from_partitions(partitions.clone(), schema)
+            SeafowlPruningStatistics::from_partitions(partitions.clone(), schema.clone())
                 .unwrap();
 
+        let filter_expr = conjunction(filters.iter().cloned())
+            .map(|expr| {
+                create_physical_expr(
+                    &expr,
+                    &DFSchema::try_from(schema.as_ref().clone()).unwrap(),
+                    &schema,
+                    &ExecutionProps::new(),
+                )
+            })
+            .unwrap()
+            .unwrap();
+
         // Prune the partitions
-        let pruned = pruning_stats.prune(filters.as_slice()).await;
+        let pruned = pruning_stats.prune(filter_expr).await;
 
         // Ensure pruning worked correctly
         assert_eq!(pruned.len(), expected.len());

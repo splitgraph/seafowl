@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,7 +9,7 @@ use crate::{
     context::{DefaultSeafowlContext, INTERNAL_OBJECT_STORE_SCHEME},
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
-use datafusion::datasource::datasource::TableProviderFactory;
+use datafusion::execution::context::SessionState;
 use datafusion::{
     error::DataFusionError,
     execution::runtime_env::{RuntimeConfig, RuntimeEnv},
@@ -32,6 +31,7 @@ use datafusion_remote_tables::factory::RemoteTableFactory;
 use object_store::aws::AmazonS3Builder;
 use parking_lot::lock_api::RwLock;
 use tempfile::TempDir;
+use url::Url;
 
 use super::schema::{self, MEBIBYTES, MEMORY_FRACTION, S3};
 
@@ -128,7 +128,26 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
     }
 }
 
-#[allow(unused_mut)]
+// Construct the session state and register additional table factories besides the default ones for
+// PARQUET, CSV, etc.
+pub fn build_state_with_table_factories(
+    config: SessionConfig,
+    runtime: Arc<RuntimeEnv>,
+) -> SessionState {
+    let mut state = SessionState::with_config_rt(config, runtime);
+
+    state
+        .table_factories_mut()
+        .insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
+    #[cfg(feature = "remote-tables")]
+    {
+        state
+            .table_factories_mut()
+            .insert("TABLE".to_string(), Arc::new(RemoteTableFactory {}));
+    }
+    state
+}
+
 pub async fn build_context(
     cfg: &schema::SeafowlConfig,
 ) -> Result<DefaultSeafowlContext, DataFusionError> {
@@ -150,26 +169,13 @@ pub async fn build_context(
     // (issues with PartitionMode::CollectLeft hash joins if a single target partition)
     let target_partitions = session_config.target_partitions().max(2);
     let session_config = session_config.with_target_partitions(target_partitions);
-
-    // Construct and register additional table factories (e.g. for generating remote tables) besides
-    // the default ones for PARQUET, CSV, etc.
-    let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-        HashMap::new();
-    table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
-    #[cfg(feature = "remote-tables")]
-    {
-        table_factories.insert("TABLE".to_string(), Arc::new(RemoteTableFactory {}));
-    }
-
-    let mut runtime_env = RuntimeEnv::new(runtime_config)?;
-    runtime_env.register_table_factories(table_factories);
-
-    let context = SessionContext::with_config_rt(session_config, Arc::new(runtime_env));
+    let runtime_env = RuntimeEnv::new(runtime_config)?;
+    let state = build_state_with_table_factories(session_config, Arc::new(runtime_env));
+    let context = SessionContext::with_state(state);
 
     let object_store = build_object_store(cfg);
     context.runtime_env().register_object_store(
-        INTERNAL_OBJECT_STORE_SCHEME,
-        "",
+        &Url::parse(INTERNAL_OBJECT_STORE_SCHEME).unwrap(),
         object_store.clone(),
     );
 

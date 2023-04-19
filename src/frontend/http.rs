@@ -16,7 +16,8 @@ use bytes::{BufMut, Bytes};
 use datafusion::datasource::DefaultTableSource;
 use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 use datafusion::physical_plan::memory::MemoryExec;
-use datafusion_expr::logical_plan::{LogicalPlan, PlanVisitor, TableScan};
+use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
+use datafusion_expr::logical_plan::{LogicalPlan, TableScan};
 use deltalake::parquet::data_type::AsBytes;
 use deltalake::DeltaTable;
 use futures::{future, TryStreamExt};
@@ -60,10 +61,13 @@ struct ETagBuilderVisitor {
     table_versions: Vec<u8>,
 }
 
-impl PlanVisitor for ETagBuilderVisitor {
-    type Error = Infallible;
+impl TreeNodeVisitor for ETagBuilderVisitor {
+    type N = LogicalPlan;
 
-    fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+    fn pre_visit(
+        &mut self,
+        plan: &LogicalPlan,
+    ) -> Result<VisitRecursion, DataFusionError> {
         if let LogicalPlan::TableScan(TableScan { source, .. }) = plan {
             // TODO handle external Parquet tables too
             if let Some(default_table_source) =
@@ -81,13 +85,13 @@ impl PlanVisitor for ETagBuilderVisitor {
                 }
             }
         }
-        Ok(true)
+        Ok(VisitRecursion::Continue)
     }
 }
 
 fn plan_to_etag(plan: &LogicalPlan) -> String {
     let mut visitor = ETagBuilderVisitor::default();
-    plan.accept(&mut visitor).unwrap();
+    plan.visit(&mut visitor).unwrap();
 
     debug!("Extracted table versions: {:?}", visitor.table_versions);
 

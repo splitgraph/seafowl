@@ -14,7 +14,7 @@ use tokio::io::AsyncWrite;
 use tokio::fs::{copy, create_dir_all, remove_file, rename};
 
 use deltalake::storage::DeltaObjectStore;
-use object_store::prefix::PrefixObjectStore;
+use object_store::prefix::PrefixStore;
 use std::path::Path as StdPath;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -54,18 +54,18 @@ impl InternalObjectStore {
     // Wrap our object store with a prefixed one corresponding to the full path to the actual table
     // root, and then wrap that with a delta object store. This is done because:
     // 1. `DeltaObjectStore` needs an object store with "/" pointing at delta table root
-    //     (i.e. where `_delta_log` is located), hence the `PrefixObjectStore`.
+    //     (i.e. where `_delta_log` is located), hence the `PrefixStore`.
     // 2. We want to re-use the underlying object store that we build initially during startup,
     //     instead of re-building one from scratch whenever we need it (not necessarily for perf
     //     reasons, but rather because the memory object store doesn't work otherwise). However,
-    //     `PrefixObjectStore` has a trait bound of `T: ObjectStore`, which isn't satisfied by
+    //     `PrefixStore` has a trait bound of `T: ObjectStore`, which isn't satisfied by
     //     `Arc<dyn ObjectStore>`, so we need another intermediary, which is where
     //     `InternalObjectStore` comes in.
     // This does mean that we have 3 layers of indirection before we hit the "real" object store
-    // (`DeltaObjectStore` -> `PrefixObjectStore` -> `InternalObjectStore` -> `inner`).
+    // (`DeltaObjectStore` -> `PrefixStore` -> `InternalObjectStore` -> `inner`).
     pub fn for_delta_table(&self, table_uuid: Uuid) -> Arc<DeltaObjectStore> {
-        let prefixed_store: PrefixObjectStore<InternalObjectStore> =
-            PrefixObjectStore::new(self.clone(), table_uuid.to_string());
+        let prefixed_store: PrefixStore<InternalObjectStore> =
+            PrefixStore::new(self.clone(), table_uuid.to_string());
 
         Arc::from(DeltaObjectStore::new(
             Arc::from(prefixed_store),

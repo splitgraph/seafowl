@@ -145,7 +145,7 @@ async fn main() {
         )
         .init();
 
-    info!("Starting Seafowl {}", env!("VERGEN_GIT_SEMVER"));
+    info!("Starting Seafowl {}", env!("VERGEN_BUILD_SEMVER"));
 
     let config_path = &args.config_path;
 

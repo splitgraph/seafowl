@@ -6,7 +6,7 @@ use bytes::BytesMut;
 use std::borrow::Cow;
 
 use datafusion::datasource::TableProvider;
-use datafusion::parquet::basic::Compression;
+use datafusion::parquet::basic::{Compression, ZstdLevel};
 use itertools::Itertools;
 use object_store::local::LocalFileSystem;
 use std::collections::HashMap;
@@ -57,7 +57,6 @@ use datafusion::datasource::file_format::json::JsonFormat;
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::optimizer::optimizer::Optimizer;
 use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
-use datafusion::optimizer::type_coercion::TypeCoercion;
 use datafusion::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::physical_expr::expressions::{cast, Column};
@@ -101,6 +100,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
+use crate::config::context::build_state_with_table_factories;
 use crate::datafusion::visit::VisitorMut;
 use crate::delta_rs::backport_create_add::{create_add, NullCounts};
 use crate::delta_rs::backports::parquet_scan_from_actions;
@@ -122,7 +122,7 @@ use crate::{
 
 // Scheme used for URLs referencing the object store that we use to register
 // with DataFusion's object store registry.
-pub const INTERNAL_OBJECT_STORE_SCHEME: &str = "seafowl";
+pub const INTERNAL_OBJECT_STORE_SCHEME: &str = "seafowl://";
 
 // Max Parquet row group size, in rows. This is what the ArrowWriter uses to determine how many
 // rows to buffer in memory before flushing them out to disk. The default for this is 1024^2, which
@@ -152,7 +152,7 @@ fn get_uuid() -> Uuid {
 }
 
 pub fn internal_object_store_url() -> ObjectStoreUrl {
-    ObjectStoreUrl::parse(format!("{INTERNAL_OBJECT_STORE_SCHEME}://")).unwrap()
+    ObjectStoreUrl::parse(INTERNAL_OBJECT_STORE_SCHEME).unwrap()
 }
 
 pub fn remove_quotes_from_ident(possibly_quoted_name: &Ident) -> Ident {
@@ -293,7 +293,7 @@ fn temp_partition_file_writer(
 
     let writer_properties = WriterProperties::builder()
         .set_max_row_group_size(MAX_ROW_GROUP_SIZE)
-        .set_compression(Compression::ZSTD)
+        .set_compression(Compression::ZSTD(ZstdLevel::default())) // This defaults to MINIMUM_LEVEL
         .build();
     let writer =
         ArrowWriter::try_new(file_writer, arrow_schema, Some(writer_properties))?;
@@ -587,11 +587,11 @@ impl DefaultSeafowlContext {
             .copied_config()
             .with_default_catalog_and_schema(name.clone(), DEFAULT_SCHEMA);
 
+        let state =
+            build_state_with_table_factories(session_config, self.inner().runtime_env());
+
         Ok(Arc::from(DefaultSeafowlContext {
-            inner: SessionContext::with_config_rt(
-                session_config,
-                self.inner().runtime_env(),
-            ),
+            inner: SessionContext::with_state(state),
             table_catalog: self.table_catalog.clone(),
             partition_catalog: self.partition_catalog.clone(),
             function_catalog: self.function_catalog.clone(),
@@ -640,14 +640,13 @@ impl DefaultSeafowlContext {
         &self,
         name: &OwnedTableReference,
     ) -> Result<OwnedTableReference> {
-        // NB: Since Datafusion 16.0.0 there's this OwnedTableReference enum and for external tables
-        // the parsed ObjectName (which may be multipart, fully-qualified name) is coerced into the
-        // `Bare` enum variant (see `external_table_to_plan` in datafusion-sql) for some reason.
+        // NB: Since Datafusion 16.0.0 for external tables the parsed ObjectName is coerced into the
+        // `OwnedTableReference::Bare` enum variant, since qualified names are not supported for them
+        // (see `external_table_to_plan` in datafusion-sql).
         //
         // This means that any potential catalog/schema references get condensed into the name, so
         // we have to unravel that name here again, and then resolve it properly.
-        let full_name = name.to_string();
-        let reference = TableReference::from(full_name.as_str());
+        let reference = TableReference::from(name.to_string());
         let resolved_reference = reference.resolve(&self.database, STAGING_SCHEMA);
 
         if resolved_reference.catalog != self.database
@@ -660,11 +659,7 @@ impl DefaultSeafowlContext {
             )));
         }
 
-        Ok(OwnedTableReference::Full {
-            catalog: resolved_reference.catalog.to_string(),
-            schema: resolved_reference.schema.to_string(),
-            table: resolved_reference.table.to_string(),
-        })
+        Ok(TableReference::from(resolved_reference).to_owned_reference())
     }
 
     /// Get a provider for a given table, return Err if it doesn't exist
@@ -992,16 +987,16 @@ impl DefaultSeafowlContext {
     ) -> Result<Arc<dyn TableProvider>> {
         let state = self.inner.state();
         let file_type = cmd.file_type.to_uppercase();
-        let factory = &state
-            .runtime_env()
-            .table_factories
-            .get(file_type.as_str())
-            .ok_or_else(|| {
-                DataFusionError::Execution(format!(
-                    "Unable to find factory for {}",
-                    cmd.file_type
-                ))
-            })?;
+        let factory =
+            &state
+                .table_factories()
+                .get(file_type.as_str())
+                .ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Unable to find factory for {}",
+                        cmd.file_type
+                    ))
+                })?;
         let table = (*factory).create(&state, cmd).await?;
         Ok(table)
     }
@@ -1212,8 +1207,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     // expressions
                     let optimizer = Optimizer::with_rules(
                         vec![
-                            Arc::new(TypeCoercion::new()),
-                            Arc::new(SimplifyExpressions::new())
+                            Arc::new(SimplifyExpressions::new()),
                         ]
                     );
                     let config = OptimizerContext::default();
@@ -1412,9 +1406,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 // Disallow the seafowl:// scheme (which is registered with DataFusion as our internal
                 // object store but shouldn't be accessible via CREATE EXTERNAL TABLE)
-                if location
-                    .starts_with(format!("{INTERNAL_OBJECT_STORE_SCHEME}://").as_str())
-                {
+                if location.starts_with(INTERNAL_OBJECT_STORE_SCHEME) {
                     return Err(DataFusionError::Plan(format!(
                         "Invalid URL scheme for location {location:?}"
                     )));
@@ -1480,6 +1472,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 input,
                 if_not_exists: _,
                 or_replace: _,
+                ..
             }) => {
                 // This is actually CREATE TABLE AS
                 let plan = self.create_physical_plan(input).await?;
@@ -1531,32 +1524,21 @@ impl SeafowlContext for DefaultSeafowlContext {
                     schema_ref.as_ref(),
                 )?;
 
-                let selection_expr =
+                let state = self.inner.state();
+
+                let (selection_expr, removes) =
                     if let LogicalPlan::Filter(Filter { predicate, .. }) = &**input {
-                        Some(create_physical_expr(
+                        // A WHERE clause has been used; employ it to prune the update down to only
+                        // a subset of files, while inheriting the rest from the previous version
+                        let filter_expr = create_physical_expr(
                             &predicate.clone(),
                             &df_schema,
                             schema_ref.as_ref(),
                             &ExecutionProps::new(),
-                        )?)
-                    } else {
-                        None
-                    };
+                        )?;
 
-                let projections = project_expressions(
-                    expr,
-                    &df_schema,
-                    schema_ref.as_ref(),
-                    selection_expr,
-                )?;
-                let state = self.inner.state();
-
-                let (filters, removes) =
-                    if let LogicalPlan::Filter(Filter { predicate, .. }) = &**input {
-                        // A WHERE clause has been used; employ it to prune the update down to only
-                        // a subset of files, while inheriting the rest from the previous version
                         let pruning_predicate = PruningPredicate::try_new(
-                            predicate.clone(),
+                            filter_expr.clone(),
                             schema_ref.clone(),
                         )?;
                         let prune_map = pruning_predicate.prune(&table)?;
@@ -1571,61 +1553,66 @@ impl SeafowlContext for DefaultSeafowlContext {
                             )
                             .collect::<Vec<Add>>();
 
-                        (vec![predicate.clone().not()], files_to_prune)
+                        (Some(filter_expr), files_to_prune)
                     } else {
                         // If no qualifier is specified we're basically updating the whole table.
-                        (vec![], table.get_state().files().clone())
+                        (None, table.get_state().files().clone())
                     };
 
-                if removes.is_empty() {
-                    // Nothing to update
-                    return Ok(make_dummy_exec());
-                }
-
-                let base_scan = parquet_scan_from_actions(
-                    &table,
-                    removes.as_slice(),
-                    schema_ref.as_ref(),
-                    filters.as_slice(),
-                    &state,
-                    None,
-                    None,
-                )
-                .await?;
-
-                // Apply the provided assignments
-                let update_plan: Arc<dyn ExecutionPlan> =
-                    Arc::new(ProjectionExec::try_new(projections.clone(), base_scan)?);
-
-                // Write the new files with updated data
                 let uuid = self.get_table_uuid(table_name).await?;
-                let adds = plan_to_object_store(
-                    &state,
-                    &update_plan,
-                    self.internal_object_store.clone(),
-                    uuid.to_string(),
-                    self.inner.runtime_env().disk_manager.clone(),
-                    self.max_partition_size,
-                )
-                .await?;
+                let mut actions: Vec<Action> = vec![];
+                if !removes.is_empty() {
+                    let base_scan = parquet_scan_from_actions(
+                        &table,
+                        removes.as_slice(),
+                        schema_ref.as_ref(),
+                        selection_expr.clone(),
+                        &state,
+                        None,
+                        None,
+                    )
+                    .await?;
 
-                let deletion_timestamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as i64;
+                    let projections = project_expressions(
+                        expr,
+                        &df_schema,
+                        schema_ref.as_ref(),
+                        selection_expr,
+                    )?;
 
-                let mut actions: Vec<Action> =
-                    adds.into_iter().map(Action::add).collect();
-                for remove in removes {
-                    actions.push(Action::remove(Remove {
-                        path: remove.path,
-                        deletion_timestamp: Some(deletion_timestamp),
-                        data_change: true,
-                        extended_file_metadata: Some(true),
-                        partition_values: Some(remove.partition_values),
-                        size: Some(remove.size),
-                        tags: None,
-                    }))
+                    // Apply the provided assignments
+                    let update_plan: Arc<dyn ExecutionPlan> = Arc::new(
+                        ProjectionExec::try_new(projections.clone(), base_scan)?,
+                    );
+
+                    // Write the new files with updated data
+                    let adds = plan_to_object_store(
+                        &state,
+                        &update_plan,
+                        self.internal_object_store.clone(),
+                        uuid.to_string(),
+                        self.inner.runtime_env().disk_manager.clone(),
+                        self.max_partition_size,
+                    )
+                    .await?;
+
+                    let deletion_timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64;
+
+                    actions = adds.into_iter().map(Action::add).collect();
+                    for remove in removes {
+                        actions.push(Action::remove(Remove {
+                            path: remove.path,
+                            deletion_timestamp: Some(deletion_timestamp),
+                            data_change: true,
+                            extended_file_metadata: Some(true),
+                            partition_values: Some(remove.partition_values),
+                            size: Some(remove.size),
+                            tags: None,
+                        }))
+                    }
                 }
 
                 let mut tx = table.create_transaction(None);
@@ -1657,19 +1644,15 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                         let state = self.inner.state();
 
-                        // To simulate the effect of a WHERE clause from a DELETE, we
-                        // need to use the inverse clause in a SELECT when filtering
-                        let filter = create_physical_expr(
-                            &predicate.clone().not(),
+                        let prune_expr = create_physical_expr(
+                            &predicate.clone(),
                             table_schema,
                             schema_ref.as_ref(),
                             &ExecutionProps::new(),
                         )?;
 
-                        let pruning_predicate = PruningPredicate::try_new(
-                            predicate.clone(),
-                            schema_ref.clone(),
-                        )?;
+                        let pruning_predicate =
+                            PruningPredicate::try_new(prune_expr, schema_ref.clone())?;
                         let prune_map = pruning_predicate.prune(&table)?;
                         let files_to_prune = table
                             .get_state()
@@ -1681,32 +1664,47 @@ impl SeafowlContext for DefaultSeafowlContext {
                             )
                             .collect::<Vec<Add>>();
 
-                        let base_scan = parquet_scan_from_actions(
-                            &table,
-                            files_to_prune.as_slice(),
-                            schema_ref.as_ref(),
-                            &[predicate.clone().not()],
-                            &state,
-                            None,
-                            None,
-                        )
-                        .await?;
+                        if files_to_prune.is_empty() {
+                            // The used WHERE clause doesn't match any of the partitions, so we don't
+                            // have any additions or removals for the new tables state.
+                            (vec![], vec![])
+                        } else {
+                            // To simulate the effect of a WHERE clause from a DELETE, we need to use the
+                            // inverse clause in a scan, when filtering the rows that should remain.
+                            let filter_expr = create_physical_expr(
+                                &predicate.clone().not(),
+                                table_schema,
+                                schema_ref.as_ref(),
+                                &ExecutionProps::new(),
+                            )?;
 
-                        let filter_plan: Arc<dyn ExecutionPlan> =
-                            Arc::new(FilterExec::try_new(filter, base_scan)?);
+                            let base_scan = parquet_scan_from_actions(
+                                &table,
+                                files_to_prune.as_slice(),
+                                schema_ref.as_ref(),
+                                Some(filter_expr.clone()),
+                                &state,
+                                None,
+                                None,
+                            )
+                            .await?;
 
-                        // Write the filtered out data
-                        let adds = plan_to_object_store(
-                            &state,
-                            &filter_plan,
-                            self.internal_object_store.clone(),
-                            uuid.to_string(),
-                            self.inner.runtime_env().disk_manager.clone(),
-                            self.max_partition_size,
-                        )
-                        .await?;
+                            let filter_plan: Arc<dyn ExecutionPlan> =
+                                Arc::new(FilterExec::try_new(filter_expr, base_scan)?);
 
-                        (adds, files_to_prune)
+                            // Write the filtered out data
+                            let adds = plan_to_object_store(
+                                &state,
+                                &filter_plan,
+                                self.internal_object_store.clone(),
+                                uuid.to_string(),
+                                self.inner.runtime_env().disk_manager.clone(),
+                                self.max_partition_size,
+                            )
+                            .await?;
+
+                            (adds, files_to_prune)
+                        }
                     } else {
                         // If no qualifier is specified we're basically truncating the table.
                         // Remove all files.
@@ -2711,7 +2709,7 @@ mod tests {
             .await.unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Schema error: Schema contains duplicate unqualified field name 'date'"
+            "Schema error: Schema contains duplicate unqualified field name date"
         );
     }
 
