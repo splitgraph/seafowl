@@ -37,8 +37,8 @@ use mockall::automock;
 use object_store::{path::Path, ObjectStore};
 
 use sqlparser::ast::{
-    AlterTableOperation, CreateFunctionBody, Expr as SqlExpr, FunctionDefinition, Ident,
-    ObjectName, ObjectType, SchemaName, Statement, TableFactor, TableWithJoins,
+    AlterTableOperation, CreateFunctionBody, Expr as SqlExpr, FunctionDefinition,
+    ObjectType, Statement, TableFactor, TableWithJoins,
 };
 
 use arrow_schema::{DataType, TimeUnit};
@@ -153,29 +153,6 @@ fn get_uuid() -> Uuid {
 
 pub fn internal_object_store_url() -> ObjectStoreUrl {
     ObjectStoreUrl::parse(INTERNAL_OBJECT_STORE_SCHEME).unwrap()
-}
-
-pub fn remove_quotes_from_ident(possibly_quoted_name: &Ident) -> Ident {
-    Ident::new(&possibly_quoted_name.value)
-}
-
-pub fn remove_quotes_from_idents(column_names: &[Ident]) -> Vec<Ident> {
-    column_names.iter().map(remove_quotes_from_ident).collect()
-}
-
-pub fn remove_quotes_from_object_name(name: &ObjectName) -> ObjectName {
-    ObjectName(remove_quotes_from_idents(&name.0))
-}
-
-pub fn remove_quotes_from_schema_name(name: &SchemaName) -> SchemaName {
-    match name {
-        SchemaName::Simple(schema_name) => {
-            SchemaName::Simple(remove_quotes_from_object_name(schema_name))
-        }
-        SchemaName::UnnamedAuthorization(_) | SchemaName::NamedAuthorization(_, _) => {
-            name.to_owned()
-        }
-    }
 }
 
 /// Load the Statistics for a Parquet file in memory
@@ -1176,18 +1153,13 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                     state.statement_to_plan(DFStatement::Statement(Box::from(Statement::Query(q)))).await
                 },
-                Statement::CreateSchema { schema_name, if_not_exists } => state.statement_to_plan(
-                    DFStatement::Statement(Box::from(Statement::CreateSchema {
-                        schema_name: remove_quotes_from_schema_name(&schema_name),
-                        if_not_exists
-                    }))
-                ).await,
                 // Delegate generic queries to the basic DataFusion logical planner
                 // (though note EXPLAIN [our custom query] will mean we have to implement EXPLAIN ourselves)
                 Statement::Explain { .. }
                 | Statement::ShowVariable { .. }
                 | Statement::ShowTables { .. }
                 | Statement::ShowColumns { .. }
+                | Statement::CreateSchema { .. }
                 | Statement::CreateView { .. }
                 | Statement::CreateDatabase { .. } => state.statement_to_plan(statement).await,
                 Statement::Insert{ .. } => {
@@ -1224,21 +1196,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     let plan = state.statement_to_plan(statement).await?;
                     state.optimize(&plan)
                 }
-                Statement::Drop { object_type: ObjectType::Table,
-                    if_exists,
-                    names,
-                    cascade,
-                    restrict,
-                    purge } => {
-                    let drop = Statement::Drop {
-                        object_type: ObjectType::Table,
-                        if_exists,
-                        names: names.iter().map(remove_quotes_from_object_name).collect(),
-                        cascade,
-                        restrict,
-                        purge };
-                    state.statement_to_plan(DFStatement::Statement(Box::from(drop))).await
-                },
+                Statement::Drop { object_type: ObjectType::Table, .. } => state.statement_to_plan(statement).await,
                 Statement::Drop { object_type: ObjectType::Schema,
                     if_exists: _,
                     names,
@@ -1270,7 +1228,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::CreateTable(CreateTable {
                             schema,
-                            name: remove_quotes_from_object_name(&name).to_string(),
+                            name: name.to_string(),
                             if_not_exists,
                             output_schema: Arc::new(DFSchema::empty())
                         })),
