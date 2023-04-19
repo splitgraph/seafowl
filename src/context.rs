@@ -2680,23 +2680,20 @@ mod tests {
         context.collect(plan).await.unwrap();
 
         let plan = context
-            .plan_query(format!(r#"CREATE SCHEMA "schema/slash-dash:colon""#).as_str())
+            .plan_query(r#"CREATE SCHEMA "schema/slash-dash:colon""#)
             .await
             .unwrap();
         context.collect(plan).await.unwrap();
 
         let plan = context
-            .plan_query(format!(r#"ALTER TABLE test_table RENAME TO "schema/slash-dash:colon"."table/slash-dash:colon""#).as_str())
+            .plan_query(r#"ALTER TABLE test_table RENAME TO "schema/slash-dash:colon"."table/slash-dash:colon""#)
             .await
             .unwrap();
         context.collect(plan).await.unwrap();
 
         let plan = context
             .plan_query(
-                format!(
-                    r#"SELECT * FROM "schema/slash-dash:colon"."table/slash-dash:colon""#
-                )
-                .as_str(),
+                r#"SELECT * FROM "schema/slash-dash:colon"."table/slash-dash:colon""#,
             )
             .await
             .unwrap();
