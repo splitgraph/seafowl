@@ -349,12 +349,13 @@ async fn test_table_time_travel() {
     assert_batches_eq!(expected, &results);
 }
 
+// There's a regression in DF 22, where the two introspection tests fail with
+// "Date64 < Timestamp(Nanosecond, None) can't be evaluated because there isn't a common type to coerce the types to"
+// Disabling them for now.
 #[cfg(feature = "remote-tables")]
 #[rstest]
-// Fails with "Date64 < Timestamp(Nanosecond, None) can't be evaluated because there isn't a common type to coerce the types to" ion DF 22
 // #[case::postgres_schema_introspected("Postgres", true)]
 #[case::postgres_schema_declared("Postgres", false)]
-// Fails with "Date64 < Timestamp(Nanosecond, None) can't be evaluated because there isn't a common type to coerce the types to" ion DF 22
 // #[case::sqlite_schema_introspected("SQLite", true)]
 #[case::sqlite_schema_declared("SQLite", false)]
 #[tokio::test]

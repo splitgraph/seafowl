@@ -52,6 +52,16 @@ async fn test_delete_statement(
     create_table_and_some_partitions(&context, "test_table", None).await;
 
     //
+    // Ensure we have 4 partitions, and record their file names
+    //
+    let mut table = context.try_get_delta_table("test_table").await.unwrap();
+    table.load().await.unwrap();
+    let mut all_partitions = table.get_files().clone();
+    assert_eq!(all_partitions.len(), 4);
+    let partition_1 = all_partitions.first().unwrap().clone();
+    let partition_4 = all_partitions.last().unwrap().clone();
+
+    //
     // Check DELETE's query plan to make sure 46 (int) gets cast to a float value by the optimizer
     //
     let plan = context
@@ -66,7 +76,7 @@ async fn test_delete_statement(
     );
 
     //
-    // Execute DELETE affecting partitions two of the partitions and creating new table_version
+    // Execute DELETE affecting partitions two and three, and creating new table_version
     //
     let plan = context
         .plan_query("DELETE FROM test_table WHERE some_value > 46")
@@ -98,31 +108,43 @@ async fn test_delete_statement(
     ];
     assert_batches_eq!(expected, &results);
 
-    //
-    // Execute a no-op DELETE, leaving the new table version the same as the prior one
-    //
-
-    let plan = context
-        .plan_query("DELETE FROM test_table WHERE some_value < 35")
-        .await
-        .unwrap();
-    context.collect(plan).await.unwrap();
-
-    let plan = context
-        .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
-    assert_batches_eq!(expected, &results);
+    // Ensure partitions 2 and 3 have been fused into a new partition, and record it.
+    table.load().await.unwrap();
+    match table.get_files().as_slice() {
+        [f_1, f_2, f_3]
+            if f_1 == &partition_1
+                && f_2 == &partition_4
+                && !all_partitions.contains(f_3) =>
+        {
+            all_partitions.push(f_3.clone())
+        }
+        _ => panic!("Expected exactly 2 inherited and 1 new partition"),
+    };
+    let partition_5 = all_partitions.last().unwrap().clone();
 
     //
-    // Add another partition for a new table_version
+    // Add another partition for a new table_version and record the new partition
     //
     let plan = context
         .plan_query("INSERT INTO test_table (some_value) VALUES (48), (49), (50)")
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
+
+    // Expect too see a new (6th) partition
+    table.load().await.unwrap();
+    match table.get_files().as_slice() {
+        [f_1, f_2, f_3, f_4]
+            if f_1 == &partition_1
+                && f_2 == &partition_4
+                && f_3 == &partition_5
+                && !all_partitions.contains(f_4) =>
+        {
+            all_partitions.push(f_4.clone())
+        }
+        _ => panic!("Expected exactly 3 inherited and 1 new partition"),
+    };
+    let _partition_6 = all_partitions.last().unwrap().clone();
 
     //
     // Execute DELETE not affecting only partition with id 4, while trimming/combining the rest
@@ -156,6 +178,39 @@ async fn test_delete_statement(
     ];
     assert_batches_eq!(expected, &results);
 
+    table.load().await.unwrap();
+    match table.get_files().as_slice() {
+        [f_1, f_2] if f_1 == &partition_4 && !all_partitions.contains(f_2) => {
+            all_partitions.push(f_2.clone())
+        }
+        _ => panic!("Expected exactly 1 inherited and 1 new partition"),
+    };
+    let partition_7 = all_partitions.last().unwrap().clone();
+
+    //
+    // Execute a no-op DELETE, leaving the new table version the same as the prior one
+    //
+
+    let plan = context
+        .plan_query("DELETE FROM test_table WHERE some_value < 35")
+        .await
+        .unwrap();
+    context.collect(plan).await.unwrap();
+
+    let plan = context
+        .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+    assert_batches_eq!(expected, &results);
+
+    // Both partitions are inherited from the previous version
+    table.load().await.unwrap();
+    match table.get_files().as_slice() {
+        [f_1, f_2] if f_1 == &partition_4 && f_2 == &partition_7 => {}
+        _ => panic!("Expected same partitions as before"),
+    };
+
     //
     // Execute DELETE with multiple qualifiers
     //
@@ -185,6 +240,13 @@ async fn test_delete_statement(
     ];
     assert_batches_eq!(expected, &results);
 
+    // Still only one partition file, but different from before
+    table.load().await.unwrap();
+    match table.get_files()[..] {
+        [ref f_1] if !all_partitions.contains(f_1) => all_partitions.push(f_1.clone()),
+        _ => panic!("Expected exactly 1 new partition different from the previous one"),
+    };
+
     //
     // Execute blank DELETE, without qualifiers
     //
@@ -199,6 +261,9 @@ async fn test_delete_statement(
     let results = context.collect(plan).await.unwrap();
 
     assert!(results.is_empty());
+
+    table.load().await.unwrap();
+    assert!(table.get_files().is_empty())
 }
 
 #[tokio::test]
@@ -281,7 +346,17 @@ async fn test_update_statement(
     create_table_and_some_partitions(&context, "test_table", None).await;
 
     //
-    // Execute UPDATE with a selection, affecting only some files
+    // Ensure we have 4 partitions, and record their file names
+    //
+    let mut table = context.try_get_delta_table("test_table").await.unwrap();
+    table.load().await.unwrap();
+    let mut all_partitions = table.get_files().clone();
+    assert_eq!(all_partitions.len(), 4);
+    let partition_2 = all_partitions[1].clone();
+    let partition_3 = all_partitions[2].clone();
+
+    //
+    // Execute UPDATE with a selection, affecting only partitions 1 and 4
     //
     let query = "UPDATE test_table
     SET some_time = '2022-01-01 21:21:21Z', some_int_value = 5555, some_value = some_value - 10
@@ -327,6 +402,20 @@ async fn test_update_statement(
     ];
     assert_batches_eq!(expected, &results);
 
+    // Ensure partitions 1 and 4 have been fused into a new partition, and record it.
+    table.load().await.unwrap();
+    match table.get_files().as_slice() {
+        [f_1, f_2, f_3]
+            if f_1 == &partition_2
+                && f_2 == &partition_3
+                && !all_partitions.contains(f_3) =>
+        {
+            all_partitions.push(f_3.clone())
+        }
+        _ => panic!("Expected exactly 2 inherited and 1 new partition"),
+    };
+    let partition_5 = all_partitions.last().unwrap().clone();
+
     //
     // Execute UPDATE that doesn't change anything
     //
@@ -342,6 +431,14 @@ async fn test_update_statement(
         .unwrap();
     let results = context.collect(plan).await.unwrap();
     assert_batches_eq!(expected, &results);
+
+    // Ensure partitions from before are still there
+    table.load().await.unwrap();
+    match table.get_files().as_slice() {
+        [f_1, f_2, f_3]
+            if f_1 == &partition_2 && f_2 == &partition_3 && f_3 == &partition_5 => {}
+        _ => panic!("Expected 3 inherited partitions"),
+    };
 
     //
     // Execute UPDATE that causes an error during planning/execution, to test that the subsequent
@@ -394,6 +491,12 @@ async fn test_update_statement(
         "+---------------------+------------+------------------+-----------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    table.load().await.unwrap();
+    match table.get_files().as_slice() {
+        [f_1] if !all_partitions.contains(f_1) => {}
+        _ => panic!("Expected only 1 new partition"),
+    };
 }
 
 #[tokio::test]

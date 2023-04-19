@@ -1559,62 +1559,60 @@ impl SeafowlContext for DefaultSeafowlContext {
                         (None, table.get_state().files().clone())
                     };
 
-                if removes.is_empty() {
-                    // Nothing to update
-                    return Ok(make_dummy_exec());
-                }
-
-                let base_scan = parquet_scan_from_actions(
-                    &table,
-                    removes.as_slice(),
-                    schema_ref.as_ref(),
-                    selection_expr.clone(),
-                    &state,
-                    None,
-                    None,
-                )
-                .await?;
-
-                let projections = project_expressions(
-                    expr,
-                    &df_schema,
-                    schema_ref.as_ref(),
-                    selection_expr,
-                )?;
-
-                // Apply the provided assignments
-                let update_plan: Arc<dyn ExecutionPlan> =
-                    Arc::new(ProjectionExec::try_new(projections.clone(), base_scan)?);
-
-                // Write the new files with updated data
                 let uuid = self.get_table_uuid(table_name).await?;
-                let adds = plan_to_object_store(
-                    &state,
-                    &update_plan,
-                    self.internal_object_store.clone(),
-                    uuid.to_string(),
-                    self.inner.runtime_env().disk_manager.clone(),
-                    self.max_partition_size,
-                )
-                .await?;
+                let mut actions: Vec<Action> = vec![];
+                if !removes.is_empty() {
+                    let base_scan = parquet_scan_from_actions(
+                        &table,
+                        removes.as_slice(),
+                        schema_ref.as_ref(),
+                        selection_expr.clone(),
+                        &state,
+                        None,
+                        None,
+                    )
+                    .await?;
 
-                let deletion_timestamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as i64;
+                    let projections = project_expressions(
+                        expr,
+                        &df_schema,
+                        schema_ref.as_ref(),
+                        selection_expr,
+                    )?;
 
-                let mut actions: Vec<Action> =
-                    adds.into_iter().map(Action::add).collect();
-                for remove in removes {
-                    actions.push(Action::remove(Remove {
-                        path: remove.path,
-                        deletion_timestamp: Some(deletion_timestamp),
-                        data_change: true,
-                        extended_file_metadata: Some(true),
-                        partition_values: Some(remove.partition_values),
-                        size: Some(remove.size),
-                        tags: None,
-                    }))
+                    // Apply the provided assignments
+                    let update_plan: Arc<dyn ExecutionPlan> = Arc::new(
+                        ProjectionExec::try_new(projections.clone(), base_scan)?,
+                    );
+
+                    // Write the new files with updated data
+                    let adds = plan_to_object_store(
+                        &state,
+                        &update_plan,
+                        self.internal_object_store.clone(),
+                        uuid.to_string(),
+                        self.inner.runtime_env().disk_manager.clone(),
+                        self.max_partition_size,
+                    )
+                    .await?;
+
+                    let deletion_timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64;
+
+                    actions = adds.into_iter().map(Action::add).collect();
+                    for remove in removes {
+                        actions.push(Action::remove(Remove {
+                            path: remove.path,
+                            deletion_timestamp: Some(deletion_timestamp),
+                            data_change: true,
+                            extended_file_metadata: Some(true),
+                            partition_values: Some(remove.partition_values),
+                            size: Some(remove.size),
+                            tags: None,
+                        }))
+                    }
                 }
 
                 let mut tx = table.create_transaction(None);
@@ -1646,19 +1644,15 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                         let state = self.inner.state();
 
-                        // To simulate the effect of a WHERE clause from a DELETE, we
-                        // need to use the inverse clause in a SELECT when filtering
-                        let filter = create_physical_expr(
-                            &predicate.clone().not(),
+                        let prune_expr = create_physical_expr(
+                            &predicate.clone(),
                             table_schema,
                             schema_ref.as_ref(),
                             &ExecutionProps::new(),
                         )?;
 
-                        let pruning_predicate = PruningPredicate::try_new(
-                            filter.clone(),
-                            schema_ref.clone(),
-                        )?;
+                        let pruning_predicate =
+                            PruningPredicate::try_new(prune_expr, schema_ref.clone())?;
                         let prune_map = pruning_predicate.prune(&table)?;
                         let files_to_prune = table
                             .get_state()
@@ -1670,32 +1664,47 @@ impl SeafowlContext for DefaultSeafowlContext {
                             )
                             .collect::<Vec<Add>>();
 
-                        let base_scan = parquet_scan_from_actions(
-                            &table,
-                            files_to_prune.as_slice(),
-                            schema_ref.as_ref(),
-                            Some(filter.clone()),
-                            &state,
-                            None,
-                            None,
-                        )
-                        .await?;
+                        if files_to_prune.is_empty() {
+                            // The used WHERE clause doesn't match any of the partitions, so we don't
+                            // have any additions or removals for the new tables state.
+                            (vec![], vec![])
+                        } else {
+                            // To simulate the effect of a WHERE clause from a DELETE, we need to use the
+                            // inverse clause in a scan, when filtering the rows that should remain.
+                            let filter_expr = create_physical_expr(
+                                &predicate.clone().not(),
+                                table_schema,
+                                schema_ref.as_ref(),
+                                &ExecutionProps::new(),
+                            )?;
 
-                        let filter_plan: Arc<dyn ExecutionPlan> =
-                            Arc::new(FilterExec::try_new(filter, base_scan)?);
+                            let base_scan = parquet_scan_from_actions(
+                                &table,
+                                files_to_prune.as_slice(),
+                                schema_ref.as_ref(),
+                                Some(filter_expr.clone()),
+                                &state,
+                                None,
+                                None,
+                            )
+                            .await?;
 
-                        // Write the filtered out data
-                        let adds = plan_to_object_store(
-                            &state,
-                            &filter_plan,
-                            self.internal_object_store.clone(),
-                            uuid.to_string(),
-                            self.inner.runtime_env().disk_manager.clone(),
-                            self.max_partition_size,
-                        )
-                        .await?;
+                            let filter_plan: Arc<dyn ExecutionPlan> =
+                                Arc::new(FilterExec::try_new(filter_expr, base_scan)?);
 
-                        (adds, files_to_prune)
+                            // Write the filtered out data
+                            let adds = plan_to_object_store(
+                                &state,
+                                &filter_plan,
+                                self.internal_object_store.clone(),
+                                uuid.to_string(),
+                                self.inner.runtime_env().disk_manager.clone(),
+                                self.max_partition_size,
+                            )
+                            .await?;
+
+                            (adds, files_to_prune)
+                        }
                     } else {
                         // If no qualifier is specified we're basically truncating the table.
                         // Remove all files.

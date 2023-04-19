@@ -110,10 +110,10 @@ async fn test_vacuum_table() -> Result<(), DataFusionError> {
 
     // Likewise, trying to time-travel to table_1 v1 will fail
     table_1.load_version(1).await?;
-    let plan = table_1
+    let err = table_1
         .scan(&context.inner.state(), Some(&vec![4_usize]), &[], None)
-        .await?;
-    let err = context.collect(plan).await.unwrap_err();
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains(".parquet not found"));
 
     // Run vacuum on table_2 as well
