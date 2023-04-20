@@ -17,6 +17,14 @@ async fn test_http_server_reader_writer() {
     let resp = post_query(&client, &uri, "SELECT 1", None).await;
     dbg!(&resp);
     assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "application/json; Int64(1)=Int64",
+    );
     assert_eq!(response_text(resp).await, "{\"Int64(1)\":1}\n");
 
     // POST CREATE TABLE as a read-only user
@@ -47,6 +55,14 @@ async fn test_http_server_reader_writer() {
     .await;
     dbg!(&resp);
     assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "application/json; col=Int32",
+    );
     assert_eq!(response_text(resp).await, "{\"col\":1}\n");
 
     // Test the DB-scoped endpoint variant

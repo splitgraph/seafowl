@@ -11,6 +11,7 @@ use warp::Rejection;
 use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow_integration_test::schema_from_json;
+use arrow_schema::SchemaRef;
 use bytes::{BufMut, Bytes};
 
 use datafusion::datasource::DefaultTableSource;
@@ -22,12 +23,13 @@ use deltalake::parquet::data_type::AsBytes;
 use deltalake::DeltaTable;
 use futures::{future, TryStreamExt};
 use hex::encode;
-use log::{debug, info};
+use log::{debug, info, warn};
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast::Receiver;
+use warp::http::HeaderValue;
 use warp::multipart::{FormData, Part};
 use warp::reply::{with_header, Response};
 use warp::{hyper::header, hyper::StatusCode, Filter, Reply};
@@ -100,6 +102,25 @@ fn plan_to_etag(plan: &LogicalPlan) -> String {
     encode(hasher.finalize())
 }
 
+// Construct a content-type header value that also includes schema information.
+fn content_type_with_schema(schema: SchemaRef) -> HeaderValue {
+    let output = schema
+        .fields
+        .iter()
+        .map(|f| format!("{}={}", f.name(), f.data_type()))
+        .collect::<Vec<String>>()
+        .join("; ");
+
+    match HeaderValue::from_str(format!("application/json; {output}").as_str()) {
+        Ok(value) => value,
+        Err(err) => {
+            // Seems silly to error out here if the query itself succeeded.
+            warn!("Couldn't generate content type header for output schema {output}: {err:?}");
+            HeaderValue::from_static("application/json")
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct QueryBody {
     query: String,
@@ -126,7 +147,7 @@ pub async fn uncached_read_write_query(
     user_context: UserContext,
     query: String,
     mut context: Arc<DefaultSeafowlContext>,
-) -> Result<Vec<u8>, ApiError> {
+) -> Result<Response, ApiError> {
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
     if let Some(name) = database_name {
@@ -179,12 +200,19 @@ pub async fn uncached_read_write_query(
         plan_to_output = Some(context.create_physical_plan(&logical).await?);
     }
 
-    let buf = physical_plan_to_json(
-        context,
-        plan_to_output.expect("at least one statement in the list"),
-    )
-    .await?;
-    Ok(buf)
+    // Collect output for the last statement
+    let plan = plan_to_output.expect("at least one statement in the list");
+    let schema = plan.schema();
+    let buf = physical_plan_to_json(context, plan).await?;
+
+    // Construct the response and headers
+    let mut response = buf.into_response();
+    if reads > 0 {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, content_type_with_schema(schema));
+    }
+    Ok(response)
 }
 
 fn header_to_user_context(
@@ -299,9 +327,18 @@ pub async fn cached_read_query(
 
     // Guess we'll have to actually run the query
     let physical = context.create_physical_plan(&plan).await?;
+    let schema = physical.schema().clone();
     let buf = physical_plan_to_json(context, physical).await?;
 
-    Ok(with_header(buf, header::ETAG, etag).into_response())
+    // Construct the response and headers
+    let mut response = buf.into_response();
+    response
+        .headers_mut()
+        .insert(header::ETAG, etag.parse().unwrap());
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, content_type_with_schema(schema));
+    Ok(response)
 }
 
 /// POST /upload/[schema]/[table] or /[database]/upload/[schema]/[table]
@@ -811,6 +848,14 @@ pub mod tests {
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
             V1_ETAG
+        );
+        assert_eq!(
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/json; c=Int64",
         );
     }
 
@@ -1518,8 +1563,14 @@ pub mod tests {
             .contains("Only one read statement is allowed"));
     }
 
+    #[rstest]
+    #[case::cached_get(
+        "GET",
+        "/q/f7ff4745e8469a83bffdf247aef5f9ee2bbb9019bbf4a725b31ee36993d5d484"
+    )]
+    #[case::uncached_post("POST", "/q")]
     #[tokio::test]
-    async fn test_http_type_conversion() {
+    async fn test_http_type_conversion(#[case] method: &str, #[case] path: &str) {
         let context = Arc::new(in_memory_context().await);
         let handler = filters(
             context,
@@ -1548,12 +1599,24 @@ SELECT
         // CREATE TABLE queries with arrays, so we don't officially support arrays.
 
         let resp = request()
-            .method("POST")
-            .path("/q")
+            .method(method)
+            .path(path)
             .json(&HashMap::from([("query", query)]))
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/json; smallint_val=Int16; integer_val=Int32; bigint_val=Int64; char_val=Utf8; \
+            varchar_val=Utf8; text_val=Utf8; float_val=Float32; real_val=Float32; double_val=Float64; \
+            bool_val=Boolean; date_val=Date32; timestamp_val=Timestamp(Nanosecond, None); \
+            int_array_val=List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }); \
+            text_array_val=List(Field { name: \"item\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })",
+        );
         assert_eq!(
             resp.body(),
             &Bytes::from(

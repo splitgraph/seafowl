@@ -14,6 +14,7 @@ use seafowl::config::schema::load_config_from_string;
 use seafowl::frontend::http::filters;
 use warp::hyper::body::to_bytes;
 use warp::hyper::client::HttpConnector;
+use warp::hyper::header;
 use warp::hyper::Body;
 use warp::hyper::Client;
 use warp::hyper::Method;
