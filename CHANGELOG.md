@@ -4,6 +4,11 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Fix table renaming to quoted identifiers with special characters
+  (<https://github.com/splitgraph/seafowl/pull/362>)
+- Upgrade DataFusion to v22.0.0 and Arrow to v36.0.0
+  (<https://github.com/splitgraph/seafowl/pull/360>)
+
 ## [0.3.2] - 2023-04-04
 
 - Enable caching of S3 objects in the local FS (<https://github.com/splitgraph/seafowl/pull/341>)
