@@ -2670,46 +2670,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rename_table_special_characters() {
-        let context = in_memory_context().await;
-
-        let plan = context
-            .plan_query("CREATE TABLE test_table AS VALUES (1, 'one')")
-            .await
-            .unwrap();
-        context.collect(plan).await.unwrap();
-
-        let plan = context
-            .plan_query(r#"CREATE SCHEMA "schema/slash-dash:colon""#)
-            .await
-            .unwrap();
-        context.collect(plan).await.unwrap();
-
-        let plan = context
-            .plan_query(r#"ALTER TABLE test_table RENAME TO "schema/slash-dash:colon"."table/slash-dash:colon""#)
-            .await
-            .unwrap();
-        context.collect(plan).await.unwrap();
-
-        let plan = context
-            .plan_query(
-                r#"SELECT * FROM "schema/slash-dash:colon"."table/slash-dash:colon""#,
-            )
-            .await
-            .unwrap();
-        let results = context.collect(plan).await.unwrap();
-
-        let expected = vec![
-            "+---------+---------+",
-            "| column1 | column2 |",
-            "+---------+---------+",
-            "| 1       | one     |",
-            "+---------+---------+",
-        ];
-        assert_batches_eq!(expected, &results);
-    }
-
-    #[tokio::test]
     async fn test_register_udf() -> Result<()> {
         let sf_context = in_memory_context().await;
 

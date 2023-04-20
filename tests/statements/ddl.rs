@@ -201,17 +201,17 @@ async fn test_create_table_move_and_drop(
 
     // Move the table into a non-existent schema
     assert!(context
-        .plan_query("ALTER TABLE test_table_3 RENAME TO new_schema.test_table_3")
+        .plan_query("ALTER TABLE test_table_3 RENAME TO \"new_./-~:schema\".test_table_3")
         .await
         .unwrap_err()
         .to_string()
-        .contains("Schema \"new_schema\" does not exist!"));
+        .contains("Schema \"new_./-~:schema\" does not exist!"));
 
     // Create a schema and move the table to it
     context
         .collect(
             context
-                .plan_query("CREATE SCHEMA new_schema")
+                .plan_query("CREATE SCHEMA \"new_./-~:schema\"")
                 .await
                 .unwrap(),
         )
@@ -221,7 +221,9 @@ async fn test_create_table_move_and_drop(
     context
         .collect(
             context
-                .plan_query("ALTER TABLE test_table_3 RENAME TO new_schema.test_table_3")
+                .plan_query(
+                    "ALTER TABLE test_table_3 RENAME TO \"new_./-~:schema\".test_table_3",
+                )
                 .await
                 .unwrap(),
         )
@@ -238,15 +240,34 @@ async fn test_create_table_move_and_drop(
         "| information_schema | df_settings  |",
         "| information_schema | tables       |",
         "| information_schema | views        |",
-        "| new_schema         | test_table_3 |",
+        "| new_./-~:schema    | test_table_3 |",
         "| public             | test_table_2 |",
         "+--------------------+--------------+",
     ];
     assert_batches_eq!(expected, &results);
 
+    // Check that the renamed table is queryable
+    let plan = context
+        .plan_query("SELECT some_value FROM \"new_./-~:schema\".test_table_3")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+------------+",
+        "| some_value |",
+        "+------------+",
+        "| 42.0       |",
+        "| 43.0       |",
+        "| 44.0       |",
+        "+------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
     // Drop test_table_3
     let plan = context
-        .plan_query("DROP TABLE new_schema.test_table_3")
+        .plan_query("DROP TABLE \"new_./-~:schema\".test_table_3")
         .await
         .unwrap();
     context.collect(plan).await.unwrap();
