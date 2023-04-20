@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.3.3] - 2023-04-20
+
 - Fix table renaming to quoted identifiers with special characters
   (<https://github.com/splitgraph/seafowl/pull/362>)
 - Upgrade DataFusion to v22.0.0 and Arrow to v36.0.0
@@ -141,7 +143,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.3.2...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/splitgraph/seafowl/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/splitgraph/seafowl/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/splitgraph/seafowl/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/splitgraph/seafowl/compare/v0.2.12...v0.3.0
