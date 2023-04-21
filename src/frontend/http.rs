@@ -10,7 +10,7 @@ use warp::Rejection;
 
 use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
-use arrow_integration_test::schema_from_json;
+use arrow_integration_test::{schema_from_json, schema_to_json};
 use arrow_schema::SchemaRef;
 use bytes::{BufMut, Bytes};
 
@@ -104,14 +104,14 @@ fn plan_to_etag(plan: &LogicalPlan) -> String {
 
 // Construct a content-type header value that also includes schema information.
 fn content_type_with_schema(schema: SchemaRef) -> HeaderValue {
-    let output = schema
-        .fields
-        .iter()
-        .map(|f| format!("{}={}", f.name(), f.data_type()))
-        .collect::<Vec<String>>()
-        .join("; ");
+    let output = schema_to_json(schema.as_ref())
+        .to_string()
+        .escape_default()
+        .to_string();
 
-    match HeaderValue::from_str(format!("application/json; {output}").as_str()) {
+    match HeaderValue::from_str(
+        format!("application/json; arrow-schema=\"{output}\"").as_str(),
+    ) {
         Ok(value) => value,
         Err(err) => {
             // Seems silly to error out here if the query itself succeeded.
@@ -848,14 +848,6 @@ pub mod tests {
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
             V1_ETAG
-        );
-        assert_eq!(
-            resp.headers()
-                .get(header::CONTENT_TYPE)
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            "application/json; c=Int64",
         );
     }
 
@@ -1611,11 +1603,22 @@ SELECT
                 .unwrap()
                 .to_str()
                 .unwrap(),
-            "application/json; smallint_val=Int16; integer_val=Int32; bigint_val=Int64; char_val=Utf8; \
-            varchar_val=Utf8; text_val=Utf8; float_val=Float32; real_val=Float32; double_val=Float64; \
-            bool_val=Boolean; date_val=Date32; timestamp_val=Timestamp(Nanosecond, None); \
-            int_array_val=List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }); \
-            text_array_val=List(Field { name: \"item\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })",
+            "application/json; arrow-schema=\"{\\\"fields\\\":[\
+            {\\\"children\\\":[],\\\"name\\\":\\\"smallint_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"bitWidth\\\":16,\\\"isSigned\\\":true,\\\"name\\\":\\\"int\\\"}},\
+            {\\\"children\\\":[],\\\"name\\\":\\\"integer_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"bitWidth\\\":32,\\\"isSigned\\\":true,\\\"name\\\":\\\"int\\\"}},\
+            {\\\"children\\\":[],\\\"name\\\":\\\"bigint_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"bitWidth\\\":64,\\\"isSigned\\\":true,\\\"name\\\":\\\"int\\\"}},\
+            {\\\"children\\\":[],\\\"name\\\":\\\"char_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"utf8\\\"}},\
+            {\\\"children\\\":[],\\\"name\\\":\\\"varchar_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"utf8\\\"}},\
+            {\\\"children\\\":[],\\\"name\\\":\\\"text_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"utf8\\\"}},\
+            {\\\"children\\\":[],\\\"name\\\":\\\"float_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"floatingpoint\\\",\\\"precision\\\":\\\"SINGLE\\\"}},\
+            {\\\"children\\\":[],\\\"name\\\":\\\"real_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"floatingpoint\\\",\\\"precision\\\":\\\"SINGLE\\\"}},\
+            {\\\"children\\\":[],\\\"name\\\":\\\"double_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"floatingpoint\\\",\\\"precision\\\":\\\"DOUBLE\\\"}},\
+            {\\\"children\\\":[],\\\"name\\\":\\\"bool_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"bool\\\"}},\
+            {\\\"children\\\":[],\\\"name\\\":\\\"date_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"date\\\",\\\"unit\\\":\\\"DAY\\\"}},\
+            {\\\"children\\\":[],\\\"name\\\":\\\"timestamp_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"timestamp\\\",\\\"unit\\\":\\\"NANOSECOND\\\"}},\
+            {\\\"children\\\":[{\\\"children\\\":[],\\\"name\\\":\\\"item\\\",\\\"nullable\\\":true,\\\"type\\\":{\\\"bitWidth\\\":64,\\\"isSigned\\\":true,\\\"name\\\":\\\"int\\\"}}],\\\"name\\\":\\\"int_array_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"list\\\"}},\
+            {\\\"children\\\":[{\\\"children\\\":[],\\\"name\\\":\\\"item\\\",\\\"nullable\\\":true,\\\"type\\\":{\\\"name\\\":\\\"utf8\\\"}}],\\\"name\\\":\\\"text_array_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"list\\\"}}],\
+            \\\"metadata\\\":{}}\"",
         );
         assert_eq!(
             resp.body(),

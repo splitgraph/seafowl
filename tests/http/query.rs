@@ -23,7 +23,7 @@ async fn test_http_server_reader_writer() {
             .unwrap()
             .to_str()
             .unwrap(),
-        "application/json; Int64(1)=Int64",
+        r#"application/json; arrow-schema="{\"fields\":[{\"children\":[],\"name\":\"Int64(1)\",\"nullable\":false,\"type\":{\"bitWidth\":64,\"isSigned\":true,\"name\":\"int\"}}],\"metadata\":{}}""#,
     );
     assert_eq!(response_text(resp).await, "{\"Int64(1)\":1}\n");
 
@@ -61,7 +61,7 @@ async fn test_http_server_reader_writer() {
             .unwrap()
             .to_str()
             .unwrap(),
-        "application/json; col=Int32",
+        r#"application/json; arrow-schema="{\"fields\":[{\"children\":[],\"name\":\"col\",\"nullable\":true,\"type\":{\"bitWidth\":32,\"isSigned\":true,\"name\":\"int\"}}],\"metadata\":{}}""#,
     );
     assert_eq!(response_text(resp).await, "{\"col\":1}\n");
 
