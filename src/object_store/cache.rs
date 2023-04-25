@@ -404,7 +404,7 @@ mod tests {
     use std::{cmp::min, fs, ops::Range};
     use tempfile::TempDir;
 
-    use crate::object_store::testutils::make_mock_parquet_server;
+    use crate::testutils::make_mock_parquet_server;
 
     fn make_cached_object_store_small_fetch() -> CachingObjectStore {
         let tmp_dir = TempDir::new().unwrap();

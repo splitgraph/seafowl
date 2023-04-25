@@ -433,7 +433,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::HttpObjectStore;
-    use crate::object_store::testutils::make_mock_parquet_server;
+    use crate::testutils::make_mock_parquet_server;
 
     fn make_cached_object_store() -> CachingObjectStore {
         let tmp_dir = TempDir::new().unwrap();

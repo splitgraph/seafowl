@@ -24,7 +24,7 @@ use deltalake::DeltaTable;
 use futures::{future, TryStreamExt};
 use hex::encode;
 use log::{debug, info, warn};
-use percent_encoding::percent_decode_str;
+use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -104,13 +104,11 @@ fn plan_to_etag(plan: &LogicalPlan) -> String {
 
 // Construct a content-type header value that also includes schema information.
 fn content_type_with_schema(schema: SchemaRef) -> HeaderValue {
-    let output = schema_to_json(schema.as_ref())
-        .to_string()
-        .escape_default()
-        .to_string();
+    let schema_string = schema_to_json(schema.as_ref()).to_string();
+    let output = utf8_percent_encode(&schema_string, NON_ALPHANUMERIC);
 
     match HeaderValue::from_str(
-        format!("application/json; arrow-schema=\"{output}\"").as_str(),
+        format!("application/json; arrow-schema-escaped={output}").as_str(),
     ) {
         Ok(value) => value,
         Err(err) => {
@@ -632,6 +630,7 @@ pub mod tests {
 
     use crate::catalog::DEFAULT_DB;
     use crate::config::schema::{str_to_hex_hash, HttpFrontend};
+    use crate::testutils::schema_from_header;
     use crate::{
         context::{test_utils::in_memory_context, DefaultSeafowlContext, SeafowlContext},
         frontend::http::{filters, QUERY_HEADER},
@@ -1565,7 +1564,7 @@ pub mod tests {
     async fn test_http_type_conversion(#[case] method: &str, #[case] path: &str) {
         let context = Arc::new(in_memory_context().await);
         let handler = filters(
-            context,
+            context.clone(),
             http_config_from_access_policy(AccessPolicy::free_for_all()),
         );
 
@@ -1597,29 +1596,18 @@ SELECT
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers()
-                .get(header::CONTENT_TYPE)
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            "application/json; arrow-schema=\"{\\\"fields\\\":[\
-            {\\\"children\\\":[],\\\"name\\\":\\\"smallint_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"bitWidth\\\":16,\\\"isSigned\\\":true,\\\"name\\\":\\\"int\\\"}},\
-            {\\\"children\\\":[],\\\"name\\\":\\\"integer_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"bitWidth\\\":32,\\\"isSigned\\\":true,\\\"name\\\":\\\"int\\\"}},\
-            {\\\"children\\\":[],\\\"name\\\":\\\"bigint_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"bitWidth\\\":64,\\\"isSigned\\\":true,\\\"name\\\":\\\"int\\\"}},\
-            {\\\"children\\\":[],\\\"name\\\":\\\"char_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"utf8\\\"}},\
-            {\\\"children\\\":[],\\\"name\\\":\\\"varchar_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"utf8\\\"}},\
-            {\\\"children\\\":[],\\\"name\\\":\\\"text_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"utf8\\\"}},\
-            {\\\"children\\\":[],\\\"name\\\":\\\"float_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"floatingpoint\\\",\\\"precision\\\":\\\"SINGLE\\\"}},\
-            {\\\"children\\\":[],\\\"name\\\":\\\"real_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"floatingpoint\\\",\\\"precision\\\":\\\"SINGLE\\\"}},\
-            {\\\"children\\\":[],\\\"name\\\":\\\"double_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"floatingpoint\\\",\\\"precision\\\":\\\"DOUBLE\\\"}},\
-            {\\\"children\\\":[],\\\"name\\\":\\\"bool_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"bool\\\"}},\
-            {\\\"children\\\":[],\\\"name\\\":\\\"date_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"date\\\",\\\"unit\\\":\\\"DAY\\\"}},\
-            {\\\"children\\\":[],\\\"name\\\":\\\"timestamp_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"timestamp\\\",\\\"unit\\\":\\\"NANOSECOND\\\"}},\
-            {\\\"children\\\":[{\\\"children\\\":[],\\\"name\\\":\\\"item\\\",\\\"nullable\\\":true,\\\"type\\\":{\\\"bitWidth\\\":64,\\\"isSigned\\\":true,\\\"name\\\":\\\"int\\\"}}],\\\"name\\\":\\\"int_array_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"list\\\"}},\
-            {\\\"children\\\":[{\\\"children\\\":[],\\\"name\\\":\\\"item\\\",\\\"nullable\\\":true,\\\"type\\\":{\\\"name\\\":\\\"utf8\\\"}}],\\\"name\\\":\\\"text_array_val\\\",\\\"nullable\\\":false,\\\"type\\\":{\\\"name\\\":\\\"list\\\"}}],\
-            \\\"metadata\\\":{}}\"",
-        );
+
+        // Ensure schema round-trip works
+        let expected_schema = context
+            .plan_query(query)
+            .await
+            .unwrap()
+            .schema()
+            .as_ref()
+            .clone();
+        assert_eq!(schema_from_header(resp.headers()), expected_schema,);
+
+        // Assert result
         assert_eq!(
             resp.body(),
             &Bytes::from(

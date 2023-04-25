@@ -18,4 +18,7 @@ pub mod utils;
 pub mod version;
 pub mod wasm_udf;
 
+#[cfg(test)]
+pub(crate) mod testutils;
+
 extern crate lazy_static;

@@ -18,12 +18,8 @@ async fn test_http_server_reader_writer() {
     dbg!(&resp);
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
-        resp.headers()
-            .get(header::CONTENT_TYPE)
-            .unwrap()
-            .to_str()
-            .unwrap(),
-        r#"application/json; arrow-schema="{\"fields\":[{\"children\":[],\"name\":\"Int64(1)\",\"nullable\":false,\"type\":{\"bitWidth\":64,\"isSigned\":true,\"name\":\"int\"}}],\"metadata\":{}}""#,
+        testutils::schema_from_header(resp.headers()),
+        Schema::new(vec![Field::new("Int64(1)", DataType::Int64, false),])
     );
     assert_eq!(response_text(resp).await, "{\"Int64(1)\":1}\n");
 
@@ -56,12 +52,8 @@ async fn test_http_server_reader_writer() {
     dbg!(&resp);
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
-        resp.headers()
-            .get(header::CONTENT_TYPE)
-            .unwrap()
-            .to_str()
-            .unwrap(),
-        r#"application/json; arrow-schema="{\"fields\":[{\"children\":[],\"name\":\"col\",\"nullable\":true,\"type\":{\"bitWidth\":32,\"isSigned\":true,\"name\":\"int\"}}],\"metadata\":{}}""#,
+        testutils::schema_from_header(resp.headers()),
+        Schema::new(vec![Field::new("col", DataType::Int32, true),])
     );
     assert_eq!(response_text(resp).await, "{\"col\":1}\n");
 
@@ -79,15 +71,27 @@ async fn test_http_server_reader_writer() {
 
     let scoped_uri = format!("http://{addr}/new_db/q");
 
+    // Also test serialization of schemas with special characters
     let resp = post_query(
         &client,
         &scoped_uri,
-        "CREATE TABLE new_table (new_col INT); INSERT INTO new_table VALUES(2); SELECT * FROM new_table",
+        r#"CREATE TABLE new_table ("col_with_ :;.,\/""'?!(){}[]@<>=-+*#$&`|~^%" INT); INSERT INTO new_table VALUES(2); SELECT * FROM new_table"#,
         Some("write_password")
     ).await;
     dbg!(&resp);
     assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(response_text(resp).await, "{\"new_col\":2}\n");
+    assert_eq!(
+        testutils::schema_from_header(resp.headers()),
+        Schema::new(vec![Field::new(
+            r#"col_with_ :;.,\/"'?!(){}[]@<>=-+*#$&`|~^%"#,
+            DataType::Int32,
+            true
+        ),])
+    );
+    assert_eq!(
+        response_text(resp).await,
+        "{\"col_with_ :;.,\\\\/\\\"'?!(){}[]@<>=-+*#$&`|~^%\":2}\n"
+    );
 
     // Stop the server
     // NB this won't run if the test fails, but at that point we're terminating the process

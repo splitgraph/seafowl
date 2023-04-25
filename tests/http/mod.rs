@@ -14,7 +14,6 @@ use seafowl::config::schema::load_config_from_string;
 use seafowl::frontend::http::filters;
 use warp::hyper::body::to_bytes;
 use warp::hyper::client::HttpConnector;
-use warp::hyper::header;
 use warp::hyper::Body;
 use warp::hyper::Client;
 use warp::hyper::Method;
@@ -35,6 +34,13 @@ use std::net::SocketAddr;
 use tempfile::Builder;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Sender;
+
+// Hack because integration tests do not set cfg(test)
+// https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
+#[allow(clippy::duplicate_mod)]
+#[allow(dead_code)]
+#[path = "../../src/testutils.rs"]
+mod testutils;
 
 /// Make an HTTP server that listens on a random free port,
 /// uses an in-memory SQLite and requires a password ("write_password") for writes

@@ -2147,7 +2147,7 @@ mod tests {
     const PART_1_FILE_NAME: &str =
         "part-00001-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
 
-    use crate::object_store::testutils::assert_uploaded_objects;
+    use crate::testutils::assert_uploaded_objects;
 
     #[rstest]
     #[case::in_memory_object_store_standard(false)]
