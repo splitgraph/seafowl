@@ -1753,7 +1753,7 @@ dependencies = [
  "lazy_static",
  "log",
  "num_cpus",
- "object_store",
+ "object_store 0.5.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "parking_lot 0.12.1",
  "parquet",
  "percent-encoding",
@@ -1781,7 +1781,7 @@ dependencies = [
  "arrow-array",
  "chrono",
  "num_cpus",
- "object_store",
+ "object_store 0.5.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "parquet",
  "sqlparser 0.32.0",
 ]
@@ -1797,7 +1797,7 @@ dependencies = [
  "datafusion-expr",
  "hashbrown 0.13.1",
  "log",
- "object_store",
+ "object_store 0.5.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "parking_lot 0.12.1",
  "rand 0.8.5",
  "tempfile",
@@ -1877,7 +1877,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
- "object_store",
+ "object_store 0.5.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "prost",
 ]
 
@@ -1971,7 +1971,7 @@ dependencies = [
  "log",
  "num-bigint",
  "num-traits",
- "object_store",
+ "object_store 0.5.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "once_cell",
  "parking_lot 0.12.1",
  "parquet",
@@ -3808,6 +3808,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "object_store"
+version = "0.5.6"
+source = "git+https://github.com/splitgraph/arrow-rs#88906d8b4261d28d4f2c76d163fba14628230400"
+dependencies = [
+ "async-trait",
+ "base64 0.21.0",
+ "bytes",
+ "chrono",
+ "futures",
+ "itertools",
+ "parking_lot 0.12.1",
+ "percent-encoding",
+ "quick-xml",
+ "rand 0.8.5",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tokio",
+ "tracing",
+ "url",
+ "walkdir",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3982,7 +4008,7 @@ dependencies = [
  "lz4",
  "num",
  "num-bigint",
- "object_store",
+ "object_store 0.5.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "paste",
  "seq-macro",
  "snap",
@@ -4728,9 +4754,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.11.14"
+version = "0.11.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21eed90ec8570952d53b772ecf8f206aa1ec9a3d76b2521c56c42973f2d91ee9"
+checksum = "27b71749df584b7f4cac2c426c127a7c785a5106cc98f7a8feb044115f0fa254"
 dependencies = [
  "base64 0.21.0",
  "bytes",
@@ -5231,7 +5257,7 @@ dependencies = [
  "log",
  "mockall",
  "moka",
- "object_store",
+ "object_store 0.5.6 (git+https://github.com/splitgraph/arrow-rs)",
  "parking_lot 0.12.1",
  "percent-encoding",
  "pretty_env_logger",

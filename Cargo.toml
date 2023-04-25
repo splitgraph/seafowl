@@ -63,7 +63,7 @@ itertools = ">=0.10.0"
 lazy_static = ">=1.4.0"
 log = "0.4"
 moka = { version = "0.10.0", default_features = false, features = ["future", "atomic64", "quanta"] }
-object_store = "0.5.2"
+object_store = { git = "https://github.com/splitgraph/arrow-rs" } # fork includes the GCS bugfix
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
 pretty_env_logger = "0.4"
