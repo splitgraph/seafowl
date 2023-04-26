@@ -63,7 +63,7 @@ itertools = ">=0.10.0"
 lazy_static = ">=1.4.0"
 log = "0.4"
 moka = { version = "0.10.0", default_features = false, features = ["future", "atomic64", "quanta"] }
-object_store = "0.5.2"
+object_store = "0.5.6"
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
 pretty_env_logger = "0.4"
@@ -88,7 +88,7 @@ tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
 url = "2.2"
 uuid = "1.2.1"
-warp = "0.3"
+warp = { git = "https://github.com/seanmonstar/warp", rev = "e2f45018edc63b75079da5e5b41eeb1c0c207f86" }
 wasi-common = "7.0.0"
 
 # For WASM user-defined functions

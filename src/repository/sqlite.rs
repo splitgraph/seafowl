@@ -62,7 +62,10 @@ impl SqliteRepository {
             .create_if_missing(true)
             .journal_mode(journal_mode);
 
-        let pool = SqlitePoolOptions::new().connect_with(options).await?;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await?;
         let repo = Self { executor: pool };
         repo.setup().await;
         Ok(repo)
