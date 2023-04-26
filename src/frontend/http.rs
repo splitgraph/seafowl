@@ -10,8 +10,9 @@ use warp::Rejection;
 
 use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
-use arrow_integration_test::schema_from_json;
-use bytes::{BufMut, Bytes};
+use arrow_integration_test::{schema_from_json, schema_to_json};
+use arrow_schema::SchemaRef;
+use bytes::{Buf, Bytes};
 
 use datafusion::datasource::DefaultTableSource;
 use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReader;
@@ -20,14 +21,15 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_expr::logical_plan::{LogicalPlan, TableScan};
 use deltalake::parquet::data_type::AsBytes;
 use deltalake::DeltaTable;
-use futures::{future, TryStreamExt};
+use futures::{future, StreamExt};
 use hex::encode;
-use log::{debug, info};
-use percent_encoding::percent_decode_str;
+use log::{debug, info, warn};
+use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast::Receiver;
+use warp::http::HeaderValue;
 use warp::multipart::{FormData, Part};
 use warp::reply::{with_header, Response};
 use warp::{hyper::header, hyper::StatusCode, Filter, Reply};
@@ -100,6 +102,21 @@ fn plan_to_etag(plan: &LogicalPlan) -> String {
     encode(hasher.finalize())
 }
 
+// Construct a content-type header value that also includes schema information.
+fn content_type_with_schema(schema: SchemaRef) -> HeaderValue {
+    let schema_string = schema_to_json(schema.as_ref()).to_string();
+    let output = utf8_percent_encode(&schema_string, NON_ALPHANUMERIC);
+
+    HeaderValue::from_str(format!("application/json; arrow-schema={output}").as_str())
+        .unwrap_or_else(|e| {
+            // Seems silly to error out here if the query itself succeeded.
+            warn!(
+                "Couldn't generate content type header for output schema {output}: {e:?}"
+            );
+            HeaderValue::from_static("application/json")
+        })
+}
+
 #[derive(Debug, Deserialize)]
 struct QueryBody {
     query: String,
@@ -126,7 +143,7 @@ pub async fn uncached_read_write_query(
     user_context: UserContext,
     query: String,
     mut context: Arc<DefaultSeafowlContext>,
-) -> Result<Vec<u8>, ApiError> {
+) -> Result<Response, ApiError> {
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
     if let Some(name) = database_name {
@@ -179,12 +196,19 @@ pub async fn uncached_read_write_query(
         plan_to_output = Some(context.create_physical_plan(&logical).await?);
     }
 
-    let buf = physical_plan_to_json(
-        context,
-        plan_to_output.expect("at least one statement in the list"),
-    )
-    .await?;
-    Ok(buf)
+    // Collect output for the last statement
+    let plan = plan_to_output.expect("at least one statement in the list");
+    let schema = plan.schema();
+    let buf = physical_plan_to_json(context, plan).await?;
+
+    // Construct the response and headers
+    let mut response = buf.into_response();
+    if reads > 0 {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, content_type_with_schema(schema));
+    }
+    Ok(response)
 }
 
 fn header_to_user_context(
@@ -299,9 +323,18 @@ pub async fn cached_read_query(
 
     // Guess we'll have to actually run the query
     let physical = context.create_physical_plan(&plan).await?;
+    let schema = physical.schema().clone();
     let buf = physical_plan_to_json(context, physical).await?;
 
-    Ok(with_header(buf, header::ETAG, etag).into_response())
+    // Construct the response and headers
+    let mut response = buf.into_response();
+    response
+        .headers_mut()
+        .insert(header::ETAG, etag.parse().unwrap());
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, content_type_with_schema(schema));
+    Ok(response)
 }
 
 /// POST /upload/[schema]/[table] or /[database]/upload/[schema]/[table]
@@ -310,7 +343,7 @@ pub async fn upload(
     schema_name: String,
     table_name: String,
     user_context: UserContext,
-    form: FormData,
+    mut form: FormData,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
     if !user_context.can_perform_action(Action::Write) {
@@ -323,26 +356,22 @@ pub async fn upload(
         }
     }
 
-    let parts: Vec<Part> = form
-        .try_collect()
-        .await
-        .map_err(ApiError::UploadBodyLoadError)?;
-
     let mut has_header = true;
     let mut csv_schema: Option<Schema> = None;
     let mut filename = String::new();
-    for p in parts {
-        if p.name() == "has_header" {
-            let value_bytes =
-                load_part(p).await.map_err(ApiError::UploadBodyLoadError)?;
+    let mut part_data: Vec<u8> = vec![];
+    while let Some(maybe_part) = form.next().await {
+        let part = maybe_part.map_err(ApiError::UploadBodyLoadError)?;
+
+        if part.name() == "has_header" {
+            let value_bytes = load_part(part).await?;
 
             has_header = String::from_utf8(value_bytes)
                 .map_err(|_| ApiError::UploadHasHeaderParseError)?
                 .starts_with("true");
             debug!("Form part has_header is: {}", has_header);
-        } else if p.name() == "schema" && p.content_type() == Some("application/json") {
-            let value_bytes =
-                load_part(p).await.map_err(ApiError::UploadBodyLoadError)?;
+        } else if part.name() == "schema" {
+            let value_bytes = load_part(part).await?;
 
             csv_schema = Some(
                 schema_from_json(
@@ -351,39 +380,17 @@ pub async fn upload(
                 )
                 .map_err(ApiError::UploadSchemaParseError)?,
             );
-        } else if p.name() == "data" || p.name() == "file" {
-            filename = p.filename().ok_or(ApiError::UploadMissingFile)?.to_string();
+        } else if part.name() == "data" || part.name() == "file" {
+            filename = part
+                .filename()
+                .ok_or(ApiError::UploadMissingFile)?
+                .to_string();
 
             // Load the file content from the request
-            // TODO: we're actually buffering the entire file into memory here which is sub-optimal,
-            // since we could be writing the contents of the stream out into a temp file on the disk
-            // to have a smaller memory footprint. However, for this to be supported warp first
-            // needs to support streaming here: https://github.com/seanmonstar/warp/issues/323
-            let source = load_part(p).await.map_err(ApiError::UploadBodyLoadError)?;
-
-            // Parse the schema and load the file contents into a vector of record batches
-            let (schema, partition) =
-                match filename.split('.').last().ok_or_else(|| {
-                    ApiError::UploadMissingFilenameExtension(filename.clone())
-                })? {
-                    "csv" => load_csv_bytes(source, csv_schema.clone(), has_header)
-                        .map_err(|e| ApiError::UploadFileLoadError(e.into()))?,
-                    "parquet" => load_parquet_bytes(source)
-                        .map_err(ApiError::UploadFileLoadError)?,
-                    _ => return Err(ApiError::UploadUnsupportedFileFormat(filename)),
-                };
-
-            // Create an execution plan for yielding the record batches we just generated
-            let execution_plan = Arc::new(MemoryExec::try_new(
-                &[partition],
-                Arc::new(schema.clone()),
-                None,
-            )?);
-
-            // Execute the plan and persist objects as well as table/partition metadata
-            context
-                .plan_to_table(execution_plan, schema_name.clone(), table_name.clone())
-                .await?;
+            // TODO: we're actually buffering the entire file into memory here which is sub-optimal.
+            // Instead we should be writing the contents of the stream out into a temp file on the
+            // disk to have a smaller memory footprint.
+            part_data = load_part(part).await?;
         }
     }
 
@@ -391,16 +398,41 @@ pub async fn upload(
         return Err(ApiError::UploadMissingFile);
     }
 
+    // Parse the schema and load the file contents into a vector of record batches
+    let (schema, partition) = match filename
+        .split('.')
+        .last()
+        .ok_or_else(|| ApiError::UploadMissingFilenameExtension(filename.clone()))?
+    {
+        "csv" => load_csv_bytes(part_data, csv_schema.clone(), has_header)
+            .map_err(|e| ApiError::UploadFileLoadError(e.into()))?,
+        "parquet" => {
+            load_parquet_bytes(part_data).map_err(ApiError::UploadFileLoadError)?
+        }
+        _ => return Err(ApiError::UploadUnsupportedFileFormat(filename)),
+    };
+
+    // Create an execution plan for yielding the record batches we just generated
+    let execution_plan = Arc::new(MemoryExec::try_new(
+        &[partition],
+        Arc::new(schema.clone()),
+        None,
+    )?);
+
+    // Execute the plan and persist objects as well as table/partition metadata
+    context
+        .plan_to_table(execution_plan, schema_name.clone(), table_name.clone())
+        .await?;
+
     Ok(warp::reply::with_status(Ok("done"), StatusCode::OK).into_response())
 }
 
-async fn load_part(p: Part) -> Result<Vec<u8>, warp::Error> {
-    p.stream()
-        .try_fold(Vec::new(), |mut vec, data| {
-            vec.put(data);
-            async move { Ok(vec) }
-        })
-        .await
+async fn load_part(mut part: Part) -> Result<Vec<u8>, ApiError> {
+    let mut bytes: Vec<u8> = vec![];
+    while let Some(maybe_bytes) = part.data().await {
+        bytes.extend(maybe_bytes.map_err(ApiError::UploadBodyLoadError)?.chunk())
+    }
+    Ok(bytes)
 }
 
 fn load_csv_bytes(
@@ -595,6 +627,7 @@ pub mod tests {
 
     use crate::catalog::DEFAULT_DB;
     use crate::config::schema::{str_to_hex_hash, HttpFrontend};
+    use crate::testutils::schema_from_header;
     use crate::{
         context::{test_utils::in_memory_context, DefaultSeafowlContext, SeafowlContext},
         frontend::http::{filters, QUERY_HEADER},
@@ -1518,11 +1551,17 @@ pub mod tests {
             .contains("Only one read statement is allowed"));
     }
 
+    #[rstest]
+    #[case::cached_get(
+        "GET",
+        "/q/f7ff4745e8469a83bffdf247aef5f9ee2bbb9019bbf4a725b31ee36993d5d484"
+    )]
+    #[case::uncached_post("POST", "/q")]
     #[tokio::test]
-    async fn test_http_type_conversion() {
+    async fn test_http_type_conversion(#[case] method: &str, #[case] path: &str) {
         let context = Arc::new(in_memory_context().await);
         let handler = filters(
-            context,
+            context.clone(),
             http_config_from_access_policy(AccessPolicy::free_for_all()),
         );
 
@@ -1548,12 +1587,24 @@ SELECT
         // CREATE TABLE queries with arrays, so we don't officially support arrays.
 
         let resp = request()
-            .method("POST")
-            .path("/q")
+            .method(method)
+            .path(path)
             .json(&HashMap::from([("query", query)]))
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
+
+        // Ensure schema round-trip works
+        let expected_schema = context
+            .plan_query(query)
+            .await
+            .unwrap()
+            .schema()
+            .as_ref()
+            .clone();
+        assert_eq!(schema_from_header(resp.headers()), expected_schema,);
+
+        // Assert result
         assert_eq!(
             resp.body(),
             &Bytes::from(

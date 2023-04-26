@@ -1,4 +1,5 @@
 use crate::http::*;
+use arrow_integration_test::schema_to_json;
 use rstest::rstest;
 
 #[rstest]
@@ -29,26 +30,7 @@ async fn test_upload_base(
 
     // For CSV uploads we can supply the schema as another part of the multipart request, to
     // remove the ambiguity resulting from automatic schema inference
-    let schema_json = r#"{
-        "fields": [
-            {
-                "name": "number",
-                "nullable": false,
-                "type": {
-                    "name": "int",
-                    "bitWidth": 32,
-                    "isSigned": true
-                }
-            },
-            {
-                "name": "parity",
-                "nullable": false,
-                "type": {
-                    "name": "utf8"
-                }
-            }
-        ]
-    }"#;
+    let schema_json = schema_to_json(schema.as_ref()).to_string();
 
     let range = 0..2000;
     let mut input_batch = RecordBatch::try_new(

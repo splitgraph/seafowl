@@ -5,12 +5,16 @@ use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 
 use arrow::record_batch::RecordBatch;
+use arrow_integration_test::schema_from_json;
 use datafusion::parquet::arrow::ArrowWriter;
 use deltalake::storage::DeltaObjectStore;
 use futures::TryStreamExt;
 use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectStore;
+use percent_encoding::percent_decode_str;
+use warp::http::{HeaderMap, HeaderValue};
+use warp::hyper::header;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -138,4 +142,23 @@ pub async fn assert_uploaded_objects(
         .map(|p| p.into_iter().sorted().collect_vec())
         .unwrap();
     assert_eq!(expected.into_iter().sorted().collect_vec(), actual);
+}
+
+pub fn schema_from_header(headers: &HeaderMap<HeaderValue>) -> Schema {
+    let schema_escaped = headers
+        .get(header::CONTENT_TYPE)
+        .expect("content-type header")
+        .to_str()
+        .expect("content-type header as a str")
+        .split("arrow-schema=")
+        .last()
+        .expect("arrow-schema last param in content-type header");
+    let schema_str = percent_decode_str(schema_escaped)
+        .decode_utf8()
+        .expect("escaped schema decodable")
+        .to_string();
+    let schema_json = serde_json::from_str::<serde_json::Value>(schema_str.as_str())
+        .expect("decoded schema is valid JSON");
+
+    schema_from_json(&schema_json).expect("arrow schema reconstructable from JSON")
 }

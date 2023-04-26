@@ -33,11 +33,12 @@ use seafowl::system_tables::SYSTEM_SCHEMA;
 mod ddl;
 mod dml;
 mod function;
-// Hack because integration tests do not set cfg(test)
-// https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
 mod query;
 mod query_legacy;
-#[path = "../../src/object_store/testutils.rs"]
+// Hack because integration tests do not set cfg(test)
+// https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
+#[allow(dead_code)]
+#[path = "../../src/testutils.rs"]
 mod testutils;
 mod vacuum;
 
