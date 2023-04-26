@@ -150,9 +150,9 @@ pub fn schema_from_header(headers: &HeaderMap<HeaderValue>) -> Schema {
         .expect("content-type header")
         .to_str()
         .expect("content-type header as a str")
-        .split("arrow-schema-escaped=")
+        .split("arrow-schema=")
         .last()
-        .expect("arrow-schema-escaped last param in content-type header");
+        .expect("arrow-schema last param in content-type header");
     let schema_str = percent_decode_str(schema_escaped)
         .decode_utf8()
         .expect("escaped schema decodable")

@@ -107,16 +107,14 @@ fn content_type_with_schema(schema: SchemaRef) -> HeaderValue {
     let schema_string = schema_to_json(schema.as_ref()).to_string();
     let output = utf8_percent_encode(&schema_string, NON_ALPHANUMERIC);
 
-    match HeaderValue::from_str(
-        format!("application/json; arrow-schema-escaped={output}").as_str(),
-    ) {
-        Ok(value) => value,
-        Err(err) => {
+    HeaderValue::from_str(format!("application/json; arrow-schema={output}").as_str())
+        .unwrap_or_else(|e| {
             // Seems silly to error out here if the query itself succeeded.
-            warn!("Couldn't generate content type header for output schema {output}: {err:?}");
+            warn!(
+                "Couldn't generate content type header for output schema {output}: {e:?}"
+            );
             HeaderValue::from_static("application/json")
-        }
-    }
+        })
 }
 
 #[derive(Debug, Deserialize)]
