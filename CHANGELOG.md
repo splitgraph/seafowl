@@ -4,6 +4,9 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Return result type info in the `content-type` header, and bump `object_store` crate
+  (<https://github.com/splitgraph/seafowl/pull/367>)
+
 ## [0.3.3] - 2023-04-20
 
 - Fix table renaming to quoted identifiers with special characters
