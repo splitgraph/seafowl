@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.3.4] - 2023-04-27
+
 - Return result type info in the `content-type` header, and bump `object_store` crate
   (<https://github.com/splitgraph/seafowl/pull/367>)
 
@@ -146,7 +148,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.3.3...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/splitgraph/seafowl/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/splitgraph/seafowl/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/splitgraph/seafowl/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/splitgraph/seafowl/compare/v0.3.0...v0.3.1
