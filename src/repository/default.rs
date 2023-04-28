@@ -587,7 +587,7 @@ impl Repository for $repo {
     ) -> Result<(), Error> {
         // Currently we hard delete only legacy tables, the others are soft-deleted by moving
         // them to a special table that is used for lazy cleanup of files via `VACUUM`.
-        // TODO: We could do this via a trigger, but then we'd lose the ability to actually
+        // We could do this via a trigger, but then we'd lose the ability to actually
         // perform hard deletes at the DB-level.
         // NB: We really only need the uuid for cleanup, but we also persist db/col name on the off
         // chance that we want to add table restore/undrop at some point.

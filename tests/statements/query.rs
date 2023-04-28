@@ -71,7 +71,6 @@ async fn test_information_schema() {
 async fn test_create_table_and_insert() {
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
-    // TODO: insert into nonexistent table outputs a wrong error (schema "public" does not exist)
     create_table_and_insert(&context, "test_table").await;
 
     // Check table columns: make sure scanning through our file pads the rest with NULLs

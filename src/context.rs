@@ -2628,6 +2628,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_plan_insert_missing_table() {
+        let context = in_memory_context_with_test_db().await;
+
+        let err = context
+            .create_logical_plan("INSERT INTO testcol.missing_table VALUES(1, 2, 3)")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Error during planning: table 'testdb.testcol.missing_table' not found"
+        );
+    }
+
+    #[tokio::test]
     async fn test_plan_insert_type_mismatch() {
         let sf_context = in_memory_context_with_test_db().await;
 

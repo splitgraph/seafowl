@@ -69,6 +69,7 @@ pub enum ApiError {
     UploadHasHeaderParseError,
     UploadUnsupportedFileFormat(String),
     QueryDecodeError,
+    QueryParsingError(Rejection),
 }
 
 // Wrap DataFusion errors so that we can automagically return an
@@ -114,6 +115,7 @@ impl ApiError {
             ApiError::UploadHasHeaderParseError => (StatusCode::BAD_REQUEST, "Invalid has_header".to_string()),
             ApiError::UploadUnsupportedFileFormat(filename) => (StatusCode::BAD_REQUEST, format!("File {filename} not supported")),
             ApiError::QueryDecodeError => (StatusCode::BAD_REQUEST, "QUERY_DECODE_ERROR".to_string()),
+            ApiError::QueryParsingError(r) => (StatusCode::BAD_REQUEST, format!("No query found in the request: {r:?}")),
         }
     }
 
