@@ -1,3 +1,4 @@
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,11 +30,12 @@ use crate::object_store::wrapped::InternalObjectStore;
 use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
+use object_store::gcp::GoogleCloudStorageBuilder;
 use parking_lot::lock_api::RwLock;
 use tempfile::TempDir;
 use url::Url;
 
-use super::schema::{self, MEBIBYTES, MEMORY_FRACTION, S3};
+use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
 
 async fn build_catalog(
     config: &schema::SeafowlConfig,
@@ -122,6 +124,20 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
                     Duration::from_secs(*ttl_s),
                 ));
             }
+
+            Arc::new(store)
+        }
+        #[cfg(feature = "object-store-gcs")]
+        schema::ObjectStore::GCS(GCS { bucket }) => {
+            let google_application_credentials =
+                env::var("GOOGLE_APPLICATION_CREDENTIALS")
+                    .expect("Could not find GOOGLE_APPLICATION_CREDENTIALS env variable");
+
+            let builder = GoogleCloudStorageBuilder::new()
+                .with_bucket_name(bucket)
+                .with_service_account_path(google_application_credentials);
+
+            let store = builder.build().expect("Error creating object store");
 
             Arc::new(store)
         }
