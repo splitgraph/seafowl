@@ -4,6 +4,7 @@ use arrow::error::ArrowError;
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::ExecutionPlan;
 use std::error::Error;
+use std::fmt::Debug;
 use std::io::Cursor;
 use std::{convert::Infallible, net::SocketAddr, sync::Arc};
 use warp::Rejection;
@@ -479,8 +480,6 @@ fn load_parquet_bytes(
 
 // We need the allow to silence the compiler: it asks us to add warp::generic::Tuple to the first
 // parameter of the return type, but that struct is not exportable (generic is private).
-// TODO: Fix the signature and remove the allow attribute at some point.
-#[allow(opaque_hidden_inferred_bound)]
 pub fn filters(
     context: Arc<DefaultSeafowlContext>,
     config: HttpFrontend,
@@ -522,6 +521,9 @@ pub fn filters(
             // Extract the query either from the header or from the JSON body
             warp::header::<String>(QUERY_HEADER)
                 .or(warp::body::json().map(|b: QueryBody| b.query))
+                .or_else(|r| {
+                    future::err(warp::reject::custom(ApiError::QueryParsingError(r)))
+                })
                 .unify(),
         )
         .and(warp::header::optional::<String>(
@@ -546,7 +548,9 @@ pub fn filters(
         .and(with_auth(access_policy.clone()))
         .and(
             // Extract the query from the JSON body
-            warp::body::json().map(|b: QueryBody| b.query),
+            warp::body::json().map(|b: QueryBody| b.query).or_else(|r| {
+                future::err(warp::reject::custom(ApiError::QueryParsingError(r)))
+            }),
         )
         .and(warp::any().map(move || ctx.clone()))
         .then(uncached_read_write_query)
@@ -861,9 +865,7 @@ pub mod tests {
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        // TODO: return a better error than this
-        // https://github.com/splitgraph/seafowl/issues/22
-        assert_eq!(resp.body(), "Request body deserialize error: EOF while parsing a value at line 1 column 0");
+        assert_eq!(resp.body(), "No query found in the request: Rejection([BodyDeserializeError { cause: Error(\"EOF while parsing a value\", line: 1, column: 0) }, MissingHeader { name: \"X-Seafowl-Query\" }])");
     }
 
     #[rstest]

@@ -41,7 +41,6 @@ async fn test_legacy_tables() {
 
     //
     // For start test that migration actually works
-    // TODO: make us cast automatic
     //
     let plan = context
         .plan_query(
