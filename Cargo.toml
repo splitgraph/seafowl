@@ -92,7 +92,7 @@ warp = { git = "https://github.com/seanmonstar/warp", rev = "e2f45018edc63b75079
 wasi-common = "7.0.0"
 
 # For WASM user-defined functions
-wasmtime = "7.0.0"
+wasmtime = "8.0.1"
 wasmtime-wasi = "7.0.0"
 
 [dev-dependencies]
