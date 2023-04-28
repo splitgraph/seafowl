@@ -22,9 +22,10 @@ include = [
 
 [features]
 catalog-postgres = ["sqlx/postgres"]
-default = ["catalog-postgres", "frontend-postgres", "object-store-s3", "remote-tables"]
+default = ["catalog-postgres", "frontend-postgres", "object-store-s3", "object-store-gcs", "remote-tables"]
 frontend-postgres = ["convergence", "convergence-arrow"]
 object-store-s3 = ["object_store/aws"]
+object-store-gcs = ["object_store/gcp"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
