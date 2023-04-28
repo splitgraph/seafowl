@@ -6,7 +6,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use std::error::Error;
 use std::fmt::Debug;
 use std::io::Cursor;
-use std::{convert::Infallible, net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 use warp::Rejection;
 
 use arrow::json::LineDelimitedWriter;
@@ -36,6 +36,7 @@ use warp::reply::{with_header, Response};
 use warp::{hyper::header, hyper::StatusCode, Filter, Reply};
 
 use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
+use crate::catalog::DEFAULT_DB;
 use crate::config::schema::{AccessSettings, MEBIBYTES};
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
@@ -140,17 +141,15 @@ async fn physical_plan_to_json(
 
 /// POST /q or /[database_name]/q
 pub async fn uncached_read_write_query(
-    database_name: Option<String>,
+    database_name: String,
     user_context: UserContext,
     query: String,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
-    if let Some(name) = database_name {
-        if name != context.database {
-            context = context.scope_to_database(name)?;
-        }
+    if database_name != context.database {
+        context = context.scope_to_database(database_name)?;
     }
 
     let statements = context.parse_query(&query).await?;
@@ -268,7 +267,7 @@ pub fn cached_read_query_authz(
 
 /// GET /q/[query hash] or /[database_name]/q/[query hash]
 pub async fn cached_read_query(
-    database_name: Option<String>,
+    database_name: String,
     query_hash: String,
     raw_query: String,
     if_none_match: Option<String>,
@@ -293,10 +292,8 @@ pub async fn cached_read_query(
 
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
-    if let Some(name) = database_name {
-        if name != context.database {
-            context = context.scope_to_database(name)?;
-        }
+    if database_name != context.database {
+        context = context.scope_to_database(database_name)?;
     }
 
     // Plan the query
@@ -340,7 +337,7 @@ pub async fn cached_read_query(
 
 /// POST /upload/[schema]/[table] or /[database]/upload/[schema]/[table]
 pub async fn upload(
-    database_name: Option<String>,
+    database_name: String,
     schema_name: String,
     table_name: String,
     user_context: UserContext,
@@ -351,10 +348,8 @@ pub async fn upload(
         return Err(ApiError::WriteForbidden);
     };
 
-    if let Some(name) = database_name {
-        if name != context.database {
-            context = context.scope_to_database(name)?;
-        }
+    if database_name != context.database {
+        context = context.scope_to_database(database_name)?;
     }
 
     let mut has_header = true;
@@ -498,20 +493,11 @@ pub fn filters(
 
     let log = warp::log(module_path!());
 
-    // TODO: The path parameter parsing below is very unergonomic, mostly because warp doesn't
-    // provide better primitives (e.g. `warp::generic::Either` is private outside of the crate).
-    // The logic is to try and match the endpoint with or without the optional prefix for the DB
-    // name, and then map the first parameter in both cases to the same `Option<String>` type, which
-    // lets us use the `unify` filter method.
-
     // Cached read query
     let ctx = context.clone();
-    let cached_read_query_route = warp::path::param::<String>()
-        .map(Some)
-        .or_else(|_| async { Ok::<(Option<String>,), Infallible>((None,)) })
-        .and(warp::path!("q" / String))
+    let cached_read_query_route = warp::path!(String / "q" / String)
         .or(warp::any()
-            .map(move || None::<String>)
+            .map(move || DEFAULT_DB.to_string())
             .and(warp::path!("q" / String)))
         .and(warp::path::end())
         .and(warp::get())
@@ -535,12 +521,9 @@ pub fn filters(
 
     // Uncached read/write query
     let ctx = context.clone();
-    let uncached_read_write_query_route = warp::path::param::<String>()
-        .map(Some)
-        .or_else(|_| async { Ok::<(Option<String>,), Infallible>((None,)) })
-        .and(warp::path!("q"))
+    let uncached_read_write_query_route = warp::path!(String / "q")
         .or(warp::any()
-            .map(move || None::<String>)
+            .map(move || DEFAULT_DB.to_string())
             .and(warp::path!("q")))
         .and(warp::path::end())
         .and(warp::post())
@@ -558,12 +541,9 @@ pub fn filters(
 
     // Upload endpoint
     let ctx = context;
-    let upload_route = warp::path::param::<String>()
-        .map(Some)
-        .or_else(|_| async { Ok::<(Option<String>,), Infallible>((None,)) })
-        .and(warp::path!("upload" / String / String))
+    let upload_route = warp::path!(String / "upload" / String / String)
         .or(warp::any()
-            .map(move || None::<String>)
+            .map(move || DEFAULT_DB.to_string())
             .and(warp::path!("upload" / String / String)))
         .and(warp::post())
         .unify()
