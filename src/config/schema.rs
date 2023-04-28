@@ -54,6 +54,9 @@ pub enum ObjectStore {
     InMemory(InMemory),
     #[cfg(feature = "object-store-s3")]
     S3(S3),
+    #[cfg(feature = "object-store-gcs")]
+    #[serde(rename = "gcs")]
+    GCS(GCS),
 }
 
 /// Build a default config file and struct
@@ -121,6 +124,11 @@ pub struct S3 {
     pub endpoint: Option<String>,
     pub bucket: String,
     pub cache_properties: Option<ObjectCacheProperties>,
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct GCS {
+    pub bucket: String,
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
