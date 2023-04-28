@@ -1,5 +1,5 @@
 use crate::config::schema;
-use crate::config::schema::{Local, S3};
+use crate::config::schema::{Local, GCS, S3};
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryFutureExt};
 use log::debug;
@@ -40,6 +40,9 @@ impl InternalObjectStore {
             }
             schema::ObjectStore::InMemory(_) => Url::from_str("memory://").unwrap(),
             schema::ObjectStore::S3(S3 { bucket, .. }) => {
+                Url::from_str(&format!("s3://{bucket}")).unwrap()
+            }
+            schema::ObjectStore::GCS(GCS { bucket, .. }) => {
                 Url::from_str(&format!("s3://{bucket}")).unwrap()
             }
         };
