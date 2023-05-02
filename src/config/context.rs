@@ -1,4 +1,3 @@
-use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -128,16 +127,22 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             Arc::new(store)
         }
         #[cfg(feature = "object-store-gcs")]
-        schema::ObjectStore::GCS(GCS { bucket }) => {
-            let google_application_credentials =
-                env::var("GOOGLE_APPLICATION_CREDENTIALS")
-                    .expect("Could not find GOOGLE_APPLICATION_CREDENTIALS env variable");
+        schema::ObjectStore::GCS(GCS {
+            bucket,
+            google_application_credentials,
+        }) => {
+            let gcs_builder: GoogleCloudStorageBuilder =
+                GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
 
-            let builder = GoogleCloudStorageBuilder::new()
-                .with_bucket_name(bucket)
-                .with_service_account_path(google_application_credentials);
+            let gcs_builder = if let Some(path) = google_application_credentials {
+                gcs_builder.with_service_account_path(path)
+            } else {
+                gcs_builder
+            };
 
-            let store = builder.build().expect("Error creating object store");
+            let store = gcs_builder
+                .build()
+                .expect("Error creating GCS object store");
 
             Arc::new(store)
         }
