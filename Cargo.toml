@@ -28,13 +28,13 @@ object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
-arrow = "36.0.0"
-arrow-buffer = "36.0.0"
+arrow = "37.0.0"
+arrow-buffer = "37.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "36.0.0"
-arrow-schema = "36.0.0"
+arrow-integration-test = "37.0.0"
+arrow-schema = "37.0.0"
 async-trait = "0.1.64"
 base64 = "0.21.0"
 
@@ -44,17 +44,17 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-22-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-22-upgrade", package = "convergence-arrow", optional = true }
+convergence = { version = "0.11.0", optional = true }
+convergence-arrow = { version = "0.11.0", optional = true }
 
-datafusion = "22.0.0"
-datafusion-common = "22.0.0"
-datafusion-expr = "22.0.0"
-datafusion-proto = "22.0.0"
+datafusion = "23.0.0"
+datafusion-common = "23.0.0"
+datafusion-expr = "23.0.0"
+datafusion-proto = "23.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { version = "0.9.0", features = ["s3-native-tls", "datafusion-ext"] }
+deltalake = { version = "0.10.0", features = ["s3-native-tls", "datafusion-ext"] }
 dynamodb_lock = { version = "0.4.3", default_features = false, features = ["native-tls"] }
 
 futures = "0.3"
@@ -80,7 +80,7 @@ rmpv = { version = "1.0.0", features = ["with-serde"] }
 serde = "1.0.156"
 serde_json = "1.0.93"
 sha2 = ">=0.10.1"
-sqlparser = "0.32.0"
+sqlparser = "0.33.0"
 sqlx = { version = "0.6.2", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
@@ -88,16 +88,16 @@ tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
 url = "2.2"
 uuid = "1.2.1"
-warp = { git = "https://github.com/seanmonstar/warp", rev = "e2f45018edc63b75079da5e5b41eeb1c0c207f86" }
-wasi-common = "7.0.0"
+warp = "0.3.5"
+wasi-common = "8.0.1"
 
 # For WASM user-defined functions
-wasmtime = "7.0.0"
-wasmtime-wasi = "7.0.0"
+wasmtime = "8.0.1"
+wasmtime-wasi = "8.0.1"
 
 [dev-dependencies]
 assert_unordered = "0.3"
-datafusion-common = "22.0.0"
+datafusion-common = "23.0.0"
 mockall = "0.11.1"
 rstest = "*"
 wiremock = "0.5"

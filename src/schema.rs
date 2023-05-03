@@ -21,7 +21,7 @@ impl Schema {
     where
         I: Iterator<Item = (&'a String, &'a String)>,
     {
-        let fields = columns
+        let fields: Vec<_> = columns
             .map(|(name, text_type)| {
                 let field = Self::field_from_json(from_str(text_type).unwrap()).unwrap();
 
@@ -56,7 +56,7 @@ mod tests {
             ArrowField::new("col_3", ArrowDataType::Boolean, true),
             ArrowField::new(
                 "col_4",
-                ArrowDataType::List(Box::new(ArrowField::new(
+                ArrowDataType::List(Arc::new(ArrowField::new(
                     "child_0",
                     ArrowDataType::Utf8,
                     true,

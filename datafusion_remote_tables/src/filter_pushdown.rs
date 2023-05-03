@@ -282,6 +282,7 @@ mod tests {
     use datafusion::logical_expr::{and, col, lit, or, Expr};
     use datafusion::scalar::ScalarValue;
     use rstest::rstest;
+    use std::sync::Arc;
 
     use crate::filter_pushdown::{
         filter_expr_to_sql, MySQLFilterPushdown, PostgresFilterPushdown,
@@ -399,19 +400,19 @@ mod tests {
     #[should_panic(
         expected = r#"ScalarValue TimestampSecond(1000, Some(\"UTC\")) not shippable"#
     )]
-    #[case(col("a").gt(lit(ScalarValue::TimestampSecond(Some(1000), Some("UTC".to_string())))))]
+    #[case(col("a").gt(lit(ScalarValue::TimestampSecond(Some(1000), Some(Arc::from("UTC"))))))]
     #[should_panic(
         expected = r#"ScalarValue TimestampMillisecond(1000, Some(\"UTC\")) not shippable"#
     )]
-    #[case(col("a").gt(lit(ScalarValue::TimestampMillisecond(Some(1000), Some("UTC".to_string())))))]
+    #[case(col("a").gt(lit(ScalarValue::TimestampMillisecond(Some(1000), Some(Arc::from("UTC"))))))]
     #[should_panic(
         expected = r#"ScalarValue TimestampMicrosecond(1000, Some(\"UTC\")) not shippable"#
     )]
-    #[case(col("a").gt(lit(ScalarValue::TimestampMicrosecond(Some(1000), Some("UTC".to_string())))))]
+    #[case(col("a").gt(lit(ScalarValue::TimestampMicrosecond(Some(1000), Some(Arc::from("UTC"))))))]
     #[should_panic(
         expected = r#"ScalarValue TimestampNanosecond(1000, Some(\"UTC\")) not shippable"#
     )]
-    #[case(col("a").gt(lit(ScalarValue::TimestampNanosecond(Some(1000), Some("UTC".to_string())))))]
+    #[case(col("a").gt(lit(ScalarValue::TimestampNanosecond(Some(1000), Some(Arc::from("UTC"))))))]
     fn test_filter_expr_to_sql_unsupported_datetime_formats(
         #[case] expr: Expr,
         #[values("postgres", "sqlite", "mysql")] source_type: &str,

@@ -50,7 +50,7 @@ pub async fn parquet_scan_from_actions(
             .iter()
             .filter(|f| !table_partition_cols.contains(f.name()))
             .cloned()
-            .collect(),
+            .collect::<Vec<_>>(),
     ));
 
     let object_store_url = table.object_store().object_store_url();
