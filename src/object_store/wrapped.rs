@@ -43,7 +43,7 @@ impl InternalObjectStore {
                 Url::from_str(&format!("s3://{bucket}")).unwrap()
             }
             schema::ObjectStore::GCS(GCS { bucket, .. }) => {
-                Url::from_str(&format!("s3://{bucket}")).unwrap()
+                Url::from_str(&format!("gs://{bucket}")).unwrap()
             }
         };
 
