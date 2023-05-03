@@ -55,10 +55,6 @@ use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::file_type::{FileCompressionType, FileType};
 use datafusion::datasource::file_format::json::JsonFormat;
 pub use datafusion::error::{DataFusionError as Error, Result};
-use datafusion::optimizer::analyzer::Analyzer;
-use datafusion::optimizer::optimizer::Optimizer;
-use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
-use datafusion::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::physical_expr::expressions::{cast, Column};
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
@@ -1181,33 +1177,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // We only support the most basic form of UPDATE (no aliases or FROM or joins)
                     if with_hints.is_empty() && joins.is_empty() => {
                     let plan = state.statement_to_plan(statement).await?;
-
-                    // Create a custom optimizer to avoid mangling effects of some optimizers (like
-                    // `CommonSubexprEliminate`) which can add nested Projection plans and rewrite
-                    // expressions.
-                    // We also need to do a analyze round beforehand for type coercion.
-                    // TODO: Move on to using `state.optimize(&plan)` and then unmangle the plan in
-                    // the execution phase.
-                    let analyzer = Analyzer::new();
-                    let plan = analyzer.execute_and_check(
-                        &plan,
-                        self.inner.copied_config().options(),
-                        |_, _| {},
-                    )?;
-                    let optimizer = Optimizer::with_rules(
-                        vec![
-                            Arc::new(SimplifyExpressions::new()),
-                        ]
-                    );
-                    let config = OptimizerContext::default();
-                    optimizer.optimize(&plan, &config, |plan: &LogicalPlan, rule: &dyn OptimizerRule| {
-                        debug!(
-                            "After applying rule '{}':\n{}\n",
-                            rule.name(),
-                            plan.display_indent()
-                        )
-                    }
-                    )
+                    state.optimize(&plan)
                 },
                 Statement::Delete{ .. } => {
                     let plan = state.statement_to_plan(statement).await?;
