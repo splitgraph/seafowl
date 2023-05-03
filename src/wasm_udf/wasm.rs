@@ -1151,10 +1151,9 @@ c40201087f230041206b2203240020032002370318200320013703102003\
             .collect()
             .await;
         assert!(results.is_err());
-        assert_eq!(
-            results.err().unwrap().to_string(),
-            "Error during planning: Coercion from [Int64, Int64, Int64] to the signature Exact([Int64, Int64]) failed."
-        );
+        assert!(
+            results.err().unwrap().to_string().contains("Error during planning: Coercion from [Int64, Int64, Int64] to the signature Exact([Int64, Int64]) failed."
+        ));
     }
 
     #[rstest]

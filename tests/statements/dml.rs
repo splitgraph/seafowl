@@ -370,7 +370,7 @@ async fn test_update_statement(
         r#"Dml: op=[Update] table=[test_table]
   Projection: Utf8("2022-01-01 21:21:21Z") AS some_time, test_table.some_value - Float32(10) AS some_value, test_table.some_other_value AS some_other_value, test_table.some_bool_value AS some_bool_value, Int64(5555) AS some_int_value
     Filter: some_value = Float32(43) OR some_value = Float32(42) OR some_value = Float32(41)
-      TableScan: test_table"#
+      TableScan: test_table, partial_filters=[some_value = Float32(43) OR some_value = Float32(42) OR some_value = Float32(41)]"#
     );
 
     // Now check the results

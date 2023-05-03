@@ -23,7 +23,7 @@ pub struct SeafowlPortal {
 }
 
 fn df_err_to_sql(err: DataFusionError) -> ErrorResponse {
-    ErrorResponse::error(SqlState::DATA_EXCEPTION, err.to_string())
+    ErrorResponse::error(SqlState::DataException, err.to_string())
 }
 
 #[async_trait]

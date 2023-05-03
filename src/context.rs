@@ -42,7 +42,7 @@ use sqlparser::ast::{
 };
 
 use arrow_schema::{DataType, TimeUnit};
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use std::iter::zip;
 use std::ops::Deref;
 use std::str::FromStr;
@@ -55,9 +55,6 @@ use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::file_type::{FileCompressionType, FileType};
 use datafusion::datasource::file_format::json::JsonFormat;
 pub use datafusion::error::{DataFusionError as Error, Result};
-use datafusion::optimizer::optimizer::Optimizer;
-use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
-use datafusion::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::physical_expr::expressions::{cast, Column};
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
@@ -91,6 +88,8 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::{DmlStatement, Filter, WriteOp};
 use deltalake::action::{Action, Add, ColumnCountStat, DeltaOperation, Remove, SaveMode};
 use deltalake::operations::create::CreateBuilder;
+use deltalake::operations::transaction::commit;
+use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::{DeltaDataTypeLong, DeltaTable, Schema as DeltaSchema};
 use log::{debug, info, warn};
 use parking_lot::RwLock;
@@ -855,16 +854,21 @@ impl DefaultSeafowlContext {
         // Commit the write into a new version
         let mut table = DeltaTable::new(table_object_store, Default::default());
         table.load().await?;
-        let mut tx = table.create_transaction(None);
 
         let actions: Vec<Action> = adds.into_iter().map(Action::add).collect();
-        tx.add_actions(actions);
         let op = DeltaOperation::Write {
             mode: SaveMode::Append,
             partition_by: None,
             predicate: None,
         };
-        let version = tx.commit(Some(op), None).await?;
+        let version = commit(
+            table.object_store().as_ref(),
+            &actions,
+            op,
+            table.get_state(),
+            None,
+        )
+        .await?;
 
         // TODO: if `DeltaTable::get_version_timestamp` was globally public we could also pass the
         // exact version timestamp, instead of creating one automatically in our own catalog (which
@@ -1173,24 +1177,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // We only support the most basic form of UPDATE (no aliases or FROM or joins)
                     if with_hints.is_empty() && joins.is_empty() => {
                     let plan = state.statement_to_plan(statement).await?;
-
-                    // Create a custom optimizer to avoid mangling effects of some optimizers (like
-                    // `CommonSubexprEliminate`) which can add nested Projection plans and rewrite
-                    // expressions
-                    let optimizer = Optimizer::with_rules(
-                        vec![
-                            Arc::new(SimplifyExpressions::new()),
-                        ]
-                    );
-                    let config = OptimizerContext::default();
-                    optimizer.optimize(&plan, &config, |plan: &LogicalPlan, rule: &dyn OptimizerRule| {
-                        debug!(
-                            "After applying rule '{}':\n{}\n",
-                            rule.name(),
-                            plan.display_indent()
-                        )
-                    }
-                    )
+                    state.optimize(&plan)
                 },
                 Statement::Delete{ .. } => {
                     let plan = state.statement_to_plan(statement).await?;
@@ -1573,9 +1560,19 @@ impl SeafowlContext for DefaultSeafowlContext {
                     }
                 }
 
-                let mut tx = table.create_transaction(None);
-                tx.add_actions(actions);
-                let version = tx.commit(None, None).await?;
+                let op = DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                };
+                let version = commit(
+                    table.object_store().as_ref(),
+                    &actions,
+                    op,
+                    table.get_state(),
+                    None,
+                )
+                .await?;
                 self.table_catalog
                     .create_new_table_version(uuid, version)
                     .await?;
@@ -1688,9 +1685,15 @@ impl SeafowlContext for DefaultSeafowlContext {
                     }))
                 }
 
-                let mut tx = table.create_transaction(None);
-                tx.add_actions(actions);
-                let version = tx.commit(None, None).await?;
+                let op = DeltaOperation::Delete { predicate: None };
+                let version = commit(
+                    table.object_store().as_ref(),
+                    &actions,
+                    op,
+                    table.get_state(),
+                    None,
+                )
+                .await?;
                 self.table_catalog
                     .create_new_table_version(uuid, version)
                     .await?;
@@ -1857,7 +1860,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     .get_dropped_tables(database)
                                     .await?;
 
-                                for mut dt in dropped_tables.iter_mut().filter(|dt| {
+                                for dt in dropped_tables.iter_mut().filter(|dt| {
                                     dt.deletion_status
                                         != DroppedTableDeletionStatus::Failed
                                 }) {
@@ -1950,8 +1953,15 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     // This all means that there are potential table versions which are still functional (and can be queried using
                                     // time-travel querying syntax), but are not represented in `system.table_versions` table.
                                     delta_table.load().await?;
-                                    let deleted_files =
-                                        delta_table.vacuum(Some(0), false, false).await?;
+                                    let plan = VacuumBuilder::new(
+                                        delta_table.object_store(),
+                                        delta_table.state.clone(),
+                                    )
+                                    .with_enforce_retention_duration(false)
+                                    .with_retention_period(Duration::hours(0_i64));
+
+                                    let (_, metrics) = plan.await?;
+                                    let deleted_files = metrics.files_deleted;
                                     info!("Deleted Delta table tombstones {deleted_files:?}");
                                 }
 
