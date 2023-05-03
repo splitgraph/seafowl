@@ -130,6 +130,7 @@ pub struct S3 {
 pub struct GCS {
     pub bucket: String,
     pub google_application_credentials: Option<String>,
+    pub base_url: Option<String>,
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -351,7 +352,8 @@ pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigErr
     }) = config.object_store
     {
         warn!(
-            "You are trying to connect to a GCS bucket without providing credentials. Continuing anyway."
+            "You are trying to connect to a GCS bucket without providing credentials.
+            If using GCP, a token should be fetched using the metadata server."
         )
     }
 

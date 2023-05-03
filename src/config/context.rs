@@ -130,12 +130,19 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
         schema::ObjectStore::GCS(GCS {
             bucket,
             google_application_credentials,
+            base_url,
         }) => {
             let gcs_builder: GoogleCloudStorageBuilder =
                 GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
 
             let gcs_builder = if let Some(path) = google_application_credentials {
                 gcs_builder.with_service_account_path(path)
+            } else {
+                gcs_builder
+            };
+
+            let gcs_builder = if let Some(url) = base_url {
+                gcs_builder.with_url(url)
             } else {
                 gcs_builder
             };
