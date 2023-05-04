@@ -34,7 +34,7 @@ arrow-buffer = "37.0.0"
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
 arrow-integration-test = "37.0.0"
-arrow-schema = "37.0.0"
+arrow-schema = "38.0.0"
 async-trait = "0.1.64"
 base64 = "0.21.0"
 
