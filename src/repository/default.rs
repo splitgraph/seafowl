@@ -140,33 +140,6 @@ impl Repository for $repo {
         Ok(columns)
     }
 
-    async fn get_all_table_partition_columns(
-        &self,
-        table_version_id: TableVersionId,
-    ) -> Result<Vec<AllTablePartitionColumnsResult>, Error> {
-        let partitions = sqlx::query_as(
-            r#"SELECT
-            physical_partition.id AS table_partition_id,
-            physical_partition.object_storage_id,
-            physical_partition.row_count AS row_count,
-            physical_partition_column.name AS column_name,
-            physical_partition_column.type AS column_type,
-            physical_partition_column.min_value,
-            physical_partition_column.max_value,
-            physical_partition_column.null_count
-        FROM table_partition
-        INNER JOIN physical_partition ON physical_partition.id = table_partition.physical_partition_id
-        -- TODO left join?
-        INNER JOIN physical_partition_column ON physical_partition_column.physical_partition_id = physical_partition.id
-        WHERE table_partition.table_version_id = $1
-        ORDER BY table_partition_id, physical_partition_column.id
-        "#,
-        ).bind(table_version_id)
-        .fetch_all(&self.executor)
-        .await.map_err($repo::interpret_error)?;
-        Ok(partitions)
-    }
-
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error> {
         let id = sqlx::query(r#"INSERT INTO database (name) VALUES ($1) RETURNING (id)"#)
             .bind(database_name)
@@ -323,43 +296,6 @@ impl Repository for $repo {
         Ok(delete_result.rows_affected())
     }
 
-    async fn get_orphan_partition_store_ids(
-        &self,
-    ) -> Result<Vec<String>, Error> {
-        let object_storage_ids = sqlx::query(
-            "SELECT DISTINCT object_storage_id FROM physical_partition
-                WHERE object_storage_id NOT IN (SELECT object_storage_id FROM physical_partition
-                    WHERE id IN (SELECT physical_partition_id FROM table_partition)
-            )"
-        )
-            .fetch(&self.executor)
-            .map_ok(|row| row.get("object_storage_id"))
-            .try_collect()
-            .await.map_err($repo::interpret_error)?;
-
-        Ok(object_storage_ids)
-    }
-
-    async fn delete_partitions(
-        &self,
-        object_storage_ids: Vec<String>,
-    ) -> Result<u64, Error> {
-        // We have to manually construct the query since SQLite doesn't have the proper Encode trait
-        let mut builder: QueryBuilder<_> = QueryBuilder::new(
-            "DELETE FROM physical_partition WHERE object_storage_id IN (",
-        );
-        let mut separated = builder.separated(", ");
-        for id in object_storage_ids.iter() {
-            separated.push_bind(id);
-        }
-        separated.push_unseparated(")");
-
-        let query = builder.build();
-        let delete_result = query.execute(&self.executor).await.map_err($repo::interpret_error)?;
-
-        Ok(delete_result.rows_affected())
-    }
-
     async fn create_new_table_version(
         &self,
         uuid: Uuid,
@@ -443,36 +379,6 @@ impl Repository for $repo {
             .map_err($repo::interpret_error)?;
 
         Ok(table_versions)
-    }
-
-    async fn get_all_table_partitions(
-        &self,
-        database_name: &str,
-    ) -> Result<Vec<TablePartitionsResult>> {
-        let table_partitions = sqlx::query_as(
-            r#"
-            SELECT
-                database.name AS database_name,
-                collection.name AS collection_name,
-                "table".name AS table_name,
-                "table".legacy AS table_legacy,
-                table_version.id AS table_version_id,
-                physical_partition.id AS table_partition_id,
-                physical_partition.object_storage_id,
-                physical_partition.row_count
-            FROM table_version
-            INNER JOIN "table" ON "table".id = table_version.table_id
-            INNER JOIN collection ON collection.id = "table".collection_id
-            INNER JOIN database ON database.id = collection.database_id
-            LEFT JOIN table_partition ON table_partition.table_version_id = table_version.id
-            LEFT JOIN physical_partition ON physical_partition.id = table_partition.physical_partition_id
-            WHERE database.name = $1;
-        "#)
-        .bind(database_name)
-        .fetch_all(&self.executor)
-        .await.map_err($repo::interpret_error)?;
-
-        Ok(table_partitions)
     }
 
     async fn move_table(

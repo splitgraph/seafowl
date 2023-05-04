@@ -8,14 +8,13 @@ use std::{
 use arrow::json::LineDelimitedWriter;
 use datafusion::error::Result;
 use hex::encode;
-use itertools::Itertools;
-use log::{debug, info, warn};
+use log::{info, warn};
 use object_store::path::Path;
 use sha2::{Digest, Sha256};
 use tokio::{fs::File, io::AsyncWrite};
 
 use crate::context::{DefaultSeafowlContext, SeafowlContext};
-use crate::provider::SeafowlPartition;
+use crate::repository::interface::DroppedTableDeletionStatus;
 
 // Run a one-off command and output its results to a writer
 pub async fn run_one_off_command<W>(
@@ -42,70 +41,77 @@ pub async fn run_one_off_command<W>(
     }
 }
 
-pub async fn gc_partitions(context: &DefaultSeafowlContext) {
-    match context
-        .partition_catalog
-        .get_orphan_partition_store_ids()
+// Physically delete dropped tables for a given context
+pub async fn gc_database(context: &DefaultSeafowlContext) {
+    let mut dropped_tables = context
+        .table_catalog
+        .get_dropped_tables(&context.database)
         .await
-    {
-        Ok(mut object_storage_ids) if !object_storage_ids.is_empty() => {
-            info!("Found {} orphan partition(s)", object_storage_ids.len());
+        .unwrap_or_else(|err| {
+            warn!("Failed fetching dropped tables: {err:?}");
+            vec![]
+        });
 
-            let mut retain_map = vec![true; object_storage_ids.len()];
-            for (ind, object_storage_id) in object_storage_ids.iter().enumerate() {
-                context
-                    .internal_object_store
-                    .inner
-                    .delete(&Path::from(object_storage_id.clone()))
-                    .await
-                    .map_err(|e| if format!("{e:?}").contains("NotFound") {
-                        // This is the way we match both object_store::Error::NotFound and the
-                        // corresponding local FS error (which doesn't get coerced into the above one):
-                        // Generic { store: "LocalFileSystem", source: UnableToDeleteFile { source: Os { code: 2, kind: NotFound, message: "No such file or directory" }, path: "/path/to/.parquet" } }
-                        // We're not able to do pattern matching here since UnableToDeleteFile
-                        // is pub(crate), and we can't use a guard to check on only the content of the
-                        // corresponding source and not source from other pattern alternatives:
-                        // https://stackoverflow.com/a/42355656
-                        info!("Object {} not found in store; deleting from catalog", object_storage_id);
-                    } else {
-                        warn!("Failed to delete orphan partition {} from object store: {:?}", object_storage_id, e);
-                        retain_map[ind] = false;
-                    })
-                    .ok();
+    for dt in dropped_tables
+        .iter_mut()
+        .filter(|dt| dt.deletion_status != DroppedTableDeletionStatus::Failed)
+    {
+        // TODO: Use batch delete when the object store crate starts supporting it
+        info!(
+            "Trying to cleanup table {}.{}.{} with UUID (directory name) {}",
+            dt.database_name, dt.collection_name, dt.table_name, dt.uuid,
+        );
+
+        let result = context
+            .internal_object_store
+            .delete_in_prefix(&Path::from(dt.uuid.to_string()))
+            .await;
+
+        if let Err(err) = result {
+            warn!(
+                "Encountered error while trying to delete table in directory {}: {err}",
+                dt.uuid
+            );
+            if dt.deletion_status != DroppedTableDeletionStatus::Pending {
+                dt.deletion_status = DroppedTableDeletionStatus::Retry;
+            } else {
+                dt.deletion_status = DroppedTableDeletionStatus::Failed;
             }
 
-            // Scope down only to partitions which we managed to delete in the object store
-            let mut keep = retain_map.iter();
-            object_storage_ids.retain(|_| *keep.next().unwrap());
-
             context
-                .partition_catalog
-                .delete_partitions(object_storage_ids)
+                .table_catalog
+                .update_dropped_table(dt.uuid, dt.deletion_status)
                 .await
-                .map_or_else(
-                    |e| warn!("Failed to delete orphan partitions from catalog: {:?}", e),
-                    |row_count| info!("Deleted {} orphan partition(s)", row_count),
-                );
+                .unwrap_or_else(|err| {
+                    warn!(
+                        "Failed updating dropped table deletion status {}: {err:?}",
+                        dt.uuid
+                    )
+                });
+        } else {
+            // Successfully cleaned up the table's directory in the object store
+            context
+                .table_catalog
+                .delete_dropped_table(dt.uuid)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("Failed removing table from metadata {}: {err:?}", dt.uuid)
+                });
         }
-        Err(e) => warn!("Failed to fetch orphan partitions: {:?}", e),
-        _ => debug!("No orphan partitions to cleanup found"),
     }
-}
 
-// Group adjacent partitions using the provided function
-pub fn group_partitions<F>(
-    partitions: Vec<SeafowlPartition>,
-    f: F,
-) -> Vec<(bool, Vec<SeafowlPartition>)>
-where
-    F: Fn(&SeafowlPartition) -> bool,
-{
-    partitions
-        .into_iter()
-        .group_by(f)
-        .into_iter()
-        .map(|(keep, group)| (keep, group.collect()))
-        .collect()
+    // Warn about cleanup errors that need manual intervention
+    dropped_tables
+        .iter()
+        .filter(|dt| dt.deletion_status == DroppedTableDeletionStatus::Failed)
+        .for_each(|dt| {
+            warn!(
+                "Failed to cleanup table {}.{}.{} with UUID (directory name) {}. \
+                Please manually delete the corresponding directory in the object store \
+                and then delete the entry in the `dropped_tables` catalog table.",
+                dt.database_name, dt.collection_name, dt.table_name, dt.uuid,
+            )
+        })
 }
 
 /// A Sha256 hasher that works as a Tokio async writer

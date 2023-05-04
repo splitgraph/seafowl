@@ -13,7 +13,6 @@ use uuid::Uuid;
 
 use crate::{
     data_types::{CollectionId, DatabaseId, FunctionId, TableId, TableVersionId},
-    repository::interface::AllTablePartitionColumnsResult,
     schema::Schema,
     wasm_udf::data_types::CreateFunctionDetails,
 };
@@ -24,8 +23,7 @@ use super::{
     default::RepositoryQueries,
     interface::{
         AllDatabaseColumnsResult, AllDatabaseFunctionsResult, DroppedTableDeletionStatus,
-        DroppedTablesResult, Error, Repository, Result, TablePartitionsResult,
-        TableVersionsResult,
+        DroppedTablesResult, Error, Repository, Result, TableVersionsResult,
     },
 };
 

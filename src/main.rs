@@ -19,7 +19,7 @@ use seafowl::{
     },
     context::DefaultSeafowlContext,
     frontend::http::run_server,
-    utils::{gc_partitions, run_one_off_command},
+    utils::{gc_database, run_one_off_command},
 };
 use tokio::signal::ctrl_c;
 #[cfg(unix)]
@@ -197,7 +197,7 @@ Run Seafowl with --one-off instead to run a one-off command from the CLI."
             async move {
                 loop {
                     tokio::select! {
-                        _ = interval.tick() => gc_partitions(&context).await,
+                        _ = interval.tick() => gc_database(&context).await,
                         _ = shutdown_r.recv() => {
                             info!("GC task received shutdown signal, exiting");
                             break;

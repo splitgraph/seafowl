@@ -3,8 +3,7 @@ use std::time::Duration;
 
 use crate::{
     catalog::{
-        DefaultCatalog, FunctionCatalog, PartitionCatalog, TableCatalog, DEFAULT_DB,
-        DEFAULT_SCHEMA,
+        DefaultCatalog, FunctionCatalog, TableCatalog, DEFAULT_DB, DEFAULT_SCHEMA,
     },
     context::{DefaultSeafowlContext, INTERNAL_OBJECT_STORE_SCHEME},
     repository::{interface::Repository, sqlite::SqliteRepository},
@@ -38,11 +37,7 @@ use super::schema::{self, MEBIBYTES, MEMORY_FRACTION, S3};
 async fn build_catalog(
     config: &schema::SeafowlConfig,
     object_store: Arc<InternalObjectStore>,
-) -> (
-    Arc<dyn TableCatalog>,
-    Arc<dyn PartitionCatalog>,
-    Arc<dyn FunctionCatalog>,
-) {
+) -> (Arc<dyn TableCatalog>, Arc<dyn FunctionCatalog>) {
     // Initialize the repository
     let repository: Arc<dyn Repository> = match &config.catalog {
         #[cfg(feature = "catalog-postgres")]
@@ -73,7 +68,7 @@ async fn build_catalog(
 
     let catalog = Arc::new(DefaultCatalog::new(repository, object_store));
 
-    (catalog.clone(), catalog.clone(), catalog)
+    (catalog.clone(), catalog)
 }
 
 fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
@@ -187,8 +182,7 @@ pub async fn build_context(
     // Register the HTTP object store for external tables
     add_http_object_store(&context, &cfg.misc.ssl_cert_file);
 
-    let (tables, partitions, functions) =
-        build_catalog(cfg, internal_object_store.clone()).await;
+    let (tables, functions) = build_catalog(cfg, internal_object_store.clone()).await;
 
     // Create default DB/collection
     let default_db = match tables.get_database_id_by_name(DEFAULT_DB).await? {
@@ -215,7 +209,6 @@ pub async fn build_context(
     Ok(DefaultSeafowlContext {
         inner: context,
         table_catalog: tables,
-        partition_catalog: partitions,
         function_catalog: functions,
         internal_object_store,
         database: DEFAULT_DB.to_string(),

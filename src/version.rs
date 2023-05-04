@@ -1,31 +1,19 @@
-use crate::catalog::TableCatalog;
-use crate::data_types::{TableVersionId, Timestamp};
-use chrono::{DateTime, NaiveDateTime};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, Utc};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::sql::TableReference;
-use itertools::Itertools;
 use sqlparser::ast::{
     Expr, FunctionArg, FunctionArgExpr, Ident, ObjectName, TableAlias, Value,
 };
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::HashSet;
 
 use crate::datafusion::visit::{visit_table_table_factor, VisitorMut};
 
 // A struct for walking the query AST, visiting all tables and rewriting any table reference that
-// uses time travel syntax (i.e. table function syntax). It does so in two runs, first collecting
-// all table references such as `table('2022-01-01 20:01:01Z')`, and then (after collecting the
-// corresponding version ids via `triage_version_ids`) renaming the table to "table:<table_version_id>"
-// (and also removing the table func expressions from the statement).
-// The reason we do this in 2 runs is so that we that we can parse and triage the version specifier
-// into a corresponding table_version_id, with which we will rename the table. By doing so, we make
-// sure that no redundant entries to schema provider's table map will be made, given that many different
-// version specifiers can point to the same table_version_id.
+// uses time travel syntax (i.e. table function syntax such as `table('2022-01-01 20:01:01Z')`).
 pub struct TableVersionProcessor {
     pub default_catalog: String,
     pub default_schema: String,
-    pub table_versions: HashMap<(ObjectName, String), Option<TableVersionId>>,
-    rewrite_ready: bool,
+    pub table_versions: HashSet<(ObjectName, String)>,
 }
 
 impl TableVersionProcessor {
@@ -33,151 +21,37 @@ impl TableVersionProcessor {
         Self {
             default_catalog,
             default_schema,
-            table_versions: HashMap::<(ObjectName, String), Option<TableVersionId>>::new(
-            ),
-            rewrite_ready: false,
+            table_versions: HashSet::<(ObjectName, String)>::new(),
         }
     }
 
-    pub fn table_with_version(&self, name: &ObjectName, version: &str) -> String {
-        if let Some(version_id) = self.table_versions[&(name.clone(), version.to_owned())]
-        {
-            format!("{}:{}", name.0.last().unwrap().value, version_id)
-        } else {
-            // The resolved table version id is None; this should only happen for delta tables, since
-            // we'll load those directly using the date string
-            format!(
-                "{}:{}",
-                name.0.last().unwrap().value,
-                version.to_ascii_lowercase()
-            )
-        }
+    pub fn table_with_version(name: &ObjectName, version: &str) -> String {
+        format!(
+            "{}:{}",
+            name.0.last().unwrap().value,
+            version.to_ascii_lowercase()
+        )
     }
 
     // Try to parse the specified version timestamp into a Unix epoch
-    pub fn version_to_epoch(version: &String) -> Result<Timestamp> {
-        // TODO: Further extend the supported formats for specifying the datetime
-        if let Ok(dt_rfc3339) = DateTime::parse_from_rfc3339(version) {
-            Ok(dt_rfc3339.timestamp())
+    pub fn version_to_datetime(version: &str) -> Result<DateTime<Utc>> {
+        let dt = if let Ok(dt_rfc3339) = DateTime::parse_from_rfc3339(version) {
+            dt_rfc3339
+        } else if let Ok(dt_rfc2822) = DateTime::parse_from_rfc2822(version) {
+            dt_rfc2822
         } else if let Ok(dt) = DateTime::parse_from_str(version, "%Y-%m-%d %H:%M:%S %z") {
-            Ok(dt.timestamp())
+            dt
         } else if let Ok(dt_naive) =
             NaiveDateTime::parse_from_str(version, "%Y-%m-%d %H:%M:%S")
         {
-            Ok(dt_naive.timestamp())
-        } else if let Ok(dt_rfc2822) = DateTime::parse_from_rfc2822(version) {
-            Ok(dt_rfc2822.timestamp())
+            DateTime::from_utc(dt_naive, FixedOffset::east_opt(0).unwrap())
         } else {
             return Err(DataFusionError::Execution(format!(
                 "Failed to parse version {version} as timestamp"
             )));
-        }
-    }
+        };
 
-    fn resolve_version_id(
-        version: &String,
-        table_versions: &[(TableVersionId, Timestamp)],
-    ) -> Result<TableVersionId> {
-        if version == "oldest" {
-            // Fetch the first recorded table version id.
-            return Ok(table_versions[0].0);
-        }
-
-        let timestamp = TableVersionProcessor::version_to_epoch(version)?;
-        match table_versions.binary_search_by_key(&timestamp, |&(_, t)| t) {
-            Ok(n) => Ok(table_versions[n].0),
-            Err(n) => {
-                // We haven't found an exact match, which is expected. Instead we have the index at
-                // which the provided timestamp would fit in the sorted versions vector.
-                if n >= 1 {
-                    // We're guaranteed to have at least 1 table version prior to the timestamp specified.
-                    // Return that version.
-                    return Ok(table_versions[n - 1].0);
-                }
-
-                // The timestamp specified occurs prior to the earliest available table version.
-                Err(DataFusionError::Execution(format!(
-                    "No recorded table versions for the provided timestamp {version}"
-                )))
-            }
-        }
-    }
-
-    pub async fn triage_version_ids(
-        &mut self,
-        database: String,
-        table_catalog: Arc<dyn TableCatalog>,
-    ) -> Result<()> {
-        // Fetch all available versions for the versioned tables from the metadata store, and
-        // collect them into a table: [..., (vi, ti), ...] map (vi being the table version id
-        // and ti the Unix epoch when that version was created for the i-th version).
-        let all_table_versions: HashMap<ObjectName, Vec<(TableVersionId, Timestamp)>> =
-            table_catalog
-                .get_all_table_versions(
-                    database.as_str(),
-                    Some(self.get_versioned_tables()),
-                )
-                .await?
-                .into_iter()
-                .filter(|tv| tv.table_legacy)
-                .group_by(|tv| {
-                    ObjectName(vec![
-                        Ident::new(&tv.database_name),
-                        Ident::new(&tv.collection_name),
-                        Ident::new(&tv.table_name),
-                    ])
-                })
-                .into_iter()
-                .map(|(t, tvs)| {
-                    (
-                        t,
-                        tvs.sorted_by_key(|tv| tv.creation_time)
-                            .map(|tv| (tv.table_version_id, tv.creation_time))
-                            .collect(),
-                    )
-                })
-                .collect();
-
-        // Update the map of the renamed tables with the corresponding table_version_id which should
-        // be loaded for the specified versions
-        for (table_version, table_version_id) in self.table_versions.iter_mut() {
-            let table = &table_version.0;
-            let version = &table_version.1;
-            if !all_table_versions.contains_key(table) {
-                // This means this is not the legacy table, no need to triage the version id
-                continue;
-            }
-
-            let all_versions = all_table_versions.get(table).ok_or_else(|| {
-                DataFusionError::Execution(format!("No versions found for table {table}"))
-            })?;
-
-            let id = TableVersionProcessor::resolve_version_id(version, all_versions)?;
-            *table_version_id = Some(id);
-        }
-
-        self.rewrite_ready = true;
-
-        Ok(())
-    }
-
-    // Get a unique list of table names that have versions specified, as some may have
-    // more than one.
-    fn get_versioned_tables(&self) -> Vec<String> {
-        self.table_versions
-            .iter()
-            .map(|((t, _), _)| t.0.last().unwrap().value.clone())
-            .unique()
-            .collect()
-    }
-
-    // Get a unique list of table_version_ids (if collected), as some version references may point to
-    // more than one.
-    pub fn table_version_ids(&self) -> Vec<TableVersionId> {
-        self.table_versions
-            .values()
-            .filter_map(|&table_version_id| table_version_id)
-            .collect()
+        Ok(DateTime::<Utc>::from(dt))
     }
 }
 
@@ -202,19 +76,14 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
                     Ident::new(resolved_ref.schema),
                     Ident::new(resolved_ref.table),
                 ]);
-                if !self.rewrite_ready {
-                    // We haven't yet fetched/triaged the table versions ids; for now just collect
-                    // all raw table versions.
 
-                    self.table_versions
-                        .insert((full_object_name, value.to_string()), None);
-                } else {
-                    // Do the actual name rewrite
-                    name.0.last_mut().unwrap().value =
-                        self.table_with_version(&full_object_name, value);
-                    // Void the function table arg struct to leave a clean printable statement
-                    *args = None;
-                }
+                self.table_versions
+                    .insert((full_object_name.clone(), value.to_string()));
+                // Do the actual name rewrite
+                name.0.last_mut().unwrap().value =
+                    TableVersionProcessor::table_with_version(&full_object_name, value);
+                // Void the function table arg struct to leave a clean printable statement
+                *args = None;
             }
         }
         visit_table_table_factor(self, name, alias, args, with_hints)
@@ -223,7 +92,6 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
 
 #[cfg(test)]
 mod tests {
-    use crate::data_types::TableVersionId;
     use datafusion::sql::parser::Statement;
     use rstest::rstest;
     use sqlparser::ast::Statement as SQLStatement;
@@ -268,32 +136,28 @@ mod tests {
             "test_catalog".to_string(),
             "test_schema".to_string(),
         );
-        // Do a first pass
-        rewriter.visit_query(&mut q);
-
-        // Set a mock table version id and do another pass for actually renaming the table
-        let id = 42 as TableVersionId;
-        for table_version_id in rewriter.table_versions.values_mut() {
-            *table_version_id = Some(id);
-        }
-        rewriter.rewrite_ready = true;
         rewriter.visit_query(&mut q);
 
         // Ensure table name in the original query has been renamed to appropriate version
         assert_eq!(
             format!("{q}"),
-            query.replace("('test_version')", format!(":{id}").as_str())
+            query.replace("('test_version')", ":test_version")
         )
     }
 
     #[rstest]
     #[case::rfc_3339("2017-07-14T02:40:00+00:00")]
+    #[case::rfc_3339_shifted("2017-07-14T04:40:00+02:00")]
     #[case::custom_with_tz("2017-07-14 02:40:00 +00:00")]
+    #[case::custom_with_tz_shifted("2017-07-14 04:40:00 +02:00")]
     #[case::naive_datetime("2017-07-14 02:40:00")]
     #[case::rfc_2822("Fri, 14 Jul 2017 02:40:00 +0000")]
+    #[case::rfc_2822_shifted("Fri, 14 Jul 2017 04:40:00 +0200")]
     fn test_version_timestamp_parsing(#[case] version: &str) {
         assert_eq!(
-            TableVersionProcessor::version_to_epoch(&version.to_string()).unwrap(),
+            TableVersionProcessor::version_to_datetime(version)
+                .unwrap()
+                .timestamp(),
             1_500_000_000,
         )
     }

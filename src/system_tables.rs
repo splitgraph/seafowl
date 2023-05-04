@@ -2,10 +2,8 @@
 //! and datafusion's information_schema.
 
 use crate::catalog::TableCatalog;
-use crate::repository::interface::{DroppedTablesResult, TablePartitionsResult};
-use arrow::array::{
-    Int32Builder, Int64Builder, StringBuilder, StructBuilder, TimestampSecondBuilder,
-};
+use crate::repository::interface::DroppedTablesResult;
+use arrow::array::{Int64Builder, StringBuilder, StructBuilder, TimestampSecondBuilder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -22,7 +20,6 @@ use std::sync::Arc;
 
 pub const SYSTEM_SCHEMA: &str = "system";
 const TABLE_VERSIONS: &str = "table_versions";
-const TABLE_PARTITIONS: &str = "table_partitions";
 const DROPPED_TABLES: &str = "dropped_tables";
 
 pub struct SystemSchemaProvider {
@@ -46,11 +43,7 @@ impl SchemaProvider for SystemSchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        vec![
-            TABLE_VERSIONS.to_string(),
-            TABLE_PARTITIONS.to_string(),
-            DROPPED_TABLES.to_string(),
-        ]
+        vec![TABLE_VERSIONS.to_string(), DROPPED_TABLES.to_string()]
     }
 
     async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
@@ -58,15 +51,6 @@ impl SchemaProvider for SystemSchemaProvider {
             // Lazy instantiate the tables, but defer loading the rows until the actual scan is invoked.
             TABLE_VERSIONS => {
                 let table = TableVersionsTable::new(
-                    self.database.clone(),
-                    self.table_catalog.clone(),
-                );
-                Some(Arc::new(SystemTableProvider {
-                    table: Arc::new(table),
-                }))
-            }
-            TABLE_PARTITIONS => {
-                let table = TablePartitionsTable::new(
                     self.database.clone(),
                     self.table_catalog.clone(),
                 );
@@ -90,7 +74,7 @@ impl SchemaProvider for SystemSchemaProvider {
     fn table_exist(&self, name: &str) -> bool {
         matches!(
             name.to_ascii_lowercase().as_str(),
-            TABLE_VERSIONS | TABLE_PARTITIONS | DROPPED_TABLES
+            TABLE_VERSIONS | DROPPED_TABLES
         )
     }
 }
@@ -211,89 +195,6 @@ impl SeafowlSystemTable for TableVersionsTable {
                 .field_builder::<TimestampSecondBuilder>(4)
                 .unwrap()
                 .append_value(table_version.creation_time);
-
-            builder.append(true);
-        }
-
-        let struct_array = builder.finish();
-
-        RecordBatch::try_new(self.schema.clone(), struct_array.columns().to_vec())
-            .map_err(DataFusionError::from)
-    }
-}
-
-// Table listing all available partitions for each table version for the given database
-struct TablePartitionsTable {
-    database: Arc<str>,
-    schema: SchemaRef,
-    table_catalog: Arc<dyn TableCatalog>,
-}
-
-impl TablePartitionsTable {
-    fn new(database: Arc<str>, table_catalog: Arc<dyn TableCatalog>) -> Self {
-        Self {
-            // This is dictated by the output of `get_all_table_partitions`, except that we omit the
-            // database_name field, since we scope down to the database at hand.
-            database,
-            schema: Arc::new(Schema::new(vec![
-                Field::new("table_schema", DataType::Utf8, false),
-                Field::new("table_name", DataType::Utf8, false),
-                Field::new("table_version_id", DataType::Int64, false),
-                Field::new("table_partition_id", DataType::Int64, true),
-                Field::new("object_storage_id", DataType::Utf8, true),
-                Field::new("row_count", DataType::Int32, true),
-            ])),
-            table_catalog,
-        }
-    }
-}
-
-#[async_trait]
-impl SeafowlSystemTable for TablePartitionsTable {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    async fn load_record_batch(&self) -> Result<RecordBatch> {
-        let table_partitions = self
-            .table_catalog
-            .get_all_table_partitions(&self.database)
-            .await?
-            .into_iter()
-            .filter(|tv| tv.table_legacy)
-            .collect::<Vec<TablePartitionsResult>>();
-
-        let mut builder = StructBuilder::from_fields(
-            self.schema.fields().clone(),
-            table_partitions.len(),
-        );
-
-        // Construct the table columns from the returned rows
-        for table_partition in &table_partitions {
-            builder
-                .field_builder::<StringBuilder>(0)
-                .unwrap()
-                .append_value(table_partition.collection_name.clone());
-            builder
-                .field_builder::<StringBuilder>(1)
-                .unwrap()
-                .append_value(&table_partition.table_name.clone());
-            builder
-                .field_builder::<Int64Builder>(2)
-                .unwrap()
-                .append_value(table_partition.table_version_id);
-            builder
-                .field_builder::<Int64Builder>(3)
-                .unwrap()
-                .append_option(table_partition.table_partition_id);
-            builder
-                .field_builder::<StringBuilder>(4)
-                .unwrap()
-                .append_option(table_partition.object_storage_id.clone());
-            builder
-                .field_builder::<Int32Builder>(5)
-                .unwrap()
-                .append_option(table_partition.row_count);
 
             builder.append(true);
         }

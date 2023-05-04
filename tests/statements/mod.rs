@@ -1,16 +1,13 @@
 use std::collections::HashMap;
 use std::env;
-use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::record_batch::RecordBatch;
-use assert_unordered::assert_eq_unordered_sort;
 use chrono::{TimeZone, Utc};
 use datafusion::assert_batches_eq;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{assert_contains, DataFusionError};
 use deltalake::DeltaDataTypeVersion;
-use futures::TryStreamExt;
 use itertools::sorted;
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
@@ -26,7 +23,7 @@ use tempfile::TempDir;
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::{DefaultSeafowlContext, SeafowlContext};
-use seafowl::data_types::{TableVersionId, Timestamp};
+use seafowl::data_types::Timestamp;
 use seafowl::repository::postgres::testutils::get_random_schema;
 use seafowl::system_tables::SYSTEM_SCHEMA;
 
@@ -34,7 +31,6 @@ mod ddl;
 mod dml;
 mod function;
 mod query;
-mod query_legacy;
 // Hack because integration tests do not set cfg(test)
 // https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
 #[allow(dead_code)]
@@ -282,19 +278,4 @@ async fn create_table_and_some_partitions(
     .await;
 
     (version_results, version_timestamps)
-}
-
-async fn assert_orphan_partitions(context: Arc<DefaultSeafowlContext>, parts: Vec<&str>) {
-    assert_eq_unordered_sort!(
-        context
-            .partition_catalog
-            .get_orphan_partition_store_ids()
-            .await
-            .unwrap()
-            // Turn Vec<String> -> Vec<&str>
-            .iter()
-            .map(|s| &**s)
-            .collect(),
-        parts
-    );
 }

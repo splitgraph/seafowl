@@ -192,16 +192,14 @@ impl<'a> DFParser<'a> {
         let mut table_name = ObjectName(vec![]);
         let mut partitions = None;
 
-        if self.parser.parse_keyword(Keyword::PARTITIONS) {
-            partitions = Some(vec![]);
-        } else if self.parser.parse_keyword(Keyword::TABLE) {
+        if self.parser.parse_keyword(Keyword::TABLE) {
             table_name = self.parser.parse_object_name()?;
         } else if self.parser.parse_keyword(Keyword::DATABASE) {
             let database_name = self.parser.parse_object_name()?.0[0].clone();
             partitions = Some(vec![Expr::Identifier(database_name)]);
         } else {
             return self.expected(
-                "PARTITIONS, TABLE or DATABASE are supported VACUUM targets",
+                "TABLE or DATABASE are supported VACUUM targets",
                 self.parser.peek_token(),
             );
         }

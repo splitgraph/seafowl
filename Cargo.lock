@@ -5197,7 +5197,6 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
- "datafusion-proto",
  "datafusion-remote-tables",
  "deltalake",
  "dynamodb_lock",
