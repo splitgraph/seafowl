@@ -3,7 +3,12 @@ use crate::statements::*;
 #[rstest]
 #[tokio::test]
 async fn test_insert_two_different_schemas(
-    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local, ObjectStoreType::S3)]
+    #[values(
+        ObjectStoreType::InMemory,
+        ObjectStoreType::Local,
+        ObjectStoreType::S3,
+        ObjectStoreType::Gcs
+    )]
     object_store_type: ObjectStoreType,
 ) {
     let (context, _) = make_context_with_pg(object_store_type).await;

@@ -43,6 +43,7 @@ mod testutils;
 mod vacuum;
 
 enum ObjectStoreType {
+    Gcs,
     Local,
     InMemory,
     S3,
@@ -78,6 +79,14 @@ bucket = "seafowl-test-bucket"
 
 [object_store.cache_properties]
 ttl = 30
+"#
+            .to_string(),
+            None,
+        ),
+        ObjectStoreType::Gcs => (
+            r#"type = "gcs"
+bucket = "seafowl-test-bucket"
+google_application_credentials = "./fake-gcs-server.json"
 "#
             .to_string(),
             None,
