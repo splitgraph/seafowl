@@ -528,7 +528,7 @@ impl Repository for $repo {
 
     async fn get_dropped_tables(
         &self,
-        database_name: &str,
+        database_name: Option<String>,
     ) -> Result<Vec<DroppedTablesResult>> {
         let query = format!(r#"SELECT
                 database_name,
@@ -537,14 +537,20 @@ impl Repository for $repo {
                 uuid,
                 deletion_status,
                 {} AS drop_time
-            FROM dropped_table WHERE database_name = $1"#,
+            FROM dropped_table"#,
             $repo::QUERIES.cast_timestamp.replace("timestamp_column", "drop_time")
         );
 
-        let dropped_tables = sqlx::query_as(&query)
-        .bind(database_name)
-        .fetch_all(&self.executor)
-        .await.map_err($repo::interpret_error)?;
+        let mut builder: QueryBuilder<_> = QueryBuilder::new(&query);
+
+        if let Some(database) = database_name {
+            builder.push(" WHERE database_name = ");
+            builder.push_bind(database);
+        }
+
+        let dropped_tables = builder.build_query_as()
+            .fetch_all(&self.executor)
+            .await.map_err($repo::interpret_error)?;
 
         Ok(dropped_tables)
     }

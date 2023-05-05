@@ -208,7 +208,7 @@ pub trait TableCatalog: Sync + Send {
 
     async fn get_dropped_tables(
         &self,
-        database_name: &str,
+        database_name: Option<String>,
     ) -> Result<Vec<DroppedTablesResult>>;
 
     async fn update_dropped_table(
@@ -562,7 +562,7 @@ impl TableCatalog for DefaultCatalog {
 
     async fn get_dropped_tables(
         &self,
-        database_name: &str,
+        database_name: Option<String>,
     ) -> Result<Vec<DroppedTablesResult>> {
         self.repository
             .get_dropped_tables(database_name)

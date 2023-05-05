@@ -42,10 +42,13 @@ pub async fn run_one_off_command<W>(
 }
 
 // Physically delete dropped tables for a given context
-pub async fn gc_database(context: &DefaultSeafowlContext) {
+pub async fn gc_databases(
+    context: &DefaultSeafowlContext,
+    database_name: Option<String>,
+) {
     let mut dropped_tables = context
         .table_catalog
-        .get_dropped_tables(&context.database)
+        .get_dropped_tables(database_name)
         .await
         .unwrap_or_else(|err| {
             warn!("Failed fetching dropped tables: {err:?}");

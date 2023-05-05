@@ -244,7 +244,7 @@ impl SeafowlSystemTable for DroppedTablesTable {
     async fn load_record_batch(&self) -> Result<RecordBatch> {
         let dropped_tables = self
             .table_catalog
-            .get_dropped_tables(&self.database)
+            .get_dropped_tables(Some(self.database.to_string()))
             .await?
             .into_iter()
             .collect::<Vec<DroppedTablesResult>>();

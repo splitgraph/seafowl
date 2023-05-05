@@ -189,7 +189,7 @@ pub trait Repository: Send + Sync + Debug {
 
     async fn get_dropped_tables(
         &self,
-        database_name: &str,
+        database_name: Option<String>,
     ) -> Result<Vec<DroppedTablesResult>>;
 
     async fn update_dropped_table(

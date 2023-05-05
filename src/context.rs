@@ -101,7 +101,7 @@ use crate::delta_rs::backports::parquet_scan_from_actions;
 #[cfg(test)]
 use crate::frontend::http::tests::deterministic_uuid;
 use crate::provider::project_expressions;
-use crate::utils::gc_database;
+use crate::utils::gc_databases;
 use crate::wasm_udf::data_types::{get_volatility, CreateFunctionDetails};
 use crate::{
     catalog::{FunctionCatalog, TableCatalog},
@@ -1792,7 +1792,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                             ..
                         }) => {
                             if database.is_some() {
-                                gc_database(self).await;
+                                gc_databases(self, database.clone()).await;
                             } else if let Some(table_name) = table_name {
                                 let table_ref = TableReference::from(table_name.as_str());
                                 let resolved_ref =
