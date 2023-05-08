@@ -6,19 +6,17 @@ async fn test_vacuum_table() -> Result<(), DataFusionError> {
 
     // Create table_1 and make tombstone by replacing the first file
     create_table_and_insert(&context, "table_1").await;
-    let plan = context
+    context
         .plan_query("DELETE FROM table_1 WHERE some_value = 42")
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     // Creates table_2 but append a new file instead of replacing the first one
     create_table_and_insert(&context, "table_2").await;
-    let plan = context
+    context
         .plan_query("INSERT INTO table_2 (some_int_value) VALUES (4444), (5555), (6666)")
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     // Check current table versions
     let plan = context
@@ -71,10 +69,7 @@ async fn test_vacuum_table() -> Result<(), DataFusionError> {
     .await;
 
     // Run vacuum on table_1 to remove tombstoned file
-    context
-        .collect(context.plan_query("VACUUM TABLE table_1").await.unwrap())
-        .await
-        .unwrap();
+    context.plan_query("VACUUM TABLE table_1").await.unwrap();
 
     // Check table versions again; table_1 now only has latest version
     let plan = context

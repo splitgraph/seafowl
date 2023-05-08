@@ -4,7 +4,7 @@ use crate::statements::*;
 async fn test_create_table() {
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
-    let plan = context
+    context
         .plan_query(
             "CREATE TABLE test_table (
             some_time TIMESTAMP,
@@ -15,7 +15,6 @@ async fn test_create_table() {
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     // Check table columns
     let results = list_columns_query(&context).await;
@@ -40,7 +39,7 @@ async fn test_create_table_as() {
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
     create_table_and_insert(&context, "test_table").await;
 
-    let plan = context
+    context
         .plan_query(
             "
     CREATE TABLE test_ctas AS (
@@ -57,7 +56,6 @@ async fn test_create_table_as() {
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     let plan = context.plan_query("SELECT * FROM test_ctas").await.unwrap();
     let results = context.collect(plan).await.unwrap();
@@ -79,19 +77,17 @@ async fn test_create_table_as_from_ns_column() {
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
     // Create an external table containing a timestamp column in nanoseconds
-    let plan = context
+    context
         .plan_query("CREATE EXTERNAL TABLE table_with_ns_column \
             STORED AS PARQUET LOCATION 'tests/data/seafowl-legacy-data/7fbfeeeade71978b4ae82cd3d97b8c1bd9ae7ab9a7a78ee541b66209cfd7722d.parquet'")
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     // Create a table and check nanosecond is coerced into microsecond
-    let plan = context
+    context
         .plan_query("CREATE TABLE table_with_us_column AS (SELECT * FROM staging.table_with_ns_column)")
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     let results = list_columns_query(&context).await;
 
@@ -174,12 +170,7 @@ async fn test_create_table_move_and_drop(
 
     // Rename the first table to a new name
     context
-        .collect(
-            context
-                .plan_query("ALTER TABLE test_table_1 RENAME TO test_table_3")
-                .await
-                .unwrap(),
-        )
+        .plan_query("ALTER TABLE test_table_1 RENAME TO test_table_3")
         .await
         .unwrap();
 
@@ -209,24 +200,12 @@ async fn test_create_table_move_and_drop(
 
     // Create a schema and move the table to it
     context
-        .collect(
-            context
-                .plan_query("CREATE SCHEMA \"new_./-~:schema\"")
-                .await
-                .unwrap(),
-        )
+        .plan_query("CREATE SCHEMA \"new_./-~:schema\"")
         .await
         .unwrap();
 
     context
-        .collect(
-            context
-                .plan_query(
-                    "ALTER TABLE test_table_3 RENAME TO \"new_./-~:schema\".test_table_3",
-                )
-                .await
-                .unwrap(),
-        )
+        .plan_query("ALTER TABLE test_table_3 RENAME TO \"new_./-~:schema\".test_table_3")
         .await
         .unwrap();
 
@@ -266,11 +245,10 @@ async fn test_create_table_move_and_drop(
     assert_batches_eq!(expected, &results);
 
     // Drop test_table_3
-    let plan = context
+    context
         .plan_query("DROP TABLE \"new_./-~:schema\".test_table_3")
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     let results = list_columns_query(&context).await;
 
@@ -290,8 +268,7 @@ async fn test_create_table_move_and_drop(
 
     // Drop the second table
 
-    let plan = context.plan_query("DROP TABLE test_table_2").await.unwrap();
-    context.collect(plan).await.unwrap();
+    context.plan_query("DROP TABLE test_table_2").await.unwrap();
 
     let results = list_columns_query(&context).await;
     assert!(results.is_empty())
@@ -543,7 +520,7 @@ async fn test_create_external_table_http() {
         .contains("Can only create external tables in the staging schema"));
 
     // Create a table normally
-    let plan = context
+    context
         .plan_query(
             format!(
                 "CREATE EXTERNAL TABLE file
@@ -554,7 +531,6 @@ async fn test_create_external_table_http() {
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     // Test we see the table in the information_schema
     let results = list_tables_query(&context).await;

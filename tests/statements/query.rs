@@ -413,7 +413,7 @@ async fn test_remote_table_querying(
     //
     // Create a remote table (pointed at our metadata store table)
     //
-    let plan = context
+    context
         .plan_query(
             format!(
                 "CREATE EXTERNAL TABLE remote_table {table_column_schema}
@@ -425,7 +425,6 @@ async fn test_remote_table_querying(
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     //
     // Verify column types in information schema
@@ -536,7 +535,7 @@ async fn test_remote_table_querying(
 async fn test_delta_tables() {
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
-    let plan = context
+    context
         .plan_query(
             "CREATE EXTERNAL TABLE test_delta \
             STORED AS DELTATABLE \
@@ -544,7 +543,6 @@ async fn test_delta_tables() {
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     // The order gets randomized so we need to enforce it
     let plan = context

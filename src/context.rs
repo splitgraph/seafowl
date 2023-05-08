@@ -1968,20 +1968,17 @@ pub mod test_utils {
         let context = in_memory_context().await;
 
         // Create new non-default database
-        let plan = context.plan_query("CREATE DATABASE testdb").await.unwrap();
-        context.collect(plan).await.unwrap();
+        context.plan_query("CREATE DATABASE testdb").await.unwrap();
         let context = context.scope_to_database("testdb".to_string()).unwrap();
 
         // Create new non-default collection
-        let plan = context.plan_query("CREATE SCHEMA testcol").await.unwrap();
-        context.collect(plan).await.unwrap();
+        context.plan_query("CREATE SCHEMA testcol").await.unwrap();
 
         // Create table
-        let plan = context
+        context
             .plan_query("CREATE TABLE testcol.some_table (date DATE, value DOUBLE)")
             .await
             .unwrap();
-        context.collect(plan).await.unwrap();
 
         context
     }
@@ -2311,13 +2308,11 @@ mod tests {
     #[tokio::test]
     async fn test_drop_table_pending_deletion() -> Result<()> {
         let context = Arc::new(in_memory_context().await);
-        let plan = context
+        context
             .plan_query("CREATE TABLE test_table (\"key\" INTEGER, value STRING)")
             .await
             .unwrap();
-        context.collect(plan).await.unwrap();
-        let plan = context.plan_query("DROP TABLE test_table").await.unwrap();
-        context.collect(plan).await.unwrap();
+        context.plan_query("DROP TABLE test_table").await.unwrap();
 
         let plan = context
             .plan_query("SELECT table_schema, table_name, uuid, deletion_status FROM system.dropped_tables")
@@ -2341,30 +2336,16 @@ mod tests {
     async fn test_execute_insert_from_other_table() -> Result<()> {
         let context = Arc::new(in_memory_context().await);
         context
-            .collect(
-                context
-                    .plan_query(
-                        "CREATE TABLE test_table (\"key\" INTEGER, value STRING);",
-                    )
-                    .await?,
-            )
+            .plan_query("CREATE TABLE test_table (\"key\" INTEGER, value STRING);")
             .await?;
 
         context
-            .collect(
-                context
-                    .plan_query("INSERT INTO test_table VALUES (1, 'one'), (2, 'two');")
-                    .await?,
-            )
+            .plan_query("INSERT INTO test_table VALUES (1, 'one'), (2, 'two');")
             .await?;
 
         context
-        .collect(
-            context
                 .plan_query("INSERT INTO test_table(key, value) SELECT * FROM test_table WHERE value = 'two'")
-                .await?,
-        )
-        .await?;
+                .await?;
 
         let results = context
             .collect(
