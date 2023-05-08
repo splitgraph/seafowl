@@ -22,7 +22,6 @@ pub struct AllDatabaseColumnsResult {
     pub table_name: String,
     pub table_id: TableId,
     pub table_uuid: Uuid,
-    pub table_legacy: bool,
     pub table_version_id: TableVersionId,
     pub column_name: String,
     pub column_type: String,
@@ -35,7 +34,6 @@ pub struct TableVersionsResult {
     pub table_name: String,
     pub table_version_id: TableVersionId,
     pub version: DeltaDataTypeVersion,
-    pub table_legacy: bool,
     pub creation_time: Timestamp,
 }
 
@@ -281,7 +279,6 @@ pub mod tests {
                 table_name: table_name.clone(),
                 table_id: 1,
                 table_uuid: Default::default(),
-                table_legacy: false,
                 table_version_id: version,
                 column_name: "date".to_string(),
                 column_type: "{\"children\":[],\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}}".to_string(),
@@ -292,7 +289,6 @@ pub mod tests {
                 table_name,
                 table_id: 1,
                 table_uuid: Default::default(),
-                table_legacy: false,
                 table_version_id: version,
                 column_name: "value".to_string(),
                 column_type: "{\"children\":[],\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}}"

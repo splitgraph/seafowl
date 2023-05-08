@@ -59,6 +59,38 @@ macro_rules! implement_repository {
 #[async_trait]
 impl Repository for $repo {
     async fn setup(&self) {
+        // Make sure to not drop the legacy catalog tables if there are still some legacy tables left over.
+        // TODO: Remove this in the next major release (0.5)
+        let maybe_legacy_tables: Result<Vec<(String, String, String)>, sqlx::Error> = sqlx::query_as(r#"SELECT
+                    database.name,
+                    collection.name,
+                    "table".name
+                FROM "table"
+                JOIN collection ON "table".collection_id = collection.id
+                JOIN database ON collection.database_id = database.id
+                WHERE "table".legacy IS FALSE"#)
+            .fetch_all(&self.executor)
+            .await;
+        if let Ok(legacy_tables) = maybe_legacy_tables && !legacy_tables.is_empty() {
+            panic!(
+                "There are still some legacy tables that need to be removed before running migrations for Seafowl v0.4:\n{}\n \
+                To remove them use a previous Seafowl version (v0.3) and run `DROP TABLE` statements for each one \
+                followed by `VACUUM PARTITIONS`.",
+                legacy_tables.iter().map(|t| format!("{}.{}.{}", t.0, t.1, t.2)).collect::<Vec<String>>().join("\n")
+            );
+        }
+
+        let maybe_legacy_partitions: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as("SELECT object_storage_id FROM physical_partition")
+            .fetch_all(&self.executor)
+            .await;
+        if let Ok(legacy_partitions) = maybe_legacy_partitions && !legacy_partitions.is_empty() {
+            panic!(
+                "There are still some legacy partitions that need to be removed before running migrations for Seafowl v0.4:\n{}\n \
+                To remove them run `VACUUM PARTITIONS` in a previous Seafowl version (v0.3).",
+                legacy_partitions.iter().map(|p| p.0.clone()).collect::<Vec<String>>().join("\n")
+            );
+        }
+
         $repo::MIGRATOR
             .run(&self.executor)
             .await
@@ -114,7 +146,6 @@ impl Repository for $repo {
             "table".name AS table_name,
             "table".id AS table_id,
             "table".uuid AS table_uuid,
-            "table".legacy AS table_legacy,
             desired_table_versions.id AS table_version_id,
             table_column.name AS column_name,
             table_column.type AS column_type
@@ -345,7 +376,6 @@ impl Repository for $repo {
                 "table".name AS table_name,
                 table_version.id AS table_version_id,
                 table_version.version AS version,
-                "table".legacy AS table_legacy,
                 {} AS creation_time
             FROM table_version
             INNER JOIN "table" ON "table".id = table_version.table_id
@@ -491,8 +521,8 @@ impl Repository for $repo {
         maybe_collection_id: Option<CollectionId>,
         maybe_database_id: Option<DatabaseId>,
     ) -> Result<(), Error> {
-        // Currently we hard delete only legacy tables, the others are soft-deleted by moving
-        // them to a special table that is used for lazy cleanup of files via `VACUUM`.
+        // Currently tables are soft-deleted by moving them to a special table that is used for lazy cleanup of files
+        // via a `VACUUM DATABASE` command.
         // We could do this via a trigger, but then we'd lose the ability to actually
         // perform hard deletes at the DB-level.
         // NB: We really only need the uuid for cleanup, but we also persist db/col name on the off
@@ -504,7 +534,7 @@ impl Repository for $repo {
                 FROM "table"
                 JOIN collection ON "table".collection_id = collection.id
                 JOIN database ON collection.database_id = database.id
-                WHERE "table".legacy IS FALSE AND "#,
+                WHERE "#,
         );
 
         if let Some(table_id) = maybe_table_id {

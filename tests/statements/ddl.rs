@@ -78,8 +78,10 @@ async fn test_create_table_as_from_ns_column() {
 
     // Create an external table containing a timestamp column in nanoseconds
     context
-        .plan_query("CREATE EXTERNAL TABLE table_with_ns_column \
-            STORED AS PARQUET LOCATION 'tests/data/seafowl-legacy-data/7fbfeeeade71978b4ae82cd3d97b8c1bd9ae7ab9a7a78ee541b66209cfd7722d.parquet'")
+        .plan_query(
+            "CREATE EXTERNAL TABLE table_with_ns_column \
+            STORED AS PARQUET LOCATION 'tests/data/table_with_ns_column.parquet'",
+        )
         .await
         .unwrap();
 

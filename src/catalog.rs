@@ -288,7 +288,6 @@ impl DefaultCatalog {
         I: Iterator<Item = &'a AllDatabaseColumnsResult>,
     {
         let tables = collection_columns
-            .filter(|c| !c.table_legacy)
             .group_by(|col| (&col.table_name, &col.table_uuid))
             .into_iter()
             .map(|((table_name, table_uuid), _)| {
