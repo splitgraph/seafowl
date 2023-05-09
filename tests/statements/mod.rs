@@ -19,6 +19,8 @@ use sqlx::{AnyPool, Executor};
 #[cfg(feature = "remote-tables")]
 use tempfile::{NamedTempFile, TempPath};
 use tokio::time::sleep;
+#[cfg(feature = "object-store-gcs")]
+use serde_json::json;
 
 use rstest::rstest;
 use tempfile::TempDir;
@@ -83,14 +85,24 @@ ttl = 30
             .to_string(),
             None,
         ),
-        ObjectStoreType::Gcs => (
-            r#"type = "gcs"
+        ObjectStoreType::Gcs => {
+            let creds_json = json!({"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""});
+            // gcs_base_url should match docker-compose.yml:fake-gcs-server
+            let google_application_credentials_path = std::path::Path::new("/tmp/fake-gcs-server.json");
+            std::fs::write(&google_application_credentials_path,
+                           serde_json::to_vec(&creds_json)
+                                    .expect("Unable to serialize creds JSON")
+            ).expect("Unable to write application credentials JSON file");
+            (
+                format!(r#"type = "gcs"
 bucket = "seafowl-test-bucket"
-google_application_credentials = "./resources/fake-gcs-server.json"
-"#
-            .to_string(),
-            None,
-        ),
+google_application_credentials = "{}"
+"#,
+                        google_application_credentials_path.display()
+                ),
+                None,
+            )
+        },
     };
 
     let config_text = format!(
