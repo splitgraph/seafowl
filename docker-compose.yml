@@ -37,4 +37,5 @@ services:
     depends_on:
       - fake-gcs
     entrypoint: >
-      curl -v -X POST --data-binary '{"name":"seafowl-test-bucket"}' -H "Content-Type: application/json" "http://fake-gcs:4443/storage/v1/b" 
+      curl -v -X POST --data-binary '{"name":"seafowl-test-bucket"}' -H "Content-Type:
+      application/json" "http://fake-gcs:4443/storage/v1/b"
