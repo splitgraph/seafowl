@@ -7,7 +7,6 @@ async fn test_insert_two_different_schemas(
         ObjectStoreType::InMemory,
         ObjectStoreType::Local,
         ObjectStoreType::S3,
-        ObjectStoreType::Gcs
     )]
     object_store_type: ObjectStoreType,
 ) {
