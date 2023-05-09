@@ -37,6 +37,7 @@ mod query;
 #[path = "../../src/testutils.rs"]
 mod testutils;
 mod vacuum;
+mod migration;
 
 enum ObjectStoreType {
     Local,
