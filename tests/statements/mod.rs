@@ -45,7 +45,7 @@ mod testutils;
 mod vacuum;
 
 enum ObjectStoreType {
-    Gcs,
+    _Gcs, // TODO: GCS Bucket tests await github.com/fsouza/fake-gcs-server/issues/852
     Local,
     InMemory,
     S3,
@@ -85,7 +85,7 @@ ttl = 30
             .to_string(),
             None,
         ),
-        ObjectStoreType::Gcs => {
+        ObjectStoreType::_Gcs => {
             let creds_json = json!({"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""});
             // gcs_base_url should match docker-compose.yml:fake-gcs-server
             let google_application_credentials_path =
