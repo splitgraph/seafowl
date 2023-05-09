@@ -65,10 +65,36 @@ default.public.legacy_table
 Please go through the migration instructions laid out in https://github.com/splitgraph/seafowl/issues/392."#
 )]
 #[case::with_legacy_v0_3("tests/data/seafowl-0.3-legacy-data/")]
+#[case::without_legacy_v0_3("tests/data/seafowl-0.3-no-legacy-data/")]
 #[tokio::test]
 async fn test_legacy_tables(#[case] source_dir: &str) {
     let data_dir = TempDir::new().unwrap();
 
-    make_context_with_local_sqlite(source_dir, data_dir.path().display().to_string())
-        .await;
+    let context =
+        make_context_with_local_sqlite(source_dir, data_dir.path().display().to_string())
+            .await;
+
+    let plan = context.plan_query("SELECT * FROM new_table").await.unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+---------------------+------------+------------------+-----------------+----------------+",
+        "| some_time           | some_value | some_other_value | some_bool_value | some_int_value |",
+        "+---------------------+------------+------------------+-----------------+----------------+",
+        "| 2022-01-01T20:01:01 | 42.0       |                  |                 | 1111           |",
+        "| 2022-01-01T20:02:02 | 43.0       |                  |                 | 2222           |",
+        "| 2022-01-01T20:03:03 | 44.0       |                  |                 | 3333           |",
+        "|                     | 45.0       |                  |                 |                |",
+        "|                     | 46.0       |                  |                 |                |",
+        "|                     | 47.0       |                  |                 |                |",
+        "|                     | 46.0       |                  |                 |                |",
+        "|                     | 47.0       |                  |                 |                |",
+        "|                     | 48.0       |                  |                 |                |",
+        "|                     | 42.0       |                  |                 |                |",
+        "|                     | 41.0       |                  |                 |                |",
+        "|                     | 40.0       |                  |                 |                |",
+        "+---------------------+------------+------------------+-----------------+----------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
 }
