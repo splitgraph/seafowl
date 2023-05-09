@@ -73,7 +73,7 @@ impl Repository for $repo {
             .await;
         if let Ok(legacy_tables) = maybe_legacy_tables && !legacy_tables.is_empty() {
             panic!(
-                "There are still some legacy tables that need to be removed before running migrations for Seafowl v0.4:\n{}\n \
+                "There are still some legacy tables that need to be removed before running migrations for Seafowl v0.4:\n{}\n\
                 To remove them use a previous Seafowl version (v0.3) and run `DROP TABLE` statements for each one \
                 followed by `VACUUM PARTITIONS`.",
                 legacy_tables.iter().map(|t| format!("{}.{}.{}", t.0, t.1, t.2)).collect::<Vec<String>>().join("\n")
@@ -85,7 +85,7 @@ impl Repository for $repo {
             .await;
         if let Ok(legacy_partitions) = maybe_legacy_partitions && !legacy_partitions.is_empty() {
             panic!(
-                "There are still some legacy partitions that need to be removed before running migrations for Seafowl v0.4:\n{}\n \
+                "There are still some legacy partitions that need to be removed before running migrations for Seafowl v0.4:\n{}\n\
                 To remove them run `VACUUM PARTITIONS` in a previous Seafowl version (v0.3).",
                 legacy_partitions.iter().map(|p| p.0.clone()).collect::<Vec<String>>().join("\n")
             );
