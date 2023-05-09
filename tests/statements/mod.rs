@@ -86,7 +86,7 @@ ttl = 30
         ObjectStoreType::Gcs => (
             r#"type = "gcs"
 bucket = "seafowl-test-bucket"
-google_application_credentials = "./fake-gcs-server.json"
+google_application_credentials = "./resources/fake-gcs-server.json"
 "#
             .to_string(),
             None,
