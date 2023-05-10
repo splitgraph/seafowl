@@ -1,4 +1,4 @@
-use std::{fmt::Debug, str::FromStr};
+use std::{env, fmt::Debug, str::FromStr};
 
 use async_trait::async_trait;
 use deltalake::DeltaDataTypeVersion;

@@ -61,33 +61,50 @@ impl Repository for $repo {
     async fn setup(&self) {
         // Make sure to not drop the legacy catalog tables if there are still some legacy tables left over.
         // TODO: Remove this in the next major release (0.5)
-        let maybe_legacy_tables: Result<Vec<(String, String, String)>, sqlx::Error> = sqlx::query_as(r#"SELECT
-                    database.name,
-                    collection.name,
-                    "table".name
-                FROM "table"
-                JOIN collection ON "table".collection_id = collection.id
-                JOIN database ON collection.database_id = database.id
-                WHERE "table".legacy IS TRUE"#)
-            .fetch_all(&self.executor)
-            .await;
-        if let Ok(legacy_tables) = maybe_legacy_tables && !legacy_tables.is_empty() {
-            panic!(
-                "There are still some legacy tables that need to be removed before running migrations for Seafowl v0.4:\n{}\n\
-                Please go through the migration instructions laid out in https://github.com/splitgraph/seafowl/issues/392.",
-                legacy_tables.iter().map(|t| format!("{}.{}.{}", t.0, t.1, t.2)).collect::<Vec<String>>().join("\n")
-            );
-        }
+        let migration_var = env::var("SEAFOWL_0_4_AUTODROP_LEGACY_TABLES");
+        if migration_var.is_ok() && migration_var.unwrap() == "true" {
+            let _ = sqlx::query(r#"DELETE FROM "table" WHERE "table".legacy IS TRUE"#)
+                .execute(&self.executor)
+                .await;
+            let maybe_legacy_partitions: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as("SELECT object_storage_id FROM physical_partition")
+                .fetch_all(&self.executor)
+                .await;
+            if let Ok(legacy_partitions) = maybe_legacy_partitions && !legacy_partitions.is_empty() {
+                // Specify which partition files need deletion
+                env::set_var(
+                    "SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS",
+                    legacy_partitions.iter().map(|p| p.0.clone()).collect::<Vec<String>>().join(";")
+                );
+            }
+        } else {
+            let maybe_legacy_tables: Result<Vec<(String, String, String)>, sqlx::Error> = sqlx::query_as(r#"SELECT
+                        database.name,
+                        collection.name,
+                        "table".name
+                    FROM "table"
+                    JOIN collection ON "table".collection_id = collection.id
+                    JOIN database ON collection.database_id = database.id
+                    WHERE "table".legacy IS TRUE"#)
+                .fetch_all(&self.executor)
+                .await;
+            if let Ok(legacy_tables) = maybe_legacy_tables && !legacy_tables.is_empty() {
+                panic!(
+                    "There are still some legacy tables that need to be removed before running migrations for Seafowl v0.4:\n{}\n\
+                    Please go through the migration instructions laid out in https://github.com/splitgraph/seafowl/issues/392.",
+                    legacy_tables.iter().map(|t| format!("{}.{}.{}", t.0, t.1, t.2)).collect::<Vec<String>>().join("\n")
+                );
+            }
 
-        let maybe_legacy_partitions: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as("SELECT object_storage_id FROM physical_partition")
-            .fetch_all(&self.executor)
-            .await;
-        if let Ok(legacy_partitions) = maybe_legacy_partitions && !legacy_partitions.is_empty() {
-            panic!(
-                "There are still some legacy partitions that need to be removed before running migrations for Seafowl v0.4:\n{}\n\
-                Please go through the migration instructions laid out in https://github.com/splitgraph/seafowl/issues/392.",
-                legacy_partitions.iter().map(|p| p.0.clone()).collect::<Vec<String>>().join("\n")
-            );
+            let maybe_legacy_partitions: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as("SELECT object_storage_id FROM physical_partition")
+                .fetch_all(&self.executor)
+                .await;
+            if let Ok(legacy_partitions) = maybe_legacy_partitions && !legacy_partitions.is_empty() {
+                panic!(
+                    "There are still some legacy partitions that need to be removed before running migrations for Seafowl v0.4:\n{}\n\
+                    Please go through the migration instructions laid out in https://github.com/splitgraph/seafowl/issues/392.",
+                    legacy_partitions.iter().map(|p| p.0.clone()).collect::<Vec<String>>().join("\n")
+                );
+            }
         }
 
         $repo::MIGRATOR

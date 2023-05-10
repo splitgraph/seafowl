@@ -7,7 +7,6 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_integration_test::schema_from_json;
 use datafusion::parquet::arrow::ArrowWriter;
-use deltalake::storage::DeltaObjectStore;
 use futures::TryStreamExt;
 use itertools::Itertools;
 use object_store::path::Path;
@@ -129,7 +128,7 @@ pub async fn make_mock_parquet_server(
 }
 
 pub async fn assert_uploaded_objects(
-    object_store: Arc<DeltaObjectStore>,
+    object_store: Arc<dyn ObjectStore>,
     expected: Vec<Path>,
 ) {
     let actual = object_store

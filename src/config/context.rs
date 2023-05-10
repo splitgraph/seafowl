@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::time::Duration;
+use std::{env, sync::Arc};
 
 use crate::{
     catalog::{
@@ -29,6 +29,7 @@ use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
 use object_store::gcp::GoogleCloudStorageBuilder;
+use object_store::path::Path;
 use parking_lot::lock_api::RwLock;
 use tempfile::TempDir;
 use url::Url;
@@ -204,6 +205,17 @@ pub async fn build_context(
     add_http_object_store(&context, &cfg.misc.ssl_cert_file);
 
     let (tables, functions) = build_catalog(cfg, internal_object_store.clone()).await;
+
+    // TODO: Remove this in the next major release (0.5)
+    let maybe_legacy_partitions = env::var("SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS");
+    if let Ok(legacy_partitions) = maybe_legacy_partitions {
+        for p in legacy_partitions.split(';') {
+            internal_object_store.delete(&Path::from(p)).await.expect(
+                format!("Please manually delete legacy partition file: {p}").as_str(),
+            );
+        }
+        env::remove_var("SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS");
+    }
 
     // Create default DB/collection
     let default_db = match tables.get_database_id_by_name(DEFAULT_DB).await? {

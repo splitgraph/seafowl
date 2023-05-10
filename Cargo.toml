@@ -100,6 +100,7 @@ assert_unordered = "0.3"
 datafusion-common = "23.0.0"
 mockall = "0.11.1"
 rstest = "*"
+serial_test = "2"
 wiremock = "0.5"
 
 [build-dependencies]
