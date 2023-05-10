@@ -120,6 +120,11 @@ following which you will:
 - Build an interactive [Observable](https://observablehq.com) notebook querying data on it, just
   like [this one](https://observablehq.com/@seafowl/interactive-visualization-demo)
 
+## Tests
+
+Please consult the dedicated [README](./tests/README.md) for more info on how to run the Seafowl
+test suite locally.
+
 ## Pre-built binaries and Docker images
 
 We do not yet provide full build instructions, but we do produce binaries and Docker images as
