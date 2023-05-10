@@ -29,11 +29,12 @@ use crate::object_store::wrapped::InternalObjectStore;
 use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
+use object_store::gcp::GoogleCloudStorageBuilder;
 use parking_lot::lock_api::RwLock;
 use tempfile::TempDir;
 use url::Url;
 
-use super::schema::{self, MEBIBYTES, MEMORY_FRACTION, S3};
+use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
 
 async fn build_catalog(
     config: &schema::SeafowlConfig,
@@ -122,6 +123,26 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
                     Duration::from_secs(*ttl_s),
                 ));
             }
+
+            Arc::new(store)
+        }
+        #[cfg(feature = "object-store-gcs")]
+        schema::ObjectStore::GCS(GCS {
+            bucket,
+            google_application_credentials,
+        }) => {
+            let gcs_builder: GoogleCloudStorageBuilder =
+                GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
+
+            let gcs_builder = if let Some(path) = google_application_credentials {
+                gcs_builder.with_service_account_path(path)
+            } else {
+                gcs_builder
+            };
+
+            let store = gcs_builder
+                .build()
+                .expect("Error creating GCS object store");
 
             Arc::new(store)
         }

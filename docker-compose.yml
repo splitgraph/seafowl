@@ -15,3 +15,27 @@ services:
       /usr/bin/mc rm -r --force test-minio/seafowl-test-bucket; /usr/bin/mc mb
       test-minio/seafowl-test-bucket; /usr/bin/mc policy download test-minio/seafowl-test-bucket;
       exit 0; "
+
+  fake-gcs:
+    image: fsouza/fake-gcs-server
+    command:
+      [
+        "-scheme",
+        "http",
+        "-port",
+        "4443",
+        "-external-url",
+        "http://[::]:4443",
+        "-backend",
+        "memory",
+      ]
+    ports:
+      - "4443:4443"
+
+  create-fake-gcs-buckets:
+    image: curlimages/curl:8.00.1
+    depends_on:
+      - fake-gcs
+    entrypoint: >
+      curl -v -X POST --data-binary '{"name":"seafowl-test-bucket"}' -H "Content-Type:
+      application/json" "http://fake-gcs:4443/storage/v1/b"

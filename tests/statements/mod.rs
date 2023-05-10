@@ -14,6 +14,8 @@ use futures::TryStreamExt;
 use itertools::sorted;
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
+#[cfg(feature = "object-store-gcs")]
+use serde_json::json;
 #[cfg(feature = "remote-tables")]
 use sqlx::{AnyPool, Executor};
 #[cfg(feature = "remote-tables")]
@@ -43,6 +45,7 @@ mod testutils;
 mod vacuum;
 
 enum ObjectStoreType {
+    _Gcs, // TODO: GCS Bucket tests await github.com/fsouza/fake-gcs-server/issues/852
     Local,
     InMemory,
     S3,
@@ -82,6 +85,27 @@ ttl = 30
             .to_string(),
             None,
         ),
+        ObjectStoreType::_Gcs => {
+            let creds_json = json!({"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""});
+            // gcs_base_url should match docker-compose.yml:fake-gcs-server
+            let google_application_credentials_path =
+                std::path::Path::new("/tmp/fake-gcs-server.json");
+            std::fs::write(
+                google_application_credentials_path,
+                serde_json::to_vec(&creds_json).expect("Unable to serialize creds JSON"),
+            )
+            .expect("Unable to write application credentials JSON file");
+            (
+                format!(
+                    r#"type = "gcs"
+bucket = "seafowl-test-bucket"
+google_application_credentials = "{}"
+"#,
+                    google_application_credentials_path.display()
+                ),
+                None,
+            )
+        }
     };
 
     let config_text = format!(
