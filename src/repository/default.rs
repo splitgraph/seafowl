@@ -72,7 +72,7 @@ impl Repository for $repo {
             if let Ok(legacy_partitions) = maybe_legacy_partitions && !legacy_partitions.is_empty() {
                 // Specify which partition files need deletion
                 env::set_var(
-                    "SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS",
+                    "_SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS",
                     legacy_partitions.iter().map(|p| p.0.clone()).collect::<Vec<String>>().join(";")
                 );
             }

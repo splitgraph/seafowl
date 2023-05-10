@@ -15,6 +15,7 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use deltalake::delta_datafusion::DeltaTableFactory;
+use log::warn;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
 #[cfg(feature = "catalog-postgres")]
@@ -92,7 +93,7 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             let mut builder = AmazonS3Builder::new()
                 .with_access_key_id(access_key_id)
                 .with_secret_access_key(secret_access_key)
-                .with_region(region.clone().unwrap_or("".to_string()))
+                .with_region(region.clone().unwrap_or_default())
                 .with_bucket_name(bucket)
                 .with_allow_http(true);
 
@@ -207,14 +208,17 @@ pub async fn build_context(
     let (tables, functions) = build_catalog(cfg, internal_object_store.clone()).await;
 
     // TODO: Remove this in the next major release (0.5)
-    let maybe_legacy_partitions = env::var("SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS");
+    let maybe_legacy_partitions = env::var("_SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS");
     if let Ok(legacy_partitions) = maybe_legacy_partitions {
         for p in legacy_partitions.split(';') {
-            internal_object_store.delete(&Path::from(p)).await.expect(
-                format!("Please manually delete legacy partition file: {p}").as_str(),
-            );
+            internal_object_store
+                .delete(&Path::from(p))
+                .await
+                .unwrap_or_else(|_| {
+                    warn!("Please manually delete legacy partition file: {p}")
+                });
         }
-        env::remove_var("SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS");
+        env::remove_var("_SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS");
     }
 
     // Create default DB/collection
