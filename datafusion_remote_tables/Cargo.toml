@@ -23,7 +23,7 @@ connectorx = { git = "https://github.com/splitgraph/connector-x", branch = "data
 
 datafusion = "23.0.0"
 datafusion-common = "23.0.0"
-datafusion-expr = "23.0.0"
+datafusion-expr = "24.0.0"
 itertools = ">=0.10.0"
 log = "0.4"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
