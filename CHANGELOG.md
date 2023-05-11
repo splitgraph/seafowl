@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.4.0] - 2023-05-11
+
 - Remove legacy table reading logic (<https://github.com/splitgraph/seafowl/pull/390>)
 - Upgrade DataFusion to 23 and Arrow to 37 (<https://github.com/splitgraph/seafowl/pull/386>)
 - Add support for GCS bucket object stores (<https://github.com/splitgraph/seafowl/pull/379>)
@@ -152,7 +154,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.3.4...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/splitgraph/seafowl/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/splitgraph/seafowl/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/splitgraph/seafowl/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/splitgraph/seafowl/compare/v0.3.1...v0.3.2
