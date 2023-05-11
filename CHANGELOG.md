@@ -4,6 +4,10 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Remove legacy table reading logic (<https://github.com/splitgraph/seafowl/pull/390>)
+- Upgrade DataFusion to 23 and Arrow to 37 (<https://github.com/splitgraph/seafowl/pull/386>)
+- Add support for GCS bucket object stores (<https://github.com/splitgraph/seafowl/pull/379>)
+
 ## [0.3.4] - 2023-04-27
 
 - Return result type info in the `content-type` header, and bump `object_store` crate
