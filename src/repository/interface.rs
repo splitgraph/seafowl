@@ -22,7 +22,6 @@ pub struct AllDatabaseColumnsResult {
     pub table_name: String,
     pub table_id: TableId,
     pub table_uuid: Uuid,
-    pub table_legacy: bool,
     pub table_version_id: TableVersionId,
     pub column_name: String,
     pub column_type: String,
@@ -35,20 +34,7 @@ pub struct TableVersionsResult {
     pub table_name: String,
     pub table_version_id: TableVersionId,
     pub version: DeltaDataTypeVersion,
-    pub table_legacy: bool,
     pub creation_time: Timestamp,
-}
-
-#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
-pub struct TablePartitionsResult {
-    pub database_name: String,
-    pub collection_name: String,
-    pub table_name: String,
-    pub table_legacy: bool,
-    pub table_version_id: TableVersionId,
-    pub table_partition_id: Option<i64>,
-    pub object_storage_id: Option<String>,
-    pub row_count: Option<i32>,
 }
 
 #[derive(sqlx::FromRow, Clone, Debug, PartialEq, Eq)]
@@ -76,18 +62,6 @@ impl TryFrom<String> for DroppedTableDeletionStatus {
     fn try_from(value: String) -> Result<Self, ParseError> {
         DroppedTableDeletionStatus::from_str(value.as_str())
     }
-}
-
-#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
-pub struct AllTablePartitionColumnsResult {
-    pub table_partition_id: i64,
-    pub object_storage_id: String,
-    pub column_name: String,
-    pub column_type: String,
-    pub row_count: i32,
-    pub min_value: Option<Vec<u8>>,
-    pub max_value: Option<Vec<u8>>,
-    pub null_count: Option<i32>,
 }
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
@@ -129,11 +103,6 @@ pub trait Repository: Send + Sync + Debug {
         table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
-    async fn get_all_table_partition_columns(
-        &self,
-        table_version_id: TableVersionId,
-    ) -> Result<Vec<AllTablePartitionColumnsResult>, Error>;
-
     async fn get_collection_id_by_name(
         &self,
         database_name: &str,
@@ -172,13 +141,6 @@ pub trait Repository: Send + Sync + Debug {
 
     async fn delete_old_table_versions(&self, table_id: TableId) -> Result<u64, Error>;
 
-    async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>, Error>;
-
-    async fn delete_partitions(
-        &self,
-        object_storage_ids: Vec<String>,
-    ) -> Result<u64, Error>;
-
     async fn create_new_table_version(
         &self,
         uuid: Uuid,
@@ -190,11 +152,6 @@ pub trait Repository: Send + Sync + Debug {
         database_name: &str,
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>>;
-
-    async fn get_all_table_partitions(
-        &self,
-        database_name: &str,
-    ) -> Result<Vec<TablePartitionsResult>>;
 
     async fn move_table(
         &self,
@@ -230,7 +187,7 @@ pub trait Repository: Send + Sync + Debug {
 
     async fn get_dropped_tables(
         &self,
-        database_name: &str,
+        database_name: Option<String>,
     ) -> Result<Vec<DroppedTablesResult>>;
 
     async fn update_dropped_table(
@@ -322,7 +279,6 @@ pub mod tests {
                 table_name: table_name.clone(),
                 table_id: 1,
                 table_uuid: Default::default(),
-                table_legacy: false,
                 table_version_id: version,
                 column_name: "date".to_string(),
                 column_type: "{\"children\":[],\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}}".to_string(),
@@ -333,7 +289,6 @@ pub mod tests {
                 table_name,
                 table_id: 1,
                 table_uuid: Default::default(),
-                table_legacy: false,
                 table_version_id: version,
                 column_name: "value".to_string(),
                 column_type: "{\"children\":[],\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}}"

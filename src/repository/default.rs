@@ -59,6 +59,54 @@ macro_rules! implement_repository {
 #[async_trait]
 impl Repository for $repo {
     async fn setup(&self) {
+        // Make sure to not drop the legacy catalog tables if there are still some legacy tables left over.
+        // TODO: Remove this in the next major release (0.5)
+        let migration_var = env::var("SEAFOWL_0_4_AUTODROP_LEGACY_TABLES");
+        if migration_var.is_ok() && migration_var.unwrap() == "true" {
+            let _ = sqlx::query(r#"DELETE FROM "table" WHERE "table".legacy IS TRUE"#)
+                .execute(&self.executor)
+                .await;
+            let maybe_legacy_partitions: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as("SELECT object_storage_id FROM physical_partition")
+                .fetch_all(&self.executor)
+                .await;
+            if let Ok(legacy_partitions) = maybe_legacy_partitions && !legacy_partitions.is_empty() {
+                // Specify which partition files need deletion
+                env::set_var(
+                    "_SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS",
+                    legacy_partitions.iter().map(|p| p.0.clone()).collect::<Vec<String>>().join(";")
+                );
+            }
+        } else {
+            let maybe_legacy_tables: Result<Vec<(String, String, String)>, sqlx::Error> = sqlx::query_as(r#"SELECT
+                        database.name,
+                        collection.name,
+                        "table".name
+                    FROM "table"
+                    JOIN collection ON "table".collection_id = collection.id
+                    JOIN database ON collection.database_id = database.id
+                    WHERE "table".legacy IS TRUE"#)
+                .fetch_all(&self.executor)
+                .await;
+            if let Ok(legacy_tables) = maybe_legacy_tables && !legacy_tables.is_empty() {
+                panic!(
+                    "There are still some legacy tables that need to be removed before running migrations for Seafowl v0.4:\n{}\n\
+                    Please go through the migration instructions laid out in https://github.com/splitgraph/seafowl/issues/392.",
+                    legacy_tables.iter().map(|t| format!("{}.{}.{}", t.0, t.1, t.2)).collect::<Vec<String>>().join("\n")
+                );
+            }
+
+            let maybe_legacy_partitions: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as("SELECT object_storage_id FROM physical_partition")
+                .fetch_all(&self.executor)
+                .await;
+            if let Ok(legacy_partitions) = maybe_legacy_partitions && !legacy_partitions.is_empty() {
+                panic!(
+                    "There are still some legacy partitions that need to be removed before running migrations for Seafowl v0.4:\n{}\n\
+                    Please go through the migration instructions laid out in https://github.com/splitgraph/seafowl/issues/392.",
+                    legacy_partitions.iter().map(|p| p.0.clone()).collect::<Vec<String>>().join("\n")
+                );
+            }
+        }
+
         $repo::MIGRATOR
             .run(&self.executor)
             .await
@@ -114,7 +162,6 @@ impl Repository for $repo {
             "table".name AS table_name,
             "table".id AS table_id,
             "table".uuid AS table_uuid,
-            "table".legacy AS table_legacy,
             desired_table_versions.id AS table_version_id,
             table_column.name AS column_name,
             table_column.type AS column_type
@@ -138,33 +185,6 @@ impl Repository for $repo {
             .map_err($repo::interpret_error)?;
 
         Ok(columns)
-    }
-
-    async fn get_all_table_partition_columns(
-        &self,
-        table_version_id: TableVersionId,
-    ) -> Result<Vec<AllTablePartitionColumnsResult>, Error> {
-        let partitions = sqlx::query_as(
-            r#"SELECT
-            physical_partition.id AS table_partition_id,
-            physical_partition.object_storage_id,
-            physical_partition.row_count AS row_count,
-            physical_partition_column.name AS column_name,
-            physical_partition_column.type AS column_type,
-            physical_partition_column.min_value,
-            physical_partition_column.max_value,
-            physical_partition_column.null_count
-        FROM table_partition
-        INNER JOIN physical_partition ON physical_partition.id = table_partition.physical_partition_id
-        -- TODO left join?
-        INNER JOIN physical_partition_column ON physical_partition_column.physical_partition_id = physical_partition.id
-        WHERE table_partition.table_version_id = $1
-        ORDER BY table_partition_id, physical_partition_column.id
-        "#,
-        ).bind(table_version_id)
-        .fetch_all(&self.executor)
-        .await.map_err($repo::interpret_error)?;
-        Ok(partitions)
     }
 
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error> {
@@ -323,43 +343,6 @@ impl Repository for $repo {
         Ok(delete_result.rows_affected())
     }
 
-    async fn get_orphan_partition_store_ids(
-        &self,
-    ) -> Result<Vec<String>, Error> {
-        let object_storage_ids = sqlx::query(
-            "SELECT DISTINCT object_storage_id FROM physical_partition
-                WHERE object_storage_id NOT IN (SELECT object_storage_id FROM physical_partition
-                    WHERE id IN (SELECT physical_partition_id FROM table_partition)
-            )"
-        )
-            .fetch(&self.executor)
-            .map_ok(|row| row.get("object_storage_id"))
-            .try_collect()
-            .await.map_err($repo::interpret_error)?;
-
-        Ok(object_storage_ids)
-    }
-
-    async fn delete_partitions(
-        &self,
-        object_storage_ids: Vec<String>,
-    ) -> Result<u64, Error> {
-        // We have to manually construct the query since SQLite doesn't have the proper Encode trait
-        let mut builder: QueryBuilder<_> = QueryBuilder::new(
-            "DELETE FROM physical_partition WHERE object_storage_id IN (",
-        );
-        let mut separated = builder.separated(", ");
-        for id in object_storage_ids.iter() {
-            separated.push_bind(id);
-        }
-        separated.push_unseparated(")");
-
-        let query = builder.build();
-        let delete_result = query.execute(&self.executor).await.map_err($repo::interpret_error)?;
-
-        Ok(delete_result.rows_affected())
-    }
-
     async fn create_new_table_version(
         &self,
         uuid: Uuid,
@@ -409,7 +392,6 @@ impl Repository for $repo {
                 "table".name AS table_name,
                 table_version.id AS table_version_id,
                 table_version.version AS version,
-                "table".legacy AS table_legacy,
                 {} AS creation_time
             FROM table_version
             INNER JOIN "table" ON "table".id = table_version.table_id
@@ -443,36 +425,6 @@ impl Repository for $repo {
             .map_err($repo::interpret_error)?;
 
         Ok(table_versions)
-    }
-
-    async fn get_all_table_partitions(
-        &self,
-        database_name: &str,
-    ) -> Result<Vec<TablePartitionsResult>> {
-        let table_partitions = sqlx::query_as(
-            r#"
-            SELECT
-                database.name AS database_name,
-                collection.name AS collection_name,
-                "table".name AS table_name,
-                "table".legacy AS table_legacy,
-                table_version.id AS table_version_id,
-                physical_partition.id AS table_partition_id,
-                physical_partition.object_storage_id,
-                physical_partition.row_count
-            FROM table_version
-            INNER JOIN "table" ON "table".id = table_version.table_id
-            INNER JOIN collection ON collection.id = "table".collection_id
-            INNER JOIN database ON database.id = collection.database_id
-            LEFT JOIN table_partition ON table_partition.table_version_id = table_version.id
-            LEFT JOIN physical_partition ON physical_partition.id = table_partition.physical_partition_id
-            WHERE database.name = $1;
-        "#)
-        .bind(database_name)
-        .fetch_all(&self.executor)
-        .await.map_err($repo::interpret_error)?;
-
-        Ok(table_partitions)
     }
 
     async fn move_table(
@@ -585,8 +537,8 @@ impl Repository for $repo {
         maybe_collection_id: Option<CollectionId>,
         maybe_database_id: Option<DatabaseId>,
     ) -> Result<(), Error> {
-        // Currently we hard delete only legacy tables, the others are soft-deleted by moving
-        // them to a special table that is used for lazy cleanup of files via `VACUUM`.
+        // Currently tables are soft-deleted by moving them to a special table that is used for lazy cleanup of files
+        // via a `VACUUM DATABASE` command.
         // We could do this via a trigger, but then we'd lose the ability to actually
         // perform hard deletes at the DB-level.
         // NB: We really only need the uuid for cleanup, but we also persist db/col name on the off
@@ -598,7 +550,7 @@ impl Repository for $repo {
                 FROM "table"
                 JOIN collection ON "table".collection_id = collection.id
                 JOIN database ON collection.database_id = database.id
-                WHERE "table".legacy IS FALSE AND "#,
+                WHERE "#,
         );
 
         if let Some(table_id) = maybe_table_id {
@@ -622,7 +574,7 @@ impl Repository for $repo {
 
     async fn get_dropped_tables(
         &self,
-        database_name: &str,
+        database_name: Option<String>,
     ) -> Result<Vec<DroppedTablesResult>> {
         let query = format!(r#"SELECT
                 database_name,
@@ -631,14 +583,20 @@ impl Repository for $repo {
                 uuid,
                 deletion_status,
                 {} AS drop_time
-            FROM dropped_table WHERE database_name = $1"#,
+            FROM dropped_table"#,
             $repo::QUERIES.cast_timestamp.replace("timestamp_column", "drop_time")
         );
 
-        let dropped_tables = sqlx::query_as(&query)
-        .bind(database_name)
-        .fetch_all(&self.executor)
-        .await.map_err($repo::interpret_error)?;
+        let mut builder: QueryBuilder<_> = QueryBuilder::new(&query);
+
+        if let Some(database) = database_name {
+            builder.push(" WHERE database_name = ");
+            builder.push_bind(database);
+        }
+
+        let dropped_tables = builder.build_query_as()
+            .fetch_all(&self.executor)
+            .await.map_err($repo::interpret_error)?;
 
         Ok(dropped_tables)
     }

@@ -9,7 +9,7 @@ async fn test_insert_two_different_schemas(
     let (context, _) = make_context_with_pg(object_store_type).await;
     create_table_and_insert(&context, "test_table").await;
 
-    let plan = context
+    context
         .plan_query(
             "INSERT INTO test_table (some_value, some_bool_value, some_other_value) VALUES
                 (41, FALSE, 2.15),
@@ -18,7 +18,6 @@ async fn test_insert_two_different_schemas(
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     let plan = context
         .plan_query("SELECT * FROM test_table")
@@ -78,11 +77,10 @@ async fn test_delete_statement(
     //
     // Execute DELETE affecting partitions two and three, and creating new table_version
     //
-    let plan = context
+    context
         .plan_query("DELETE FROM test_table WHERE some_value > 46")
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     // Verify results
     let plan = context
@@ -125,11 +123,10 @@ async fn test_delete_statement(
     //
     // Add another partition for a new table_version and record the new partition
     //
-    let plan = context
+    context
         .plan_query("INSERT INTO test_table (some_value) VALUES (48), (49), (50)")
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     // Expect too see a new (6th) partition
     table.load().await.unwrap();
@@ -149,11 +146,10 @@ async fn test_delete_statement(
     //
     // Execute DELETE not affecting only partition with id 4, while trimming/combining the rest
     //
-    let plan = context
+    context
         .plan_query("DELETE FROM test_table WHERE some_value IN (43, 45, 49)")
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     let plan = context
         .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
@@ -191,11 +187,10 @@ async fn test_delete_statement(
     // Execute a no-op DELETE, leaving the new table version the same as the prior one
     //
 
-    let plan = context
+    context
         .plan_query("DELETE FROM test_table WHERE some_value < 35")
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     let plan = context
         .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
@@ -214,11 +209,10 @@ async fn test_delete_statement(
     //
     // Execute DELETE with multiple qualifiers
     //
-    let plan = context
+    context
         .plan_query("DELETE FROM test_table WHERE some_value < 41 OR some_value > 46")
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     let plan = context
         .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
@@ -250,8 +244,7 @@ async fn test_delete_statement(
     //
     // Execute blank DELETE, without qualifiers
     //
-    let plan = context.plan_query("DELETE FROM test_table").await.unwrap();
-    context.collect(plan).await.unwrap();
+    context.plan_query("DELETE FROM test_table").await.unwrap();
 
     // Verify results
     let plan = context
@@ -373,9 +366,8 @@ async fn test_update_statement(
       TableScan: test_table, partial_filters=[some_value = Float32(43) OR some_value = Float32(42) OR some_value = Float32(41)]"#
     );
 
-    // Now check the results
-    let plan = context.plan_query(query).await.unwrap();
-    context.collect(plan).await.unwrap();
+    // Now execute and check the results
+    context.plan_query(query).await.unwrap();
 
     let plan = context
         .plan_query("SELECT * FROM test_table ORDER BY some_value")
@@ -419,11 +411,10 @@ async fn test_update_statement(
     //
     // Execute UPDATE that doesn't change anything
     //
-    let plan = context
+    context
         .plan_query("UPDATE test_table SET some_bool_value = TRUE WHERE some_value = 200")
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     let plan = context
         .plan_query("SELECT * FROM test_table ORDER BY some_value")
@@ -456,14 +447,13 @@ async fn test_update_statement(
     //
     // Execute complex UPDATE (redundant assignment and a case assignment) without a selection
     //
-    let plan = context
+    context
         .plan_query(
             "UPDATE test_table SET some_bool_value = FALSE, some_bool_value = (some_int_value = 5555), some_value = 42, \
             some_other_value = CASE WHEN some_int_value = 5555 THEN 5.555 WHEN some_int_value = 3333 THEN 3.333 ELSE 0 END"
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     // Verify results
     let plan = context

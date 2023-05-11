@@ -13,17 +13,16 @@ async fn test_information_schema() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+---------------+--------------------+------------------+------------+",
-        "| table_catalog | table_schema       | table_name       | table_type |",
-        "+---------------+--------------------+------------------+------------+",
-        "| default       | information_schema | columns          | VIEW       |",
-        "| default       | information_schema | df_settings      | VIEW       |",
-        "| default       | system             | dropped_tables   | VIEW       |",
-        "| default       | system             | table_partitions | VIEW       |",
-        "| default       | system             | table_versions   | VIEW       |",
-        "| default       | information_schema | tables           | VIEW       |",
-        "| default       | information_schema | views            | VIEW       |",
-        "+---------------+--------------------+------------------+------------+",
+        "+---------------+--------------------+----------------+------------+",
+        "| table_catalog | table_schema       | table_name     | table_type |",
+        "+---------------+--------------------+----------------+------------+",
+        "| default       | information_schema | columns        | VIEW       |",
+        "| default       | information_schema | df_settings    | VIEW       |",
+        "| default       | system             | dropped_tables | VIEW       |",
+        "| default       | system             | table_versions | VIEW       |",
+        "| default       | information_schema | tables         | VIEW       |",
+        "| default       | information_schema | views          | VIEW       |",
+        "+---------------+--------------------+----------------+------------+",
     ];
 
     assert_batches_eq!(expected, &results);
@@ -43,26 +42,20 @@ async fn test_information_schema() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+--------------+------------------+--------------------+-------------------------+-------------+",
-        "| table_schema | table_name       | column_name        | data_type               | is_nullable |",
-        "+--------------+------------------+--------------------+-------------------------+-------------+",
-        "| system       | dropped_tables   | table_schema       | Utf8                    | NO          |",
-        "| system       | dropped_tables   | table_name         | Utf8                    | NO          |",
-        "| system       | dropped_tables   | uuid               | Utf8                    | NO          |",
-        "| system       | dropped_tables   | deletion_status    | Utf8                    | NO          |",
-        "| system       | dropped_tables   | drop_time          | Timestamp(Second, None) | NO          |",
-        "| system       | table_partitions | table_schema       | Utf8                    | NO          |",
-        "| system       | table_partitions | table_name         | Utf8                    | NO          |",
-        "| system       | table_partitions | table_version_id   | Int64                   | NO          |",
-        "| system       | table_partitions | table_partition_id | Int64                   | YES         |",
-        "| system       | table_partitions | object_storage_id  | Utf8                    | YES         |",
-        "| system       | table_partitions | row_count          | Int32                   | YES         |",
-        "| system       | table_versions   | table_schema       | Utf8                    | NO          |",
-        "| system       | table_versions   | table_name         | Utf8                    | NO          |",
-        "| system       | table_versions   | table_version_id   | Int64                   | NO          |",
-        "| system       | table_versions   | version            | Int64                   | NO          |",
-        "| system       | table_versions   | creation_time      | Timestamp(Second, None) | NO          |",
-        "+--------------+------------------+--------------------+-------------------------+-------------+",
+        "+--------------+----------------+------------------+-------------------------+-------------+",
+        "| table_schema | table_name     | column_name      | data_type               | is_nullable |",
+        "+--------------+----------------+------------------+-------------------------+-------------+",
+        "| system       | dropped_tables | table_schema     | Utf8                    | NO          |",
+        "| system       | dropped_tables | table_name       | Utf8                    | NO          |",
+        "| system       | dropped_tables | uuid             | Utf8                    | NO          |",
+        "| system       | dropped_tables | deletion_status  | Utf8                    | NO          |",
+        "| system       | dropped_tables | drop_time        | Timestamp(Second, None) | NO          |",
+        "| system       | table_versions | table_schema     | Utf8                    | NO          |",
+        "| system       | table_versions | table_name       | Utf8                    | NO          |",
+        "| system       | table_versions | table_version_id | Int64                   | NO          |",
+        "| system       | table_versions | version          | Int64                   | NO          |",
+        "| system       | table_versions | creation_time    | Timestamp(Second, None) | NO          |",
+        "+--------------+----------------+------------------+-------------------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
 }
@@ -420,7 +413,7 @@ async fn test_remote_table_querying(
     //
     // Create a remote table (pointed at our metadata store table)
     //
-    let plan = context
+    context
         .plan_query(
             format!(
                 "CREATE EXTERNAL TABLE remote_table {table_column_schema}
@@ -432,7 +425,6 @@ async fn test_remote_table_querying(
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     //
     // Verify column types in information schema
@@ -543,7 +535,7 @@ async fn test_remote_table_querying(
 async fn test_delta_tables() {
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
-    let plan = context
+    context
         .plan_query(
             "CREATE EXTERNAL TABLE test_delta \
             STORED AS DELTATABLE \
@@ -551,7 +543,6 @@ async fn test_delta_tables() {
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     // The order gets randomized so we need to enforce it
     let plan = context

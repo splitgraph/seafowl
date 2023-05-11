@@ -1,10 +1,9 @@
-use std::sync::Arc;
 use std::time::Duration;
+use std::{env, sync::Arc};
 
 use crate::{
     catalog::{
-        DefaultCatalog, FunctionCatalog, PartitionCatalog, TableCatalog, DEFAULT_DB,
-        DEFAULT_SCHEMA,
+        DefaultCatalog, FunctionCatalog, TableCatalog, DEFAULT_DB, DEFAULT_SCHEMA,
     },
     context::{DefaultSeafowlContext, INTERNAL_OBJECT_STORE_SCHEME},
     repository::{interface::Repository, sqlite::SqliteRepository},
@@ -16,6 +15,7 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use deltalake::delta_datafusion::DeltaTableFactory;
+use log::warn;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
 #[cfg(feature = "catalog-postgres")]
@@ -30,6 +30,7 @@ use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
 use object_store::gcp::GoogleCloudStorageBuilder;
+use object_store::path::Path;
 use parking_lot::lock_api::RwLock;
 use tempfile::TempDir;
 use url::Url;
@@ -39,11 +40,7 @@ use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
 async fn build_catalog(
     config: &schema::SeafowlConfig,
     object_store: Arc<InternalObjectStore>,
-) -> (
-    Arc<dyn TableCatalog>,
-    Arc<dyn PartitionCatalog>,
-    Arc<dyn FunctionCatalog>,
-) {
+) -> (Arc<dyn TableCatalog>, Arc<dyn FunctionCatalog>) {
     // Initialize the repository
     let repository: Arc<dyn Repository> = match &config.catalog {
         #[cfg(feature = "catalog-postgres")]
@@ -74,7 +71,7 @@ async fn build_catalog(
 
     let catalog = Arc::new(DefaultCatalog::new(repository, object_store));
 
-    (catalog.clone(), catalog.clone(), catalog)
+    (catalog.clone(), catalog)
 }
 
 fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
@@ -96,7 +93,7 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             let mut builder = AmazonS3Builder::new()
                 .with_access_key_id(access_key_id)
                 .with_secret_access_key(secret_access_key)
-                .with_region(region.clone().unwrap_or("".to_string()))
+                .with_region(region.clone().unwrap_or_default())
                 .with_bucket_name(bucket)
                 .with_allow_http(true);
 
@@ -208,8 +205,21 @@ pub async fn build_context(
     // Register the HTTP object store for external tables
     add_http_object_store(&context, &cfg.misc.ssl_cert_file);
 
-    let (tables, partitions, functions) =
-        build_catalog(cfg, internal_object_store.clone()).await;
+    let (tables, functions) = build_catalog(cfg, internal_object_store.clone()).await;
+
+    // TODO: Remove this in the next major release (0.5)
+    let maybe_legacy_partitions = env::var("_SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS");
+    if let Ok(legacy_partitions) = maybe_legacy_partitions {
+        for p in legacy_partitions.split(';') {
+            internal_object_store
+                .delete(&Path::from(p))
+                .await
+                .unwrap_or_else(|_| {
+                    warn!("Please manually delete legacy partition file: {p}")
+                });
+        }
+        env::remove_var("_SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS");
+    }
 
     // Create default DB/collection
     let default_db = match tables.get_database_id_by_name(DEFAULT_DB).await? {
@@ -236,7 +246,6 @@ pub async fn build_context(
     Ok(DefaultSeafowlContext {
         inner: context,
         table_catalog: tables,
-        partition_catalog: partitions,
         function_catalog: functions,
         internal_object_store,
         database: DEFAULT_DB.to_string(),

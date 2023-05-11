@@ -5198,7 +5198,6 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
- "datafusion-proto",
  "datafusion-remote-tables",
  "deltalake",
  "dynamodb_lock",
@@ -5224,6 +5223,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "serial_test",
  "sha2 0.10.6",
  "sqlparser 0.33.0",
  "sqlx",
@@ -5346,6 +5346,31 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serial_test"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e56dd856803e253c8f298af3f4d7eb0ae5e23a737252cd90bb4f3b435033b2d"
+dependencies = [
+ "dashmap",
+ "futures",
+ "lazy_static",
+ "log",
+ "parking_lot 0.12.1",
+ "serial_test_derive",
+]
+
+[[package]]
+name = "serial_test_derive"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91d129178576168c589c9ec973feedf7d3126c01ac2bf08795109aa35b69fb8f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.15",
 ]
 
 [[package]]

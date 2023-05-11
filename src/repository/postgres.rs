@@ -1,4 +1,4 @@
-use std::{fmt::Debug, time::Duration};
+use std::{env, fmt::Debug, time::Duration};
 
 use async_trait::async_trait;
 use deltalake::DeltaDataTypeVersion;
@@ -13,7 +13,6 @@ use uuid::Uuid;
 use crate::{
     data_types::{CollectionId, DatabaseId, FunctionId, TableId, TableVersionId},
     implement_repository,
-    repository::interface::AllTablePartitionColumnsResult,
     schema::Schema,
     wasm_udf::data_types::CreateFunctionDetails,
 };
@@ -22,8 +21,7 @@ use super::{
     default::RepositoryQueries,
     interface::{
         AllDatabaseColumnsResult, AllDatabaseFunctionsResult, DroppedTableDeletionStatus,
-        DroppedTablesResult, Error, Repository, Result, TablePartitionsResult,
-        TableVersionsResult,
+        DroppedTablesResult, Error, Repository, Result, TableVersionsResult,
     },
 };
 

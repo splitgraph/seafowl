@@ -1,16 +1,13 @@
 use std::collections::HashMap;
 use std::env;
-use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::record_batch::RecordBatch;
-use assert_unordered::assert_eq_unordered_sort;
 use chrono::{TimeZone, Utc};
 use datafusion::assert_batches_eq;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{assert_contains, DataFusionError};
 use deltalake::DeltaDataTypeVersion;
-use futures::TryStreamExt;
 use itertools::sorted;
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
@@ -28,7 +25,7 @@ use tempfile::TempDir;
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::{DefaultSeafowlContext, SeafowlContext};
-use seafowl::data_types::{TableVersionId, Timestamp};
+use seafowl::data_types::Timestamp;
 use seafowl::repository::postgres::testutils::get_random_schema;
 use seafowl::system_tables::SYSTEM_SCHEMA;
 
@@ -36,9 +33,9 @@ mod ddl;
 mod dml;
 mod function;
 mod query;
-mod query_legacy;
 // Hack because integration tests do not set cfg(test)
 // https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
+mod migration;
 #[allow(dead_code)]
 #[path = "../../src/testutils.rs"]
 mod testutils;
@@ -168,7 +165,7 @@ async fn list_tables_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch> 
 }
 
 async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &str) {
-    let plan = context
+    context
         .plan_query(
             // SQL injection here, fine for test code
             format!(
@@ -183,10 +180,9 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 
     // Insert some data (with some columns missing, different order)
-    let plan = context
+    context
         .plan_query(
             format!(
                 "INSERT INTO {table_name:} (some_int_value, some_time, some_value) VALUES
@@ -198,7 +194,6 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
 }
 
 async fn create_table_and_some_partitions(
@@ -249,14 +244,13 @@ async fn create_table_and_some_partitions(
     .await;
 
     // Add another partition for table version 2
-    let plan = context
+    context
         .plan_query(
             format!("INSERT INTO {table_name} (some_value) VALUES (45), (46), (47)")
                 .as_str(),
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
     record_latest_version_snapshot(
         context,
         2 as DeltaDataTypeVersion,
@@ -268,14 +262,13 @@ async fn create_table_and_some_partitions(
     .await;
 
     // Add another partition for table_version 3
-    let plan = context
+    context
         .plan_query(
             format!("INSERT INTO {table_name} (some_value) VALUES (46), (47), (48)")
                 .as_str(),
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
     record_latest_version_snapshot(
         context,
         3 as DeltaDataTypeVersion,
@@ -287,14 +280,13 @@ async fn create_table_and_some_partitions(
     .await;
 
     // Add another partition for table_version 4
-    let plan = context
+    context
         .plan_query(
             format!("INSERT INTO {table_name} (some_value) VALUES (42), (41), (40)")
                 .as_str(),
         )
         .await
         .unwrap();
-    context.collect(plan).await.unwrap();
     record_latest_version_snapshot(
         context,
         4 as DeltaDataTypeVersion,
@@ -306,19 +298,4 @@ async fn create_table_and_some_partitions(
     .await;
 
     (version_results, version_timestamps)
-}
-
-async fn assert_orphan_partitions(context: Arc<DefaultSeafowlContext>, parts: Vec<&str>) {
-    assert_eq_unordered_sort!(
-        context
-            .partition_catalog
-            .get_orphan_partition_store_ids()
-            .await
-            .unwrap()
-            // Turn Vec<String> -> Vec<&str>
-            .iter()
-            .map(|s| &**s)
-            .collect(),
-        parts
-    );
 }

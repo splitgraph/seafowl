@@ -637,12 +637,7 @@ pub mod tests {
         // cross-db queries, so we have to switch context back and forth.
         if let Some(db_name) = new_db {
             context
-                .collect(
-                    context
-                        .plan_query(&format!("CREATE DATABASE IF NOT EXISTS {db_name}"))
-                        .await
-                        .unwrap(),
-                )
+                .plan_query(&format!("CREATE DATABASE IF NOT EXISTS {db_name}"))
                 .await
                 .unwrap();
 
@@ -650,22 +645,12 @@ pub mod tests {
         }
 
         context
-            .collect(
-                context
-                    .plan_query("CREATE TABLE test_table(col_1 INT)")
-                    .await
-                    .unwrap(),
-            )
+            .plan_query("CREATE TABLE test_table(col_1 INT)")
             .await
             .unwrap();
 
         context
-            .collect(
-                context
-                    .plan_query("INSERT INTO test_table VALUES (1)")
-                    .await
-                    .unwrap(),
-            )
+            .plan_query("INSERT INTO test_table VALUES (1)")
             .await
             .unwrap();
 
@@ -687,12 +672,7 @@ pub mod tests {
         }
 
         context
-            .collect(
-                context
-                    .plan_query("INSERT INTO test_table VALUES (2)")
-                    .await
-                    .unwrap(),
-            )
+            .plan_query("INSERT INTO test_table VALUES (2)")
             .await
             .unwrap();
 

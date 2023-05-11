@@ -22,13 +22,10 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::{default_session_builder, SessionState};
 use datafusion::execution::DiskManager;
 
-use datafusion_proto::protobuf;
-
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
 use crate::datafusion::utils::build_schema;
 use crate::object_store::http::try_prepare_http_url;
 use crate::object_store::wrapped::InternalObjectStore;
-use crate::utils::gc_partitions;
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 use futures::{StreamExt, TryStreamExt};
 
@@ -42,7 +39,7 @@ use sqlparser::ast::{
 };
 
 use arrow_schema::{DataType, TimeUnit};
-use chrono::{DateTime, Duration, FixedOffset, Utc};
+use chrono::Duration;
 use std::iter::zip;
 use std::ops::Deref;
 use std::str::FromStr;
@@ -62,7 +59,6 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::prelude::SessionConfig;
-use datafusion::scalar::ScalarValue;
 use datafusion::{
     arrow::{
         datatypes::{Schema, SchemaRef},
@@ -93,20 +89,19 @@ use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::{DeltaDataTypeLong, DeltaTable, Schema as DeltaSchema};
 use log::{debug, info, warn};
 use parking_lot::RwLock;
-use prost::Message;
 use tempfile::TempPath;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
-use crate::catalog::{PartitionCatalog, DEFAULT_SCHEMA, STAGING_SCHEMA};
+use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::config::context::build_state_with_table_factories;
 use crate::datafusion::visit::VisitorMut;
 use crate::delta_rs::backport_create_add::{create_add, NullCounts};
 use crate::delta_rs::backports::parquet_scan_from_actions;
 #[cfg(test)]
 use crate::frontend::http::tests::deterministic_uuid;
-use crate::provider::{project_expressions, SeafowlTable};
-use crate::repository::interface::DroppedTableDeletionStatus;
+use crate::provider::project_expressions;
+use crate::utils::gc_databases;
 use crate::wasm_udf::data_types::{get_volatility, CreateFunctionDetails};
 use crate::{
     catalog::{FunctionCatalog, TableCatalog},
@@ -194,17 +189,6 @@ async fn get_parquet_file_statistics_bytes(
     Ok((meta.size as DeltaDataTypeLong, stats))
 }
 
-// Serialise min/max stats in the form of a given ScalarValue using Datafusion protobufs format
-pub fn scalar_value_to_bytes(value: &ScalarValue) -> Option<Vec<u8>> {
-    match <&ScalarValue as TryInto<protobuf::ScalarValue>>::try_into(value) {
-        Ok(proto) => Some(proto.encode_to_vec()),
-        Err(error) => {
-            warn!("Failed to serialise min/max value {:?}: {}", value, error);
-            None
-        }
-    }
-}
-
 // TODO: maybe we should do something along the lines of `apply_null_counts` from delta-rs
 /// Generate delta-rs `NullCounts` from Parquet `Statistics`.
 fn build_null_counts(partition_stats: &Statistics, schema: SchemaRef) -> NullCounts {
@@ -232,7 +216,6 @@ fn build_null_counts(partition_stats: &Statistics, schema: SchemaRef) -> NullCou
 pub struct DefaultSeafowlContext {
     pub inner: SessionContext,
     pub table_catalog: Arc<dyn TableCatalog>,
-    pub partition_catalog: Arc<dyn PartitionCatalog>,
     pub function_catalog: Arc<dyn FunctionCatalog>,
     pub internal_object_store: Arc<InternalObjectStore>,
     pub database: String,
@@ -569,7 +552,6 @@ impl DefaultSeafowlContext {
         Ok(Arc::from(DefaultSeafowlContext {
             inner: SessionContext::with_state(state),
             table_catalog: self.table_catalog.clone(),
-            partition_catalog: self.partition_catalog.clone(),
             function_catalog: self.function_catalog.clone(),
             internal_object_store: self.internal_object_store.clone(),
             database: name,
@@ -668,23 +650,6 @@ impl DefaultSeafowlContext {
                     resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
                 ))
             })
-    }
-
-    /// Resolve a table reference into a Seafowl table
-    pub async fn try_get_seafowl_table(
-        &self,
-        table_name: impl Into<String> + std::fmt::Debug,
-    ) -> Result<SeafowlTable> {
-        let table_name = table_name.into();
-        let table_provider = self.get_table_provider(&table_name).await?;
-
-        let seafowl_table = match table_provider.as_any().downcast_ref::<SeafowlTable>() {
-            Some(seafowl_table) => Ok(seafowl_table),
-            None => Err(Error::Plan(format!(
-                "'{table_name:?}' is a read-only table"
-            ))),
-        }?;
-        Ok(seafowl_table.clone())
     }
 
     /// Resolve a table reference into a Delta table
@@ -1096,53 +1061,36 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Statement::Query(mut q) => {
                     // Determine if some of the tables reference a non-latest version using table
                     // function syntax. If so, rename the tables in the query by appending the
-                    // explicit version id for the provided timestamp and add it to the schema
-                    // provider's map.
+                    // explicit version to the name, and add it to the schema provider's map.
 
                     let mut version_processor = TableVersionProcessor::new(self.database.clone(), DEFAULT_SCHEMA.to_string());
                     version_processor.visit_query(&mut q);
 
                     if !version_processor.table_versions.is_empty() {
+                        debug!("Time travel query rewritten to: {}", q);
+
                         // Create a new session context and session state, to avoid potential race
                         // conditions leading to schema provider map leaking into other queries (and
                         // thus polluting e.g. the information_schema output), or even worse reloading
                         // the map and having the versioned query fail during execution.
                         let session_ctx = SessionContext::with_state(self.inner.state());
 
-                        version_processor.triage_version_ids(self.database.clone(), self.table_catalog.clone()).await?;
-                        // We now have table_version_ids for each table with version specified; do another
-                        // run over the query AST to rewrite the table.
-                        version_processor.visit_query(&mut q);
-                        debug!("Time travel query rewritten to: {}", q);
-
-                        let tables_by_version = self
-                            .table_catalog
-                            .load_tables_by_version(self.database_id, Some(version_processor.table_version_ids())).await?;
-
-                        for ((table, version), table_version_id) in &version_processor.table_versions {
+                        for (table, version) in &version_processor.table_versions {
                             let name_with_version =
-                                version_processor.table_with_version(table, version);
+                                TableVersionProcessor::table_with_version(table, version);
 
                             let full_table_name = table.to_string();
                             let mut resolved_ref = TableReference::from(full_table_name.as_str()).resolve(&self.database, DEFAULT_SCHEMA);
 
-                            let table_provider_for_version: Arc<dyn TableProvider> = if let Some(table_version_id) = table_version_id {
-                                // Legacy tables
-                                tables_by_version[table_version_id].clone()
-                            } else {
-                                // We only support datetime DeltaTable version specification for start
-                                let table_uuid = self.get_table_uuid(resolved_ref.clone()).await?;
-                                let table_object_store =
-                                    self.internal_object_store.for_delta_table(table_uuid);
-                                let datetime = DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(version).map_err(|_| DataFusionError::Execution(format!(
-                                    "Failed to parse version {version} as RFC3339 timestamp"
-                                )))?);
+                            // We only support datetime DeltaTable version specification for start
+                            let table_uuid = self.get_table_uuid(resolved_ref.clone()).await?;
+                            let table_object_store =
+                                self.internal_object_store.for_delta_table(table_uuid);
+                            let datetime = TableVersionProcessor::version_to_datetime(version)?;
 
-                                // This won't work with `InMemory` object store for now: https://github.com/apache/arrow-rs/issues/3782
-                                let mut delta_table = DeltaTable::new(table_object_store, Default::default());
-                                delta_table.load_with_datetime(datetime).await?;
-                                Arc::from(delta_table)
-                            };
+                            let mut delta_table = DeltaTable::new(table_object_store, Default::default());
+                            delta_table.load_with_datetime(datetime).await?;
+                            let table_provider_for_version = Arc::from(delta_table);
 
                             resolved_ref.table = Cow::Borrowed(name_with_version.as_str());
 
@@ -1279,15 +1227,14 @@ impl SeafowlContext for DefaultSeafowlContext {
                     };
 
                     let mut database = None;
-                    if partitions.is_some() && !partitions.clone().unwrap().is_empty() {
-                        if let SqlExpr::Identifier(name) = &partitions.clone().unwrap()[0] {
+                    if let Some(sql_exprs) = partitions {
+                        if let [SqlExpr::Identifier(name)] = sql_exprs.as_slice() {
                             database = Some(name.value.clone());
                         }
                     }
 
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Vacuum(Vacuum {
-                            partitions: partitions.is_some() && partitions.unwrap().is_empty(),
                             database,
                             table_name,
                             output_schema: Arc::new(DFSchema::empty())
@@ -1705,13 +1652,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                 if_exists: _,
                 schema: _,
             }) => {
-                // DROP TABLE
-                if let Ok(table) = self.try_get_seafowl_table(name.to_string()).await {
-                    // Drop for legacy tables
-                    self.table_catalog.drop_table(table.table_id).await?;
-                    return Ok(make_dummy_exec());
-                };
-
                 let table_ref = TableReference::from(name);
                 let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
 
@@ -1848,80 +1788,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                         }
                         SeafowlExtensionNode::Vacuum(Vacuum {
                             database,
-                            partitions,
                             table_name,
                             ..
                         }) => {
-                            if let Some(database) = database {
-                                // Physically delete dropped tables
-                                // TODO: Add this to cleanup job alongside `gc_partitions`
-                                let mut dropped_tables = self
-                                    .table_catalog
-                                    .get_dropped_tables(database)
-                                    .await?;
-
-                                for dt in dropped_tables.iter_mut().filter(|dt| {
-                                    dt.deletion_status
-                                        != DroppedTableDeletionStatus::Failed
-                                }) {
-                                    // TODO: Use batch delete when the object store crate starts supporting it
-                                    info!(
-                                        "Trying to cleanup table {}.{}.{} with UUID (directory name) {}",
-                                        dt.database_name,
-                                        dt.collection_name,
-                                        dt.table_name,
-                                        dt.uuid,
-                                    );
-
-                                    let result = self
-                                        .internal_object_store
-                                        .delete_in_prefix(&Path::from(
-                                            dt.uuid.to_string(),
-                                        ))
-                                        .await;
-
-                                    if let Err(err) = result {
-                                        warn!("Encountered error while trying to delete table in directory {}: {err}", dt.uuid);
-                                        if dt.deletion_status
-                                            != DroppedTableDeletionStatus::Pending
-                                        {
-                                            dt.deletion_status =
-                                                DroppedTableDeletionStatus::Retry;
-                                        } else {
-                                            dt.deletion_status =
-                                                DroppedTableDeletionStatus::Failed;
-                                        }
-
-                                        self.table_catalog
-                                            .update_dropped_table(
-                                                dt.uuid,
-                                                dt.deletion_status,
-                                            )
-                                            .await?;
-                                    } else {
-                                        // Successfully cleaned up the table's directory in the object store
-                                        self.table_catalog
-                                            .delete_dropped_table(dt.uuid)
-                                            .await?;
-                                    }
-                                }
-
-                                // Warn about cleanup errors that need manual intervention
-                                dropped_tables.iter()
-                                    .filter(|dt| dt.deletion_status == DroppedTableDeletionStatus::Failed)
-                                    .for_each(|dt|
-                                        warn!(
-                                            "Failed to cleanup table {}.{}.{} with UUID (directory name) {}. \
-                                            Please manually delete the corresponding directory in the object store \
-                                            and then delete the entry in the `dropped_tables` catalog table.",
-                                            dt.database_name,
-                                            dt.collection_name,
-                                            dt.table_name,
-                                            dt.uuid,
-                                        )
-                                    )
-                            } else if *partitions {
-                                gc_partitions(self).await
+                            if database.is_some() {
+                                gc_databases(self, database.clone()).await;
                             } else if let Some(table_name) = table_name {
                                 let table_ref = TableReference::from(table_name.as_str());
                                 let resolved_ref =
@@ -1972,7 +1843,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 {
                                     Ok(row_count) => {
                                         info!("Deleted {} old table versions", row_count);
-                                        gc_partitions(self).await;
                                     }
                                     Err(error) => {
                                         return Err(Error::Internal(format!(
@@ -2008,7 +1878,7 @@ impl SeafowlContext for DefaultSeafowlContext {
         schema_name: String,
         table_name: String,
     ) -> Result<()> {
-        // Reload the schema since `try_get_seafowl_table` relies on using DataFusion's
+        // Reload the schema since `try_get_delta_table` relies on using DataFusion's
         // TableProvider interface (which we need to pre-populate with up to date
         // information on our tables)
         self.reload_schema().await?;
@@ -2023,17 +1893,6 @@ impl SeafowlContext for DefaultSeafowlContext {
             .schema(&schema_name)
         {
             Some(_) => {
-                if self
-                    .try_get_seafowl_table(format!("{schema_name}.{table_name}"))
-                    .await
-                    .is_ok()
-                {
-                    return Err(DataFusionError::Execution(
-                        "Cannot insert into legacy table, please use a different name"
-                            .to_string(),
-                    ));
-                }
-
                 // Schema exists, check if existing table's schema matches the new one
                 match self.get_table_provider(&table_name).await {
                     Ok(table) => {
@@ -2074,7 +1933,6 @@ impl SeafowlContext for DefaultSeafowlContext {
         }
 
         self.plan_to_delta_table(table_ref, &plan).await?;
-
         Ok(())
     }
 }
@@ -2110,20 +1968,17 @@ pub mod test_utils {
         let context = in_memory_context().await;
 
         // Create new non-default database
-        let plan = context.plan_query("CREATE DATABASE testdb").await.unwrap();
-        context.collect(plan).await.unwrap();
+        context.plan_query("CREATE DATABASE testdb").await.unwrap();
         let context = context.scope_to_database("testdb".to_string()).unwrap();
 
         // Create new non-default collection
-        let plan = context.plan_query("CREATE SCHEMA testcol").await.unwrap();
-        context.collect(plan).await.unwrap();
+        context.plan_query("CREATE SCHEMA testcol").await.unwrap();
 
         // Create table
-        let plan = context
+        context
             .plan_query("CREATE TABLE testcol.some_table (date DATE, value DOUBLE)")
             .await
             .unwrap();
-        context.collect(plan).await.unwrap();
 
         context
     }
@@ -2453,13 +2308,11 @@ mod tests {
     #[tokio::test]
     async fn test_drop_table_pending_deletion() -> Result<()> {
         let context = Arc::new(in_memory_context().await);
-        let plan = context
+        context
             .plan_query("CREATE TABLE test_table (\"key\" INTEGER, value STRING)")
             .await
             .unwrap();
-        context.collect(plan).await.unwrap();
-        let plan = context.plan_query("DROP TABLE test_table").await.unwrap();
-        context.collect(plan).await.unwrap();
+        context.plan_query("DROP TABLE test_table").await.unwrap();
 
         let plan = context
             .plan_query("SELECT table_schema, table_name, uuid, deletion_status FROM system.dropped_tables")
@@ -2483,30 +2336,16 @@ mod tests {
     async fn test_execute_insert_from_other_table() -> Result<()> {
         let context = Arc::new(in_memory_context().await);
         context
-            .collect(
-                context
-                    .plan_query(
-                        "CREATE TABLE test_table (\"key\" INTEGER, value STRING);",
-                    )
-                    .await?,
-            )
+            .plan_query("CREATE TABLE test_table (\"key\" INTEGER, value STRING);")
             .await?;
 
         context
-            .collect(
-                context
-                    .plan_query("INSERT INTO test_table VALUES (1, 'one'), (2, 'two');")
-                    .await?,
-            )
+            .plan_query("INSERT INTO test_table VALUES (1, 'one'), (2, 'two');")
             .await?;
 
         context
-        .collect(
-            context
                 .plan_query("INSERT INTO test_table(key, value) SELECT * FROM test_table WHERE value = 'two'")
-                .await?,
-        )
-        .await?;
+                .await?;
 
         let results = context
             .collect(

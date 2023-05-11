@@ -51,7 +51,6 @@ convergence-arrow = { version = "0.11.0", optional = true }
 datafusion = "23.0.0"
 datafusion-common = "23.0.0"
 datafusion-expr = "23.0.0"
-datafusion-proto = "23.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
@@ -101,6 +100,7 @@ assert_unordered = "0.3"
 datafusion-common = "23.0.0"
 mockall = "0.11.1"
 rstest = "*"
+serial_test = "2"
 wiremock = "0.5"
 
 [build-dependencies]

@@ -14,27 +14,18 @@ use uuid::Uuid;
 
 use crate::object_store::wrapped::InternalObjectStore;
 use crate::provider::SeafowlFunction;
-use crate::repository::interface::{
-    DroppedTableDeletionStatus, DroppedTablesResult, TablePartitionsResult,
-};
+use crate::repository::interface::{DroppedTableDeletionStatus, DroppedTablesResult};
 use crate::system_tables::SystemSchemaProvider;
 use crate::wasm_udf::data_types::{
     CreateFunctionDataType, CreateFunctionDetails, CreateFunctionLanguage,
     CreateFunctionVolatility,
 };
 use crate::{
-    data_types::{
-        CollectionId, DatabaseId, FunctionId, PhysicalPartitionId, TableId,
-        TableVersionId,
-    },
-    provider::{
-        PartitionColumn, SeafowlCollection, SeafowlDatabase, SeafowlPartition,
-        SeafowlTable,
-    },
+    data_types::{CollectionId, DatabaseId, FunctionId, TableId, TableVersionId},
+    provider::{SeafowlCollection, SeafowlDatabase},
     repository::interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult,
-        AllTablePartitionColumnsResult, Error as RepositoryError, Repository,
-        TableVersionsResult,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Error as RepositoryError,
+        Repository, TableVersionsResult,
     },
     schema::Schema,
 };
@@ -156,11 +147,6 @@ impl From<Error> for DataFusionError {
 pub trait TableCatalog: Sync + Send {
     async fn load_database(&self, id: DatabaseId) -> Result<SeafowlDatabase>;
     async fn load_database_ids(&self) -> Result<HashMap<String, DatabaseId>>;
-    async fn load_tables_by_version(
-        &self,
-        database_id: DatabaseId,
-        table_version_ids: Option<Vec<TableVersionId>>,
-    ) -> Result<HashMap<TableVersionId, Arc<SeafowlTable>>>;
     async fn get_database_id_by_name(
         &self,
         database_name: &str,
@@ -207,11 +193,6 @@ pub trait TableCatalog: Sync + Send {
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>>;
 
-    async fn get_all_table_partitions(
-        &self,
-        database_name: &str,
-    ) -> Result<Vec<TablePartitionsResult>>;
-
     async fn move_table(
         &self,
         table_id: TableId,
@@ -227,7 +208,7 @@ pub trait TableCatalog: Sync + Send {
 
     async fn get_dropped_tables(
         &self,
-        database_name: &str,
+        database_name: Option<String>,
     ) -> Result<Vec<DroppedTablesResult>>;
 
     async fn update_dropped_table(
@@ -237,22 +218,6 @@ pub trait TableCatalog: Sync + Send {
     ) -> Result<(), Error>;
 
     async fn delete_dropped_table(&self, uuid: Uuid) -> Result<()>;
-}
-
-#[cfg_attr(test, automock)]
-#[async_trait]
-pub trait PartitionCatalog: Sync + Send {
-    async fn load_table_partitions(
-        &self,
-        table_version_id: TableVersionId,
-    ) -> Result<Vec<SeafowlPartition>>;
-
-    async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>>;
-
-    async fn delete_partitions(
-        &self,
-        object_storage_ids: Vec<String>,
-    ) -> Result<u64, Error>;
 }
 
 #[cfg_attr(test, automock)]
@@ -301,70 +266,6 @@ impl DefaultCatalog {
         })
     }
 
-    fn build_partition<'a, I>(&self, partition_columns: I) -> SeafowlPartition
-    where
-        I: Iterator<Item = &'a AllTablePartitionColumnsResult>,
-    {
-        let mut iter = partition_columns.peekable();
-
-        SeafowlPartition {
-            partition_id: Some(
-                iter.peek().unwrap().table_partition_id as PhysicalPartitionId,
-            ),
-            object_storage_id: Arc::from(iter.peek().unwrap().object_storage_id.clone()),
-            row_count: iter.peek().unwrap().row_count,
-            columns: Arc::new(
-                iter.map(|partition| PartitionColumn {
-                    name: Arc::from(partition.column_name.clone()),
-                    r#type: Arc::from(partition.column_type.clone()),
-                    min_value: Arc::new(partition.min_value.clone()),
-                    max_value: Arc::new(partition.max_value.clone()),
-                    null_count: partition.null_count,
-                })
-                .collect(),
-            ),
-        }
-    }
-
-    fn build_legacy_table<'a, I>(
-        &self,
-        table_name: &str,
-        table_columns: I,
-    ) -> (Arc<str>, Arc<SeafowlTable>)
-    where
-        I: Iterator<Item = &'a AllDatabaseColumnsResult>,
-    {
-        // We have an iterator of all columns and all partitions in this table.
-        // We want to, first, deduplicate all columns (since we repeat them for every partition)
-        // in order to build the table's schema.
-        // We also want to make a Partition object from all partitions in this table.
-        // Since we're going to be consuming this iterator twice (first for unique, then for the group_by),
-        // collect all columns into a vector.
-        let table_columns_vec = table_columns.collect_vec();
-
-        // Recover the table ID and version ID (this is going to be the same for all columns).
-        // TODO: if the table has no columns then we wouldn't be in this function since we originally
-        // grouped by the table name before stepping down into here.
-        let (table_id, table_version_id) = table_columns_vec
-            .get(0)
-            .map_or_else(|| (0, 0), |v| (v.table_id, v.table_version_id));
-
-        let table = SeafowlTable {
-            name: Arc::from(table_name.to_string()),
-            table_id,
-            table_version_id,
-            schema: Arc::new(Schema::from_column_names_types(
-                table_columns_vec
-                    .iter()
-                    .map(|col| (&col.column_name, &col.column_type)),
-            )),
-
-            catalog: Arc::new(self.clone()),
-        };
-
-        (Arc::from(table_name.to_string()), Arc::new(table))
-    }
-
     fn build_table(
         &self,
         table_name: &str,
@@ -386,20 +287,7 @@ impl DefaultCatalog {
     where
         I: Iterator<Item = &'a AllDatabaseColumnsResult>,
     {
-        let collection_columns_vec = collection_columns.collect_vec();
-
-        let legacy_tables = collection_columns_vec
-            .clone()
-            .into_iter()
-            .filter(|c| c.table_legacy)
-            .group_by(|col| &col.table_name)
-            .into_iter()
-            .map(|(tn, tc)| self.build_legacy_table(tn, tc))
-            .collect::<HashMap<_, _>>();
-
-        let tables = collection_columns_vec
-            .into_iter()
-            .filter(|c| !c.table_legacy)
+        let tables = collection_columns
             .group_by(|col| (&col.table_name, &col.table_uuid))
             .into_iter()
             .map(|((table_name, table_uuid), _)| {
@@ -411,7 +299,6 @@ impl DefaultCatalog {
             Arc::from(collection_name.to_string()),
             Arc::new(SeafowlCollection {
                 name: Arc::from(collection_name.to_string()),
-                legacy_tables: RwLock::new(legacy_tables),
                 tables: RwLock::new(tables),
             }),
         )
@@ -461,28 +348,6 @@ impl TableCatalog for DefaultCatalog {
             .map_err(Self::to_sqlx_error)?;
 
         Ok(HashMap::from_iter(all_db_ids))
-    }
-
-    async fn load_tables_by_version(
-        &self,
-        database_id: DatabaseId,
-        table_version_ids: Option<Vec<TableVersionId>>,
-    ) -> Result<HashMap<TableVersionId, Arc<SeafowlTable>>> {
-        let table_columns = self
-            .repository
-            .get_all_columns_in_database(database_id, table_version_ids)
-            .await
-            .map_err(Self::to_sqlx_error)?;
-
-        let tables = table_columns
-            .iter()
-            .filter(|col| col.table_legacy)
-            .group_by(|col| (&col.table_name, &col.table_version_id))
-            .into_iter()
-            .map(|((tn, &tv), tc)| (tv, self.build_legacy_table(tn, tc).1))
-            .collect();
-
-        Ok(tables)
     }
 
     async fn create_table(
@@ -630,16 +495,6 @@ impl TableCatalog for DefaultCatalog {
             .map_err(Self::to_sqlx_error)
     }
 
-    async fn get_all_table_partitions(
-        &self,
-        database_name: &str,
-    ) -> Result<Vec<TablePartitionsResult>> {
-        self.repository
-            .get_all_table_partitions(database_name)
-            .await
-            .map_err(Self::to_sqlx_error)
-    }
-
     async fn move_table(
         &self,
         table_id: TableId,
@@ -706,7 +561,7 @@ impl TableCatalog for DefaultCatalog {
 
     async fn get_dropped_tables(
         &self,
-        database_name: &str,
+        database_name: Option<String>,
     ) -> Result<Vec<DroppedTablesResult>> {
         self.repository
             .get_dropped_tables(database_name)
@@ -740,46 +595,6 @@ impl TableCatalog for DefaultCatalog {
                 }
                 _ => Self::to_sqlx_error(e),
             })
-    }
-}
-
-#[async_trait]
-impl PartitionCatalog for DefaultCatalog {
-    async fn load_table_partitions(
-        &self,
-        table_version_id: TableVersionId,
-    ) -> Result<Vec<SeafowlPartition>> {
-        // NB: currently the query can't distinguish between a non-existent table version
-        // and an empty table version
-        let all_partitions = self
-            .repository
-            .get_all_table_partition_columns(table_version_id)
-            .await
-            .map_err(Self::to_sqlx_error)?;
-
-        Ok(all_partitions
-            .iter()
-            .group_by(|col| col.table_partition_id)
-            .into_iter()
-            .map(|(_, cs)| self.build_partition(cs))
-            .collect())
-    }
-
-    async fn get_orphan_partition_store_ids(&self) -> Result<Vec<String>, Error> {
-        self.repository
-            .get_orphan_partition_store_ids()
-            .await
-            .map_err(Self::to_sqlx_error)
-    }
-
-    async fn delete_partitions(
-        &self,
-        object_storage_ids: Vec<String>,
-    ) -> Result<u64, Error> {
-        self.repository
-            .delete_partitions(object_storage_ids)
-            .await
-            .map_err(Self::to_sqlx_error)
     }
 }
 

@@ -52,8 +52,6 @@ pub struct DropSchema {
 pub struct Vacuum {
     /// Denotes whether to vacuum dropped tables in a particular database
     pub database: Option<String>,
-    /// Denotes whether to vacuum the partitions
-    pub partitions: bool,
     /// If the vacuum target are not the partitions or the db, denotes which table it applies to
     pub table_name: Option<String>,
     /// Dummy result schema for the plan (empty)
@@ -134,11 +132,15 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
                 write!(f, "DropSchema: {name}")
             }
-            SeafowlExtensionNode::Vacuum(Vacuum { partitions, .. }) => {
+            SeafowlExtensionNode::Vacuum(Vacuum { database, .. }) => {
                 write!(
                     f,
                     "Vacuum: {}",
-                    if *partitions { "partitions" } else { "tables" }
+                    if database.is_some() {
+                        "database"
+                    } else {
+                        "tables"
+                    }
                 )
             }
         }
