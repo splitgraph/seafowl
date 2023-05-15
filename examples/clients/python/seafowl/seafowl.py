@@ -13,6 +13,7 @@ from .types import RowInserter, SeafowlConnectionParams
 # Default Seafowl DB name that gets queried when we send a request to `seafowl-endpoint/q`
 DEFAULT_DB = "default"
 DEFAULT_SCHEMA = "public"
+URL_SUFFIX = "/q"
 
 SeafowlRow = Dict[str, Any]
 
@@ -51,21 +52,24 @@ def none_for_empty(s: str) -> Optional[str]:
 def get_db_endpoint(endpoint: str, database_name: str = DEFAULT_DB) -> str:
     return endpoint if database_name == DEFAULT_DB else endpoint + "/" + database_name
 
+
 def query(
-    conn: SeafowlConnectionParams, sql: str, raise_for_status: bool = True
+    conn: SeafowlConnectionParams,
+    sql: str,
+    raise_for_status: bool = True,
+    append_url_suffix: bool = True,
 ) -> Tuple[int, Union[List[SeafowlRow], Optional[str]]]:
     url = get_db_endpoint(conn.url, conn.database or DEFAULT_DB)
     headers = {"Content-Type": "application/json"}
     if conn.secret:
         headers["Authorization"] = f"Bearer {conn.secret}"
-    response = requests.post(f"{url}/q", json={"query": sql}, headers=headers)
-    if raise_for_status and 400 <= response.status_code < 600:
-        http_error_msg = "HTTP ERROR %s for url %s: %s" % (
-            response.status_code,
-            response.url,
-            response.text,
-        )
-        raise requests.HTTPError(http_error_msg, response=response)
+    response = requests.post(
+        f"{url}{URL_SUFFIX if append_url_suffix else ''}",
+        json={"query": sql},
+        headers=headers,
+    )
+    if raise_for_status:
+        response.raise_for_status()
     return (
         response.status_code,
         [json.loads(t) for t in response.text.strip().split("\n")]
