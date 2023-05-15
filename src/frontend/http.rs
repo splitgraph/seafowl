@@ -268,26 +268,36 @@ pub fn cached_read_query_authz(
 /// GET /q/[query hash] or /[database_name]/q/[query hash]
 pub async fn cached_read_query(
     database_name: String,
-    query_hash: String,
-    raw_query: String,
+    query_or_hash: String,
+    maybe_raw_query: Option<String>,
     if_none_match: Option<String>,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
     // Ignore dots at the end
-    let query_hash = query_hash.split('.').next().unwrap();
+    let query_or_hash = query_or_hash.split('.').next().unwrap();
 
-    let decoded_query = percent_decode_str(&raw_query).decode_utf8()?;
+    let decoded_query = if let Some(raw_query) = maybe_raw_query {
+        // If we managed to extract the query from the body or the header, the string from the path
+        // parameter is supposed to be the query hash; decode the query and validate
+        let query_hash = query_or_hash;
+        let decoded_query = percent_decode_str(&raw_query).decode_utf8()?;
 
-    let hash_str = str_to_hex_hash(&decoded_query);
+        let hash_str = str_to_hex_hash(&decoded_query);
 
-    debug!(
-        "Received query: {}, URL hash {}, actual hash {}",
-        decoded_query, query_hash, hash_str
-    );
+        debug!(
+            "Received query: {}, URL hash {}, actual hash {}",
+            decoded_query, query_hash, hash_str
+        );
 
-    // Verify the query hash matches the query
-    if query_hash != hash_str {
-        return Err(ApiError::HashMismatch(hash_str, query_hash.to_string()));
+        // Verify the query hash matches the query
+        if query_hash != hash_str {
+            return Err(ApiError::HashMismatch(hash_str, query_hash.to_string()));
+        };
+
+        decoded_query.to_string()
+    } else {
+        // Otherwise, the query itself is passed as the path param
+        percent_decode_str(query_or_hash).decode_utf8()?.to_string()
     };
 
     // If a specific DB name was used as a parameter in the route, scope the context to it,
@@ -504,12 +514,10 @@ pub fn filters(
         .unify()
         .and(cached_read_query_authz(access_policy.clone()))
         .and(
-            // Extract the query either from the header or from the JSON body
-            warp::header::<String>(QUERY_HEADER)
-                .or(warp::body::json().map(|b: QueryBody| b.query))
-                .or_else(|r| {
-                    future::err(warp::reject::custom(ApiError::QueryParsingError(r)))
-                })
+            // Extract the query either from the JSON body or the header
+            warp::body::json()
+                .map(|b: QueryBody| Some(b.query))
+                .or(warp::header::optional::<String>(QUERY_HEADER))
                 .unify(),
         )
         .and(warp::header::optional::<String>(
@@ -790,19 +798,41 @@ pub mod tests {
     }
 
     #[rstest]
+    #[case::query_in_path(PERCENT_ENCODED_SELECT_QUERY, None, None)]
+    #[case::query_in_body(
+        SELECT_QUERY_HASH,
+        Some(HashMap::from([("query", SELECT_QUERY)])),
+        None,
+    )]
+    #[case::query_in_header(
+        SELECT_QUERY_HASH,
+        None,
+        Some(vec![(QUERY_HEADER, SELECT_QUERY)]),
+    )]
+    #[case::encoded_query_in_header(
+        SELECT_QUERY_HASH,
+        None,
+        Some(vec![(QUERY_HEADER, PERCENT_ENCODED_SELECT_QUERY)]),
+    )]
     #[tokio::test]
     async fn test_get_cached_no_etag(
+        #[case] query_param: &str,
+        #[case] maybe_body: Option<HashMap<&'_ str, &'_ str>>,
+        #[case] maybe_headers: Option<Vec<(&'_ str, &'_ str)>>,
         #[values(None, Some("test_db"))] new_db: Option<&str>,
+        #[values("", ".bin")] extension: &str,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp = request()
-            .method("GET")
-            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
-            .header(QUERY_HEADER, SELECT_QUERY)
-            .reply(&handler)
-            .await;
+        let resp = query_cached_endpoint(
+            &handler,
+            make_uri(format!("/q/{query_param}{extension}"), new_db).as_str(),
+            maybe_body,
+            maybe_headers,
+        )
+        .await;
+
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
@@ -813,7 +843,7 @@ pub mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn test_get_cached_no_query(
+    async fn test_get_cached_hash_no_query(
         #[values(None, Some("test_db"))] new_db: Option<&str>,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
@@ -825,50 +855,9 @@ pub mod tests {
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(resp.body(), "No query found in the request: Rejection([BodyDeserializeError { cause: Error(\"EOF while parsing a value\", line: 1, column: 0) }, MissingHeader { name: \"X-Seafowl-Query\" }])");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_get_cached_no_etag_query_in_body(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
-    ) {
-        let context = in_memory_context_with_single_table(new_db).await;
-        let handler = filters(context, http_config_from_access_policy(free_for_all()));
-
-        let resp = request()
-            .method("GET")
-            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
-            .json(&HashMap::from([("query", SELECT_QUERY)]))
-            .reply(&handler)
-            .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
-            resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V1_ETAG
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_get_cached_no_etag_extension(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
-    ) {
-        let context = in_memory_context_with_single_table(new_db).await;
-        let handler = filters(context, http_config_from_access_policy(free_for_all()));
-
-        let resp = request()
-            .method("GET")
-            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}.bin"), new_db).as_str())
-            .header(QUERY_HEADER, SELECT_QUERY)
-            .reply(&handler)
-            .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "{\"c\":1}\n");
-        assert_eq!(
-            resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V1_ETAG
+            resp.body(),
+            "SQL error: ParserError(\"Expected an SQL statement, found: 7\")"
         );
     }
 
@@ -891,28 +880,6 @@ pub mod tests {
             .await;
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(resp.body(), "NOT_MODIFIED");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_get_encoded_query_special_chars(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
-    ) {
-        let context = in_memory_context_with_single_table(new_db).await;
-        let handler = filters(context, http_config_from_access_policy(free_for_all()));
-
-        let resp = request()
-            .method("GET")
-            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}.bin"), new_db).as_str())
-            .header(QUERY_HEADER, PERCENT_ENCODED_SELECT_QUERY)
-            .reply(&handler)
-            .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "{\"c\":1}\n");
-        assert_eq!(
-            resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V1_ETAG
-        );
     }
 
     #[rstest]
@@ -956,6 +923,44 @@ pub mod tests {
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
             V2_ETAG
         );
+    }
+
+    async fn _query_cached_endpoint<R, H>(
+        handler: &H,
+        path: &str,
+        maybe_body: Option<HashMap<&'_ str, &'_ str>>,
+        maybe_headers: Option<Vec<(&'_ str, &'_ str)>>,
+    ) -> Response<Bytes>
+    where
+        R: Reply,
+        H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
+    {
+        let mut builder = request().method("GET").path(path);
+
+        if let Some(body) = maybe_body {
+            builder = builder.json(&body);
+        }
+
+        if let Some(headers) = maybe_headers {
+            for (key, value) in headers {
+                builder = builder.header(key, value);
+            }
+        }
+
+        builder.reply(handler).await
+    }
+
+    async fn query_cached_endpoint<R, H>(
+        handler: &H,
+        path: &str,
+        maybe_body: Option<HashMap<&'_ str, &'_ str>>,
+        maybe_headers: Option<Vec<(&'_ str, &'_ str)>>,
+    ) -> Response<Bytes>
+    where
+        R: Reply,
+        H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
+    {
+        _query_cached_endpoint(handler, path, maybe_body, maybe_headers).await
     }
 
     async fn _query_uncached_endpoint<R, H>(
