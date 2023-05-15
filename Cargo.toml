@@ -29,13 +29,13 @@ object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
-arrow = "37.0.0"
-arrow-buffer = "37.0.0"
+arrow = "38.0.0"
+arrow-buffer = "38.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "37.0.0"
-arrow-schema = "37.0.0"
+arrow-integration-test = "38.0.0"
+arrow-schema = "38.0.0"
 async-trait = "0.1.64"
 base64 = "0.21.0"
 
@@ -48,13 +48,13 @@ config = "0.13.3"
 convergence = { version = "0.11.0", optional = true }
 convergence-arrow = { version = "0.11.0", optional = true }
 
-datafusion = "23.0.0"
-datafusion-common = "23.0.0"
-datafusion-expr = "23.0.0"
+datafusion = "24.0.0"
+datafusion-common = "24.0.0"
+datafusion-expr = "24.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { version = "0.10.0", features = ["s3-native-tls", "datafusion-ext"] }
+deltalake = { version = "0.11.0", features = ["s3-native-tls", "datafusion-ext"] }
 dynamodb_lock = { version = "0.4.3", default_features = false, features = ["native-tls"] }
 
 futures = "0.3"
@@ -62,7 +62,7 @@ hex = ">=0.4.0"
 itertools = ">=0.10.0"
 lazy_static = ">=1.4.0"
 log = "0.4"
-moka = { version = "0.10.2", default_features = false, features = ["future", "atomic64", "quanta"] }
+moka = { version = "0.11.0", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.5.6"
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
@@ -95,9 +95,13 @@ wasi-common = "8.0.1"
 wasmtime = "8.0.1"
 wasmtime-wasi = "8.0.1"
 
+[patch.crates-io]
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-24-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", package = "convergence-arrow", branch = "datafusion-24-upgrade", optional = true }
+
 [dev-dependencies]
 assert_unordered = "0.3"
-datafusion-common = "23.0.0"
+datafusion-common = "24.0.0"
 mockall = "0.11.1"
 rstest = "*"
 serial_test = "2"

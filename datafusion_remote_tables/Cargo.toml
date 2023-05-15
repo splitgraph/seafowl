@@ -13,17 +13,17 @@ license = "Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arrow = "37.0.0"
-arrow-buffer = "37.0.0"
-arrow-schema = "37.0.0"
+arrow = "38.0.0"
+arrow-buffer = "38.0.0"
+arrow-schema = "38.0.0"
 async-trait = "0.1.64"
 
 # Remote query execution for a variety of DBs
-connectorx = { git = "https://github.com/splitgraph/connector-x", branch = "datafusion-23-upgrade", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
+connectorx = { git = "https://github.com/splitgraph/connector-x", branch = "datafusion-24-upgrade", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
 
-datafusion = "23.0.0"
-datafusion-common = "23.0.0"
-datafusion-expr = "23.0.0"
+datafusion = "24.0.0"
+datafusion-common = "24.0.0"
+datafusion-expr = "24.0.0"
 itertools = ">=0.10.0"
 log = "0.4"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
