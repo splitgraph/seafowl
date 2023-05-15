@@ -265,29 +265,44 @@ pub fn cached_read_query_authz(
         .untuple_one()
 }
 
-/// GET /q/[query hash] or /[database_name]/q/[query hash]
+/// Supports either one of:
+/// 1. GET /q/[query]
+/// 2. GET /q/[query hash] {"query": "[query]"}
+/// 3. GET -H "X-Seafowl-Query: [query]" /q/[query hash]
+/// In all cases the path can have an optional prefix parameter in order do specify a non-default
+/// database as target, e.g. /[database_name]/q/[query]
 pub async fn cached_read_query(
     database_name: String,
-    query_hash: String,
-    raw_query: String,
+    query_or_hash: String,
+    maybe_raw_query: Option<String>,
     if_none_match: Option<String>,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
     // Ignore dots at the end
-    let query_hash = query_hash.split('.').next().unwrap();
+    let query_or_hash = query_or_hash.split('.').next().unwrap();
 
-    let decoded_query = percent_decode_str(&raw_query).decode_utf8()?;
+    let decoded_query = if let Some(raw_query) = maybe_raw_query {
+        // If we managed to extract the query from the body or the header, the string from the path
+        // parameter is supposed to be the query hash; decode the query and validate
+        let query_hash = query_or_hash;
+        let decoded_query = percent_decode_str(&raw_query).decode_utf8()?;
 
-    let hash_str = str_to_hex_hash(&decoded_query);
+        let hash_str = str_to_hex_hash(&decoded_query);
 
-    debug!(
-        "Received query: {}, URL hash {}, actual hash {}",
-        decoded_query, query_hash, hash_str
-    );
+        debug!(
+            "Received query: {}, URL hash {}, actual hash {}",
+            decoded_query, query_hash, hash_str
+        );
 
-    // Verify the query hash matches the query
-    if query_hash != hash_str {
-        return Err(ApiError::HashMismatch(hash_str, query_hash.to_string()));
+        // Verify the query hash matches the query
+        if query_hash != hash_str {
+            return Err(ApiError::HashMismatch(hash_str, query_hash.to_string()));
+        };
+
+        decoded_query.to_string()
+    } else {
+        // Otherwise, the query itself is passed as the path param
+        percent_decode_str(query_or_hash).decode_utf8()?.to_string()
     };
 
     // If a specific DB name was used as a parameter in the route, scope the context to it,
@@ -504,12 +519,10 @@ pub fn filters(
         .unify()
         .and(cached_read_query_authz(access_policy.clone()))
         .and(
-            // Extract the query either from the header or from the JSON body
-            warp::header::<String>(QUERY_HEADER)
-                .or(warp::body::json().map(|b: QueryBody| b.query))
-                .or_else(|r| {
-                    future::err(warp::reject::custom(ApiError::QueryParsingError(r)))
-                })
+            // Extract the query either from the JSON body or the header
+            warp::body::json()
+                .map(|b: QueryBody| Some(b.query))
+                .or(warp::header::optional::<String>(QUERY_HEADER))
                 .unify(),
         )
         .and(warp::header::optional::<String>(
@@ -718,6 +731,53 @@ pub mod tests {
         })
     }
 
+    async fn query_cached_endpoint<R, H>(
+        handler: &H,
+        path: &str,
+        maybe_body: Option<HashMap<&'_ str, &'_ str>>,
+        maybe_headers: Option<Vec<(&'_ str, &'_ str)>>,
+    ) -> Response<Bytes>
+    where
+        R: Reply,
+        H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
+    {
+        let mut builder = request().method("GET").path(path);
+
+        if let Some(body) = maybe_body {
+            builder = builder.json(&body);
+        }
+
+        if let Some(headers) = maybe_headers {
+            for (key, value) in headers {
+                builder = builder.header(key, value);
+            }
+        }
+
+        builder.reply(handler).await
+    }
+
+    async fn query_uncached_endpoint<R, H>(
+        handler: &H,
+        query: &'_ str,
+        path_prefix: Option<&str>,
+        token: Option<&str>,
+    ) -> Response<Bytes>
+    where
+        R: Reply,
+        H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
+    {
+        let mut builder = request()
+            .method("POST")
+            .path(make_uri("/q", path_prefix).as_str())
+            .json(&HashMap::from([("query", query)]));
+
+        if let Some(t) = token {
+            builder = builder.header(header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+
+        builder.reply(handler).await
+    }
+
     #[rstest]
     #[tokio::test]
     async fn test_get_cached_hash_mismatch(
@@ -790,19 +850,41 @@ pub mod tests {
     }
 
     #[rstest]
+    #[case::query_in_path(PERCENT_ENCODED_SELECT_QUERY, None, None)]
+    #[case::query_in_body(
+        SELECT_QUERY_HASH,
+        Some(HashMap::from([("query", SELECT_QUERY)])),
+        None,
+    )]
+    #[case::query_in_header(
+        SELECT_QUERY_HASH,
+        None,
+        Some(vec![(QUERY_HEADER, SELECT_QUERY)]),
+    )]
+    #[case::encoded_query_in_header(
+        SELECT_QUERY_HASH,
+        None,
+        Some(vec![(QUERY_HEADER, PERCENT_ENCODED_SELECT_QUERY)]),
+    )]
     #[tokio::test]
     async fn test_get_cached_no_etag(
+        #[case] query_param: &str,
+        #[case] maybe_body: Option<HashMap<&'_ str, &'_ str>>,
+        #[case] maybe_headers: Option<Vec<(&'_ str, &'_ str)>>,
         #[values(None, Some("test_db"))] new_db: Option<&str>,
+        #[values("", ".bin")] extension: &str,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp = request()
-            .method("GET")
-            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
-            .header(QUERY_HEADER, SELECT_QUERY)
-            .reply(&handler)
-            .await;
+        let resp = query_cached_endpoint(
+            &handler,
+            make_uri(format!("/q/{query_param}{extension}"), new_db).as_str(),
+            maybe_body,
+            maybe_headers,
+        )
+        .await;
+
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
@@ -813,7 +895,7 @@ pub mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn test_get_cached_no_query(
+    async fn test_get_cached_hash_no_query(
         #[values(None, Some("test_db"))] new_db: Option<&str>,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
@@ -825,50 +907,9 @@ pub mod tests {
             .reply(&handler)
             .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(resp.body(), "No query found in the request: Rejection([BodyDeserializeError { cause: Error(\"EOF while parsing a value\", line: 1, column: 0) }, MissingHeader { name: \"X-Seafowl-Query\" }])");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_get_cached_no_etag_query_in_body(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
-    ) {
-        let context = in_memory_context_with_single_table(new_db).await;
-        let handler = filters(context, http_config_from_access_policy(free_for_all()));
-
-        let resp = request()
-            .method("GET")
-            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}"), new_db).as_str())
-            .json(&HashMap::from([("query", SELECT_QUERY)]))
-            .reply(&handler)
-            .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "{\"c\":1}\n");
         assert_eq!(
-            resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V1_ETAG
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_get_cached_no_etag_extension(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
-    ) {
-        let context = in_memory_context_with_single_table(new_db).await;
-        let handler = filters(context, http_config_from_access_policy(free_for_all()));
-
-        let resp = request()
-            .method("GET")
-            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}.bin"), new_db).as_str())
-            .header(QUERY_HEADER, SELECT_QUERY)
-            .reply(&handler)
-            .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "{\"c\":1}\n");
-        assert_eq!(
-            resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V1_ETAG
+            resp.body(),
+            "SQL error: ParserError(\"Expected an SQL statement, found: 7\")"
         );
     }
 
@@ -891,28 +932,6 @@ pub mod tests {
             .await;
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(resp.body(), "NOT_MODIFIED");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_get_encoded_query_special_chars(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
-    ) {
-        let context = in_memory_context_with_single_table(new_db).await;
-        let handler = filters(context, http_config_from_access_policy(free_for_all()));
-
-        let resp = request()
-            .method("GET")
-            .path(make_uri(format!("/q/{SELECT_QUERY_HASH}.bin"), new_db).as_str())
-            .header(QUERY_HEADER, PERCENT_ENCODED_SELECT_QUERY)
-            .reply(&handler)
-            .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body(), "{\"c\":1}\n");
-        assert_eq!(
-            resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
-            V1_ETAG
-        );
     }
 
     #[rstest]
@@ -958,60 +977,14 @@ pub mod tests {
         );
     }
 
-    async fn _query_uncached_endpoint<R, H>(
-        handler: &H,
-        query: &'_ str,
-        path_prefix: Option<&str>,
-        token: Option<&str>,
-    ) -> Response<Bytes>
-    where
-        R: Reply,
-        H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
-    {
-        let mut builder = request()
-            .method("POST")
-            .path(make_uri("/q", path_prefix).as_str())
-            .json(&HashMap::from([("query", query)]));
-
-        if let Some(t) = token {
-            builder = builder.header(header::AUTHORIZATION, format!("Bearer {t}"));
-        }
-
-        builder.reply(handler).await
-    }
-
-    async fn query_uncached_endpoint<R, H>(
-        handler: &H,
-        query: &'_ str,
-        path_prefix: Option<&str>,
-    ) -> Response<Bytes>
-    where
-        R: Reply,
-        H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
-    {
-        _query_uncached_endpoint(handler, query, path_prefix, None).await
-    }
-
-    async fn query_uncached_endpoint_token<R, H>(
-        handler: &H,
-        query: &'_ str,
-        path_prefix: Option<&str>,
-        token: &str,
-    ) -> Response<Bytes>
-    where
-        R: Reply,
-        H: Filter<Extract = R, Error = Rejection> + Clone + 'static,
-    {
-        _query_uncached_endpoint(handler, query, path_prefix, Some(token)).await
-    }
-
     #[tokio::test]
     async fn test_get_uncached_read_nonexistent_db() {
         let context = in_memory_context_with_single_table(None).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp =
-            query_uncached_endpoint(&handler, SELECT_QUERY, Some("missing_db")).await;
+            query_uncached_endpoint(&handler, SELECT_QUERY, Some("missing_db"), None)
+                .await;
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
@@ -1028,7 +1001,7 @@ pub mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp = query_uncached_endpoint(&handler, SELECT_QUERY, new_db).await;
+        let resp = query_uncached_endpoint(&handler, SELECT_QUERY, new_db, None).await;
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":1}\n");
@@ -1042,11 +1015,11 @@ pub mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp = query_uncached_endpoint(&handler, INSERT_QUERY, new_db).await;
+        let resp = query_uncached_endpoint(&handler, INSERT_QUERY, new_db, None).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "");
 
-        let resp = query_uncached_endpoint(&handler, SELECT_QUERY, new_db).await;
+        let resp = query_uncached_endpoint(&handler, SELECT_QUERY, new_db, None).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body(), "{\"c\":2}\n");
     }
@@ -1057,7 +1030,7 @@ pub mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp = query_uncached_endpoint(&handler, "SLEECT 1", new_db).await;
+        let resp = query_uncached_endpoint(&handler, "SLEECT 1", new_db, None).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
@@ -1073,9 +1046,13 @@ pub mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp =
-            query_uncached_endpoint(&handler, "CREATE FUNCTION what_function", new_db)
-                .await;
+        let resp = query_uncached_endpoint(
+            &handler,
+            "CREATE FUNCTION what_function",
+            new_db,
+            None,
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
@@ -1091,9 +1068,13 @@ pub mod tests {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
-        let resp =
-            query_uncached_endpoint(&handler, "SELECT * FROM missing_table", new_db)
-                .await;
+        let resp = query_uncached_endpoint(
+            &handler,
+            "SELECT * FROM missing_table",
+            new_db,
+            None,
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         if let Some(db_name) = new_db {
@@ -1116,7 +1097,8 @@ pub mod tests {
         let handler = filters(context, http_config_from_access_policy(free_for_all()));
 
         let resp =
-            query_uncached_endpoint(&handler, "SELECT 'notanint'::int", new_db).await;
+            query_uncached_endpoint(&handler, "SELECT 'notanint'::int", new_db, None)
+                .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(resp.body(), "Arrow error: Cast error: Cannot cast string 'notanint' to value of Int32 type");
     }
@@ -1205,7 +1187,8 @@ pub mod tests {
         );
 
         let resp =
-            query_uncached_endpoint(&handler, "SELECT * FROM test_table", new_db).await;
+            query_uncached_endpoint(&handler, "SELECT * FROM test_table", new_db, None)
+                .await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -1222,11 +1205,11 @@ pub mod tests {
             ),
         );
 
-        let resp = query_uncached_endpoint_token(
+        let resp = query_uncached_endpoint(
             &handler,
             "DROP TABLE test_table",
             new_db,
-            "somepw",
+            Some("somepw"),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1246,7 +1229,8 @@ pub mod tests {
         );
 
         let resp =
-            query_uncached_endpoint(&handler, "DROP TABLE test_table", new_db).await;
+            query_uncached_endpoint(&handler, "DROP TABLE test_table", new_db, None)
+                .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         assert_eq!(resp.body(), "WRITE_FORBIDDEN");
     }
@@ -1266,7 +1250,7 @@ pub mod tests {
             ),
         );
 
-        let resp = query_uncached_endpoint(&handler, "SELECT 1", new_db).await;
+        let resp = query_uncached_endpoint(&handler, "SELECT 1", new_db, None).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(resp.body(), "NEED_ACCESS_TOKEN");
     }
@@ -1286,11 +1270,11 @@ pub mod tests {
             ),
         );
 
-        let resp = query_uncached_endpoint_token(
+        let resp = query_uncached_endpoint(
             &handler,
             "DROP TABLE test_table",
             new_db,
-            "somereadpw",
+            Some("somereadpw"),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -1312,11 +1296,11 @@ pub mod tests {
             ),
         );
 
-        let resp = query_uncached_endpoint_token(
+        let resp = query_uncached_endpoint(
             &handler,
             "DROP TABLE test_table",
             new_db,
-            "somepw",
+            Some("somepw"),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1336,7 +1320,8 @@ pub mod tests {
         );
 
         let resp =
-            query_uncached_endpoint(&handler, "DROP TABLE test_table", new_db).await;
+            query_uncached_endpoint(&handler, "DROP TABLE test_table", new_db, None)
+                .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         assert_eq!(resp.body(), "WRITE_FORBIDDEN");
     }
@@ -1354,11 +1339,11 @@ pub mod tests {
             ),
         );
 
-        let resp = query_uncached_endpoint_token(
+        let resp = query_uncached_endpoint(
             &handler,
             "DROP TABLE test_table",
             new_db,
-            "somepw",
+            Some("somepw"),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1379,7 +1364,7 @@ pub mod tests {
         );
 
         let resp =
-            query_uncached_endpoint_token(&handler, "SELECT 1", new_db, "otherpw").await;
+            query_uncached_endpoint(&handler, "SELECT 1", new_db, Some("otherpw")).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(resp.body(), "INVALID_ACCESS_TOKEN");
     }
@@ -1422,21 +1407,21 @@ pub mod tests {
             ),
         );
 
-        let resp = query_uncached_endpoint_token(
+        let resp = query_uncached_endpoint(
             &handler,
             "DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
             INSERT INTO test_table VALUES('hey')",
             new_db,
-            "somepw",
+            Some("somepw"),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let resp = query_uncached_endpoint_token(
+        let resp = query_uncached_endpoint(
             &handler,
             "SELECT * FROM test_table;",
             new_db,
-            "somepw",
+            Some("somepw"),
         )
         .await;
         assert_eq!(resp.body(), "{\"key\":\"hey\"}\n");
@@ -1455,12 +1440,12 @@ pub mod tests {
             ),
         );
 
-        let resp = query_uncached_endpoint_token(
+        let resp = query_uncached_endpoint(
             &handler,
             "DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
             INSERT INTO test_table VALUES('hey');SELECT * FROM test_table;",
             new_db,
-            "somepw",
+            Some("somepw"),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1481,8 +1466,8 @@ pub mod tests {
         );
 
         let resp =
-            query_uncached_endpoint_token(&handler, "SELECT * FROM test_table;DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
-            INSERT INTO test_table VALUES('hey')", new_db,"somepw")
+            query_uncached_endpoint(&handler, "SELECT * FROM test_table;DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
+            INSERT INTO test_table VALUES('hey')", new_db, Some("somepw"))
                 .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert!(String::from_utf8(resp.body().to_vec())
@@ -1504,8 +1489,8 @@ pub mod tests {
         );
 
         let resp =
-            query_uncached_endpoint_token(&handler, "DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
-            INSERT INTO test_table VALUES('hey');SELECT * FROM test_table;SELECT * FROM test_table;", new_db, "somepw")
+            query_uncached_endpoint(&handler, "DROP TABLE test_table;CREATE TABLE test_table(\"key\" VARCHAR);
+            INSERT INTO test_table VALUES('hey');SELECT * FROM test_table;SELECT * FROM test_table;", new_db, Some("somepw"))
                 .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert!(String::from_utf8(resp.body().to_vec())
