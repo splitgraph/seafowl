@@ -19,7 +19,7 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::execution::context::{default_session_builder, SessionState};
+use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
 
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
@@ -81,7 +81,7 @@ use datafusion_expr::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     DropTable, Extension, LogicalPlan, Projection,
 };
-use datafusion_expr::{DmlStatement, Filter, WriteOp};
+use datafusion_expr::{DdlStatement, DmlStatement, Filter, WriteOp};
 use deltalake::action::{Action, Add, ColumnCountStat, DeltaOperation, Remove, SaveMode};
 use deltalake::operations::create::CreateBuilder;
 use deltalake::operations::transaction::commit;
@@ -178,7 +178,7 @@ async fn get_parquet_file_statistics_bytes(
     let dummy_path = Path::from(file_name.to_string());
 
     let parquet = ParquetFormat::new();
-    let session_state = default_session_builder(SessionConfig::default());
+    let session_state = SessionContext::with_config(SessionConfig::new()).state();
     let meta = dummy_object_store
         .head(&dummy_path)
         .await
@@ -453,12 +453,8 @@ pub async fn plan_to_object_store(
 pub fn is_read_only(plan: &LogicalPlan) -> bool {
     !matches!(
         plan,
-        LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateMemoryTable(_)
-            | LogicalPlan::CreateView(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_)
+        LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Extension(_)
     )
@@ -1280,13 +1276,13 @@ impl SeafowlContext for DefaultSeafowlContext {
             // It uses ListingTable which queries data at a given location using the ObjectStore
             // abstraction (URL: scheme://some-path.to.file.parquet) and it's easier to reuse this
             // mechanism in our case too.
-            LogicalPlan::CreateExternalTable(
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
                 cmd @ CreateExternalTable {
                     ref name,
                     ref location,
                     ..
                 },
-            ) => {
+            )) => {
                 // Replace the table name with the fully qualified one that has our staging schema
                 let mut cmd = cmd.clone();
                 cmd.name = self.resolve_staging_ref(name)?;
@@ -1311,11 +1307,13 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 self.create_external_table(&cmd, !is_http).await
             }
-            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                schema_name,
-                if_not_exists: _,
-                schema: _,
-            }) => {
+            LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                CreateCatalogSchema {
+                    schema_name,
+                    if_not_exists: _,
+                    schema: _,
+                },
+            )) => {
                 // CREATE SCHEMA
                 // Create a schema and register it
                 self.table_catalog
@@ -1323,11 +1321,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                     .await?;
                 Ok(make_dummy_exec())
             }
-            LogicalPlan::CreateCatalog(CreateCatalog {
+            LogicalPlan::Ddl(DdlStatement::CreateCatalog(CreateCatalog {
                 catalog_name,
                 if_not_exists,
                 ..
-            }) => {
+            })) => {
                 if self
                     .table_catalog
                     .get_database_id_by_name(catalog_name)
@@ -1359,13 +1357,13 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 Ok(make_dummy_exec())
             }
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
                 name,
                 input,
                 if_not_exists: _,
                 or_replace: _,
                 ..
-            }) => {
+            })) => {
                 // This is actually CREATE TABLE AS
                 let plan = self.create_physical_plan(input).await?;
                 let plan = self.coerce_plan(plan).await?;
@@ -1647,11 +1645,11 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                 Ok(make_dummy_exec())
             }
-            LogicalPlan::DropTable(DropTable {
+            LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
                 name,
                 if_exists: _,
                 schema: _,
-            }) => {
+            })) => {
                 let table_ref = TableReference::from(name);
                 let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
 
@@ -1676,7 +1674,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 self.table_catalog.drop_table(table_id).await?;
                 Ok(make_dummy_exec())
             }
-            LogicalPlan::CreateView(_) => {
+            LogicalPlan::Ddl(DdlStatement::CreateView(_)) => {
                 return Err(Error::Plan(
                     "Creating views is currently unsupported!".to_string(),
                 ))

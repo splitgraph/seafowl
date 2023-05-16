@@ -28,7 +28,7 @@
 pub use datafusion::sql::parser::Statement;
 use datafusion::sql::parser::{CreateExternalTable, DescribeTableStmt};
 use datafusion_common::parsers::CompressionTypeVariant;
-use sqlparser::ast::{CreateFunctionBody, Expr, ObjectName};
+use sqlparser::ast::{CreateFunctionBody, Expr, ObjectName, OrderByExpr};
 use sqlparser::tokenizer::{TokenWithLocation, Word};
 use sqlparser::{
     ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
@@ -281,6 +281,49 @@ impl<'a> DFParser<'a> {
         Ok(partitions)
     }
 
+    /// Parse the ordering clause of a `CREATE EXTERNAL TABLE` SQL statement
+    pub fn parse_order_by_exprs(&mut self) -> Result<Vec<OrderByExpr>, ParserError> {
+        let mut values = vec![];
+        self.parser.expect_token(&Token::LParen)?;
+        loop {
+            values.push(self.parse_order_by_expr()?);
+            if !self.parser.consume_token(&Token::Comma) {
+                self.parser.expect_token(&Token::RParen)?;
+                return Ok(values);
+            }
+        }
+    }
+
+    /// Parse an ORDER BY sub-expression optionally followed by ASC or DESC.
+    pub fn parse_order_by_expr(&mut self) -> Result<OrderByExpr, ParserError> {
+        let expr = self.parser.parse_expr()?;
+
+        let asc = if self.parser.parse_keyword(Keyword::ASC) {
+            Some(true)
+        } else if self.parser.parse_keyword(Keyword::DESC) {
+            Some(false)
+        } else {
+            None
+        };
+
+        let nulls_first = if self
+            .parser
+            .parse_keywords(&[Keyword::NULLS, Keyword::FIRST])
+        {
+            Some(true)
+        } else if self.parser.parse_keywords(&[Keyword::NULLS, Keyword::LAST]) {
+            Some(false)
+        } else {
+            None
+        };
+
+        Ok(OrderByExpr {
+            expr,
+            asc,
+            nulls_first,
+        })
+    }
+
     // This is a copy of the equivalent implementation in sqlparser.
     fn parse_columns(
         &mut self,
@@ -361,53 +404,92 @@ impl<'a> DFParser<'a> {
                 .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
         let table_name = self.parser.parse_object_name()?;
         let (columns, _) = self.parse_columns()?;
-        self.parser
-            .expect_keywords(&[Keyword::STORED, Keyword::AS])?;
 
-        // THIS is the main difference: we parse a different file format.
-        let file_type = self.parse_file_format()?;
+        #[derive(Default)]
+        struct Builder {
+            file_type: Option<String>,
+            location: Option<String>,
+            has_header: Option<bool>,
+            delimiter: Option<char>,
+            file_compression_type: Option<CompressionTypeVariant>,
+            table_partition_cols: Option<Vec<String>>,
+            order_exprs: Option<Vec<OrderByExpr>>,
+            options: Option<HashMap<String, String>>,
+        }
+        let mut builder = Builder::default();
 
-        let has_header = self.parse_csv_has_header();
+        fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
+            if field.is_some() {
+                return Err(ParserError::ParserError(format!(
+                    "{name} specified more than once",
+                )));
+            }
+            Ok(())
+        }
 
-        let has_delimiter = self.parse_has_delimiter();
-        let delimiter = match has_delimiter {
-            true => self.parse_delimiter()?,
-            false => ',',
-        };
+        loop {
+            if self.parser.parse_keyword(Keyword::STORED) {
+                self.parser.expect_keyword(Keyword::AS)?;
+                ensure_not_set(&builder.file_type, "STORED AS")?;
+                builder.file_type = Some(self.parse_file_format()?);
+            } else if self.parser.parse_keyword(Keyword::LOCATION) {
+                ensure_not_set(&builder.location, "LOCATION")?;
+                builder.location = Some(self.parser.parse_literal_string()?);
+            } else if self.parser.parse_keyword(Keyword::WITH) {
+                if self.parser.parse_keyword(Keyword::ORDER) {
+                    ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
+                    builder.order_exprs = Some(self.parse_order_by_exprs()?);
+                } else {
+                    self.parser.expect_keyword(Keyword::HEADER)?;
+                    self.parser.expect_keyword(Keyword::ROW)?;
+                    ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
+                    builder.has_header = Some(true);
+                }
+            } else if self.parser.parse_keyword(Keyword::DELIMITER) {
+                ensure_not_set(&builder.delimiter, "DELIMITER")?;
+                builder.delimiter = Some(self.parse_delimiter()?);
+            } else if self.parser.parse_keyword(Keyword::COMPRESSION) {
+                self.parser.expect_keyword(Keyword::TYPE)?;
+                ensure_not_set(&builder.file_compression_type, "COMPRESSION TYPE")?;
+                builder.file_compression_type = Some(self.parse_file_compression_type()?);
+            } else if self.parser.parse_keyword(Keyword::PARTITIONED) {
+                self.parser.expect_keyword(Keyword::BY)?;
+                ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
+                builder.table_partition_cols = Some(self.parse_partitions()?)
+            } else if self.parser.parse_keyword(Keyword::OPTIONS) {
+                ensure_not_set(&builder.options, "OPTIONS")?;
+                builder.options = Some(self.parse_options()?);
+            } else {
+                break;
+            }
+        }
 
-        let file_compression_type = if self.parse_has_file_compression_type() {
-            self.parse_file_compression_type()?
-        } else {
-            CompressionTypeVariant::UNCOMPRESSED
-        };
-
-        let table_partition_cols = if self.parse_has_partition() {
-            self.parse_partitions()?
-        } else {
-            vec![]
-        };
-
-        let options = if self.parse_has_options() {
-            self.parse_options()?
-        } else {
-            HashMap::new()
-        };
-
-        self.parser.expect_keyword(Keyword::LOCATION)?;
-        let location = self.parser.parse_literal_string()?;
+        // Validations: location and file_type are required
+        if builder.file_type.is_none() {
+            return Err(ParserError::ParserError(
+                "Missing STORED AS clause in CREATE EXTERNAL TABLE statement".into(),
+            ));
+        }
+        if builder.location.is_none() {
+            return Err(ParserError::ParserError(
+                "Missing LOCATION clause in CREATE EXTERNAL TABLE statement".into(),
+            ));
+        }
 
         let create = CreateExternalTable {
             name: table_name.to_string(),
             columns,
-            file_type,
-            has_header,
-            delimiter,
-            location,
-            table_partition_cols,
-            order_exprs: vec![],
+            file_type: builder.file_type.unwrap(),
+            has_header: builder.has_header.unwrap_or(false),
+            delimiter: builder.delimiter.unwrap_or(','),
+            location: builder.location.unwrap(),
+            table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
+            order_exprs: builder.order_exprs.unwrap_or(vec![]),
             if_not_exists,
-            file_compression_type,
-            options,
+            file_compression_type: builder
+                .file_compression_type
+                .unwrap_or(CompressionTypeVariant::UNCOMPRESSED),
+            options: builder.options.unwrap_or(HashMap::new()),
         };
         Ok(Statement::CreateExternalTable(create))
     }
@@ -430,10 +512,6 @@ impl<'a> DFParser<'a> {
             Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
             _ => self.expected("one of GZIP, BZIP2, XZ, ZSTD", token),
         }
-    }
-
-    fn parse_has_options(&mut self) -> bool {
-        self.parser.parse_keyword(Keyword::OPTIONS)
     }
 
     //
@@ -459,20 +537,6 @@ impl<'a> DFParser<'a> {
         Ok(options)
     }
 
-    fn parse_has_file_compression_type(&mut self) -> bool {
-        self.parser
-            .parse_keywords(&[Keyword::COMPRESSION, Keyword::TYPE])
-    }
-
-    fn parse_csv_has_header(&mut self) -> bool {
-        self.parser
-            .parse_keywords(&[Keyword::WITH, Keyword::HEADER, Keyword::ROW])
-    }
-
-    fn parse_has_delimiter(&mut self) -> bool {
-        self.parser.parse_keyword(Keyword::DELIMITER)
-    }
-
     fn parse_delimiter(&mut self) -> Result<char, ParserError> {
         let token = self.parser.parse_literal_string()?;
         match token.len() {
@@ -481,10 +545,5 @@ impl<'a> DFParser<'a> {
                 "Delimiter must be a single char".to_string(),
             )),
         }
-    }
-
-    fn parse_has_partition(&mut self) -> bool {
-        self.parser
-            .parse_keywords(&[Keyword::PARTITIONED, Keyword::BY])
     }
 }

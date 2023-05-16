@@ -66,7 +66,7 @@ pub async fn parquet_scan_from_actions(
                 object_store_url,
                 file_schema,
                 file_groups: file_groups.into_values().collect(),
-                statistics: table.datafusion_table_statistics(),
+                statistics: table.state.datafusion_table_statistics(),
                 projection: projection.cloned(),
                 limit,
                 table_partition_cols: table_partition_cols
