@@ -116,7 +116,7 @@ dependencies = [
  "ahash 0.8.3",
  "arrow-arith",
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-cast",
  "arrow-csv",
  "arrow-data",
@@ -136,7 +136,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ace6aa3d5617c5d03041a05e01c6819428a8ddf49dd0b055df9b40fef9d96094"
 dependencies = [
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-data",
  "arrow-schema",
  "chrono",
@@ -151,7 +151,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "104a04520692cc674e6afd7682f213ca41f9b13ff1873f63a5a2857a590b87b3"
 dependencies = [
  "ahash 0.8.3",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-data",
  "arrow-schema",
  "chrono",
@@ -172,13 +172,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-buffer"
+version = "39.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9405b78106a9d767c7b97c78a70ee1b23ee51a74f5188a821a716d9a85d1af2b"
+dependencies = [
+ "half",
+ "num",
+]
+
+[[package]]
 name = "arrow-cast"
 version = "38.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6d6e18281636c8fc0b93be59834da6bf9a72bb70fd0c98ddfdaf124da466c28"
 dependencies = [
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-data",
  "arrow-schema",
  "arrow-select",
@@ -195,7 +205,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3197dab0963a236ff8e7c82e2272535745955ac1321eb740c29f2f88b353f54e"
 dependencies = [
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-cast",
  "arrow-data",
  "arrow-schema",
@@ -213,7 +223,7 @@ version = "38.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eb68113d6ecdbe8bba48b2c4042c151bf9e1c61244e45072a50250a6fc59bafe"
 dependencies = [
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-schema",
  "half",
  "num",
@@ -226,7 +236,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e048f85a06e1da342fab328b9d63d1869af23ac047379f81312591c2052f0ca"
 dependencies = [
  "arrow",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "hex",
  "num",
  "serde",
@@ -240,7 +250,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eab4bbf2dd3078facb5ce0a9641316a64f42bfd8cf357e6775c8a5e6708e3a8d"
 dependencies = [
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-cast",
  "arrow-data",
  "arrow-schema",
@@ -254,7 +264,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c5b650d23746a494665d914a7fa3d21d939153cff9d53bdebe39bffa88f263"
 dependencies = [
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-cast",
  "arrow-data",
  "arrow-schema",
@@ -274,7 +284,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68c6fce28e5011e30acc7466b5efcb8ed0197c396240bd2b10e167f275a3c208"
 dependencies = [
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-data",
  "arrow-schema",
  "arrow-select",
@@ -290,7 +300,7 @@ checksum = "f20a421f19799d8b93eb8edde5217e910fa1e2d6ceb3c529f000e57b6db144c0"
 dependencies = [
  "ahash 0.8.3",
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-data",
  "arrow-schema",
  "half",
@@ -313,7 +323,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6ab6613ce65b61d85a3410241744e84e48fbab0fe06e1251b4429d21b3470fd"
 dependencies = [
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-data",
  "arrow-schema",
  "num",
@@ -326,7 +336,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3008641239e884aefba66d8b8532da6af40d14296349fcc85935de4ba67b89e"
 dependencies = [
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-data",
  "arrow-schema",
  "arrow-select",
@@ -1816,7 +1826,7 @@ dependencies = [
  "ahash 0.8.3",
  "arrow",
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-schema",
  "blake2",
  "blake3",
@@ -1860,7 +1870,7 @@ name = "datafusion-remote-tables"
 version = "0.1.0"
 dependencies = [
  "arrow",
- "arrow-buffer",
+ "arrow-buffer 39.0.0",
  "arrow-schema",
  "async-trait",
  "connectorx",
@@ -3948,7 +3958,7 @@ checksum = "4cbd51311f8d9ff3d2697b1522b18a588782e097d313a1a278b0faf2ccf2d3f6"
 dependencies = [
  "ahash 0.8.3",
  "arrow-array",
- "arrow-buffer",
+ "arrow-buffer 38.0.0",
  "arrow-cast",
  "arrow-data",
  "arrow-ipc",
@@ -5184,7 +5194,7 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "arrow",
- "arrow-buffer",
+ "arrow-buffer 39.0.0",
  "arrow-integration-test",
  "arrow-schema",
  "assert_unordered",
