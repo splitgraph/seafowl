@@ -80,7 +80,7 @@ import pandas as pd
 import os
 from seafowl import query, SeafowlConnectionParams
 from seafowl.types import QualifiedTableName
-from seafowl.dataframe_to_sql import dataframe_to_seafowl
+from seafowl.dataframe import dataframe_to_seafowl
 
 # load a CSV file into pandas
 data = pd.read_csv("https://media.geeksforgeeks.org/wp-content/uploads/nba.csv")
