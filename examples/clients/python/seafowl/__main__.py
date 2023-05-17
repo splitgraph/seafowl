@@ -1,6 +1,9 @@
 import os
 import argparse
 from typing import Optional
+import sys
+
+from requests import HTTPError
 from .seafowl import query
 from .types import SeafowlConnectionParams
 import json
@@ -40,10 +43,14 @@ if args.fromfile:
         sql = "; ".join(f.readlines())
 else:
     sql = " ".join(args.rest)  # type:ignore
-
-status_code, data = query(
-    SeafowlConnectionParams(endpoint, password, None), sql, append_url_suffix=False
-)
-print(f"code: {status_code}")
-if data:
-    print(json.dumps(data, indent=4))
+try:
+    status_code, data = query(
+        SeafowlConnectionParams(endpoint, password, None), sql, append_url_suffix=False
+    )
+    print(f"code: {status_code}")
+    if data:
+        print(json.dumps(data, indent=4))
+except HTTPError as error:
+    print(f"Error: {error.response.status_code}", file=sys.stderr)
+    print(error.response.text, file=sys.stderr)
+    exit(1)
