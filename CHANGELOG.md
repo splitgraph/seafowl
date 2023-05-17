@@ -4,6 +4,10 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Upgrade to DataFusion 24 and Arrow 38 (<https://github.com/splitgraph/seafowl/pull/403>)
+- Enable passing query as a path parameter in the GET endpoint
+  (<https://github.com/splitgraph/seafowl/pull/402>)
+
 ## [0.4.0] - 2023-05-11
 
 - Remove legacy table reading logic (<https://github.com/splitgraph/seafowl/pull/390>)
