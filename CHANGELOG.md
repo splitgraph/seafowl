@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.4.1] - 2023-05-17
+
 - Upgrade to DataFusion 24 and Arrow 38 (<https://github.com/splitgraph/seafowl/pull/403>)
 - Enable passing query as a path parameter in the GET endpoint
   (<https://github.com/splitgraph/seafowl/pull/402>)
@@ -158,7 +160,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.4.0...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/splitgraph/seafowl/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/splitgraph/seafowl/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/splitgraph/seafowl/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/splitgraph/seafowl/compare/v0.3.2...v0.3.3
