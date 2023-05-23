@@ -10,5 +10,8 @@ setup(
     url="https://github.com/splitgraph/seafowl/tree/main/examples/clients/python",
     packages=["seafowl"],
     install_requires=["requests"],
-    extras_require={"pandas": ["pandas", "SQLAlchemy"]},
+    extras_require={
+        "pandas": ["pandas", "SQLAlchemy"],
+        "parquet": ["pyarrow"]
+      },
 )

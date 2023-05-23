@@ -71,7 +71,7 @@ To run this script, invoke it as:
 PASSWORD="my-super-secret-password" ENDPOINT="http://seafowl-instance.acme.com:80"  python script.py
 ```
 
-## Using Seafowl with pandas DataFrames
+## Writing Pandas DataFrames to Seafowl
 
 Loading `pandas` `DataFrame`s into Seafowl:
 
@@ -102,3 +102,15 @@ as (note: no trailing `/q` required here):
 ```bash
 PASSWORD="my-super-secret-password" ENDPOINT="http://seafowl-instance.acme.com:80" TABLE="nba2" python pandas-example.py
 ```
+
+# Uploading efficiently using Parquet
+
+To add Parquet support, install the `pyarrow` package with `pip install pyarrow` or install the
+Python client with the `parquet` option enabled:
+
+```bash
+pip install -e 'git+https://git@github.com/splitgraph/seafowl.git@main#egg=seafowl[pandas,parquet]&subdirectory=examples/clients/python'
+```
+
+Calls to `dataframe_to_seafowl()` will serialize the DataFrame to Parquet and upload the resulting
+file with a single HTTP request.

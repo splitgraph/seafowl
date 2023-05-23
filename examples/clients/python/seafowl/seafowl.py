@@ -49,8 +49,12 @@ def none_for_empty(s: str) -> Optional[str]:
     return s if len(s) > 0 else None
 
 
-def get_db_endpoint(endpoint: str, database_name: str = DEFAULT_DB) -> str:
-    return endpoint if database_name == DEFAULT_DB else endpoint + "/" + database_name
+def get_db_endpoint(endpoint: str, database_name: Optional[str] = DEFAULT_DB) -> str:
+    return (
+        endpoint
+        if (database_name is None) or database_name == DEFAULT_DB
+        else endpoint + "/" + database_name
+    )
 
 
 def query(
