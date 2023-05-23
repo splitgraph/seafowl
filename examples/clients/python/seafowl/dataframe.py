@@ -1,14 +1,21 @@
 from contextlib import contextmanager
 from functools import partial
-from typing import Any, Callable, Generator, List, Optional
+from typing import Any, Generator, List, Optional
 import pandas as pd
 from sqlalchemy import create_engine
+import tempfile
+import requests
 
 # mypy doesn't recognize that pandas.io.sql exports pandasSQL_builder
 from pandas.io.sql import pandasSQL_builder, SQLTable, PandasSQL  # type:ignore
-import numpy as np
 
-from .seafowl import DEFAULT_DB, DEFAULT_SCHEMA, emit_value, sql_esc_ident, query
+from .seafowl import (
+    DEFAULT_SCHEMA,
+    emit_value,
+    get_db_endpoint,
+    sql_esc_ident,
+    query,
+)
 from .types import QualifiedTableName, RowInserter, SeafowlConnectionParams
 
 
@@ -63,7 +70,23 @@ def make_row_inserter(conn: SeafowlConnectionParams) -> RowInserter:
     return partial(query, conn)
 
 
-def dataframe_to_seafowl(
+def export_to_parquet_and_upload(
+    data: pd.DataFrame,
+    conn: SeafowlConnectionParams,
+    destination_table: QualifiedTableName,
+) -> None:
+    url = f"{get_db_endpoint(conn.url, conn.database)}/upload/{destination_table.schema or DEFAULT_SCHEMA}/{destination_table.table}"
+    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmpfile:
+        data.to_parquet(tmpfile, compression="gzip")
+        tmpfile.flush()
+        tmpfile.seek(0)
+        headers = {}
+        if conn.secret:
+            headers["Authorization"] = f"Bearer {conn.secret}"
+        requests.post(url, files={"data": ("upload.parquet", tmpfile)}, headers=headers)
+
+
+def create_table_and_insert(
     data: pd.DataFrame,
     conn: SeafowlConnectionParams,
     destination_table: QualifiedTableName,
@@ -77,5 +100,18 @@ def dataframe_to_seafowl(
         )
         # create table
         query(conn, get_sql_create_statement(table))
-        # insert rows from dataframe
         execute_insert(table, make_row_inserter(conn))
+
+
+def dataframe_to_seafowl(
+    data: pd.DataFrame,
+    conn: SeafowlConnectionParams,
+    destination_table: QualifiedTableName,
+) -> None:
+    try:
+        # if pyarrow can't be imported fall back to uploading rows with INSERT.
+        import pyarrow  # type:ignore
+
+        export_to_parquet_and_upload(data, conn, destination_table)
+    except ImportError:
+        create_table_and_insert(data, conn, destination_table)
