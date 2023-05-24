@@ -1,7 +1,6 @@
 use std::{env, fmt::Debug, str::FromStr};
 
 use async_trait::async_trait;
-use deltalake::DeltaDataTypeVersion;
 use futures::TryStreamExt;
 use sqlx::sqlite::SqliteJournalMode;
 use sqlx::{

@@ -2,7 +2,6 @@ use std::fmt::Debug;
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use deltalake::DeltaDataTypeVersion;
 use strum::ParseError;
 use strum_macros::{Display, EnumString};
 use uuid::Uuid;
@@ -33,7 +32,7 @@ pub struct TableVersionsResult {
     pub collection_name: String,
     pub table_name: String,
     pub table_version_id: TableVersionId,
-    pub version: DeltaDataTypeVersion,
+    pub version: i64,
     pub creation_time: Timestamp,
 }
 
@@ -144,7 +143,7 @@ pub trait Repository: Send + Sync + Debug {
     async fn create_new_table_version(
         &self,
         uuid: Uuid,
-        version: DeltaDataTypeVersion,
+        version: i64,
     ) -> Result<TableVersionId, Error>;
 
     async fn get_all_table_versions(

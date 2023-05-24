@@ -25,17 +25,22 @@ dashboards and notebooks by running SQL straight from the user's browser.
 Seafowl is built around
 [Apache DataFusion](https://arrow.apache.org/datafusion/user-guide/introduction.html), a fast and
 extensible query execution framework. It uses [Apache Parquet](https://parquet.apache.org/) columnar
-storage, making it perfect for analytical workloads.
+storage, adhering to the [Delta Lake](https://delta.io/) protocol, making it perfect for analytical
+workloads.
 
 For `SELECT` queries, Seafowl supports a large subset of the PostgreSQL dialect. If there's
 something missing, you can
 [write a user-defined function](https://splitgraph.com/docs/seafowl/guides/custom-udf-wasm) for
 Seafowl in anything that compiles to WebAssembly.
 
-In addition, you can write data to Seafowl by
-[uploading a CSV or a Parquet file](https://splitgraph.com/docs/seafowl/guides/uploading-csv-parquet),
-creating an external table or using
-[standard SQL statements](https://splitgraph.com/docs/seafowl/guides/writing-sql-queries).
+In addition, you can write data to Seafowl by:
+
+- [uploading a CSV or a Parquet file](https://splitgraph.com/docs/seafowl/guides/uploading-csv-parquet)...
+- pointing a table to an
+  [externally hosted CSV or a Parquet file](https://seafowl.io/docs/guides/csv-parquet-http-external)...
+- pointing a table to a [remote Database](https://seafowl.io/docs/guides/remote-tables)...
+- or using
+  [standard SQL DML statements](https://splitgraph.com/docs/seafowl/guides/writing-sql-queries).
 
 ### ...at the edge
 
@@ -168,8 +173,3 @@ manipulate/access JSON data, similar to the
 ### PostgreSQL-compatible endpoint
 
 This will make Seafowl queryable by existing BI tools like Metabase/Superset/Looker.
-
-### Federated querying
-
-You will be able to add other databases and external data sources to Seafowl, letting it query them
-"live".

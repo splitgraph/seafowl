@@ -47,11 +47,16 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use datafusion::common::DFSchema;
+use datafusion::datasource::file_format::arrow::ArrowFormat;
 use datafusion::datasource::file_format::avro::AvroFormat;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::file_type::{FileCompressionType, FileType};
 use datafusion::datasource::file_format::json::JsonFormat;
 pub use datafusion::error::{DataFusionError as Error, Result};
+use datafusion::optimizer::analyzer::Analyzer;
+use datafusion::optimizer::optimizer::Optimizer;
+use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
+use datafusion::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::physical_expr::expressions::{cast, Column};
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
@@ -86,7 +91,7 @@ use deltalake::action::{Action, Add, ColumnCountStat, DeltaOperation, Remove, Sa
 use deltalake::operations::create::CreateBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
-use deltalake::{DeltaDataTypeLong, DeltaTable, Schema as DeltaSchema};
+use deltalake::{DeltaTable, Schema as DeltaSchema};
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use tempfile::TempPath;
@@ -153,7 +158,7 @@ pub fn internal_object_store_url() -> ObjectStoreUrl {
 async fn get_parquet_file_statistics_bytes(
     path: &std::path::Path,
     schema: SchemaRef,
-) -> Result<(DeltaDataTypeLong, Statistics)> {
+) -> Result<(i64, Statistics)> {
     // DataFusion's methods for this are all private (see fetch_statistics / summarize_min_max)
     // and require the ObjectStore abstraction since they are normally used in the context
     // of a TableProvider sending a Range request to object storage to get min/max values
@@ -186,7 +191,7 @@ async fn get_parquet_file_statistics_bytes(
     let stats = parquet
         .infer_stats(&session_state, &dummy_object_store, schema, &meta)
         .await?;
-    Ok((meta.size as DeltaDataTypeLong, stats))
+    Ok((meta.size.try_into().unwrap(), stats))
 }
 
 // TODO: maybe we should do something along the lines of `apply_null_counts` from delta-rs
@@ -196,19 +201,15 @@ fn build_null_counts(partition_stats: &Statistics, schema: SchemaRef) -> NullCou
         // NB: Here we may end up with `null_count` being None, but DF pruning algorithm demands that
         // the null count field be not nullable itself. Consequently for any such cases the
         // pruning will fail, and we will default to using all partitions.
-        Some(column_statistics) => {
-            zip(column_statistics, schema.fields())
-                .filter(|(stats, _)| stats.null_count.is_some())
-                .map(|(stats, column)| {
-                    (
-                        column.name().to_string(),
-                        ColumnCountStat::Value(
-                            stats.null_count.unwrap() as DeltaDataTypeLong
-                        ),
-                    )
-                })
-                .collect::<NullCounts>()
-        }
+        Some(column_statistics) => zip(column_statistics, schema.fields())
+            .filter(|(stats, _)| stats.null_count.is_some())
+            .map(|(stats, column)| {
+                (
+                    column.name().to_string(),
+                    ColumnCountStat::Value(stats.null_count.unwrap().try_into().unwrap()),
+                )
+            })
+            .collect::<NullCounts>(),
         None => NullCounts::default(),
     }
 }
@@ -973,6 +974,7 @@ impl DefaultSeafowlContext {
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
+            FileType::ARROW => Arc::new(ArrowFormat),
         };
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
@@ -1121,7 +1123,31 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // We only support the most basic form of UPDATE (no aliases or FROM or joins)
                     if with_hints.is_empty() && joins.is_empty() => {
                     let plan = state.statement_to_plan(statement).await?;
-                    state.optimize(&plan)
+
+                    // Create a custom optimizer as a workaround for "Optimizer rule 'push_down_projection' failed",
+                    // which seems to be a regression for the UPDATE statement planning.
+                    // We also need to do a analyze round beforehand for type coercion.
+                    // TODO: Move on to using `state.optimize(&plan)`
+                    let analyzer = Analyzer::new();
+                    let plan = analyzer.execute_and_check(
+                        &plan,
+                        self.inner.copied_config().options(),
+                        |_, _| {},
+                    )?;
+                    let optimizer = Optimizer::with_rules(
+                        vec![
+                            Arc::new(SimplifyExpressions::new()),
+                        ]
+                    );
+                    let config = OptimizerContext::default();
+                    optimizer.optimize(&plan, &config, |plan: &LogicalPlan, rule: &dyn OptimizerRule| {
+                            debug!(
+                                "After applying rule '{}':\n{}\n",
+                                rule.name(),
+                                plan.display_indent()
+                            )
+                        }
+                    )
                 },
                 Statement::Delete{ .. } => {
                     let plan = state.statement_to_plan(statement).await?;
@@ -1244,6 +1270,9 @@ impl SeafowlContext for DefaultSeafowlContext {
             DFStatement::DescribeTableStmt(_) | DFStatement::CreateExternalTable(_) => {
                 state.statement_to_plan(statement).await
             }
+            DFStatement::CopyTo(_) => Err(Error::NotImplemented(format!(
+                "Unsupported SQL statement: {statement:?}"
+            ))),
         }
     }
 

@@ -1,7 +1,6 @@
 use std::{env, fmt::Debug, time::Duration};
 
 use async_trait::async_trait;
-use deltalake::DeltaDataTypeVersion;
 use futures::TryStreamExt;
 use sqlx::{
     migrate::{MigrateDatabase, Migrator},

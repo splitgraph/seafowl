@@ -346,7 +346,7 @@ impl Repository for $repo {
     async fn create_new_table_version(
         &self,
         uuid: Uuid,
-        version: DeltaDataTypeVersion,
+        version: i64,
     ) -> Result<TableVersionId, Error> {
         // For now we only support linear history
         let last_version_id: TableVersionId = sqlx::query(r#"SELECT max(table_version.id) AS id

@@ -7,7 +7,6 @@ use chrono::{TimeZone, Utc};
 use datafusion::assert_batches_eq;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{assert_contains, DataFusionError};
-use deltalake::DeltaDataTypeVersion;
 use itertools::sorted;
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
@@ -200,20 +199,17 @@ async fn create_table_and_some_partitions(
     context: &DefaultSeafowlContext,
     table_name: &str,
     delay: Option<Duration>,
-) -> (
-    HashMap<DeltaDataTypeVersion, Vec<RecordBatch>>,
-    HashMap<DeltaDataTypeVersion, Timestamp>,
-) {
-    let mut version_results = HashMap::<DeltaDataTypeVersion, Vec<RecordBatch>>::new();
-    let mut version_timestamps = HashMap::<DeltaDataTypeVersion, Timestamp>::new();
+) -> (HashMap<i64, Vec<RecordBatch>>, HashMap<i64, Timestamp>) {
+    let mut version_results = HashMap::<i64, Vec<RecordBatch>>::new();
+    let mut version_timestamps = HashMap::<i64, Timestamp>::new();
 
     async fn record_latest_version_snapshot(
         context: &DefaultSeafowlContext,
-        version_id: DeltaDataTypeVersion,
+        version_id: i64,
         table_name: &str,
         delay: Option<Duration>,
-        version_results: &mut HashMap<DeltaDataTypeVersion, Vec<RecordBatch>>,
-        version_timestamps: &mut HashMap<DeltaDataTypeVersion, Timestamp>,
+        version_results: &mut HashMap<i64, Vec<RecordBatch>>,
+        version_timestamps: &mut HashMap<i64, Timestamp>,
     ) {
         if let Some(delay) = delay {
             let plan = context
@@ -235,7 +231,7 @@ async fn create_table_and_some_partitions(
     create_table_and_insert(context, table_name).await;
     record_latest_version_snapshot(
         context,
-        1 as DeltaDataTypeVersion,
+        1,
         table_name,
         delay,
         &mut version_results,
@@ -253,7 +249,7 @@ async fn create_table_and_some_partitions(
         .unwrap();
     record_latest_version_snapshot(
         context,
-        2 as DeltaDataTypeVersion,
+        2,
         table_name,
         delay,
         &mut version_results,
@@ -271,7 +267,7 @@ async fn create_table_and_some_partitions(
         .unwrap();
     record_latest_version_snapshot(
         context,
-        3 as DeltaDataTypeVersion,
+        3,
         table_name,
         delay,
         &mut version_results,
@@ -289,7 +285,7 @@ async fn create_table_and_some_partitions(
         .unwrap();
     record_latest_version_snapshot(
         context,
-        4 as DeltaDataTypeVersion,
+        4,
         table_name,
         delay,
         &mut version_results,
