@@ -30,7 +30,7 @@ remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
 arrow = "39.0.0"
-arrow-buffer = "39.0.0"
+arrow-buffer = "40.0.0"
 arrow-csv = "39.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
