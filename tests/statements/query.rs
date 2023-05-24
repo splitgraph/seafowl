@@ -192,9 +192,9 @@ async fn test_table_time_travel() {
 
     async fn query_table_version(
         context: &DefaultSeafowlContext,
-        version_id: DeltaDataTypeVersion,
-        version_results: &HashMap<DeltaDataTypeVersion, Vec<RecordBatch>>,
-        version_timestamps: &HashMap<DeltaDataTypeVersion, Timestamp>,
+        version_id: i64,
+        version_results: &HashMap<i64, Vec<RecordBatch>>,
+        version_timestamps: &HashMap<i64, Timestamp>,
         timestamp_converter: fn(Timestamp) -> String,
     ) {
         let plan = context
@@ -215,7 +215,7 @@ async fn test_table_time_travel() {
     for version_id in [1, 2, 3, 4] {
         query_table_version(
             &context,
-            version_id as DeltaDataTypeVersion,
+            version_id,
             &version_results,
             &version_timestamps,
             timestamp_to_rfc3339,

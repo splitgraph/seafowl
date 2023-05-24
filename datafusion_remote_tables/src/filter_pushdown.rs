@@ -6,6 +6,7 @@ use datafusion::common::{Column, DataFusionError};
 use datafusion::error::Result;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
+use datafusion_expr::expr::InList;
 use datafusion_expr::{BinaryExpr, Expr, Operator};
 use itertools::Itertools;
 
@@ -219,7 +220,7 @@ impl<T: FilterPushdownConverter> TreeNodeVisitor for FilterPushdownVisitor<T> {
                 let inner_sql = self.pop_sql_expr();
                 self.sql_exprs.push(format!("{inner_sql} IS NOT FALSE"));
             }
-            Expr::InList { list, negated, .. } => {
+            Expr::InList(InList { list, negated, .. }) => {
                 // The N elements of the list are on the top of the stack, we need to pop them first
                 let index = self.sql_exprs.len() - list.len();
                 let list_sql = self.sql_exprs.split_off(index).iter().join(", ");

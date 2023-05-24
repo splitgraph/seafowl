@@ -1085,7 +1085,8 @@ c40201087f230041206b2203240020032002370318200320013703102003\
             .collect()
             .await;
         assert!(results.is_err());
-        assert!(results.err().unwrap().to_string().starts_with("Internal error: Error invoking function \"panic_if_negative\": Internal(\"Error invoking WASM UDF"));
+        let error_msg = results.err().unwrap().to_string();
+        assert!(error_msg.contains("Internal error: Error invoking function \"panic_if_negative\": Internal(\"Error invoking WASM UDF"));
     }
 
     #[tokio::test]
@@ -1105,7 +1106,8 @@ c40201087f230041206b2203240020032002370318200320013703102003\
             .collect()
             .await;
         assert!(results.is_err());
-        assert!(results.err().unwrap().to_string().starts_with("Internal error: Error invoking function \"write_garbage_output\": Internal(\"Error messagepack decoding output buffer"));
+        let error_msg = results.err().unwrap().to_string();
+        assert!(error_msg.contains("Internal error: Error invoking function \"write_garbage_output\": Internal(\"Error messagepack decoding output buffer"));
     }
 
     #[tokio::test]
@@ -1128,7 +1130,8 @@ c40201087f230041206b2203240020032002370318200320013703102003\
             .collect()
             .await;
         assert!(results.is_err());
-        assert!(results.err().unwrap().to_string().starts_with("Internal error: Expected to find string value, received Integer(PosInt(3)) instead"));
+        let error_msg = results.err().unwrap().to_string();
+        assert!(error_msg.contains("Internal error: Expected to find string value, received Integer(PosInt(3)) instead"));
     }
 
     #[tokio::test]

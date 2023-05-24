@@ -5,12 +5,13 @@ use datafusion::error::DataFusionError;
 use datafusion::physical_plan::ExecutionPlan;
 use std::error::Error;
 use std::fmt::Debug;
-use std::io::Cursor;
+use std::io::{Cursor, Seek};
 use std::{net::SocketAddr, sync::Arc};
 use warp::Rejection;
 
 use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
+use arrow_csv::reader::Format;
 use arrow_integration_test::{schema_from_json, schema_to_json};
 use arrow_schema::SchemaRef;
 use bytes::{Buf, Bytes};
@@ -451,17 +452,21 @@ fn load_csv_bytes(
     schema: Option<Schema>,
     has_header: bool,
 ) -> Result<(Schema, Vec<RecordBatch>), ArrowError> {
+    let mut cursor = Cursor::new(source);
+
     // If the schema part wasn't specified we'll need to infer it
     let builder = match schema {
-        Some(schema) => ReaderBuilder::new()
-            .with_schema(Arc::new(schema))
-            .has_header(has_header),
-        None => ReaderBuilder::new()
-            .infer_schema(None)
-            .has_header(has_header),
+        Some(schema) => ReaderBuilder::new(Arc::new(schema)).has_header(has_header),
+        None => {
+            let (schema, _) = Format::default()
+                .with_header(has_header)
+                .infer_schema(&mut cursor, None)
+                .unwrap();
+            cursor.rewind()?;
+            ReaderBuilder::new(Arc::new(schema)).has_header(has_header)
+        }
     };
 
-    let mut cursor = Cursor::new(source);
     let csv_reader = builder.build(&mut cursor)?;
     let schema = csv_reader.schema().as_ref().clone();
     let partition: Vec<RecordBatch> = csv_reader
@@ -1100,7 +1105,9 @@ pub mod tests {
             query_uncached_endpoint(&handler, "SELECT 'notanint'::int", new_db, None)
                 .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(resp.body(), "Arrow error: Cast error: Cannot cast string 'notanint' to value of Int32 type");
+
+        let error_msg = String::from_utf8_lossy(resp.body());
+        assert!(error_msg.contains("Arrow error: Cast error: Cannot cast string 'notanint' to value of Int32 type"));
     }
 
     #[rstest]

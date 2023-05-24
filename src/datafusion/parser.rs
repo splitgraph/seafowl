@@ -28,7 +28,7 @@
 pub use datafusion::sql::parser::Statement;
 use datafusion::sql::parser::{CreateExternalTable, DescribeTableStmt};
 use datafusion_common::parsers::CompressionTypeVariant;
-use sqlparser::ast::{CreateFunctionBody, Expr, ObjectName, OrderByExpr};
+use sqlparser::ast::{CreateFunctionBody, Expr, ObjectName, OrderByExpr, Value};
 use sqlparser::tokenizer::{TokenWithLocation, Word};
 use sqlparser::{
     ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
@@ -210,10 +210,55 @@ impl<'a> DFParser<'a> {
         })))
     }
 
+    /// Parse the next token as a key name for an option list
+    ///
+    /// Note this is different than [`parse_literal_string`]
+    /// because it allows keywords as well as other non words
+    ///
+    /// [`parse_literal_string`]: sqlparser::parser::Parser::parse_literal_string
+    pub fn parse_option_key(&mut self) -> Result<String, ParserError> {
+        let next_token = self.parser.next_token();
+        match next_token.token {
+            Token::Word(Word { value, .. }) => Ok(value),
+            Token::SingleQuotedString(s) => Ok(s),
+            Token::DoubleQuotedString(s) => Ok(s),
+            Token::EscapedStringLiteral(s) => Ok(s),
+            _ => self.parser.expected("key name", next_token),
+        }
+    }
+
+    /// Parse the next token as a value for an option list
+    ///
+    /// Note this is different than [`parse_value`] as it allows any
+    /// word or keyword in this location.
+    ///
+    /// [`parse_value`]: sqlparser::parser::Parser::parse_value
+    pub fn parse_option_value(&mut self) -> Result<Value, ParserError> {
+        let next_token = self.parser.next_token();
+        match next_token.token {
+            Token::Word(Word { value, .. }) => Ok(Value::UnQuotedString(value)),
+            Token::SingleQuotedString(s) => Ok(Value::SingleQuotedString(s)),
+            Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
+            Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
+            Token::Number(ref n, l) => match n.parse() {
+                Ok(n) => Ok(Value::Number(n, l)),
+                // The tokenizer should have ensured `n` is an integer
+                // so this should not be possible
+                Err(e) => parser_err!(format!(
+                    "Unexpected error: could not parse '{n}' as number: {e}"
+                )),
+            },
+            _ => self.parser.expected("string or numeric value", next_token),
+        }
+    }
+
     /// Parse a SQL CREATE statement
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
-            self.parse_create_external_table()
+            self.parse_create_external_table(false)
+        } else if self.parser.parse_keyword(Keyword::UNBOUNDED) {
+            self.parser.expect_keyword(Keyword::EXTERNAL)?;
+            self.parse_create_external_table(true)
         }
         // XXX SEAFOWL: this is the change to get CREATE FUNCTION parsing working
         else if self.parser.parse_keyword(Keyword::FUNCTION) {
@@ -397,7 +442,10 @@ impl<'a> DFParser<'a> {
         })
     }
 
-    fn parse_create_external_table(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create_external_table(
+        &mut self,
+        unbounded: bool,
+    ) -> Result<Statement, ParserError> {
         self.parser.expect_keyword(Keyword::TABLE)?;
         let if_not_exists =
             self.parser
@@ -428,39 +476,72 @@ impl<'a> DFParser<'a> {
         }
 
         loop {
-            if self.parser.parse_keyword(Keyword::STORED) {
-                self.parser.expect_keyword(Keyword::AS)?;
-                ensure_not_set(&builder.file_type, "STORED AS")?;
-                builder.file_type = Some(self.parse_file_format()?);
-            } else if self.parser.parse_keyword(Keyword::LOCATION) {
-                ensure_not_set(&builder.location, "LOCATION")?;
-                builder.location = Some(self.parser.parse_literal_string()?);
-            } else if self.parser.parse_keyword(Keyword::WITH) {
-                if self.parser.parse_keyword(Keyword::ORDER) {
-                    ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
-                    builder.order_exprs = Some(self.parse_order_by_exprs()?);
-                } else {
-                    self.parser.expect_keyword(Keyword::HEADER)?;
-                    self.parser.expect_keyword(Keyword::ROW)?;
-                    ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
-                    builder.has_header = Some(true);
+            if let Some(keyword) = self.parser.parse_one_of_keywords(&[
+                Keyword::STORED,
+                Keyword::LOCATION,
+                Keyword::WITH,
+                Keyword::DELIMITER,
+                Keyword::COMPRESSION,
+                Keyword::PARTITIONED,
+                Keyword::OPTIONS,
+            ]) {
+                match keyword {
+                    Keyword::STORED => {
+                        self.parser.expect_keyword(Keyword::AS)?;
+                        ensure_not_set(&builder.file_type, "STORED AS")?;
+                        builder.file_type = Some(self.parse_file_format()?);
+                    }
+                    Keyword::LOCATION => {
+                        ensure_not_set(&builder.location, "LOCATION")?;
+                        builder.location = Some(self.parser.parse_literal_string()?);
+                    }
+                    Keyword::WITH => {
+                        if self.parser.parse_keyword(Keyword::ORDER) {
+                            ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
+                            builder.order_exprs = Some(self.parse_order_by_exprs()?);
+                        } else {
+                            self.parser.expect_keyword(Keyword::HEADER)?;
+                            self.parser.expect_keyword(Keyword::ROW)?;
+                            ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
+                            builder.has_header = Some(true);
+                        }
+                    }
+                    Keyword::DELIMITER => {
+                        ensure_not_set(&builder.delimiter, "DELIMITER")?;
+                        builder.delimiter = Some(self.parse_delimiter()?);
+                    }
+                    Keyword::COMPRESSION => {
+                        self.parser.expect_keyword(Keyword::TYPE)?;
+                        ensure_not_set(
+                            &builder.file_compression_type,
+                            "COMPRESSION TYPE",
+                        )?;
+                        builder.file_compression_type =
+                            Some(self.parse_file_compression_type()?);
+                    }
+                    Keyword::PARTITIONED => {
+                        self.parser.expect_keyword(Keyword::BY)?;
+                        ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
+                        builder.table_partition_cols = Some(self.parse_partitions()?);
+                    }
+                    Keyword::OPTIONS => {
+                        ensure_not_set(&builder.options, "OPTIONS")?;
+                        builder.options = Some(self.parse_string_options()?);
+                    }
+                    _ => {
+                        unreachable!()
+                    }
                 }
-            } else if self.parser.parse_keyword(Keyword::DELIMITER) {
-                ensure_not_set(&builder.delimiter, "DELIMITER")?;
-                builder.delimiter = Some(self.parse_delimiter()?);
-            } else if self.parser.parse_keyword(Keyword::COMPRESSION) {
-                self.parser.expect_keyword(Keyword::TYPE)?;
-                ensure_not_set(&builder.file_compression_type, "COMPRESSION TYPE")?;
-                builder.file_compression_type = Some(self.parse_file_compression_type()?);
-            } else if self.parser.parse_keyword(Keyword::PARTITIONED) {
-                self.parser.expect_keyword(Keyword::BY)?;
-                ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
-                builder.table_partition_cols = Some(self.parse_partitions()?)
-            } else if self.parser.parse_keyword(Keyword::OPTIONS) {
-                ensure_not_set(&builder.options, "OPTIONS")?;
-                builder.options = Some(self.parse_options()?);
             } else {
-                break;
+                let token = self.parser.next_token();
+                if token == Token::EOF || token == Token::SemiColon {
+                    break;
+                } else {
+                    return Err(ParserError::ParserError(format!(
+                        "Unexpected token {}",
+                        token
+                    )));
+                }
             }
         }
 
@@ -489,6 +570,7 @@ impl<'a> DFParser<'a> {
             file_compression_type: builder
                 .file_compression_type
                 .unwrap_or(CompressionTypeVariant::UNCOMPRESSED),
+            unbounded,
             options: builder.options.unwrap_or(HashMap::new()),
         };
         Ok(Statement::CreateExternalTable(create))
@@ -514,15 +596,15 @@ impl<'a> DFParser<'a> {
         }
     }
 
-    //
-    fn parse_options(&mut self) -> Result<HashMap<String, String>, ParserError> {
-        let mut options: HashMap<String, String> = HashMap::new();
+    /// Parses (key value) style options where the values are literal strings.
+    fn parse_string_options(&mut self) -> Result<HashMap<String, String>, ParserError> {
+        let mut options = HashMap::new();
         self.parser.expect_token(&Token::LParen)?;
 
         loop {
             let key = self.parser.parse_literal_string()?;
             let value = self.parser.parse_literal_string()?;
-            options.insert(key.to_string(), value.to_string());
+            options.insert(key, value);
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
                 // allow a trailing comma, even though it's not in standard

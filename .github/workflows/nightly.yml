@@ -1,13 +1,11 @@
+# Build binaries and store them as artifacts (also upload Docker images)
+# For pushes to main with tags, also make a GitHub release.
 name: Build nightly binaries and perform releases
 
 on:
-  # For pushes to main, build binaries and store them as artifacts (also upload Docker images)
-  # For pushes to main with tags, also make a GitHub release.
   push:
     branches:
       - main
-    tags:
-      - "v*"
 
 jobs:
   build_binary:
