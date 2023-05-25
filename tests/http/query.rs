@@ -93,6 +93,34 @@ async fn test_http_server_reader_writer() {
         "{\"col_with_ :;.,\\\\/\\\"'?!(){}[]@<>=-+*#$&`|~^%\":2}\n"
     );
 
+    // Test multi-statement query starting with external table creation; it gets changed with almost
+    // every DataFusion upgrade, so it can sometimes introduce regressions.
+    let resp = post_query(
+        &client,
+        &uri,
+        "CREATE EXTERNAL TABLE test_external \
+            STORED AS PARQUET \
+            LOCATION './tests/data/table_with_ns_column.parquet'; \
+            CREATE TABLE test_external AS SELECT * FROM staging.test_external; \
+            SELECT * FROM test_external LIMIT 1",
+        Some("write_password"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        testutils::schema_from_header(resp.headers()),
+        Schema::new(vec![
+            Field::new("some_int_value", DataType::Int64, true),
+            Field::new(
+                "some_time",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true
+            ),
+            Field::new("some_value", DataType::Float32, true),
+        ])
+    );
+    assert_eq!(response_text(resp).await, "{\"some_int_value\":1111,\"some_time\":\"2022-01-01T20:01:01\",\"some_value\":42.0}\n");
+
     // Stop the server
     // NB this won't run if the test fails, but at that point we're terminating the process
     // anyway. Maybe it'll become a problem if we have a bunch of tests running that all

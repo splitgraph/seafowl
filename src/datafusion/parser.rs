@@ -533,7 +533,7 @@ impl<'a> DFParser<'a> {
                     }
                 }
             } else {
-                let token = self.parser.next_token();
+                let token = self.parser.peek_token();
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
