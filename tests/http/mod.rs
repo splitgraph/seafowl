@@ -25,6 +25,7 @@ use arrow::array::{Int32Array, StringArray};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::TimeUnit;
 use datafusion::assert_batches_eq;
 use datafusion::from_slice::FromSlice;
 use datafusion::parquet::arrow::ArrowWriter;
