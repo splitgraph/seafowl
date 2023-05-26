@@ -1,11 +1,13 @@
-# Build binaries and store them as artifacts (also upload Docker images)
-# For pushes to main with tags, also make a GitHub release.
 name: Build nightly binaries and perform releases
 
 on:
+  # For pushes to main, build binaries and store them as artifacts (also upload Docker images)
+  # For pushes to main with tags, also make a GitHub release.
   push:
     branches:
       - main
+    tags:
+      - "v*"
 
 jobs:
   build_binary:
@@ -40,7 +42,7 @@ jobs:
             echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
             export PATH=$PATH:$HOME/d/protoc/bin
             protoc.exe --version
-            
+
             vcpkg integrate install
             vcpkg.exe install openssl:x64-windows-static-md
           elif [ "${{ matrix.build }}" = "linux" ]; then
