@@ -279,6 +279,7 @@ pub struct HttpFrontend {
     pub read_access: AccessSettings,
     pub write_access: AccessSettings,
     pub upload_data_max_length: u64,
+    pub cache_control: Option<String>,
 }
 
 impl Default for HttpFrontend {
@@ -289,6 +290,7 @@ impl Default for HttpFrontend {
             read_access: AccessSettings::Any,
             write_access: AccessSettings::Off,
             upload_data_max_length: 256,
+            cache_control: None,
         }
     }
 }
@@ -471,6 +473,7 @@ bind_port = 80
 read_access = "any"
 write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
 upload_data_max_length = 1
+cache_control = "max-age=3600, public"
 "#;
 
     const TEST_CONFIG_ERROR: &str = r#"
@@ -545,7 +548,8 @@ upload_data_max_length = 1
                         bind_port: 80,
                         read_access: AccessSettings::Any,
                         write_access: AccessSettings::Off,
-                        upload_data_max_length: 256
+                        upload_data_max_length: 256,
+                        cache_control: None,
                     })
                 },
                 runtime: Runtime {
@@ -576,7 +580,8 @@ upload_data_max_length = 1
                         "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
                             .to_string()
                 },
-                upload_data_max_length: 1
+                upload_data_max_length: 1,
+                cache_control: Some("max-age=3600, public".to_string()),
             }
         );
     }
@@ -638,7 +643,8 @@ upload_data_max_length = 1
                             "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
                                 .to_string()
                         },
-                        upload_data_max_length: 256
+                        upload_data_max_length: 256,
+                        cache_control: None,
                     })
                 },
                                  runtime: Runtime {

@@ -535,7 +535,13 @@ pub fn filters(
         ))
         .and(warp::any().map(move || ctx.clone()))
         .then(cached_read_query)
-        .map(into_response);
+        .map(move |r: Result<Response, ApiError>| {
+            if let Some(cache_control) = &config.cache_control && let Ok(response) = r {
+                with_header(response, header::CACHE_CONTROL, cache_control).into_response()
+            } else {
+                into_response(r)
+            }
+        });
 
     // Uncached read/write query
     let ctx = context.clone();
@@ -634,6 +640,18 @@ pub mod tests {
         context::{test_utils::in_memory_context, DefaultSeafowlContext, SeafowlContext},
         frontend::http::{filters, QUERY_HEADER},
     };
+
+    fn http_config_from_access_policy_and_cache_control(
+        access_policy: AccessPolicy,
+        cache_control: Option<&str>,
+    ) -> HttpFrontend {
+        HttpFrontend {
+            read_access: access_policy.read,
+            write_access: access_policy.write,
+            cache_control: cache_control.map(|val| val.to_string()),
+            ..HttpFrontend::default()
+        }
+    }
 
     fn http_config_from_access_policy(access_policy: AccessPolicy) -> HttpFrontend {
         HttpFrontend {
@@ -878,9 +896,16 @@ pub mod tests {
         #[case] maybe_headers: Option<Vec<(&'_ str, &'_ str)>>,
         #[values(None, Some("test_db"))] new_db: Option<&str>,
         #[values("", ".bin")] extension: &str,
+        #[values(None, Some("max-age=3600, public"))] cache_control: Option<&str>,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
-        let handler = filters(context, http_config_from_access_policy(free_for_all()));
+        let handler = filters(
+            context,
+            http_config_from_access_policy_and_cache_control(
+                free_for_all(),
+                cache_control,
+            ),
+        );
 
         let resp = query_cached_endpoint(
             &handler,
@@ -895,6 +920,12 @@ pub mod tests {
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
             V1_ETAG
+        );
+        assert_eq!(
+            resp.headers()
+                .get(header::CACHE_CONTROL)
+                .map(|val| val.to_str().unwrap()),
+            cache_control
         );
     }
 
