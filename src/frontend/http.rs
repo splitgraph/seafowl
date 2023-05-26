@@ -56,10 +56,9 @@ const CORS_MAXAGE: u32 = 86400;
 
 // Vary on Origin, as warp's CORS responds with Access-Control-Allow-Origin: [origin],
 // so we can't cache the response in the browser if the origin changes.
-// NB: We can't vary by `Authorization` in here since Cloudflare states that it doesn't
-// take the vary values into account in caching decisions:
+// NB: Cloudflare doesn't take the vary values into account in caching decisions:
 // https://developers.cloudflare.com/cache/about/cache-control/#other
-const VARY: &str = "Content-Type, Origin, X-Seafowl-Query";
+const VARY: &str = "Authorization, Content-Type, Origin, X-Seafowl-Query";
 
 #[derive(Default)]
 struct ETagBuilderVisitor {
@@ -535,7 +534,18 @@ pub fn filters(
         ))
         .and(warp::any().map(move || ctx.clone()))
         .then(cached_read_query)
-        .map(into_response);
+        .map(move |r: Result<Response, ApiError>| {
+            if let Ok(response) = r {
+                with_header(
+                    response,
+                    header::CACHE_CONTROL,
+                    config.cache_control.clone(),
+                )
+                .into_response()
+            } else {
+                into_response(r)
+            }
+        });
 
     // Uncached read/write query
     let ctx = context.clone();
@@ -634,6 +644,21 @@ pub mod tests {
         context::{test_utils::in_memory_context, DefaultSeafowlContext, SeafowlContext},
         frontend::http::{filters, QUERY_HEADER},
     };
+
+    fn http_config_from_access_policy_and_cache_control(
+        access_policy: AccessPolicy,
+        cache_control: Option<&str>,
+    ) -> HttpFrontend {
+        if cache_control.is_none() {
+            return http_config_from_access_policy(access_policy);
+        }
+        HttpFrontend {
+            read_access: access_policy.read,
+            write_access: access_policy.write,
+            cache_control: cache_control.unwrap().to_string(),
+            ..HttpFrontend::default()
+        }
+    }
 
     fn http_config_from_access_policy(access_policy: AccessPolicy) -> HttpFrontend {
         HttpFrontend {
@@ -878,9 +903,16 @@ pub mod tests {
         #[case] maybe_headers: Option<Vec<(&'_ str, &'_ str)>>,
         #[values(None, Some("test_db"))] new_db: Option<&str>,
         #[values("", ".bin")] extension: &str,
+        #[values(None, Some("private, max-age=86400"))] cache_control: Option<&str>,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
-        let handler = filters(context, http_config_from_access_policy(free_for_all()));
+        let handler = filters(
+            context,
+            http_config_from_access_policy_and_cache_control(
+                free_for_all(),
+                cache_control,
+            ),
+        );
 
         let resp = query_cached_endpoint(
             &handler,
@@ -895,6 +927,14 @@ pub mod tests {
         assert_eq!(
             resp.headers().get(header::ETAG).unwrap().to_str().unwrap(),
             V1_ETAG
+        );
+        assert_eq!(
+            resp.headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            cache_control.unwrap_or("max-age=43200, public")
         );
     }
 

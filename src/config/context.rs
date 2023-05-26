@@ -183,10 +183,6 @@ pub async fn build_context(
         .with_information_schema(true)
         .with_default_catalog_and_schema(DEFAULT_DB, DEFAULT_SCHEMA);
 
-    // Make sure we have at least 2 target partitions even on single-core environments
-    // (issues with PartitionMode::CollectLeft hash joins if a single target partition)
-    let target_partitions = session_config.target_partitions().max(2);
-    let session_config = session_config.with_target_partitions(target_partitions);
     let runtime_env = RuntimeEnv::new(runtime_config)?;
     let state = build_state_with_table_factories(session_config, Arc::new(runtime_env));
     let context = SessionContext::with_state(state);
@@ -283,6 +279,7 @@ mod tests {
                     read_access: schema::AccessSettings::Any,
                     write_access: schema::AccessSettings::Any,
                     upload_data_max_length: 256 * 1024 * 1024,
+                    cache_control: "max-age=43200, public".to_string(),
                 }),
             },
             runtime: schema::Runtime {
