@@ -279,7 +279,7 @@ mod tests {
                     read_access: schema::AccessSettings::Any,
                     write_access: schema::AccessSettings::Any,
                     upload_data_max_length: 256 * 1024 * 1024,
-                    cache_control: None,
+                    cache_control: "max-age=43200, public".to_string(),
                 }),
             },
             runtime: schema::Runtime {

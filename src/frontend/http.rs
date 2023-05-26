@@ -56,10 +56,9 @@ const CORS_MAXAGE: u32 = 86400;
 
 // Vary on Origin, as warp's CORS responds with Access-Control-Allow-Origin: [origin],
 // so we can't cache the response in the browser if the origin changes.
-// NB: We can't vary by `Authorization` in here since Cloudflare states that it doesn't
-// take the vary values into account in caching decisions:
+// NB: Cloudflare doesn't take the vary values into account in caching decisions:
 // https://developers.cloudflare.com/cache/about/cache-control/#other
-const VARY: &str = "Content-Type, Origin, X-Seafowl-Query";
+const VARY: &str = "Authorization, Content-Type, Origin, X-Seafowl-Query";
 
 #[derive(Default)]
 struct ETagBuilderVisitor {
@@ -536,8 +535,13 @@ pub fn filters(
         .and(warp::any().map(move || ctx.clone()))
         .then(cached_read_query)
         .map(move |r: Result<Response, ApiError>| {
-            if let Some(cache_control) = &config.cache_control && let Ok(response) = r {
-                with_header(response, header::CACHE_CONTROL, cache_control).into_response()
+            if let Ok(response) = r {
+                with_header(
+                    response,
+                    header::CACHE_CONTROL,
+                    config.cache_control.clone(),
+                )
+                .into_response()
             } else {
                 into_response(r)
             }
@@ -645,10 +649,13 @@ pub mod tests {
         access_policy: AccessPolicy,
         cache_control: Option<&str>,
     ) -> HttpFrontend {
+        if cache_control.is_none() {
+            return http_config_from_access_policy(access_policy);
+        }
         HttpFrontend {
             read_access: access_policy.read,
             write_access: access_policy.write,
-            cache_control: cache_control.map(|val| val.to_string()),
+            cache_control: cache_control.unwrap().to_string(),
             ..HttpFrontend::default()
         }
     }
@@ -896,7 +903,7 @@ pub mod tests {
         #[case] maybe_headers: Option<Vec<(&'_ str, &'_ str)>>,
         #[values(None, Some("test_db"))] new_db: Option<&str>,
         #[values("", ".bin")] extension: &str,
-        #[values(None, Some("max-age=3600, public"))] cache_control: Option<&str>,
+        #[values(None, Some("private, max-age=86400"))] cache_control: Option<&str>,
     ) {
         let context = in_memory_context_with_single_table(new_db).await;
         let handler = filters(
@@ -924,8 +931,10 @@ pub mod tests {
         assert_eq!(
             resp.headers()
                 .get(header::CACHE_CONTROL)
-                .map(|val| val.to_str().unwrap()),
-            cache_control
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            cache_control.unwrap_or("max-age=43200, public")
         );
     }
 

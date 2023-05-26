@@ -279,7 +279,7 @@ pub struct HttpFrontend {
     pub read_access: AccessSettings,
     pub write_access: AccessSettings,
     pub upload_data_max_length: u64,
-    pub cache_control: Option<String>,
+    pub cache_control: String,
 }
 
 impl Default for HttpFrontend {
@@ -290,7 +290,7 @@ impl Default for HttpFrontend {
             read_access: AccessSettings::Any,
             write_access: AccessSettings::Off,
             upload_data_max_length: 256,
-            cache_control: None,
+            cache_control: "max-age=43200, public".to_string(), // defaults to 12 hours
         }
     }
 }
@@ -473,7 +473,7 @@ bind_port = 80
 read_access = "any"
 write_access = "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
 upload_data_max_length = 1
-cache_control = "max-age=3600, public"
+cache_control = "private, max-age=86400"
 "#;
 
     const TEST_CONFIG_ERROR: &str = r#"
@@ -549,7 +549,7 @@ cache_control = "max-age=3600, public"
                         read_access: AccessSettings::Any,
                         write_access: AccessSettings::Off,
                         upload_data_max_length: 256,
-                        cache_control: None,
+                        cache_control: "max-age=43200, public".to_string(),
                     })
                 },
                 runtime: Runtime {
@@ -581,7 +581,7 @@ cache_control = "max-age=3600, public"
                             .to_string()
                 },
                 upload_data_max_length: 1,
-                cache_control: Some("max-age=3600, public".to_string()),
+                cache_control: "private, max-age=86400".to_string(),
             }
         );
     }
@@ -644,7 +644,7 @@ cache_control = "max-age=3600, public"
                                 .to_string()
                         },
                         upload_data_max_length: 256,
-                        cache_control: None,
+                        cache_control: "max-age=43200, public".to_string(),
                     })
                 },
                                  runtime: Runtime {
