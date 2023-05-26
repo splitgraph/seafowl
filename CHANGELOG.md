@@ -4,6 +4,10 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Enable specifying the GET endpoint cache-control header via config
+  (<https://github.com/splitgraph/seafowl/pull/422>)
+- Upgrade to DataFusion 25 and Arrow 39 (<https://github.com/splitgraph/seafowl/pull/415>)
+
 ## [0.4.1] - 2023-05-17
 
 - Upgrade to DataFusion 24 and Arrow 38 (<https://github.com/splitgraph/seafowl/pull/403>)
