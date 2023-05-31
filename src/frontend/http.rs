@@ -2,7 +2,6 @@ use arrow::csv::ReaderBuilder;
 use arrow::datatypes::Schema;
 use arrow::error::ArrowError;
 use datafusion::error::DataFusionError;
-use datafusion::physical_plan::ExecutionPlan;
 use std::error::Error;
 use std::fmt::Debug;
 use std::io::{Cursor, Seek};
@@ -10,7 +9,6 @@ use std::{net::SocketAddr, sync::Arc};
 use warp::{hyper, Rejection};
 
 use arrow::json::writer::record_batches_to_json_rows;
-use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow_csv::reader::Format;
 use arrow_integration_test::{schema_from_json, schema_to_json};
@@ -20,6 +18,7 @@ use bytes::{Buf, Bytes};
 use datafusion::datasource::DefaultTableSource;
 use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_expr::logical_plan::{LogicalPlan, TableScan};
 use deltalake::parquet::data_type::AsBytes;
@@ -125,21 +124,6 @@ struct QueryBody {
     query: String,
 }
 
-/// Execute a physical plan and output its results to a JSON Lines format
-async fn physical_plan_to_json(
-    context: Arc<DefaultSeafowlContext>,
-    physical: Arc<dyn ExecutionPlan>,
-) -> Result<Vec<u8>, DataFusionError> {
-    let batches = context.collect(physical).await?;
-    let mut buf = Vec::new();
-    let mut writer = LineDelimitedWriter::new(&mut buf);
-    writer
-        .write_batches(&batches)
-        .map_err(DataFusionError::ArrowError)?;
-    writer.finish().map_err(DataFusionError::ArrowError)?;
-    Ok(buf)
-}
-
 /// Convert rows from a `RecordBatch` to their JSON Lines byte representation, with newlines at the end
 fn batch_to_json(batch: RecordBatch) -> Result<Vec<u8>, ArrowError> {
     let mut buf = Vec::new();
@@ -151,6 +135,19 @@ fn batch_to_json(batch: RecordBatch) -> Result<Vec<u8>, ArrowError> {
         buf.push(b'\n');
     }
     Ok(buf)
+}
+
+// Execute the plan and stream the results
+async fn plan_to_response(
+    context: Arc<DefaultSeafowlContext>,
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Response, DataFusionError> {
+    let stream = context
+        .execute_stream(plan)
+        .await?
+        .map(|maybe_batch| batch_to_json(maybe_batch?));
+    let body = hyper::Body::wrap_stream(stream);
+    Ok(Response::new(body))
 }
 
 /// POST /q or /[database_name]/q
@@ -213,13 +210,7 @@ pub async fn uncached_read_write_query(
     // Stream output for the last statement
     let plan = plan_to_output.expect("at least one statement in the list");
     let schema = plan.schema();
-
-    let stream = context
-        .execute_stream(plan)
-        .await?
-        .map(|maybe_batch| batch_to_json(maybe_batch?));
-    let body = hyper::Body::wrap_stream(stream);
-    let mut response = Response::new(body);
+    let mut response = plan_to_response(context, plan).await?;
 
     if reads > 0 {
         response
@@ -355,10 +346,8 @@ pub async fn cached_read_query(
     // Guess we'll have to actually run the query
     let physical = context.create_physical_plan(&plan).await?;
     let schema = physical.schema().clone();
-    let buf = physical_plan_to_json(context, physical).await?;
+    let mut response = plan_to_response(context, physical).await?;
 
-    // Construct the response and headers
-    let mut response = buf.into_response();
     response
         .headers_mut()
         .insert(header::ETAG, etag.parse().unwrap());
