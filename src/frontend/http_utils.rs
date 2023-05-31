@@ -63,7 +63,7 @@ pub enum ApiError {
     UploadMissingFilename,
     UploadMissingFilenameExtension(String),
     UploadSchemaDeserializationError(serde_json::Error),
-    UploadSchemaParseError(datafusion::arrow::error::ArrowError),
+    UploadSchemaParseError(arrow::error::ArrowError),
     UploadFileLoadError(Box<dyn std::error::Error + Send + Sync>),
     UploadBodyLoadError(warp::Error),
     UploadHasHeaderParseError,
