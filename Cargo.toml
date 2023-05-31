@@ -29,7 +29,7 @@ object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
-arrow = "39.0.0"
+arrow = "40.0.0"
 arrow-buffer = "39.0.0"
 arrow-csv = "39.0.0"
 # For the JSON format support
