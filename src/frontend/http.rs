@@ -7,8 +7,9 @@ use std::error::Error;
 use std::fmt::Debug;
 use std::io::{Cursor, Seek};
 use std::{net::SocketAddr, sync::Arc};
-use warp::Rejection;
+use warp::{hyper, Rejection};
 
+use arrow::json::writer::record_batches_to_json_rows;
 use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow_csv::reader::Format;
@@ -139,6 +140,19 @@ async fn physical_plan_to_json(
     Ok(buf)
 }
 
+/// Convert rows from a `RecordBatch` to their JSON Lines byte representation, with newlines at the end
+fn batch_to_json(batch: RecordBatch) -> Result<Vec<u8>, ArrowError> {
+    let mut buf = Vec::new();
+    for row in record_batches_to_json_rows(&[batch])? {
+        buf.extend(
+            serde_json::to_vec(&row)
+                .map_err(|error| ArrowError::JsonError(error.to_string()))?,
+        );
+        buf.push(b'\n');
+    }
+    Ok(buf)
+}
+
 /// POST /q or /[database_name]/q
 pub async fn uncached_read_write_query(
     database_name: String,
@@ -196,13 +210,17 @@ pub async fn uncached_read_write_query(
         plan_to_output = Some(context.create_physical_plan(&logical).await?);
     }
 
-    // Collect output for the last statement
+    // Stream output for the last statement
     let plan = plan_to_output.expect("at least one statement in the list");
     let schema = plan.schema();
-    let buf = physical_plan_to_json(context, plan).await?;
 
-    // Construct the response and headers
-    let mut response = buf.into_response();
+    let stream = context
+        .execute_stream(plan)
+        .await?
+        .map(|maybe_batch| batch_to_json(maybe_batch?));
+    let body = hyper::Body::wrap_stream(stream);
+    let mut response = Response::new(body);
+
     if reads > 0 {
         response
             .headers_mut()

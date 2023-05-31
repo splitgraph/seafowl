@@ -463,7 +463,12 @@ pub fn is_read_only(plan: &LogicalPlan) -> bool {
 
 pub fn is_statement_read_only(statement: &DFStatement) -> bool {
     if let DFStatement::Statement(s) = statement {
-        matches!(**s, Statement::Query(_) | Statement::Explain { .. })
+        matches!(
+            **s,
+            Statement::Query(_)
+                | Statement::Explain { .. }
+                | Statement::ShowTables { .. }
+        )
     } else {
         false
     }
@@ -866,7 +871,7 @@ impl DefaultSeafowlContext {
         Ok(())
     }
 
-    async fn execute_stream(
+    pub(crate) async fn execute_stream(
         &self,
         physical_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {

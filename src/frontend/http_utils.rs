@@ -63,13 +63,14 @@ pub enum ApiError {
     UploadMissingFilename,
     UploadMissingFilenameExtension(String),
     UploadSchemaDeserializationError(serde_json::Error),
-    UploadSchemaParseError(datafusion::arrow::error::ArrowError),
+    UploadSchemaParseError(arrow::error::ArrowError),
     UploadFileLoadError(Box<dyn std::error::Error + Send + Sync>),
     UploadBodyLoadError(warp::Error),
     UploadHasHeaderParseError,
     UploadUnsupportedFileFormat(String),
     QueryDecodeError,
     QueryParsingError(Rejection),
+    JsonError(String),
 }
 
 // Wrap DataFusion errors so that we can automagically return an
@@ -116,6 +117,7 @@ impl ApiError {
             ApiError::UploadUnsupportedFileFormat(filename) => (StatusCode::BAD_REQUEST, format!("File {filename} not supported")),
             ApiError::QueryDecodeError => (StatusCode::BAD_REQUEST, "QUERY_DECODE_ERROR".to_string()),
             ApiError::QueryParsingError(r) => (StatusCode::BAD_REQUEST, format!("No query found in the request: {r:?}")),
+            ApiError::JsonError(message) => (StatusCode::INTERNAL_SERVER_ERROR, message.clone()),
         }
     }
 
