@@ -15,9 +15,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use std::fs::File;
 
-use datafusion::datasource::listing::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
-};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
@@ -42,16 +39,10 @@ use arrow_schema::{DataType, TimeUnit};
 use chrono::Duration;
 use std::iter::zip;
 use std::ops::Deref;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use datafusion::common::DFSchema;
-use datafusion::datasource::file_format::arrow::ArrowFormat;
-use datafusion::datasource::file_format::avro::AvroFormat;
-use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::file_format::file_type::{FileCompressionType, FileType};
-use datafusion::datasource::file_format::json::JsonFormat;
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::optimizer::analyzer::Analyzer;
 use datafusion::optimizer::optimizer::Optimizer;
@@ -896,147 +887,6 @@ impl DefaultSeafowlContext {
         let task_context = Arc::new(TaskContext::from(self.inner()));
         physical_plan.execute(partition, task_context)
     }
-
-    // Copied from DataFusion's source code (private functions)
-    async fn create_external_table(
-        &self,
-        cmd: &CreateExternalTable,
-        filter_suffix: bool,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let table_provider: Arc<dyn TableProvider> =
-            if ["TABLE", "DELTATABLE"].contains(&cmd.file_type.as_str()) {
-                self.create_custom_table(cmd).await?
-            } else {
-                // This is quite unfortunate, as the DataFusion creates everything we need above, apart from
-                // the override of the `file_extension`. There's no way to override the ListingOptions
-                // in the created ListingTable, so we just use a slightly modified ListingTableFactory
-                // code to instantiate the table.
-                self.create_listing_table(cmd, filter_suffix).await?
-            };
-
-        let table = self.inner.table(&cmd.name).await;
-        match (&cmd.if_not_exists, table) {
-            (true, Ok(_)) => Ok(make_dummy_exec()),
-            (_, Err(_)) => {
-                self.inner.register_table(&cmd.name, table_provider)?;
-                return Ok(make_dummy_exec());
-            }
-            (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                "Table '{:?}' already exists",
-                cmd.name
-            ))),
-        }
-    }
-
-    // Copied from DataFusion's source code (private functions)
-    async fn create_custom_table(
-        &self,
-        cmd: &CreateExternalTable,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let state = self.inner.state();
-        let file_type = cmd.file_type.to_uppercase();
-        let factory =
-            &state
-                .table_factories()
-                .get(file_type.as_str())
-                .ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "Unable to find factory for {}",
-                        cmd.file_type
-                    ))
-                })?;
-        let table = (*factory).create(&state, cmd).await?;
-        Ok(table)
-    }
-
-    // Copied from TableProviderFactory for the ListingTable with some minimal changes
-    async fn create_listing_table(
-        &self,
-        cmd: &CreateExternalTable,
-        filter_suffix: bool,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let file_compression_type = FileCompressionType::from(cmd.file_compression_type);
-        let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
-            DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
-        })?;
-
-        // Change from default DataFusion behaviour: allow disabling filtering by an extension
-        let file_extension = if filter_suffix {
-            file_type.get_ext_with_compression(file_compression_type.to_owned())?
-        } else {
-            "".to_string()
-        };
-
-        let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::CSV => Arc::new(
-                CsvFormat::default()
-                    .with_has_header(cmd.has_header)
-                    .with_delimiter(cmd.delimiter as u8)
-                    .with_file_compression_type(file_compression_type),
-            ),
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
-            FileType::AVRO => Arc::new(AvroFormat),
-            FileType::JSON => Arc::new(
-                JsonFormat::default().with_file_compression_type(file_compression_type),
-            ),
-            FileType::ARROW => Arc::new(ArrowFormat),
-        };
-
-        let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
-            (
-                None,
-                cmd.table_partition_cols
-                    .iter()
-                    .map(|x| (x.clone(), DataType::Utf8))
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            let schema: SchemaRef = Arc::new(cmd.schema.as_ref().to_owned().into());
-            let table_partition_cols = cmd
-                .table_partition_cols
-                .iter()
-                .map(|col| {
-                    schema
-                        .field_with_name(col)
-                        .map_err(DataFusionError::ArrowError)
-                })
-                .collect::<datafusion_common::Result<Vec<_>>>()?
-                .into_iter()
-                .map(|f| (f.name().to_owned(), f.data_type().to_owned()))
-                .collect();
-            // exclude partition columns to support creating partitioned external table
-            // with a specified column definition like
-            // `create external table a(c0 int, c1 int) stored as csv partitioned by (c1)...`
-            let mut project_idx = Vec::new();
-            for i in 0..schema.fields().len() {
-                if !cmd.table_partition_cols.contains(schema.field(i).name()) {
-                    project_idx.push(i);
-                }
-            }
-            let schema = Arc::new(schema.project(&project_idx)?);
-            (Some(schema), table_partition_cols)
-        };
-
-        let state = self.inner.state();
-        let options = ListingOptions::new(file_format)
-            .with_collect_stat(state.config().collect_statistics())
-            .with_file_extension(file_extension)
-            .with_target_partitions(state.config().target_partitions())
-            .with_table_partition_cols(table_partition_cols)
-            .with_file_sort_order(None);
-
-        let table_path = ListingTableUrl::parse(&cmd.location)?;
-        let resolved_schema = match provided_schema {
-            None => options.infer_schema(&state, &table_path).await?,
-            Some(s) => s,
-        };
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(options)
-            .with_schema(resolved_schema);
-        let table =
-            ListingTable::try_new(config)?.with_definition(cmd.definition.clone());
-        Ok(Arc::new(table))
-    }
 }
 
 #[async_trait]
@@ -1317,15 +1167,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                     ..
                 },
             )) => {
-                // Replace the table name with the fully qualified one that has our staging schema
-                let mut cmd = cmd.clone();
-                cmd.name = self.resolve_staging_ref(name)?;
-
-                let (location, is_http) = match try_prepare_http_url(location) {
-                    Some(new_loc) => (new_loc, true),
-                    None => (location.into(), false),
-                };
-
                 // Disallow the seafowl:// scheme (which is registered with DataFusion as our internal
                 // object store but shouldn't be accessible via CREATE EXTERNAL TABLE)
                 if location.starts_with(INTERNAL_OBJECT_STORE_SCHEME) {
@@ -1334,12 +1175,24 @@ impl SeafowlContext for DefaultSeafowlContext {
                     )));
                 }
 
+                // Replace the table name with the fully qualified one that has our staging schema
+                let mut cmd = cmd.clone();
+                cmd.name = self.resolve_staging_ref(name)?;
+
                 // try_prepare_http_url changes the url in case of the HTTP object store
                 // (to route _all_ HTTP URLs to our object store, not just specific hosts),
                 // so inject it into the CreateExternalTable command as well.
-                cmd.location = location;
+                cmd.location = match try_prepare_http_url(location) {
+                    Some(new_loc) => new_loc,
+                    None => location.into(),
+                };
 
-                self.create_external_table(&cmd, !is_http).await
+                self.inner
+                    .execute_logical_plan(LogicalPlan::Ddl(
+                        DdlStatement::CreateExternalTable(cmd),
+                    ))
+                    .await?;
+                Ok(make_dummy_exec())
             }
             LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
                 CreateCatalogSchema {
