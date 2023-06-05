@@ -15,7 +15,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use std::fs::File;
 
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::DiskManager;
 
@@ -110,10 +109,6 @@ use crate::{
     version::TableVersionProcessor,
 };
 
-// Scheme used for URLs referencing the object store that we use to register
-// with DataFusion's object store registry.
-pub const INTERNAL_OBJECT_STORE_SCHEME: &str = "seafowl://";
-
 // Max Parquet row group size, in rows. This is what the ArrowWriter uses to determine how many
 // rows to buffer in memory before flushing them out to disk. The default for this is 1024^2, which
 // means that we're effectively buffering a whole partition in memory, causing issues on RAM-limited
@@ -139,10 +134,6 @@ fn get_uuid() -> Uuid {
 #[cfg(not(test))]
 fn get_uuid() -> Uuid {
     Uuid::new_v4()
-}
-
-pub fn internal_object_store_url() -> ObjectStoreUrl {
-    ObjectStoreUrl::parse(INTERNAL_OBJECT_STORE_SCHEME).unwrap()
 }
 
 /// Load the Statistics for a Parquet file in memory
@@ -1167,14 +1158,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                     ..
                 },
             )) => {
-                // Disallow the seafowl:// scheme (which is registered with DataFusion as our internal
-                // object store but shouldn't be accessible via CREATE EXTERNAL TABLE)
-                if location.starts_with(INTERNAL_OBJECT_STORE_SCHEME) {
-                    return Err(DataFusionError::Plan(format!(
-                        "Invalid URL scheme for location {location:?}"
-                    )));
-                }
-
                 // Replace the table name with the fully qualified one that has our staging schema
                 let mut cmd = cmd.clone();
                 cmd.name = self.resolve_staging_ref(name)?;

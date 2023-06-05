@@ -488,7 +488,7 @@ async fn test_create_table_in_staging_schema() {
 #[case::minio(Some(
     "http://localhost:9000/seafowl-test-bucket/table_with_ns_column.parquet"
 ))]
-#[case::mock(None)]
+#[case::mock_http_server(None)]
 #[tokio::test]
 async fn test_create_external_table_http(#[case] minio_url: Option<&str>) {
     /*
@@ -609,27 +609,4 @@ async fn test_create_external_table_http(#[case] minio_url: Option<&str>) {
         "+--------------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
-
-    // Test we can't hit the Seafowl object store directly via CREATE EXTERNAL TABLE
-    let err = context
-        .plan_query(
-            "CREATE EXTERNAL TABLE internal STORED AS PARQUET LOCATION 'seafowl://file'",
-        )
-        .await
-        .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Invalid URL scheme for location \"seafowl://file\""));
-
-    // (also test that the DF object store registry doesn't normalize the case so that people can't
-    // bypass this)
-    let err = context
-        .plan_query(
-            "CREATE EXTERNAL TABLE internal STORED AS PARQUET LOCATION 'SeAfOwL://file'",
-        )
-        .await
-        .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("No suitable object store found for seafowl://file"));
 }
