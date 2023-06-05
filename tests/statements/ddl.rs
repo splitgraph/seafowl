@@ -484,10 +484,15 @@ async fn test_create_table_in_staging_schema() {
     assert_eq!(err.to_string(), expected_err,);
 }
 
+#[rstest]
+#[case::minio(Some(
+    "http://localhost:9000/seafowl-test-bucket/table_with_ns_column.parquet"
+))]
+#[case::mock_http_server(None)]
 #[tokio::test]
-async fn test_create_external_table_http() {
+async fn test_create_external_table_http(#[case] minio_url: Option<&str>) {
     /*
-    Test CREATE EXTERNAL TABLE works with an HTTP mock server.
+    Test CREATE EXTERNAL TABLE works with an HTTP mock server and MinIO.
 
     This also works with https + actual S3 (tested manually)
 
@@ -496,12 +501,17 @@ async fn test_create_external_table_http() {
     bytes_scanned{filename=seafowl-public.s3.eu-west-1.amazonaws.com/tutorial/trase-supply-chains.parquet}=232699
     */
 
-    let (mock_server, _) = testutils::make_mock_parquet_server(true, true).await;
-    // Add a query string that's ignored by the mock (make sure DataFusion doesn't eat the whole URL)
-    let url = format!(
-        "{}/some/file.parquet?query_string=ignore",
-        &mock_server.uri()
-    );
+    let url = match minio_url {
+        None => {
+            let (mock_server, _) = testutils::make_mock_parquet_server(true, true).await;
+            // Add a query string that's ignored by the mock (make sure DataFusion doesn't eat the whole URL)
+            format!(
+                "{}/some/file.parquet?query_string=ignore",
+                &mock_server.uri()
+            )
+        }
+        Some(url) => url.to_string(),
+    };
 
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
 
@@ -556,15 +566,27 @@ async fn test_create_external_table_http() {
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
-    let expected = vec![
-        "+-------+",
-        "| col_1 |",
-        "+-------+",
-        "| 1     |",
-        "| 2     |",
-        "| 3     |",
-        "+-------+",
-    ];
+    let expected = if minio_url.is_none() {
+        vec![
+            "+-------+",
+            "| col_1 |",
+            "+-------+",
+            "| 1     |",
+            "| 2     |",
+            "| 3     |",
+            "+-------+",
+        ]
+    } else {
+        vec![
+            "+----------------+---------------------+------------+",
+            "| some_int_value | some_time           | some_value |",
+            "+----------------+---------------------+------------+",
+            "| 1111           | 2022-01-01T20:01:01 | 42.0       |",
+            "| 2222           | 2022-01-01T20:02:02 | 43.0       |",
+            "| 3333           | 2022-01-01T20:03:03 | 44.0       |",
+            "+----------------+---------------------+------------+",
+        ]
+    };
 
     assert_batches_eq!(expected, &results);
 
@@ -587,27 +609,4 @@ async fn test_create_external_table_http() {
         "+--------------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
-
-    // Test we can't hit the Seafowl object store directly via CREATE EXTERNAL TABLE
-    let err = context
-        .plan_query(
-            "CREATE EXTERNAL TABLE internal STORED AS PARQUET LOCATION 'seafowl://file'",
-        )
-        .await
-        .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Invalid URL scheme for location \"seafowl://file\""));
-
-    // (also test that the DF object store registry doesn't normalize the case so that people can't
-    // bypass this)
-    let err = context
-        .plan_query(
-            "CREATE EXTERNAL TABLE internal STORED AS PARQUET LOCATION 'SeAfOwL://file'",
-        )
-        .await
-        .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("No suitable object store found for seafowl://file"));
 }

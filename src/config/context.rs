@@ -5,7 +5,7 @@ use crate::{
     catalog::{
         DefaultCatalog, FunctionCatalog, TableCatalog, DEFAULT_DB, DEFAULT_SCHEMA,
     },
-    context::{DefaultSeafowlContext, INTERNAL_OBJECT_STORE_SCHEME},
+    context::DefaultSeafowlContext,
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
 use datafusion::execution::context::SessionState;
@@ -33,7 +33,6 @@ use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::path::Path;
 use parking_lot::lock_api::RwLock;
 use tempfile::TempDir;
-use url::Url;
 
 use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
 
@@ -188,11 +187,6 @@ pub async fn build_context(
     let context = SessionContext::with_state(state);
 
     let object_store = build_object_store(cfg);
-    context.runtime_env().register_object_store(
-        &Url::parse(INTERNAL_OBJECT_STORE_SCHEME).unwrap(),
-        object_store.clone(),
-    );
-
     let internal_object_store = Arc::new(InternalObjectStore::new(
         object_store.clone(),
         cfg.object_store.clone(),
