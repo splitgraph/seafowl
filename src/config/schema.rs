@@ -1,18 +1,25 @@
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::{
     fmt::{self, Display},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use crate::object_store::cache::{
-    DEFAULT_CACHE_CAPACITY, DEFAULT_CACHE_ENTRY_TTL, DEFAULT_MIN_FETCH_SIZE,
+    CachingObjectStore, DEFAULT_CACHE_CAPACITY, DEFAULT_CACHE_ENTRY_TTL,
+    DEFAULT_MIN_FETCH_SIZE,
 };
 use config::{Config, ConfigError, Environment, File, FileFormat, Map};
+use datafusion_common::DataFusionError;
 use hex::encode;
 use log::{info, warn};
+use object_store::DynObjectStore;
 use rand::distributions::{Alphanumeric, DistString};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqliteJournalMode;
+use tempfile::TempDir;
 
 pub const DEFAULT_DATA_DIR: &str = "seafowl-data";
 pub const DEFAULT_SQLITE_DB: &str = "seafowl.sqlite";
@@ -126,10 +133,52 @@ pub struct S3 {
     pub cache_properties: Option<ObjectCacheProperties>,
 }
 
+impl S3 {
+    pub fn from_bucket_and_options(
+        bucket: String,
+        map: &HashMap<String, String>,
+    ) -> Result<Self, DataFusionError> {
+        Ok(S3 {
+            region: map.get("region").cloned(),
+            access_key_id: map
+                .get("access_key_id")
+                .ok_or(DataFusionError::Execution(
+                    "'access_key_id' not found in provided options".to_string(),
+                ))?
+                .clone(),
+            secret_access_key: map
+                .get("secret_access_key")
+                .ok_or(DataFusionError::Execution(
+                    "'secret_access_key' not found in provided options".to_string(),
+                ))?
+                .clone(),
+            endpoint: map.get("endpoint").cloned(),
+            bucket,
+            cache_properties: Some(ObjectCacheProperties::default()),
+        })
+    }
+}
+
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct GCS {
     pub bucket: String,
     pub google_application_credentials: Option<String>,
+    pub cache_properties: Option<ObjectCacheProperties>,
+}
+
+impl GCS {
+    pub fn from_bucket_and_options(
+        bucket: String,
+        map: &HashMap<String, String>,
+    ) -> Self {
+        GCS {
+            bucket,
+            google_application_credentials: map
+                .get("google_application_credentials")
+                .cloned(),
+            cache_properties: Some(ObjectCacheProperties::default()),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -147,6 +196,21 @@ impl Default for ObjectCacheProperties {
             min_fetch_size: DEFAULT_MIN_FETCH_SIZE,
             ttl_s: DEFAULT_CACHE_ENTRY_TTL.as_secs(),
         }
+    }
+}
+
+impl ObjectCacheProperties {
+    pub fn wrap_store(&self, inner: Arc<DynObjectStore>) -> Arc<DynObjectStore> {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.into_path();
+
+        Arc::new(CachingObjectStore::new(
+            inner,
+            &path,
+            self.capacity,
+            self.min_fetch_size,
+            Duration::from_secs(self.ttl_s),
+        ))
     }
 }
 

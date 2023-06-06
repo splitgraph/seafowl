@@ -1,4 +1,3 @@
-use std::time::Duration;
 use std::{env, sync::Arc};
 
 use crate::{
@@ -21,8 +20,6 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
 
-use crate::config::schema::ObjectCacheProperties;
-use crate::object_store::cache::CachingObjectStore;
 use crate::object_store::http::add_http_object_store;
 use crate::object_store::wrapped::InternalObjectStore;
 #[cfg(feature = "remote-tables")]
@@ -32,7 +29,6 @@ use object_store::aws::AmazonS3Builder;
 use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::path::Path;
 use parking_lot::lock_api::RwLock;
-use tempfile::TempDir;
 
 use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
 
@@ -73,8 +69,10 @@ async fn build_catalog(
     (catalog.clone(), catalog)
 }
 
-fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
-    match &cfg.object_store {
+pub fn build_object_store(
+    object_store_cfg: &schema::ObjectStore,
+) -> Arc<dyn ObjectStore> {
+    match &object_store_cfg {
         schema::ObjectStore::Local(schema::Local { data_dir }) => Arc::new(
             LocalFileSystem::new_with_prefix(data_dir)
                 .expect("Error creating object store"),
@@ -102,22 +100,8 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
 
             let store = builder.build().expect("Error creating object store");
 
-            if let Some(ObjectCacheProperties {
-                capacity,
-                min_fetch_size,
-                ttl_s,
-            }) = cache_properties
-            {
-                let tmp_dir = TempDir::new().unwrap();
-                let path = tmp_dir.into_path();
-
-                return Arc::new(CachingObjectStore::new(
-                    Arc::new(store),
-                    &path,
-                    *capacity,
-                    *min_fetch_size,
-                    Duration::from_secs(*ttl_s),
-                ));
+            if let Some(props) = cache_properties {
+                return props.wrap_store(Arc::new(store));
             }
 
             Arc::new(store)
@@ -126,6 +110,7 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
         schema::ObjectStore::GCS(GCS {
             bucket,
             google_application_credentials,
+            cache_properties,
         }) => {
             let gcs_builder: GoogleCloudStorageBuilder =
                 GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
@@ -139,6 +124,10 @@ fn build_object_store(cfg: &schema::SeafowlConfig) -> Arc<dyn ObjectStore> {
             let store = gcs_builder
                 .build()
                 .expect("Error creating GCS object store");
+
+            if let Some(props) = cache_properties {
+                return props.wrap_store(Arc::new(store));
+            }
 
             Arc::new(store)
         }
@@ -186,7 +175,7 @@ pub async fn build_context(
     let state = build_state_with_table_factories(session_config, Arc::new(runtime_env));
     let context = SessionContext::with_state(state);
 
-    let object_store = build_object_store(cfg);
+    let object_store = build_object_store(&cfg.object_store);
     let internal_object_store = Arc::new(InternalObjectStore::new(
         object_store.clone(),
         cfg.object_store.clone(),

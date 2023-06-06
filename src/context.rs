@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use datafusion::common::DFSchema;
+use datafusion::datasource::listing::ListingTableUrl;
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::optimizer::analyzer::Analyzer;
 use datafusion::optimizer::optimizer::Optimizer;
@@ -86,10 +87,13 @@ use log::{debug, info, warn};
 use parking_lot::RwLock;
 use tempfile::TempPath;
 use tokio::sync::Semaphore;
+use url::Url;
 use uuid::Uuid;
 
 use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
-use crate::config::context::build_state_with_table_factories;
+use crate::config::context::{build_object_store, build_state_with_table_factories};
+use crate::config::schema;
+use crate::config::schema::{GCS, S3};
 use crate::datafusion::visit::VisitorMut;
 use crate::delta_rs::backport_create_add::{create_add, NullCounts};
 use crate::delta_rs::backports::parquet_scan_from_actions;
@@ -1169,6 +1173,47 @@ impl SeafowlContext for DefaultSeafowlContext {
                     Some(new_loc) => new_loc,
                     None => location.into(),
                 };
+
+                // If the referenced table is in a cloud object store then register a new
+                // corresponding object store dynamically:
+                // 1. Using cmd.options if provided,
+                // 2. Otherwise use the object store credentials from the config if it matches
+                //    the object store kind.
+                let table_path = ListingTableUrl::parse(&cmd.location)?;
+                let scheme = table_path.scheme();
+                let url: &Url = table_path.as_ref();
+                if matches!(scheme, "s3" | "gs" | "gcs") {
+                    let bucket = url
+                        .host_str()
+                        .ok_or_else(|| {
+                            DataFusionError::Execution(format!(
+                                "Not able to parse bucket name from url: {}",
+                                url.as_str()
+                            ))
+                        })?
+                        .to_string();
+
+                    let config = if scheme == "s3" {
+                        let s3 = if cmd.options.is_empty() && let schema::ObjectStore::S3(s3) = self.internal_object_store.config.clone() {
+                            S3{ bucket, ..s3 }
+                        } else {
+                            S3::from_bucket_and_options(bucket, &cmd.options)?
+                        };
+                        schema::ObjectStore::S3(s3)
+                    } else {
+                        let gcs = if cmd.options.is_empty() && let schema::ObjectStore::GCS(gcs) = self.internal_object_store.config.clone() {
+                            GCS{ bucket, ..gcs }
+                        } else {
+                            GCS::from_bucket_and_options(bucket, &cmd.options)
+                        };
+                        schema::ObjectStore::GCS(gcs)
+                    };
+
+                    let object_store = build_object_store(&config);
+                    self.inner
+                        .runtime_env()
+                        .register_object_store(url, object_store);
+                }
 
                 self.inner
                     .execute_logical_plan(LogicalPlan::Ddl(
