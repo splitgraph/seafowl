@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.4.3] - 2023-06-07
+
 - Enable creating external tables on cloud object stores
   (<https://github.com/splitgraph/seafowl/pull/433>)
 - Implement streaming of result rows (<https://github.com/splitgraph/seafowl/pull/424>)
@@ -170,7 +172,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.4.2...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/splitgraph/seafowl/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/splitgraph/seafowl/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/splitgraph/seafowl/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/splitgraph/seafowl/compare/v0.3.4...v0.4.0
