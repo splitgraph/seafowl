@@ -11,7 +11,6 @@ use crate::object_store::cache::{
     DEFAULT_MIN_FETCH_SIZE,
 };
 use config::{Config, ConfigError, Environment, File, FileFormat, Map};
-use datafusion_common::DataFusionError;
 use hex::encode;
 use log::{info, warn};
 use object_store::DynObjectStore;
@@ -137,18 +136,18 @@ impl S3 {
     pub fn from_bucket_and_options(
         bucket: String,
         map: &HashMap<String, String>,
-    ) -> Result<Self, DataFusionError> {
+    ) -> Result<Self, ConfigError> {
         Ok(S3 {
             region: map.get("region").cloned(),
             access_key_id: map
                 .get("access_key_id")
-                .ok_or(DataFusionError::Execution(
+                .ok_or(ConfigError::Message(
                     "'access_key_id' not found in provided options".to_string(),
                 ))?
                 .clone(),
             secret_access_key: map
                 .get("secret_access_key")
-                .ok_or(DataFusionError::Execution(
+                .ok_or(ConfigError::Message(
                     "'secret_access_key' not found in provided options".to_string(),
                 ))?
                 .clone(),

@@ -1197,7 +1197,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         let s3 = if cmd.options.is_empty() && let schema::ObjectStore::S3(s3) = self.internal_object_store.config.clone() {
                             S3{ bucket, ..s3 }
                         } else {
-                            S3::from_bucket_and_options(bucket, &cmd.options)?
+                            S3::from_bucket_and_options(bucket, &cmd.options).map_err(|e| DataFusionError::Execution(e.to_string()))?
                         };
                         schema::ObjectStore::S3(s3)
                     } else {
