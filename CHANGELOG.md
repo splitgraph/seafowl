@@ -4,6 +4,10 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Enable creating external tables on cloud object stores
+  (<https://github.com/splitgraph/seafowl/pull/433>)
+- Implement streaming of result rows (<https://github.com/splitgraph/seafowl/pull/424>)
+
 ## [0.4.2] - 2023-05-26
 
 - Enable specifying the GET endpoint cache-control header via config
