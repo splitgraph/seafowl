@@ -485,12 +485,30 @@ async fn test_create_table_in_staging_schema() {
 }
 
 #[rstest]
-#[case::minio(Some(
-    "http://localhost:9000/seafowl-test-bucket/table_with_ns_column.parquet"
-))]
-#[case::mock_http_server(None)]
+#[case::minio_http(
+    Some("http://localhost:9000/seafowl-test-bucket/table_with_ns_column.parquet"),
+    "",
+    ObjectStoreType::InMemory
+)]
+// Tests the case of inheriting the credentials from the underlying object store, since none are
+// provided via the `OPTIONS` clause, so we must use `ObjectStoreType::S3`.
+#[case::minio_s3(
+    Some("s3://seafowl-test-bucket/table_with_ns_column.parquet"),
+    "",
+    ObjectStoreType::S3
+)]
+// Tests the case of explicitly specifying the `OPTIONS` clause to construct a dynamic object store.
+// so we can use anything other than `ObjectStoreType::S3`.
+#[case::minio_s3_with_options(Some(
+    "s3://seafowl-test-bucket/table_with_ns_column.parquet"
+), " OPTIONS ('access_key_id' 'minioadmin', 'secret_access_key' 'minioadmin', 'endpoint' 'http://127.0.0.1:9000') ", ObjectStoreType::InMemory)]
+#[case::mock_http_server(None, "", ObjectStoreType::InMemory)]
 #[tokio::test]
-async fn test_create_external_table_http(#[case] minio_url: Option<&str>) {
+async fn test_create_external_table(
+    #[case] minio_url: Option<&str>,
+    #[case] options: &str,
+    #[case] object_store_type: ObjectStoreType,
+) {
     /*
     Test CREATE EXTERNAL TABLE works with an HTTP mock server and MinIO.
 
@@ -513,7 +531,7 @@ async fn test_create_external_table_http(#[case] minio_url: Option<&str>) {
         Some(url) => url.to_string(),
     };
 
-    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(object_store_type).await;
 
     // Try creating a table in a non-staging schema
     let err = context
@@ -536,7 +554,7 @@ async fn test_create_external_table_http(#[case] minio_url: Option<&str>) {
         .plan_query(
             format!(
                 "CREATE EXTERNAL TABLE file
-        STORED AS PARQUET
+        STORED AS PARQUET {options}
         LOCATION '{url}'"
             )
             .as_str(),
