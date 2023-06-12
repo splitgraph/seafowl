@@ -80,7 +80,7 @@ pub async fn parquet_scan_from_actions(
                         ))
                     })
                     .collect::<Result<Vec<_>, ArrowError>>()?,
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             (&filter_expr).into(),
@@ -144,7 +144,10 @@ fn to_correct_scalar_value(
                 let cast_arr = cast_with_options(
                     &time_nanos.to_array(),
                     field_dt,
-                    &CastOptions { safe: false },
+                    &CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
                 )
                 .ok()?;
                 Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
@@ -163,7 +166,10 @@ fn to_correct_scalar_value(
                 let cast_arr = cast_with_options(
                     &time_nanos.to_array(),
                     field_dt,
-                    &CastOptions { safe: false },
+                    &CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
                 )
                 .ok()?;
                 Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)

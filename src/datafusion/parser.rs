@@ -207,6 +207,7 @@ impl<'a> DFParser<'a> {
         Ok(Statement::Statement(Box::new(SQLStatement::Truncate {
             table_name,
             partitions,
+            table: false,
         })))
     }
 
@@ -461,7 +462,7 @@ impl<'a> DFParser<'a> {
             delimiter: Option<char>,
             file_compression_type: Option<CompressionTypeVariant>,
             table_partition_cols: Option<Vec<String>>,
-            order_exprs: Option<Vec<OrderByExpr>>,
+            order_exprs: Vec<Vec<OrderByExpr>>,
             options: Option<HashMap<String, String>>,
         }
         let mut builder = Builder::default();
@@ -497,8 +498,7 @@ impl<'a> DFParser<'a> {
                     }
                     Keyword::WITH => {
                         if self.parser.parse_keyword(Keyword::ORDER) {
-                            ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
-                            builder.order_exprs = Some(self.parse_order_by_exprs()?);
+                            builder.order_exprs.push(self.parse_order_by_exprs()?);
                         } else {
                             self.parser.expect_keyword(Keyword::HEADER)?;
                             self.parser.expect_keyword(Keyword::ROW)?;
@@ -538,8 +538,7 @@ impl<'a> DFParser<'a> {
                     break;
                 } else {
                     return Err(ParserError::ParserError(format!(
-                        "Unexpected token {}",
-                        token
+                        "Unexpected token {token}"
                     )));
                 }
             }
@@ -565,7 +564,7 @@ impl<'a> DFParser<'a> {
             delimiter: builder.delimiter.unwrap_or(','),
             location: builder.location.unwrap(),
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
-            order_exprs: builder.order_exprs.unwrap_or(vec![]),
+            order_exprs: builder.order_exprs,
             if_not_exists,
             file_compression_type: builder
                 .file_compression_type
