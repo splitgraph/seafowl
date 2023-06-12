@@ -83,9 +83,15 @@ jobs:
 
       - name: Build the release binary
         shell: bash
+        # Since our win builds have been OOM-ing recently try to constrain the memory
+        # consumption by limiting the number of parallel jobs during build.
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo build --release
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cargo build -j 1 --release
+          else
+            cargo build --release
+          fi
 
       - name: Test invoking the binaries
         shell: bash
