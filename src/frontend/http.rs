@@ -43,6 +43,7 @@ use crate::{
         is_read_only, is_statement_read_only, DefaultSeafowlContext, SeafowlContext,
     },
 };
+use crate::frontend::{instrument, handle_request};
 
 use super::http_utils::{handle_rejection, into_response, ApiError};
 
@@ -477,7 +478,6 @@ pub fn filters(
         .max_age(CORS_MAXAGE);
 
     let log = warp::log(module_path!());
-
     // Cached read query
     let ctx = context.clone();
     let cached_read_query_route = warp::path!(String / "q" / String)
@@ -549,11 +549,19 @@ pub fn filters(
         .then(upload)
         .map(into_response);
 
+    let instrument_filter = instrument().clone();
+
     cached_read_query_route
         .or(uncached_read_write_query_route)
         .or(upload_route)
+        .and(instrument_filter)
+        .and(warp::body::bytes())
+        .and_then(|start_time, body| async move {
+            handle_request(start_time, body).await
+        })
         .with(cors)
         .with(log)
+        .with(warp::trace::request())// experiment: print warp's built-in tracing
         .map(|r| with_header(r, header::VARY, VARY))
         .recover(handle_rejection)
 }
