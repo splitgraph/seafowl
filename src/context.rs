@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use bytes::BytesMut;
 use std::borrow::Cow;
+use std::ops::Not;
 
 use datafusion::datasource::TableProvider;
 use datafusion::parquet::basic::{Compression, ZstdLevel};
@@ -1091,7 +1092,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                             })),
                         }))
                     },
-                Statement::Truncate { table_name, partitions} => {
+                Statement::Truncate { table_name, partitions, .. } => {
                     let table_name = if partitions.is_none() {
                         Some(table_name.to_string())
                     } else {

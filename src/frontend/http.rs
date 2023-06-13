@@ -127,7 +127,7 @@ struct QueryBody {
 /// Convert rows from a `RecordBatch` to their JSON Lines byte representation, with newlines at the end
 fn batch_to_json(batch: RecordBatch) -> Result<Vec<u8>, ArrowError> {
     let mut buf = Vec::new();
-    for row in record_batches_to_json_rows(&[batch])? {
+    for row in record_batches_to_json_rows(&[&batch])? {
         buf.extend(
             serde_json::to_vec(&row)
                 .map_err(|error| ArrowError::JsonError(error.to_string()))?,

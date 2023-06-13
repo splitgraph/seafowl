@@ -6,6 +6,7 @@ use std::{
 };
 
 use arrow::json::LineDelimitedWriter;
+use arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
 use hex::encode;
 use log::{info, warn};
@@ -33,7 +34,9 @@ pub async fn run_one_off_command<W>(
             let batches = context.collect(physical).await?;
 
             let mut writer = LineDelimitedWriter::new(&mut output);
-            writer.write_batches(&batches)?;
+            writer.write_batches(
+                batches.iter().collect::<Vec<&RecordBatch>>().as_slice(),
+            )?;
             writer.finish()
         }
         .await

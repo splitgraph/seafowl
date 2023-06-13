@@ -11,7 +11,7 @@ use sqlparser::ast::{
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName, OrderByExpr,
     Query, Select, SelectItem, SetExpr, SetOperator, TableAlias, TableFactor,
     TableWithJoins, UnaryOperator, Value, Values, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowSpec,
+    WindowFrameUnits, WindowSpec, WindowType,
 };
 
 /// A trait that represents a visitor that walks through a SQL AST.
@@ -246,6 +246,10 @@ pub trait VisitorMut<'ast> {
         func_arg_expr: &'ast mut FunctionArgExpr,
     ) {
         visit_function_arg_expression(self, func_arg_expr)
+    }
+
+    fn visit_window_type(&mut self, window_type: &'ast mut WindowType) {
+        visit_window_type(self, window_type)
     }
 
     fn visit_window_spec(&mut self, window_spec: &'ast mut WindowSpec) {
@@ -773,7 +777,7 @@ pub fn visit_function<'ast, V: VisitorMut<'ast> + ?Sized>(
         visitor.visit_function_arg(arg);
     }
     if let Some(over) = &mut func.over {
-        visitor.visit_window_spec(over);
+        visitor.visit_window_type(over);
     }
 }
 
@@ -806,6 +810,15 @@ pub fn visit_function_arg_expression<'ast, V: VisitorMut<'ast> + ?Sized>(
             visitor.visit_qualified_wildcard(&mut object_name.0)
         }
         _ => {}
+    }
+}
+
+pub fn visit_window_type<'ast, V: VisitorMut<'ast> + ?Sized>(
+    visitor: &mut V,
+    window_type: &'ast mut WindowType,
+) {
+    if let WindowType::WindowSpec(window_spec) = window_type {
+        visitor.visit_window_spec(window_spec)
     }
 }
 
