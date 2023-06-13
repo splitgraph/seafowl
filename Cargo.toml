@@ -55,7 +55,7 @@ datafusion-expr = "26.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", branch = "new-arrow", features = ["s3-native-tls", "datafusion-ext"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "8294c5f0e6fe441fa735a10726a81fc74e506c97", features = ["s3-native-tls", "datafusion-ext"] }
 dynamodb_lock = { version = "0.4.3", default_features = false, features = ["native-tls"] }
 
 futures = "0.3"
@@ -97,8 +97,8 @@ wasmtime = "8.0.1"
 wasmtime-wasi = "8.0.1"
 
 [patch.crates-io]
-convergence = { git = "https://github.com/splitgraph/convergence", rev = "6c804f96aa74ad08471bc67d031a2dc9456fc5e3", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", rev = "6c804f96aa74ad08471bc67d031a2dc9456fc5e3", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-26-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-26-upgrade", optional = true }
 
 [dev-dependencies]
 assert_unordered = "0.3"

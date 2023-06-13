@@ -1338,7 +1338,7 @@ checksum = "13418e745008f7349ec7e449155f419a61b92b58a99cc3616942b926825ec76b"
 [[package]]
 name = "convergence"
 version = "0.11.0"
-source = "git+https://github.com/splitgraph/convergence?rev=6c804f96aa74ad08471bc67d031a2dc9456fc5e3#6c804f96aa74ad08471bc67d031a2dc9456fc5e3"
+source = "git+https://github.com/splitgraph/convergence?branch=datafusion-26-upgrade#6c804f96aa74ad08471bc67d031a2dc9456fc5e3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1353,7 +1353,7 @@ dependencies = [
 [[package]]
 name = "convergence-arrow"
 version = "0.11.0"
-source = "git+https://github.com/splitgraph/convergence?rev=6c804f96aa74ad08471bc67d031a2dc9456fc5e3#6c804f96aa74ad08471bc67d031a2dc9456fc5e3"
+source = "git+https://github.com/splitgraph/convergence?branch=datafusion-26-upgrade#6c804f96aa74ad08471bc67d031a2dc9456fc5e3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1876,7 +1876,7 @@ checksum = "eaa37046cc0f6c3cc6090fbdbf73ef0b8ef4cfcc37f6befc0020f63e8cf121e1"
 [[package]]
 name = "deltalake"
 version = "0.13.0"
-source = "git+https://github.com/delta-io/delta-rs?branch=new-arrow#b1b355a370506e5c174913bff0aaabf3d714884a"
+source = "git+https://github.com/delta-io/delta-rs?rev=8294c5f0e6fe441fa735a10726a81fc74e506c97#8294c5f0e6fe441fa735a10726a81fc74e506c97"
 dependencies = [
  "arrow",
  "arrow-array",
