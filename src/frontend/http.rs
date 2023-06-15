@@ -570,7 +570,6 @@ pub fn filters(
         .or(upload_route)
         .with(cors)
         .with(log)
-        .with(warp::trace::request())// experiment: print warp's built-in tracing
         .map(|r| with_header(r, header::VARY, VARY))
         .recover(handle_rejection)
 }
