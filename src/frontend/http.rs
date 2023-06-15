@@ -43,7 +43,6 @@ use crate::{
         is_read_only, is_statement_read_only, DefaultSeafowlContext, SeafowlContext,
     },
 };
-use crate::frontend::{instrument, handle_request};
 
 use super::http_utils::{handle_rejection, into_response, ApiError};
 
@@ -52,6 +51,7 @@ const BEARER_PREFIX: &str = "Bearer ";
 // We have a very lax CORS on this, so we don't mind browsers
 // caching it for as long as possible.
 const CORS_MAXAGE: u32 = 86400;
+const RUNTIME_HEADER: &str = "X-Seafowl-Runtime";
 
 // Vary on Origin, as warp's CORS responds with Access-Control-Allow-Origin: [origin],
 // so we can't cache the response in the browser if the origin changes.
@@ -156,6 +156,9 @@ pub async fn uncached_read_write_query(
     query: String,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
+    // Start a timer
+    let start_time = std::time::Instant::now();
+
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
     if database_name != context.database {
@@ -216,6 +219,12 @@ pub async fn uncached_read_write_query(
             .headers_mut()
             .insert(header::CONTENT_TYPE, content_type_with_schema(schema));
     }
+
+    let elapsed = start_time.elapsed();
+    response
+        .headers_mut()
+        .insert(RUNTIME_HEADER, format!("{:?}", elapsed).parse().unwrap());
+
     Ok(response)
 }
 
@@ -286,6 +295,8 @@ pub async fn cached_read_query(
     if_none_match: Option<String>,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
+    // Start a timer
+    let start_time = std::time::Instant::now();
     // Ignore dots at the end
     let query_or_hash = query_or_hash.split('.').next().unwrap();
 
@@ -347,6 +358,11 @@ pub async fn cached_read_query(
     let schema = physical.schema().clone();
     let mut response = plan_to_response(context, physical).await?;
 
+    // Compute runtime
+    let elapsed = start_time.elapsed();
+    response
+        .headers_mut()
+        .insert(RUNTIME_HEADER, format!("{:?}", elapsed).parse().unwrap());
     response
         .headers_mut()
         .insert(header::ETAG, etag.parse().unwrap());
@@ -549,16 +565,9 @@ pub fn filters(
         .then(upload)
         .map(into_response);
 
-    let instrument_filter = instrument().clone();
-
     cached_read_query_route
         .or(uncached_read_write_query_route)
         .or(upload_route)
-        .and(instrument_filter)
-        .and(warp::body::bytes())
-        .and_then(|start_time, body| async move {
-            handle_request(start_time, body).await
-        })
         .with(cors)
         .with(log)
         .with(warp::trace::request())// experiment: print warp's built-in tracing
