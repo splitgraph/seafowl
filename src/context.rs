@@ -43,7 +43,11 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use datafusion::common::DFSchema;
-use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::file_format::file_type::FileType;
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::optimizer::analyzer::Analyzer;
 use datafusion::optimizer::optimizer::Optimizer;
@@ -505,14 +509,6 @@ pub trait SeafowlContext: Send + Sync {
         &self,
         physical_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Vec<RecordBatch>>;
-
-    /// Execute a plan, outputting its results to a table.
-    async fn plan_to_table(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        schema_name: String,
-        table_name: String,
-    ) -> Result<()>;
 }
 
 impl DefaultSeafowlContext {
@@ -882,6 +878,100 @@ impl DefaultSeafowlContext {
     ) -> Result<SendableRecordBatchStream> {
         let task_context = Arc::new(TaskContext::from(self.inner()));
         physical_plan.execute(partition, task_context)
+    }
+
+    /// Append data from the provided file, creating a new schema/table if absent
+    pub async fn file_to_table(
+        &self,
+        file_path: String,
+        file_type: FileType,
+        file_schema: Option<SchemaRef>,
+        has_header: bool,
+        schema_name: String,
+        table_name: String,
+    ) -> Result<DeltaTable> {
+        // Reload the schema since `try_get_delta_table` relies on using DataFusion's
+        // TableProvider interface (which we need to pre-populate with up to date
+        // information on our tables)
+        self.reload_schema().await?;
+
+        let mut table_schema = None;
+
+        // Check whether table already exists and ensure that the schema exists
+        let table_exists = match self
+            .inner
+            .catalog(&self.database)
+            .ok_or_else(|| Error::Plan(format!("Database {} not found!", self.database)))?
+            .schema(&schema_name)
+        {
+            Some(_) => {
+                // Schema exists, check if existing table's schema matches the new one
+                match self.get_table_provider(&table_name).await {
+                    Ok(table) => {
+                        table_schema = Some(table.schema());
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }
+            None => {
+                // Schema doesn't exist; create one first
+                self.table_catalog
+                    .create_collection(self.database_id, &schema_name)
+                    .await?;
+                false
+            }
+        };
+
+        // Create a `ListingTable` that points to the specified file
+        let table_path = ListingTableUrl::parse(file_path)?;
+        let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::CSV => Arc::new(CsvFormat::default().with_has_header(has_header)),
+            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            _ => {
+                return Err(Error::Plan(format!(
+                    "File type {file_type:?} not supported!"
+                )));
+            }
+        };
+        let listing_options = ListingOptions::new(file_format);
+
+        // Resolve the final schema; take the one from the table if present, otherwise take the supplied
+        // file schema, otherwise infer the schema from the file
+        let schema = match table_schema.or(file_schema) {
+            Some(schema) => schema,
+            None => {
+                listing_options
+                    .infer_schema(&self.inner.state(), &table_path)
+                    .await?
+            }
+        };
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(listing_options)
+            .with_schema(schema);
+
+        let source = ListingTable::try_new(config)?;
+
+        // Make a scan plan for the listing table, which will be the input for the target table
+        let plan = source.scan(&self.inner.state(), None, &[], None).await?;
+        //let plan = self.coerce_plan(scan).await?;
+
+        let table_ref = TableReference::Full {
+            catalog: Cow::from(self.database.clone()),
+            schema: Cow::from(schema_name),
+            table: Cow::from(table_name),
+        };
+
+        if !table_exists {
+            self.create_delta_table(table_ref.clone(), plan.schema().as_ref())
+                .await?;
+            // TODO: This is really only needed here and for CREATE TABLE AS statements only to be
+            // able to get the uuid without hitting the catalog DB in `get_table_uuid`
+            self.reload_schema().await?;
+        }
+
+        self.plan_to_delta_table(table_ref, &plan).await
     }
 }
 
@@ -1783,71 +1873,6 @@ impl SeafowlContext for DefaultSeafowlContext {
     ) -> Result<Vec<RecordBatch>> {
         let stream = self.execute_stream(physical_plan).await?;
         stream.err_into().try_collect().await
-    }
-
-    /// Create a new table and insert data generated by the provided execution plan
-    async fn plan_to_table(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        schema_name: String,
-        table_name: String,
-    ) -> Result<()> {
-        // Reload the schema since `try_get_delta_table` relies on using DataFusion's
-        // TableProvider interface (which we need to pre-populate with up to date
-        // information on our tables)
-        self.reload_schema().await?;
-
-        let plan = self.coerce_plan(plan).await?;
-
-        // Check whether table already exists and ensure that the schema exists
-        let table_exists = match self
-            .inner
-            .catalog(&self.database)
-            .ok_or_else(|| Error::Plan(format!("Database {} not found!", self.database)))?
-            .schema(&schema_name)
-        {
-            Some(_) => {
-                // Schema exists, check if existing table's schema matches the new one
-                match self.get_table_provider(&table_name).await {
-                    Ok(table) => {
-                        if table.schema() != plan.schema() {
-                            return Err(DataFusionError::Execution(
-                                format!(
-                                    "The table {table_name} already exists but has a different schema than the one provided.")
-                            )
-                            );
-                        }
-
-                        true
-                    }
-                    Err(_) => false,
-                }
-            }
-            None => {
-                // Schema doesn't exist; create one first
-                self.table_catalog
-                    .create_collection(self.database_id, &schema_name)
-                    .await?;
-                false
-            }
-        };
-
-        let table_ref = TableReference::Full {
-            catalog: Cow::from(self.database.clone()),
-            schema: Cow::from(schema_name),
-            table: Cow::from(table_name),
-        };
-
-        if !table_exists {
-            self.create_delta_table(table_ref.clone(), plan.schema().as_ref())
-                .await?;
-            // TODO: This is really only needed here and for CREATE TABLE AS statements only to be
-            // able to get the uuid without hitting the catalog DB in `get_table_uuid`
-            self.reload_schema().await?;
-        }
-
-        self.plan_to_delta_table(table_ref, &plan).await?;
-        Ok(())
     }
 }
 
