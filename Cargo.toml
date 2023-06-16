@@ -55,7 +55,7 @@ datafusion-expr = "26.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "8294c5f0e6fe441fa735a10726a81fc74e506c97", features = ["s3-native-tls", "datafusion-ext"] }
+deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "df-post-26-parquet-schema-coercion", features = ["s3-native-tls", "datafusion-ext"] }
 dynamodb_lock = { version = "0.4.3", default_features = false, features = ["native-tls"] }
 
 futures = "0.3"
@@ -96,13 +96,16 @@ wasi-common = "8.0.1"
 wasmtime = "8.0.1"
 wasmtime-wasi = "8.0.1"
 
+# Pick up post-26 DF that has Parquet schema type adapter/coercion
 [patch.crates-io]
 convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-26-upgrade", optional = true }
 convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-26-upgrade", optional = true }
+datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "70d633a71d0096b03bd8f173b000fdca82671d3f", optional = true }
+datafusion-common = { git = "https://github.com/apache/arrow-datafusion", rev = "70d633a71d0096b03bd8f173b000fdca82671d3f", optional = true }
+datafusion-expr = { git = "https://github.com/apache/arrow-datafusion", rev = "70d633a71d0096b03bd8f173b000fdca82671d3f", optional = true }
 
 [dev-dependencies]
 assert_unordered = "0.3"
-datafusion-common = "26.0.0"
 mockall = "0.11.1"
 rstest = "*"
 serial_test = "2"

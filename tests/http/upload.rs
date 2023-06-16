@@ -1,6 +1,4 @@
 use crate::http::*;
-use arrow_integration_test::schema_to_json;
-use rstest::rstest;
 
 #[rstest]
 #[case::csv_schema_supplied_with_headers("csv", true, Some(true))]
@@ -153,32 +151,37 @@ async fn test_upload_to_existing_table() {
     context
         .collect(
             context
-                .plan_query("CREATE TABLE test_table(col_1 INT)")
+                .plan_query("CREATE TABLE test_table(col_1 INT, col_2 TEXT, col_3 DOUBLE, col_4 TIMESTAMP) \
+                AS VALUES (1, 'one', 1.0, '2001-01-01 01:01:01'), (2, 'two', 2.0, '2002-02-02 02:02:02')")
                 .await
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    context
-        .collect(
-            context
-                .plan_query("INSERT INTO test_table VALUES (1)")
-                .await
-                .unwrap(),
+                .unwrap()
         )
         .await
         .unwrap();
 
     // Prepare the schema that matches the existing table + some data
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "col_1",
-        DataType::Int32,
-        true,
-    )]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("col_1", DataType::Int32, true),
+        Field::new("col_2", DataType::Utf8, true),
+        Field::new("col_3", DataType::Float64, true),
+        Field::new(
+            "col_4",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+    ]));
 
     let input_batch = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Int32Array::from(vec![2, 3]))],
+        vec![
+            Arc::new(Int32Array::from(vec![3, 4])),
+            Arc::new(StringArray::from(vec![Some("three"), Some("four")])),
+            Arc::new(Float64Array::from(vec![3.0, 4.0])),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                1046660583000000,
+                1081051444000000,
+            ])),
+        ],
     )
     .unwrap();
 
@@ -211,27 +214,107 @@ async fn test_upload_to_existing_table() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = vec![
-        "+-------+",
-        "| col_1 |",
-        "+-------+",
-        "| 1     |",
-        "| 2     |",
-        "| 3     |",
-        "+-------+",
+        "+-------+-------+-------+---------------------+",
+        "| col_1 | col_2 | col_3 | col_4               |",
+        "+-------+-------+-------+---------------------+",
+        "| 1     | one   | 1.0   | 2001-01-01T01:01:01 |",
+        "| 2     | two   | 2.0   | 2002-02-02T02:02:02 |",
+        "| 3     | three | 3.0   | 2003-03-03T03:03:03 |",
+        "| 4     | four  | 4.0   | 2004-04-04T04:04:04 |",
+        "+-------+-------+-------+---------------------+",
     ];
 
     assert_batches_eq!(expected, &results);
 
-    // Now try with schema that doesn't matches the existing table (re-use input batch from before)
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "col_1",
-        DataType::Int32,
-        false,
-    )]));
+    // Now try with schema that doesn't match the existing table, but can be coerced to it; also
+    // has one missing column supposed to be replaced with NULL's, and one extra column that should
+    // be ignored.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("col_1", DataType::Float64, true),
+        Field::new("col_3", DataType::Int32, true),
+        Field::new("col_5", DataType::Boolean, true),
+        Field::new(
+            "col_4",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        ),
+    ]));
 
     let input_batch = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Int32Array::from(vec![4, 5]))],
+        vec![
+            Arc::new(Float64Array::from(vec![5.0, 6.0])),
+            Arc::new(Int32Array::from(vec![5, 6])),
+            Arc::new(BooleanArray::from(vec![Some(false), Some(true)])),
+            Arc::new(TimestampNanosecondArray::from(vec![
+                1115269505000000000,
+                1149573966000000000,
+            ])),
+        ],
+    )
+    .unwrap();
+
+    // Open a temp file to write the data into
+    let mut named_tempfile = Builder::new().suffix(".parquet").tempfile().unwrap();
+    // drop the writer early to release the borrow.
+    {
+        let mut writer = ArrowWriter::try_new(&mut named_tempfile, schema, None).unwrap();
+        writer.write(&input_batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    Command::new("curl")
+        .args([
+            "-H",
+            "Authorization: Bearer write_password",
+            "-F",
+            format!("data=@{}", named_tempfile.path().to_str().unwrap()).as_str(),
+            format!("http://{addr}/upload/public/test_table").as_str(),
+        ])
+        .output()
+        .await
+        .unwrap();
+
+    dbg!("Upload status is {}", status);
+
+    // Verify that the rows have been appended
+    let plan = context
+        .plan_query("SELECT * FROM test_table")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = vec![
+        "+-------+-------+-------+---------------------+",
+        "| col_1 | col_2 | col_3 | col_4               |",
+        "+-------+-------+-------+---------------------+",
+        "| 1     | one   | 1.0   | 2001-01-01T01:01:01 |",
+        "| 2     | two   | 2.0   | 2002-02-02T02:02:02 |",
+        "| 3     | three | 3.0   | 2003-03-03T03:03:03 |",
+        "| 4     | four  | 4.0   | 2004-04-04T04:04:04 |",
+        "| 5     |       | 5.0   | 2005-05-05T05:05:05 |",
+        "| 6     |       | 6.0   | 2006-06-06T06:06:06 |",
+        "+-------+-------+-------+---------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // Finally try with schema that can't be coerced to the existing table.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("col_1", DataType::Boolean, true),
+        Field::new("col_2", DataType::Boolean, true),
+        Field::new("col_3", DataType::Boolean, true),
+        Field::new("col_4", DataType::Boolean, true),
+    ]));
+
+    let input_batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(BooleanArray::from(vec![Some(false), Some(true)])),
+            Arc::new(BooleanArray::from(vec![Some(false), Some(true)])),
+            Arc::new(BooleanArray::from(vec![Some(false), Some(true)])),
+            Arc::new(BooleanArray::from(vec![Some(false), Some(true)])),
+        ],
     )
     .unwrap();
 
@@ -256,8 +339,10 @@ async fn test_upload_to_existing_table() {
         .await
         .unwrap();
 
+    dbg!("Upload status is {}", status);
+
     assert_eq!(
-        "Execution error: The table test_table already exists but has a different schema than the one provided.".to_string(),
+        "Error during planning: Cannot cast file schema field col_4 of type Boolean to table schema field of type Timestamp(Microsecond, None)".to_string(),
         String::from_utf8(output.stdout).unwrap()
     );
 

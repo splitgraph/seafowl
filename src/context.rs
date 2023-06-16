@@ -955,7 +955,6 @@ impl DefaultSeafowlContext {
 
         // Make a scan plan for the listing table, which will be the input for the target table
         let plan = source.scan(&self.inner.state(), None, &[], None).await?;
-        //let plan = self.coerce_plan(scan).await?;
 
         let table_ref = TableReference::Full {
             catalog: Cow::from(self.database.clone()),

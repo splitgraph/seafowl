@@ -369,14 +369,14 @@ pub async fn upload(
     };
 
     if database_name != context.database {
-        context = context.scope_to_database(database_name)?;
+        context = context.scope_to_database(database_name.clone())?;
     }
 
     let mut has_header = true;
     let mut schema: Option<SchemaRef> = None;
     let mut filename = String::new();
     let mut temp_file = context.inner.runtime_env().disk_manager.create_tmp_file(
-        format!("Creating a target file to persist the uploaded {filename}").as_str(),
+        format!("Creating a target file to append to {database_name}.{schema_name}.{table_name}").as_str(),
     )?;
     while let Some(maybe_part) = form.next().await {
         let mut part = maybe_part.map_err(ApiError::UploadBodyLoadError)?;
