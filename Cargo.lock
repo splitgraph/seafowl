@@ -1649,8 +1649,7 @@ dependencies = [
 [[package]]
 name = "datafusion"
 version = "26.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9992c267436551d40b52d65289b144712e7b0ebdc62c8c859fd1574e5f73efbb"
+source = "git+https://github.com/apache/arrow-datafusion?rev=70d633a71d0096b03bd8f173b000fdca82671d3f#70d633a71d0096b03bd8f173b000fdca82671d3f"
 dependencies = [
  "ahash 0.8.3",
  "arrow",
@@ -1699,8 +1698,7 @@ dependencies = [
 [[package]]
 name = "datafusion-common"
 version = "26.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3be97f7a7c720cdbb71e9eeabf814fa6ad8102b9022390f6cac74d3b4af6392"
+source = "git+https://github.com/apache/arrow-datafusion?rev=70d633a71d0096b03bd8f173b000fdca82671d3f#70d633a71d0096b03bd8f173b000fdca82671d3f"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -1714,8 +1712,7 @@ dependencies = [
 [[package]]
 name = "datafusion-execution"
 version = "26.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c77c4b14b809b0e4c5bb101b6834504f06cdbb0d3c643400c61d0d844b33264e"
+source = "git+https://github.com/apache/arrow-datafusion?rev=70d633a71d0096b03bd8f173b000fdca82671d3f#70d633a71d0096b03bd8f173b000fdca82671d3f"
 dependencies = [
  "dashmap",
  "datafusion-common",
@@ -1732,8 +1729,7 @@ dependencies = [
 [[package]]
 name = "datafusion-expr"
 version = "26.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6ec7409bd45cf4fae6395d7d1024c8a97e543cadc88363e405d2aad5330e5e7"
+source = "git+https://github.com/apache/arrow-datafusion?rev=70d633a71d0096b03bd8f173b000fdca82671d3f#70d633a71d0096b03bd8f173b000fdca82671d3f"
 dependencies = [
  "ahash 0.8.3",
  "arrow",
@@ -1747,8 +1743,7 @@ dependencies = [
 [[package]]
 name = "datafusion-optimizer"
 version = "26.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64b537c93f87989c212db92a448a0f5eb4f0995e27199bb7687ae94f8b64a7a8"
+source = "git+https://github.com/apache/arrow-datafusion?rev=70d633a71d0096b03bd8f173b000fdca82671d3f#70d633a71d0096b03bd8f173b000fdca82671d3f"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1765,8 +1760,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-expr"
 version = "26.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f60ee3f53340fdef36ee54d9e12d446ae2718b1d0196ac581f791d34808ec876"
+source = "git+https://github.com/apache/arrow-datafusion?rev=70d633a71d0096b03bd8f173b000fdca82671d3f#70d633a71d0096b03bd8f173b000fdca82671d3f"
 dependencies = [
  "ahash 0.8.3",
  "arrow",
@@ -1798,8 +1792,7 @@ dependencies = [
 [[package]]
 name = "datafusion-proto"
 version = "26.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0700dbf61d471cedb18574eebf5ddc253a64dff406244bbb34ed5402ebaeb197"
+source = "git+https://github.com/apache/arrow-datafusion?rev=70d633a71d0096b03bd8f173b000fdca82671d3f#70d633a71d0096b03bd8f173b000fdca82671d3f"
 dependencies = [
  "arrow",
  "chrono",
@@ -1831,8 +1824,7 @@ dependencies = [
 [[package]]
 name = "datafusion-row"
 version = "26.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d58fc64058aa3bcb00077a0d19474a0d584d31dec8c7ac3406868f485f659af9"
+source = "git+https://github.com/apache/arrow-datafusion?rev=70d633a71d0096b03bd8f173b000fdca82671d3f#70d633a71d0096b03bd8f173b000fdca82671d3f"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1843,8 +1835,7 @@ dependencies = [
 [[package]]
 name = "datafusion-sql"
 version = "26.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1531f0314151a34bf6c0a83c7261525688b7c729876f53e7896b8f4ca8f57d07"
+source = "git+https://github.com/apache/arrow-datafusion?rev=70d633a71d0096b03bd8f173b000fdca82671d3f#70d633a71d0096b03bd8f173b000fdca82671d3f"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -1876,7 +1867,7 @@ checksum = "eaa37046cc0f6c3cc6090fbdbf73ef0b8ef4cfcc37f6befc0020f63e8cf121e1"
 [[package]]
 name = "deltalake"
 version = "0.13.0"
-source = "git+https://github.com/delta-io/delta-rs?rev=8294c5f0e6fe441fa735a10726a81fc74e506c97#8294c5f0e6fe441fa735a10726a81fc74e506c97"
+source = "git+https://github.com/splitgraph/delta-rs?branch=df-post-26-parquet-schema-coercion#2ff9600b535ce790812d981ca9054e210001fcaa"
 dependencies = [
  "arrow",
  "arrow-array",

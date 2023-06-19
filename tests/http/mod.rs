@@ -21,15 +21,20 @@ use warp::hyper::Request;
 use warp::hyper::Response;
 use warp::hyper::StatusCode;
 
-use arrow::array::{Int32Array, StringArray};
+use arrow::array::{
+    BooleanArray, Float64Array, Int32Array, StringArray, TimestampMicrosecondArray,
+    TimestampNanosecondArray,
+};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_integration_test::schema_to_json;
 use arrow_schema::TimeUnit;
 use datafusion::assert_batches_eq;
 use datafusion::from_slice::FromSlice;
 use datafusion::parquet::arrow::ArrowWriter;
 use itertools::Itertools;
+use rstest::rstest;
 use seafowl::context::{DefaultSeafowlContext, SeafowlContext};
 use std::net::SocketAddr;
 use tempfile::Builder;

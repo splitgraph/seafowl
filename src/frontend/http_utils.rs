@@ -48,6 +48,7 @@ use warp::{Rejection, Reply};
 #[derive(Debug)]
 pub enum ApiError {
     DataFusionError(DataFusionError),
+    IoError(std::io::Error),
     HashMismatch(String, String),
     NotReadOnlyQuery,
     ReadOnlyEndpointDisabled,
@@ -80,6 +81,12 @@ impl From<DataFusionError> for ApiError {
     }
 }
 
+impl From<std::io::Error> for ApiError {
+    fn from(err: std::io::Error) -> Self {
+        ApiError::IoError(err)
+    }
+}
+
 // Similarly, wrap Utf8 string decode errors.
 impl From<std::str::Utf8Error> for ApiError {
     fn from(_e: std::str::Utf8Error) -> ApiError {
@@ -94,6 +101,7 @@ impl ApiError {
             // here too (e.g. ResourcesExhausted) and potentially some that leak internal
             // information (e.g. ObjectStore?)
             ApiError::DataFusionError(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+            ApiError::IoError(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             ApiError::HashMismatch(expected, got) => (StatusCode::BAD_REQUEST, format!("Invalid hash: expected {expected:?}, got {got:?}. Resend your query with {expected:?}")),
             ApiError::NotReadOnlyQuery => (StatusCode::METHOD_NOT_ALLOWED, "NOT_READ_ONLY_QUERY".to_string()),
             ApiError::ReadOnlyEndpointDisabled => (StatusCode::METHOD_NOT_ALLOWED, "READ_ONLY_ENDPOINT_DISABLED".to_string()),
