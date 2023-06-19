@@ -51,7 +51,7 @@ const BEARER_PREFIX: &str = "Bearer ";
 // We have a very lax CORS on this, so we don't mind browsers
 // caching it for as long as possible.
 const CORS_MAXAGE: u32 = 86400;
-const RUNTIME_HEADER: &str = "X-Seafowl-Runtime";
+const QUERY_TIME_HEADER: &str = "X-Seafowl-Query-Time";
 
 // Vary on Origin, as warp's CORS responds with Access-Control-Allow-Origin: [origin],
 // so we can't cache the response in the browser if the origin changes.
@@ -223,7 +223,7 @@ pub async fn uncached_read_write_query(
     let elapsed = start_time.elapsed();
     response
         .headers_mut()
-        .insert(RUNTIME_HEADER, format!("{:?}", elapsed).parse().unwrap());
+        .insert(QUERY_TIME_HEADER, format!("{:?}", elapsed).parse().unwrap());
 
     Ok(response)
 }
@@ -362,7 +362,7 @@ pub async fn cached_read_query(
     let elapsed = start_time.elapsed();
     response
         .headers_mut()
-        .insert(RUNTIME_HEADER, format!("{:?}", elapsed).parse().unwrap());
+        .insert(QUERY_TIME_HEADER, format!("{:?}", elapsed).parse().unwrap());
     response
         .headers_mut()
         .insert(header::ETAG, etag.parse().unwrap());
