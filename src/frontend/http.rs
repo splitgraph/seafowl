@@ -43,7 +43,7 @@ use crate::{
         is_read_only, is_statement_read_only, DefaultSeafowlContext, SeafowlContext,
     },
 };
-
+use crate::frontend::profile_utils::Timer;
 use super::http_utils::{handle_rejection, into_response, ApiError};
 
 const QUERY_HEADER: &str = "X-Seafowl-Query";
@@ -156,8 +156,8 @@ pub async fn uncached_read_write_query(
     query: String,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
-    // Start a timer
-    let start_time = std::time::Instant::now();
+    let mut timer = Timer::new();
+    timer.start_timer();
 
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
@@ -220,10 +220,10 @@ pub async fn uncached_read_write_query(
             .insert(header::CONTENT_TYPE, content_type_with_schema(schema));
     }
 
-    let elapsed = start_time.elapsed();
+    let elapsed = timer.formatted_elapsed();
     response
         .headers_mut()
-        .insert(QUERY_TIME_HEADER, format!("{:?}", elapsed).parse().unwrap());
+        .insert(QUERY_TIME_HEADER, elapsed.parse().unwrap());
 
     Ok(response)
 }
@@ -295,8 +295,9 @@ pub async fn cached_read_query(
     if_none_match: Option<String>,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
-    // Start a timer
-    let start_time = std::time::Instant::now();
+    let mut timer = Timer::new();
+    timer.start_timer();
+
     // Ignore dots at the end
     let query_or_hash = query_or_hash.split('.').next().unwrap();
 
@@ -358,11 +359,10 @@ pub async fn cached_read_query(
     let schema = physical.schema().clone();
     let mut response = plan_to_response(context, physical).await?;
 
-    // Compute runtime
-    let elapsed = start_time.elapsed();
+    let elapsed = timer.formatted_elapsed();
     response
         .headers_mut()
-        .insert(QUERY_TIME_HEADER, format!("{:?}", elapsed).parse().unwrap());
+        .insert(QUERY_TIME_HEADER, elapsed.parse().unwrap());
     response
         .headers_mut()
         .insert(header::ETAG, etag.parse().unwrap());
