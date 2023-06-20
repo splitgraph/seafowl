@@ -624,7 +624,7 @@ pub mod tests {
     use crate::testutils::schema_from_header;
     use crate::{
         context::{test_utils::in_memory_context, DefaultSeafowlContext, SeafowlContext},
-        frontend::http::{filters, QUERY_HEADER},
+        frontend::http::{filters, QUERY_HEADER, QUERY_TIME_HEADER},
     };
 
     fn http_config_from_access_policy_and_cache_control(
@@ -1588,5 +1588,18 @@ SELECT
 "#
             )
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_get_uncached_read_query_timing_header_present(
+        #[values(None, Some("test_db"))] new_db: Option<&str>,
+    ) {
+        let context = in_memory_context_with_single_table(new_db).await;
+        let handler = filters(context, http_config_from_access_policy(free_for_all()));
+
+        let resp = query_uncached_endpoint(&handler, SELECT_QUERY, new_db, None).await;
+
+        assert!(resp.headers().contains_key(QUERY_TIME_HEADER));
     }
 }
