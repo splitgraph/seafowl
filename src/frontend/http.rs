@@ -34,17 +34,17 @@ use warp::multipart::{FormData, Part};
 use warp::reply::{with_header, Response};
 use warp::{hyper::header, hyper::StatusCode, Filter, Reply};
 
+use super::http_utils::{handle_rejection, into_response, ApiError};
 use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::catalog::DEFAULT_DB;
 use crate::config::schema::{AccessSettings, MEBIBYTES};
+use crate::frontend::profile_utils::Timer;
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
     context::{
         is_read_only, is_statement_read_only, DefaultSeafowlContext, SeafowlContext,
     },
 };
-use crate::frontend::profile_utils::Timer;
-use super::http_utils::{handle_rejection, into_response, ApiError};
 
 const QUERY_HEADER: &str = "X-Seafowl-Query";
 const BEARER_PREFIX: &str = "Bearer ";
