@@ -156,8 +156,7 @@ pub async fn uncached_read_write_query(
     query: String,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
-    let mut timer = Timer::new();
-    timer.start_timer();
+    let timer = Timer::new();
 
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
@@ -295,8 +294,7 @@ pub async fn cached_read_query(
     if_none_match: Option<String>,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
-    let mut timer = Timer::new();
-    timer.start_timer();
+    let timer = Timer::new();
 
     // Ignore dots at the end
     let query_or_hash = query_or_hash.split('.').next().unwrap();

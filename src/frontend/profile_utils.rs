@@ -5,30 +5,20 @@ use std::time::{Duration, Instant};
 /// Use Option as a safeguard because apparently previous Rust versions panicked
 /// when current time was earlier than self.
 
-#[derive(Default)]
 pub struct Timer {
-    start_time: Option<Instant>,
+    start_time: Instant,
 }
 
 impl Timer {
     pub fn new() -> Self {
-        Self { start_time: None }
+        Self { start_time: Instant::now() }
     }
 
-    pub fn start_timer(&mut self) {
-        self.start_time = Some(Instant::now())
-    }
-
-    pub fn elapsed(&self) -> Option<Duration> {
-        self.start_time.map(|start| start.elapsed())
+    pub fn elapsed(&self) -> Duration {
+        self.start_time.elapsed()
     }
 
     pub fn formatted_elapsed(&self) -> String {
-        self.elapsed()
-            .map(|duration| {
-                let millis = duration.as_millis();
-                format!("{}", millis)
-            })
-            .unwrap_or_else(String::new)
+        self.elapsed().as_millis().to_string()
     }
 }
