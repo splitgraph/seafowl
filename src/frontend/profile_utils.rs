@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
-// Simple timer intended for profiling
-// Lazily inits. Returns `Duration`s or raw string (in ms)
-// Use Option as a safeguard because apparently previous Rust versions panicked
-// when current time was earlier than self.
+/// Simple timer intended for profiling
+/// Lazily inits. Returns `Duration`s or raw string (in ms)
+/// Use Option as a safeguard because apparently previous Rust versions panicked
+/// when current time was earlier than self.
 
 #[derive(Default)]
 pub struct Timer {
