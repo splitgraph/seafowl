@@ -621,7 +621,7 @@ pub mod tests {
 
     use crate::catalog::DEFAULT_DB;
     use crate::config::schema::{str_to_hex_hash, HttpFrontend};
-    use crate::testutils::schema_from_header;
+    use crate::testutils::{assert_header_is_float, schema_from_header};
     use crate::{
         context::{test_utils::in_memory_context, DefaultSeafowlContext, SeafowlContext},
         frontend::http::{filters, QUERY_HEADER, QUERY_TIME_HEADER},
@@ -1534,7 +1534,10 @@ pub mod tests {
     )]
     #[case::uncached_post("POST", "/q")]
     #[tokio::test]
-    async fn test_http_type_conversion(#[case] method: &str, #[case] path: &str) {
+    async fn test_http_type_conversion_and_timing_header(
+        #[case] method: &str,
+        #[case] path: &str,
+    ) {
         let context = Arc::new(in_memory_context().await);
         let handler = filters(
             context.clone(),
@@ -1588,18 +1591,11 @@ SELECT
 "#
             )
         );
-    }
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_get_uncached_read_query_timing_header_present(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
-    ) {
-        let context = in_memory_context_with_single_table(new_db).await;
-        let handler = filters(context, http_config_from_access_policy(free_for_all()));
-
-        let resp = query_uncached_endpoint(&handler, SELECT_QUERY, new_db, None).await;
-
+        // Assert the "request-to-response" time header is present
         assert!(resp.headers().contains_key(QUERY_TIME_HEADER));
+        // Assert that it's a float
+        let header_value = resp.headers().get(QUERY_TIME_HEADER).unwrap();
+        assert_header_is_float(header_value);
     }
 }
