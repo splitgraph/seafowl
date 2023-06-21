@@ -3,6 +3,7 @@ use datafusion::error::DataFusionError;
 
 use std::fmt::Debug;
 use std::io::Write;
+use std::time::Instant;
 use std::{net::SocketAddr, sync::Arc};
 use warp::{hyper, Rejection};
 
@@ -38,7 +39,6 @@ use super::http_utils::{handle_rejection, into_response, ApiError};
 use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::catalog::DEFAULT_DB;
 use crate::config::schema::{AccessSettings, MEBIBYTES};
-use crate::frontend::profile_utils::Timer;
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
     context::{
@@ -156,7 +156,7 @@ pub async fn uncached_read_write_query(
     query: String,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
-    let timer = Timer::new();
+    let timer = Instant::now();
 
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
@@ -219,7 +219,7 @@ pub async fn uncached_read_write_query(
             .insert(header::CONTENT_TYPE, content_type_with_schema(schema));
     }
 
-    let elapsed = timer.formatted_elapsed();
+    let elapsed = timer.elapsed().as_millis().to_string();
     response
         .headers_mut()
         .insert(QUERY_TIME_HEADER, elapsed.parse().unwrap());
@@ -294,7 +294,7 @@ pub async fn cached_read_query(
     if_none_match: Option<String>,
     mut context: Arc<DefaultSeafowlContext>,
 ) -> Result<Response, ApiError> {
-    let timer = Timer::new();
+    let timer = Instant::now();
 
     // Ignore dots at the end
     let query_or_hash = query_or_hash.split('.').next().unwrap();
@@ -357,7 +357,7 @@ pub async fn cached_read_query(
     let schema = physical.schema().clone();
     let mut response = plan_to_response(context, physical).await?;
 
-    let elapsed = timer.formatted_elapsed();
+    let elapsed = timer.elapsed().as_millis().to_string();
     response
         .headers_mut()
         .insert(QUERY_TIME_HEADER, elapsed.parse().unwrap());
