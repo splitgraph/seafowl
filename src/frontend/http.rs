@@ -16,6 +16,7 @@ use bytes::Buf;
 use datafusion::datasource::file_format::file_type::FileType;
 use datafusion::datasource::DefaultTableSource;
 
+use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_expr::logical_plan::{LogicalPlan, TableScan};
@@ -140,13 +141,21 @@ fn batch_to_json(batch: RecordBatch) -> Result<Vec<u8>, ArrowError> {
 async fn plan_to_response(
     context: Arc<DefaultSeafowlContext>,
     plan: Arc<dyn ExecutionPlan>,
-) -> Result<Response, DataFusionError> {
+) -> Result<(Response, BaselineMetrics), DataFusionError> {
+    let metrics = ExecutionPlanMetricsSet::new();
+    let partition = 1; //TODO: how many partitions do we want to measure?
+    let baseline_metrics = BaselineMetrics::new(&metrics, partition);
+
+    let timer = baseline_metrics.elapsed_compute().timer();
+
     let stream = context
         .execute_stream(plan)
         .await?
         .map(|maybe_batch| batch_to_json(maybe_batch?));
     let body = hyper::Body::wrap_stream(stream);
-    Ok(Response::new(body))
+    timer.done();
+    baseline_metrics.done();
+    Ok((Response::new(body), baseline_metrics))
 }
 
 /// POST /q or /[database_name]/q
@@ -212,7 +221,12 @@ pub async fn uncached_read_write_query(
     // Stream output for the last statement
     let plan = plan_to_output.expect("at least one statement in the list");
     let schema = plan.schema();
-    let mut response = plan_to_response(context, plan).await?;
+    let (mut response, metrics) = plan_to_response(context, plan).await?;
+
+    let metrics_value = format!("{:?}", metrics);
+    response
+        .headers_mut()
+        .insert("X-Seafowl-Metrics", metrics_value.parse().unwrap());
 
     if reads > 0 {
         response
@@ -357,7 +371,7 @@ pub async fn cached_read_query(
     // Guess we'll have to actually run the query
     let physical = context.create_physical_plan(&plan).await?;
     let schema = physical.schema().clone();
-    let mut response = plan_to_response(context, physical).await?;
+    let (mut response, _) = plan_to_response(context, physical).await?;
 
     let elapsed = timer.formatted_elapsed();
     response
