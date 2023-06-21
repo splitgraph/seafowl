@@ -167,9 +167,9 @@ impl Repository for $repo {
             table_column.type AS column_type
         FROM database
         INNER JOIN collection ON database.id = collection.database_id
-        INNER JOIN "table" ON collection.id = "table".collection_id
-        INNER JOIN desired_table_versions ON "table".id = desired_table_versions.table_id
-        INNER JOIN table_column ON table_column.table_version_id = desired_table_versions.id
+        LEFT JOIN "table" ON collection.id = "table".collection_id
+        LEFT JOIN desired_table_versions ON "table".id = desired_table_versions.table_id
+        LEFT JOIN table_column ON table_column.table_version_id = desired_table_versions.id
         WHERE database.id = "#);
         builder.push_bind(database_id);
 
