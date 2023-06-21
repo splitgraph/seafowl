@@ -15,7 +15,7 @@ license = "Apache-2.0"
 [dependencies]
 arrow = "40.0.0"
 arrow-buffer = "40.0.0"
-arrow-schema = "40.0.0"
+arrow-schema = "42.0.0"
 async-trait = "0.1.64"
 
 # Remote query execution for a variety of DBs
