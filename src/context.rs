@@ -517,24 +517,23 @@ impl DefaultSeafowlContext {
         &self,
         name: String,
     ) -> Result<Arc<DefaultSeafowlContext>> {
-        if !self.all_database_ids.read().contains_key(name.as_str()) {
-            // Perhaps the db was created on another node; try to reload from catalog
-            let new_db_ids = self.table_catalog.load_database_ids().await?;
-            new_db_ids
-                .get(name.as_str())
-                .map(|db_id| self.all_database_ids.write().insert(name.clone(), *db_id));
-        }
-
-        let database_id =
-            self.all_database_ids
-                .read()
-                .get(name.as_str())
-                .cloned()
-                .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "Unknown database {name}; try creating one with CREATE DATABASE first"
-                    ))
-                })?;
+        let maybe_database_id = self.all_database_ids.read().get(name.as_str()).cloned();
+        let database_id = match maybe_database_id {
+            Some(db_id) => db_id,
+            None => {
+                // Perhaps the db was created on another node; try to reload from catalog
+                let new_db_ids = self.table_catalog.load_database_ids().await?;
+                new_db_ids
+                    .get(name.as_str())
+                    .cloned()
+                    .map(|db_id| {self.all_database_ids.write().insert(name.clone(), db_id); db_id})
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "Unknown database {name}; try creating one with CREATE DATABASE first"
+                        ))
+                    })?
+            }
+        };
 
         // Swap the default database in the new internal context's session config
         let session_config = self
