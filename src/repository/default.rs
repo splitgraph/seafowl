@@ -128,32 +128,8 @@ impl Repository for $repo {
     async fn get_all_columns_in_database(
         &self,
         database_id: DatabaseId,
-        table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error> {
-        let mut builder: QueryBuilder<_> = if let Some(table_version_ids) = table_version_ids {
-            let mut b = QueryBuilder::new(r#"
-            WITH desired_table_versions AS (
-                SELECT table_id, id FROM table_version
-            "#);
-
-            if !table_version_ids.is_empty() {
-                b.push(" WHERE table_version.id IN (");
-                let mut separated = b.separated(", ");
-                for table_version_id in table_version_ids.into_iter() {
-                    separated.push_bind(table_version_id);
-                }
-                separated.push_unseparated(")");
-            }
-
-            b.push(r#"
-                ORDER BY table_id, creation_time DESC, id DESC
-            )
-            "#);
-
-            b
-        } else {
-            QueryBuilder::new($repo::QUERIES.latest_table_versions)
-        };
+        let mut builder: QueryBuilder<_> = QueryBuilder::new($repo::QUERIES.latest_table_versions);
 
         builder.push(r#"
         SELECT
@@ -167,9 +143,9 @@ impl Repository for $repo {
             table_column.type AS column_type
         FROM database
         INNER JOIN collection ON database.id = collection.database_id
-        INNER JOIN "table" ON collection.id = "table".collection_id
-        INNER JOIN desired_table_versions ON "table".id = desired_table_versions.table_id
-        INNER JOIN table_column ON table_column.table_version_id = desired_table_versions.id
+        LEFT JOIN "table" ON collection.id = "table".collection_id
+        LEFT JOIN desired_table_versions ON "table".id = desired_table_versions.table_id
+        LEFT JOIN table_column ON table_column.table_version_id = desired_table_versions.id
         WHERE database.id = "#);
         builder.push_bind(database_id);
 

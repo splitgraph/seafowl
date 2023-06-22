@@ -513,17 +513,27 @@ pub trait SeafowlContext: Send + Sync {
 
 impl DefaultSeafowlContext {
     // Create a new `DefaultSeafowlContext` with a new inner context scoped to a different default DB
-    pub fn scope_to_database(&self, name: String) -> Result<Arc<DefaultSeafowlContext>> {
-        let database_id =
-            self.all_database_ids
-                .read()
-                .get(name.as_str())
-                .map(|db_id| *db_id as DatabaseId)
-                .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "Unknown database {name}; try creating one with CREATE DATABASE first"
-                    ))
-                })?;
+    pub async fn scope_to_database(
+        &self,
+        name: String,
+    ) -> Result<Arc<DefaultSeafowlContext>> {
+        let maybe_database_id = self.all_database_ids.read().get(name.as_str()).cloned();
+        let database_id = match maybe_database_id {
+            Some(db_id) => db_id,
+            None => {
+                // Perhaps the db was created on another node; try to reload from catalog
+                let new_db_ids = self.table_catalog.load_database_ids().await?;
+                new_db_ids
+                    .get(name.as_str())
+                    .cloned()
+                    .map(|db_id| {self.all_database_ids.write().insert(name.clone(), db_id); db_id})
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "Unknown database {name}; try creating one with CREATE DATABASE first"
+                        ))
+                    })?
+            }
+        };
 
         // Swap the default database in the new internal context's session config
         let session_config = self
@@ -696,7 +706,7 @@ impl DefaultSeafowlContext {
         &self,
         name: impl Into<TableReference<'a>>,
         schema: &Schema,
-    ) -> Result<DeltaTable> {
+    ) -> Result<Arc<DeltaTable>> {
         let table_ref: TableReference = name.into();
         let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
         let schema_name = resolved_ref.schema.clone();
@@ -727,15 +737,17 @@ impl DefaultSeafowlContext {
 
         // NB: there's also a uuid generated below for table's `DeltaTableMetaData::id`, so it would
         // be nice if those two could match
-        let table = CreateBuilder::new()
-            .with_object_store(table_object_store)
-            .with_table_name(&*table_name)
-            .with_columns(delta_schema.get_fields().clone())
-            .with_comment(format!(
-                "Created by Seafowl version {}",
-                env!("CARGO_PKG_VERSION")
-            ))
-            .await?;
+        let table = Arc::new(
+            CreateBuilder::new()
+                .with_object_store(table_object_store)
+                .with_table_name(&*table_name)
+                .with_columns(delta_schema.get_fields().clone())
+                .with_comment(format!(
+                    "Created by Seafowl version {}",
+                    env!("CARGO_PKG_VERSION")
+                ))
+                .await?,
+        );
 
         // We still persist the table into our own catalog, one reason is us being able to load all
         // tables and their schemas in bulk to satisfy information_schema queries.
@@ -745,6 +757,7 @@ impl DefaultSeafowlContext {
             .create_table(collection_id, &table_name, &sf_schema, table_uuid)
             .await?;
 
+        self.inner.register_table(resolved_ref, table.clone())?;
         debug!("Created new table {table}");
         Ok(table)
     }
@@ -915,10 +928,11 @@ impl DefaultSeafowlContext {
                 }
             }
             None => {
-                // Schema doesn't exist; create one first
+                // Schema doesn't exist; create one first, and then reload to pick it up
                 self.table_catalog
                     .create_collection(self.database_id, &schema_name)
                     .await?;
+                self.reload_schema().await?;
                 false
             }
         };
@@ -965,9 +979,6 @@ impl DefaultSeafowlContext {
         if !table_exists {
             self.create_delta_table(table_ref.clone(), plan.schema().as_ref())
                 .await?;
-            // TODO: This is really only needed here and for CREATE TABLE AS statements only to be
-            // able to get the uuid without hitting the catalog DB in `get_table_uuid`
-            self.reload_schema().await?;
         }
 
         self.plan_to_delta_table(table_ref, &plan).await
@@ -1377,10 +1388,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                 // TODO: this means we'll have 2 table versions at the end, 1st from the create
                 // and 2nd from the insert, while it seems more reasonable that in this case we have
                 // only one
-                let _table = self
-                    .create_delta_table(name, plan.schema().as_ref())
+                self.create_delta_table(name, plan.schema().as_ref())
                     .await?;
-                self.reload_schema().await?;
                 self.plan_to_delta_table(name, &plan).await?;
 
                 Ok(make_dummy_exec())
@@ -1905,9 +1914,18 @@ pub mod test_utils {
     pub async fn in_memory_context_with_test_db() -> Arc<DefaultSeafowlContext> {
         let context = in_memory_context().await;
 
-        // Create new non-default database
-        context.plan_query("CREATE DATABASE testdb").await.unwrap();
-        let context = context.scope_to_database("testdb".to_string()).unwrap();
+        // Create new non-default database; we're doing this in catalog only to simulate it taking
+        // place on another node
+        context
+            .table_catalog
+            .create_database("testdb")
+            .await
+            .unwrap();
+
+        let context = context
+            .scope_to_database("testdb".to_string())
+            .await
+            .expect("'testdb' should exist");
 
         // Create new non-default collection
         context.plan_query("CREATE SCHEMA testcol").await.unwrap();

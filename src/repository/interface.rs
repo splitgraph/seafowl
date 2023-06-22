@@ -14,16 +14,16 @@ use crate::{
     schema::Schema,
 };
 
-#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
+#[derive(sqlx::FromRow, Default, Debug, PartialEq, Eq)]
 pub struct AllDatabaseColumnsResult {
     pub database_name: String,
     pub collection_name: String,
-    pub table_name: String,
-    pub table_id: TableId,
-    pub table_uuid: Uuid,
-    pub table_version_id: TableVersionId,
-    pub column_name: String,
-    pub column_type: String,
+    pub table_name: Option<String>,
+    pub table_id: Option<TableId>,
+    pub table_uuid: Option<Uuid>,
+    pub table_version_id: Option<TableVersionId>,
+    pub column_name: Option<String>,
+    pub column_type: Option<String>,
 }
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
@@ -99,7 +99,6 @@ pub trait Repository: Send + Sync + Debug {
     async fn get_all_columns_in_database(
         &self,
         database_id: DatabaseId,
-        table_version_ids: Option<Vec<TableVersionId>>,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
     async fn get_collection_id_by_name(
@@ -202,6 +201,7 @@ pub trait Repository: Send + Sync + Debug {
 pub mod tests {
     use std::sync::Arc;
 
+    use crate::catalog::DEFAULT_SCHEMA;
     use datafusion::arrow::datatypes::{
         DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     };
@@ -219,6 +219,25 @@ pub mod tests {
             .create_database("testdb")
             .await
             .expect("Error creating database");
+
+        // Create the default schema and a column-less table in it
+        let default_schema_id = repository
+            .create_collection(database_id, DEFAULT_SCHEMA)
+            .await
+            .expect("Error creating default schema");
+        let empty_schema = Schema {
+            arrow_schema: Arc::new(ArrowSchema::empty()),
+        };
+        repository
+            .create_table(
+                default_schema_id,
+                "empty_table",
+                &empty_schema,
+                Uuid::default(),
+            )
+            .await
+            .expect("Error creating table");
+
         let collection_id = repository
             .create_collection(database_id, "testcol")
             .await
@@ -274,24 +293,34 @@ pub mod tests {
         vec![
             AllDatabaseColumnsResult {
                 database_name: database_name.clone(),
+                collection_name: DEFAULT_SCHEMA.to_string(),
+                table_name: Some("empty_table".to_string()),
+                table_id: Some(1),
+                table_uuid: Some(Uuid::default()),
+                table_version_id: Some(1),
+                column_name: None,
+                column_type: None,
+            },
+            AllDatabaseColumnsResult {
+                database_name: database_name.clone(),
                 collection_name: collection_name.clone(),
-                table_name: table_name.clone(),
-                table_id: 1,
-                table_uuid: Default::default(),
-                table_version_id: version,
-                column_name: "date".to_string(),
-                column_type: "{\"children\":[],\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}}".to_string(),
+                table_name: Some(table_name.clone()),
+                table_id: Some(2),
+                table_uuid: Some(Uuid::default()),
+                table_version_id: Some(version),
+                column_name: Some("date".to_string()),
+                column_type: Some("{\"children\":[],\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}}".to_string()),
             },
             AllDatabaseColumnsResult {
                 database_name,
                 collection_name,
-                table_name,
-                table_id: 1,
-                table_uuid: Default::default(),
-                table_version_id: version,
-                column_name: "value".to_string(),
-                column_type: "{\"children\":[],\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}}"
-                    .to_string(),
+                table_name: Some(table_name),
+                table_id: Some(2),
+                table_uuid: Some(Uuid::default()),
+                table_version_id: Some(version),
+                column_name: Some("value".to_string()),
+                column_type: Some("{\"children\":[],\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}}"
+                    .to_string()),
             },
         ]
     }
@@ -312,14 +341,14 @@ pub mod tests {
         // Test loading all columns
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id, None)
+            .get_all_columns_in_database(database_id)
             .await
             .expect("Error getting all columns");
 
         assert_eq!(
             all_columns,
             expected(
-                1,
+                2,
                 "testdb".to_string(),
                 "testcol".to_string(),
                 "testtable".to_string()
@@ -334,7 +363,7 @@ pub mod tests {
 
         // Test all columns again: we should have the schema for the latest table version
         let all_columns = repository
-            .get_all_columns_in_database(database_id, None)
+            .get_all_columns_in_database(database_id)
             .await
             .expect("Error getting all columns");
 
@@ -342,22 +371,6 @@ pub mod tests {
             all_columns,
             expected(
                 new_version_id,
-                "testdb".to_string(),
-                "testcol".to_string(),
-                "testtable".to_string()
-            )
-        );
-
-        // Try to get the original version again explicitly
-        let all_columns = repository
-            .get_all_columns_in_database(database_id, Some(vec![1 as TableVersionId]))
-            .await
-            .expect("Error getting all columns");
-
-        assert_eq!(
-            all_columns,
-            expected(
-                1,
                 "testdb".to_string(),
                 "testcol".to_string(),
                 "testtable".to_string()
@@ -373,7 +386,7 @@ pub mod tests {
             .map(|tv| tv.table_version_id)
             .collect();
 
-        assert_eq!(all_table_versions, vec![1, new_version_id]);
+        assert_eq!(all_table_versions, vec![2, new_version_id]);
 
         (database_id, table_id, table_version_id)
     }
@@ -434,7 +447,7 @@ pub mod tests {
             .unwrap();
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id, None)
+            .get_all_columns_in_database(database_id)
             .await
             .expect("Error getting all columns");
 
@@ -458,20 +471,27 @@ pub mod tests {
             .await
             .unwrap();
 
-        let all_columns = repository
-            .get_all_columns_in_database(database_id, None)
+        let mut all_columns = repository
+            .get_all_columns_in_database(database_id)
             .await
             .expect("Error getting all columns");
+        all_columns.sort_by_key(|c| c.collection_name.clone());
 
-        assert_eq!(
-            all_columns,
-            expected(
-                table_version_id,
-                "testdb".to_string(),
-                "testcol2".to_string(),
-                "testtable2".to_string()
-            )
+        let mut expected_columns = expected(
+            table_version_id,
+            "testdb".to_string(),
+            "testcol2".to_string(),
+            "testtable2".to_string(),
         );
+        // We also include schemas that don't have any tables; in this case the schema from which
+        // the table was migrated from.
+        expected_columns.push(AllDatabaseColumnsResult {
+            database_name: "testdb".to_string(),
+            collection_name: "testcol".to_string(),
+            ..Default::default()
+        });
+        expected_columns.sort_by_key(|c| c.collection_name.clone());
+        assert_eq!(all_columns, expected_columns);
     }
 
     async fn test_error_propagation(repository: Arc<dyn Repository>, table_id: TableId) {

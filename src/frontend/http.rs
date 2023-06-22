@@ -158,7 +158,7 @@ pub async fn uncached_read_write_query(
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
     if database_name != context.database {
-        context = context.scope_to_database(database_name)?;
+        context = context.scope_to_database(database_name).await?;
     }
 
     let statements = context.parse_query(&query).await?;
@@ -315,7 +315,7 @@ pub async fn cached_read_query(
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
     if database_name != context.database {
-        context = context.scope_to_database(database_name)?;
+        context = context.scope_to_database(database_name).await?;
     }
 
     // Plan the query
@@ -369,7 +369,7 @@ pub async fn upload(
     };
 
     if database_name != context.database {
-        context = context.scope_to_database(database_name.clone())?;
+        context = context.scope_to_database(database_name.clone()).await?;
     }
 
     let mut has_header = true;
@@ -642,15 +642,16 @@ pub mod tests {
     ) -> Arc<DefaultSeafowlContext> {
         let mut context = Arc::new(in_memory_context().await);
 
-        // TODO: the ergonomics of setting up multi-db tests is not the nicest, since we don't support
-        // cross-db queries, so we have to switch context back and forth.
         if let Some(db_name) = new_db {
             context
                 .plan_query(&format!("CREATE DATABASE IF NOT EXISTS {db_name}"))
                 .await
                 .unwrap();
 
-            context = context.scope_to_database(db_name.to_string()).unwrap();
+            context = context
+                .scope_to_database(db_name.to_string())
+                .await
+                .unwrap();
         }
 
         context
@@ -665,7 +666,10 @@ pub mod tests {
 
         if new_db.is_some() {
             // Re-scope to the original DB
-            return context.scope_to_database(DEFAULT_DB.to_string()).unwrap();
+            return context
+                .scope_to_database(DEFAULT_DB.to_string())
+                .await
+                .unwrap();
         }
 
         context
@@ -677,7 +681,10 @@ pub mod tests {
         let mut context = in_memory_context_with_single_table(new_db).await;
 
         if let Some(db_name) = new_db {
-            context = context.scope_to_database(db_name.to_string()).unwrap();
+            context = context
+                .scope_to_database(db_name.to_string())
+                .await
+                .unwrap();
         }
 
         context
@@ -687,7 +694,10 @@ pub mod tests {
 
         if new_db.is_some() {
             // Re-scope to the original DB
-            return context.scope_to_database(DEFAULT_DB.to_string()).unwrap();
+            return context
+                .scope_to_database(DEFAULT_DB.to_string())
+                .await
+                .unwrap();
         }
 
         context

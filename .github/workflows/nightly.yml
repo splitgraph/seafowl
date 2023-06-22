@@ -87,7 +87,7 @@ jobs:
         # consumption by limiting the number of parallel jobs during build.
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo build -j 1 --release
+          cargo build --release
 
       - name: Test invoking the binaries
         shell: bash
