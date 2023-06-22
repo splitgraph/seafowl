@@ -513,12 +513,23 @@ pub trait SeafowlContext: Send + Sync {
 
 impl DefaultSeafowlContext {
     // Create a new `DefaultSeafowlContext` with a new inner context scoped to a different default DB
-    pub fn scope_to_database(&self, name: String) -> Result<Arc<DefaultSeafowlContext>> {
+    pub async fn scope_to_database(
+        &self,
+        name: String,
+    ) -> Result<Arc<DefaultSeafowlContext>> {
+        if !self.all_database_ids.read().contains_key(name.as_str()) {
+            // Perhaps the db was created on another node; try to reload from catalog
+            let new_db_ids = self.table_catalog.load_database_ids().await?;
+            new_db_ids
+                .get(name.as_str())
+                .map(|db_id| self.all_database_ids.write().insert(name.clone(), *db_id));
+        }
+
         let database_id =
             self.all_database_ids
                 .read()
                 .get(name.as_str())
-                .map(|db_id| *db_id as DatabaseId)
+                .cloned()
                 .ok_or_else(|| {
                     DataFusionError::Plan(format!(
                         "Unknown database {name}; try creating one with CREATE DATABASE first"
@@ -1904,9 +1915,18 @@ pub mod test_utils {
     pub async fn in_memory_context_with_test_db() -> Arc<DefaultSeafowlContext> {
         let context = in_memory_context().await;
 
-        // Create new non-default database
-        context.plan_query("CREATE DATABASE testdb").await.unwrap();
-        let context = context.scope_to_database("testdb".to_string()).unwrap();
+        // Create new non-default database; we're doing this in catalog only to simulate it taking
+        // place on another node
+        context
+            .table_catalog
+            .create_database("testdb")
+            .await
+            .unwrap();
+
+        let context = context
+            .scope_to_database("testdb".to_string())
+            .await
+            .expect("'testdb' should exist");
 
         // Create new non-default collection
         context.plan_query("CREATE SCHEMA testcol").await.unwrap();
