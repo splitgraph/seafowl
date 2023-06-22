@@ -311,7 +311,7 @@ impl TableCatalog for DefaultCatalog {
     async fn load_database(&self, database_id: DatabaseId) -> Result<SeafowlDatabase> {
         let all_columns = self
             .repository
-            .get_all_columns_in_database(database_id, None)
+            .get_all_columns_in_database(database_id)
             .await
             .map_err(Self::to_sqlx_error)?;
 
