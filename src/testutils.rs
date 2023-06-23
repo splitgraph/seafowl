@@ -1,4 +1,5 @@
 use std::cmp::min;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::Int32Array;
@@ -160,4 +161,10 @@ pub fn schema_from_header(headers: &HeaderMap<HeaderValue>) -> Schema {
         .expect("decoded schema is valid JSON");
 
     schema_from_json(&schema_json).expect("arrow schema reconstructable from JSON")
+}
+
+pub fn assert_header_is_float(header: &HeaderValue) -> bool {
+    let float_str = header.to_str().unwrap();
+    let parsed_float = f64::from_str(float_str).unwrap();
+    parsed_float.is_finite()
 }
