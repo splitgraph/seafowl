@@ -8,7 +8,9 @@ use futures::stream::BoxStream;
 use log::{debug, error, warn};
 use moka::future::{Cache, CacheBuilder};
 use moka::notification::RemovalCause;
-use object_store::{GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore};
+use object_store::{
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+};
 
 use std::fmt::Display;
 use std::fmt::{Debug, Formatter};
@@ -288,6 +290,14 @@ impl ObjectStore for CachingObjectStore {
         location: &object_store::path::Path,
     ) -> object_store::Result<GetResult> {
         self.inner.get(location).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &object_store::path::Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.inner.get_opts(location, options).await
     }
 
     async fn get_range(

@@ -12,7 +12,7 @@ async fn test_information_schema() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+---------------+--------------------+----------------+------------+",
         "| table_catalog | table_schema       | table_name     | table_type |",
         "+---------------+--------------------+----------------+------------+",
@@ -73,15 +73,13 @@ async fn test_create_table_and_insert() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
-        "+---------------------+------------+------------------+-----------------+----------------+",
+    let expected = ["+---------------------+------------+------------------+-----------------+----------------+",
         "| some_time           | some_value | some_other_value | some_bool_value | some_int_value |",
         "+---------------------+------------+------------------+-----------------+----------------+",
         "| 2022-01-01T20:01:01 | 42.0       |                  |                 | 1111           |",
         "| 2022-01-01T20:02:02 | 43.0       |                  |                 | 2222           |",
         "| 2022-01-01T20:03:03 | 44.0       |                  |                 | 3333           |",
-        "+---------------------+------------+------------------+-----------------+----------------+",
-    ];
+        "+---------------------+------------+------------------+-----------------+----------------+"];
 
     assert_batches_eq!(expected, &results);
 
@@ -92,7 +90,7 @@ async fn test_create_table_and_insert() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+---------------------------+",
         "| MAX(test_table.some_time) |",
         "+---------------------------+",
@@ -108,13 +106,11 @@ async fn test_create_table_and_insert() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
-        "+--------------------------------+--------------------------------------------+----------------------------+",
+    let expected = ["+--------------------------------+--------------------------------------------+----------------------------+",
         "| MAX(test_table.some_int_value) | COUNT(DISTINCT test_table.some_bool_value) | MAX(test_table.some_value) |",
         "+--------------------------------+--------------------------------------------+----------------------------+",
         "| 3333                           | 0                                          | 44.0                       |",
-        "+--------------------------------+--------------------------------------------+----------------------------+",
-    ];
+        "+--------------------------------+--------------------------------------------+----------------------------+"];
 
     assert_batches_eq!(expected, &results);
 }
@@ -143,7 +139,7 @@ async fn test_table_time_travel() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+--------------+------------+---------+",
         "| table_schema | table_name | version |",
         "+--------------+------------+---------+",
@@ -175,7 +171,7 @@ async fn test_table_time_travel() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+---------+",
         "| version |",
         "+---------+",
@@ -312,7 +308,7 @@ async fn test_table_time_travel() {
 
     let results = list_tables_query(&context).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------------+-------------+",
         "| table_schema       | table_name  |",
         "+--------------------+-------------+",
@@ -327,7 +323,7 @@ async fn test_table_time_travel() {
 
     let results = list_columns_query(&context).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------+------------+------------------+------------------------------+",
         "| table_schema | table_name | column_name      | data_type                    |",
         "+--------------+------------+------------------+------------------------------+",
@@ -469,16 +465,14 @@ async fn test_remote_table_querying(
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected= vec![
-        "+---+--------+-------+------------+---------------------+--------------------+",
+    let expected= ["+---+--------+-------+------------+---------------------+--------------------+",
         "| a | b      | c     | date field | e                   | f                  |",
         "+---+--------+-------+------------+---------------------+--------------------+",
         "| 1 | 1.1    | one   | 2022-11-01 | 2022-11-01T22:11:01 | {\"rows\":[1]}       |",
         "| 2 | 2.22   | two   | 2022-11-02 | 2022-11-02T22:11:02 | {\"rows\":[1,2]}     |",
         "| 3 | 3.333  | three | 2022-11-03 | 2022-11-03T22:11:03 | {\"rows\":[1,2,3]}   |",
         "| 4 | 4.4444 | four  | 2022-11-04 | 2022-11-04T22:11:04 | {\"rows\":[1,2,3,4]} |",
-        "+---+--------+-------+------------+---------------------+--------------------+",
-    ];
+        "+---+--------+-------+------------+---------------------+--------------------+"];
     assert_batches_eq!(expected, &results);
 
     // Test that projection and filtering work
@@ -492,7 +486,7 @@ async fn test_remote_table_querying(
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+------------+-------+",
         "| date field | c     |",
         "+------------+-------+",
@@ -551,7 +545,7 @@ async fn test_delta_tables() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+-------+------+-------+-----+",
         "| value | year | month | day |",
         "+-------+------+-------+-----+",

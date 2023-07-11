@@ -25,7 +25,7 @@ async fn test_vacuum_table() -> Result<(), DataFusionError> {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+------------+---------+",
         "| table_name | version |",
         "+------------+---------+",
@@ -78,7 +78,7 @@ async fn test_vacuum_table() -> Result<(), DataFusionError> {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+------------+---------+",
         "| table_name | version |",
         "+------------+---------+",
@@ -124,7 +124,7 @@ async fn test_vacuum_table() -> Result<(), DataFusionError> {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+------------+---------+",
         "| table_name | version |",
         "+------------+---------+",
@@ -156,7 +156,7 @@ async fn test_vacuum_table() -> Result<(), DataFusionError> {
         .await?;
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+----------------+",
         "| some_int_value |",
         "+----------------+",
@@ -235,7 +235,7 @@ async fn test_vacuum_database(
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+--------------+------------+-----------------+",
         "| table_schema | table_name | deletion_status |",
         "+--------------+------------+-----------------+",
@@ -282,7 +282,7 @@ async fn test_vacuum_database(
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
-    let expected = vec![
+    let expected = [
         "+--------------+------------+------+-----------------+",
         "| table_schema | table_name | uuid | deletion_status |",
         "+--------------+------------+------+-----------------+",

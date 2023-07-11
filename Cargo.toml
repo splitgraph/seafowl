@@ -29,14 +29,14 @@ object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
-arrow = "40.0.0"
-arrow-buffer = "40.0.0"
-arrow-csv = "40.0.0"
+arrow = "42.0.0"
+arrow-buffer = "42.0.0"
+arrow-csv = "42.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "40.0.0"
-arrow-schema = "40.0.0"
+arrow-integration-test = "42.0.0"
+arrow-schema = "42.0.0"
 async-trait = "0.1.64"
 base64 = "0.21.0"
 
@@ -46,16 +46,16 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
 
 # PG wire protocol support
-convergence = { version = "0.11.0", optional = true }
-convergence-arrow = { version = "0.11.0", optional = true }
+convergence = { version = "0.12.0", optional = true }
+convergence-arrow = { version = "0.12.0", optional = true }
 
-datafusion = "26.0.0"
-datafusion-common = "26.0.0"
-datafusion-expr = "26.0.0"
+datafusion = "27.0.0"
+datafusion-common = "27.0.0"
+datafusion-expr = "27.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "df-post-26-parquet-schema-coercion", features = ["s3-native-tls", "datafusion-ext"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "56dfd25a8e9395527f4b87de5c6f0f6f3698c7bb", features = ["s3-native-tls", "datafusion-ext"] }
 dynamodb_lock = { version = "0.4.3", default_features = false, features = ["native-tls"] }
 
 futures = "0.3"
@@ -64,7 +64,7 @@ itertools = ">=0.10.0"
 lazy_static = ">=1.4.0"
 log = "0.4"
 moka = { version = "0.11.0", default_features = false, features = ["future", "atomic64", "quanta"] }
-object_store = "0.5.6"
+object_store = "0.6.1"
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
 pretty_env_logger = "0.4"
@@ -81,7 +81,7 @@ rmpv = { version = "1.0.0", features = ["with-serde"] }
 serde = "1.0.156"
 serde_json = "1.0.93"
 sha2 = ">=0.10.1"
-sqlparser = "0.34.0"
+sqlparser = "0.35.0"
 sqlx = { version = "0.6.2", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
@@ -95,14 +95,6 @@ wasi-common = "8.0.1"
 # For WASM user-defined functions
 wasmtime = "8.0.1"
 wasmtime-wasi = "8.0.1"
-
-# Pick up post-26 DF that has Parquet schema type adapter/coercion
-[patch.crates-io]
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-26-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-26-upgrade", optional = true }
-datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "70d633a71d0096b03bd8f173b000fdca82671d3f", optional = true }
-datafusion-common = { git = "https://github.com/apache/arrow-datafusion", rev = "70d633a71d0096b03bd8f173b000fdca82671d3f", optional = true }
-datafusion-expr = { git = "https://github.com/apache/arrow-datafusion", rev = "70d633a71d0096b03bd8f173b000fdca82671d3f", optional = true }
 
 [dev-dependencies]
 assert_unordered = "0.3"

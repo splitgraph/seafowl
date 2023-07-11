@@ -6,7 +6,9 @@ use futures::stream::BoxStream;
 use futures::{stream, StreamExt};
 
 use object_store::path::Path;
-use object_store::{GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore};
+use object_store::{
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 
 use crate::object_store::cache::{
@@ -185,6 +187,7 @@ impl HttpObjectStore {
             location: location.clone(),
             last_modified: Utc::now(),
             size: usize::try_from(length).expect("unsupported size on this platform"),
+            e_tag: None,
         })
     }
 }
@@ -225,6 +228,15 @@ impl ObjectStore for HttpObjectStore {
             body.map(|c| c.map_err(|e| HttpObjectStoreError::HttpClientError(e).into()))
                 .boxed(),
         ))
+    }
+
+    // TODO: see if we can/need to use some of the options provided as arguments here
+    async fn get_opts(
+        &self,
+        location: &Path,
+        _options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.get(location).await
     }
 
     async fn get_range(
@@ -299,6 +311,7 @@ impl ObjectStore for HttpObjectStore {
             // expressions can access this.
             last_modified: Utc::now(),
             size: usize::try_from(length).expect("unsupported size on this platform"),
+            e_tag: None,
         })
     }
 

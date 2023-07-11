@@ -29,7 +29,7 @@ async fn test_create_and_run_function() {
         .await
         .unwrap();
 
-    let expected = vec![
+    let expected = [
         "+-----+--------+",
         "| v   | sintau |",
         "+-----+--------+",
@@ -81,7 +81,7 @@ async fn test_create_and_run_function_legacy_type_names() {
         .await
         .unwrap();
 
-    let expected = vec![
+    let expected = [
         "+-----+--------+",
         "| v   | sintau |",
         "+-----+--------+",
@@ -133,7 +133,7 @@ async fn test_create_and_run_function_uppercase_type_names() {
         .await
         .unwrap();
 
-    let expected = vec![
+    let expected = [
         "+-----+--------+",
         "| v   | sintau |",
         "+-----+--------+",
