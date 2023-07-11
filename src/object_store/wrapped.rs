@@ -4,8 +4,8 @@ use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryFutureExt};
 use log::debug;
 use object_store::{
-    path::Path, Error, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
-    Result,
+    path::Path, Error, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Result,
 };
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
@@ -170,6 +170,12 @@ impl ObjectStore for InternalObjectStore {
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult> {
         self.inner.get(location).await
+    }
+
+    /// Perform a get request with options
+    /// Note: options.range will be ignored if GetResult::File
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        self.inner.get_opts(location, options).await
     }
 
     /// Return the bytes that are stored at the specified location

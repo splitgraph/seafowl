@@ -1,4 +1,4 @@
-use std::{env, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
     catalog::{
@@ -14,7 +14,6 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use deltalake::delta_datafusion::DeltaTableFactory;
-use log::warn;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
 #[cfg(feature = "catalog-postgres")]
@@ -27,7 +26,6 @@ use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
 use object_store::gcp::GoogleCloudStorageBuilder;
-use object_store::path::Path;
 use parking_lot::lock_api::RwLock;
 
 use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
@@ -185,20 +183,6 @@ pub async fn build_context(
     add_http_object_store(&context, &cfg.misc.ssl_cert_file);
 
     let (tables, functions) = build_catalog(cfg, internal_object_store.clone()).await;
-
-    // TODO: Remove this in the next major release (0.5)
-    let maybe_legacy_partitions = env::var("_SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS");
-    if let Ok(legacy_partitions) = maybe_legacy_partitions {
-        for p in legacy_partitions.split(';') {
-            internal_object_store
-                .delete(&Path::from(p))
-                .await
-                .unwrap_or_else(|_| {
-                    warn!("Please manually delete legacy partition file: {p}")
-                });
-        }
-        env::remove_var("_SEAFOWL_0_4_AUTODROP_LEGACY_PARTITIONS");
-    }
 
     // Create default DB/collection
     let default_db = match tables.get_database_id_by_name(DEFAULT_DB).await? {

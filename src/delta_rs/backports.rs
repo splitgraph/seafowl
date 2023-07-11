@@ -4,11 +4,11 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::execution::context::SessionState;
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::file_format::{
+use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, FileScanConfig,
 };
+use datafusion::execution::context::SessionState;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{Result, ScalarValue};
 use deltalake::action::Add;
@@ -117,6 +117,7 @@ fn partitioned_file_from_action(action: &Add, schema: &Schema) -> PartitionedFil
             location: Path::from(action.path.clone()),
             last_modified,
             size: action.size as usize,
+            e_tag: None,
         },
         partition_values,
         range: None,

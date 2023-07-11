@@ -31,7 +31,6 @@ use arrow::record_batch::RecordBatch;
 use arrow_integration_test::schema_to_json;
 use arrow_schema::TimeUnit;
 use datafusion::assert_batches_eq;
-use datafusion::from_slice::FromSlice;
 use datafusion::parquet::arrow::ArrowWriter;
 use itertools::Itertools;
 use rstest::rstest;

@@ -25,8 +25,7 @@ async fn test_insert_two_different_schemas(
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
-        "+---------------------+------------+------------------+-----------------+----------------+",
+    let expected = ["+---------------------+------------+------------------+-----------------+----------------+",
         "| some_time           | some_value | some_other_value | some_bool_value | some_int_value |",
         "+---------------------+------------+------------------+-----------------+----------------+",
         "| 2022-01-01T20:01:01 | 42.0       |                  |                 | 1111           |",
@@ -35,8 +34,7 @@ async fn test_insert_two_different_schemas(
         "|                     | 41.0       | 2.1500000000     | false           |                |",
         "|                     | 45.0       | 9.1200000000     | true            |                |",
         "|                     |            | 44.3400000000    | false           |                |",
-        "+---------------------+------------+------------------+-----------------+----------------+",
-    ];
+        "+---------------------+------------+------------------+-----------------+----------------+"];
     assert_batches_eq!(expected, &results);
 }
 
@@ -220,7 +218,7 @@ async fn test_delete_statement(
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+------------+",
         "| some_value |",
         "+------------+",
@@ -317,7 +315,7 @@ async fn test_delete_with_string_filter_exact_match() {
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
-    let expected = vec![
+    let expected = [
         "+-----------+-------+",
         "| partition | value |",
         "+-----------+-------+",

@@ -1414,7 +1414,11 @@ impl SeafowlContext for DefaultSeafowlContext {
             }) => {
                 // Destructure input into projection expressions and the upstream scan/filter plan
                 let LogicalPlan::Projection(Projection { expr, input, .. }) = &**input
-                    else { return Err(DataFusionError::Plan("Update plan doesn't contain a Projection node".to_string())) };
+                else {
+                    return Err(DataFusionError::Plan(
+                        "Update plan doesn't contain a Projection node".to_string(),
+                    ));
+                };
 
                 // TODO: Once https://github.com/delta-io/delta-rs/issues/1126 is closed use the
                 // native delta-rs UPDATE op
@@ -1451,7 +1455,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                             .get_state()
                             .files()
                             .iter()
-                            .zip(prune_map.into_iter())
+                            .zip(prune_map)
                             .filter_map(
                                 |(add, keep)| if keep { Some(add.clone()) } else { None },
                             )
@@ -1572,7 +1576,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                             .get_state()
                             .files()
                             .iter()
-                            .zip(prune_map.into_iter())
+                            .zip(prune_map)
                             .filter_map(
                                 |(add, keep)| if keep { Some(add.clone()) } else { None },
                             )
@@ -1954,7 +1958,6 @@ mod tests {
 
     use crate::config::schema;
     use datafusion::assert_batches_eq;
-    use datafusion::from_slice::FromSlice;
     use datafusion::physical_plan::memory::MemoryExec;
     use object_store::local::LocalFileSystem;
     use serde_json::{json, Value};
@@ -2057,7 +2060,7 @@ mod tests {
             vec![
                 (
                     PART_0_FILE_NAME.to_string(),
-                    1266,
+                    1262,
                     true,
                     true,
                     true,
@@ -2082,7 +2085,7 @@ mod tests {
                 ),
                 (
                     PART_1_FILE_NAME.to_string(),
-                    1281,
+                    1277,
                     true,
                     true,
                     true,
@@ -2161,7 +2164,7 @@ mod tests {
                     .map(|record_batch| {
                         RecordBatch::try_new(
                             schema.clone(),
-                            vec![Arc::new(Int32Array::from_slice(record_batch))],
+                            vec![Arc::new(Int32Array::from(record_batch.clone()))],
                         )
                         .unwrap()
                     })
@@ -2276,13 +2279,11 @@ mod tests {
             .unwrap();
         let results = context.collect(plan).await.unwrap();
 
-        let expected = vec![
-            "+--------------+------------+--------------------------------------+-----------------+",
+        let expected = ["+--------------+------------+--------------------------------------+-----------------+",
             "| table_schema | table_name | uuid                                 | deletion_status |",
             "+--------------+------------+--------------------------------------+-----------------+",
             "| public       | test_table | 01020304-0506-4708-890a-0b0c0d0e0f10 | PENDING         |",
-            "+--------------+------------+--------------------------------------+-----------------+",
-        ];
+            "+--------------+------------+--------------------------------------+-----------------+"];
         assert_batches_eq!(expected, &results);
 
         Ok(())
@@ -2311,7 +2312,7 @@ mod tests {
             )
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+-----+-------+",
             "| key | value |",
             "+-----+-------+",
@@ -2364,7 +2365,7 @@ mod tests {
             )
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+-----+-------+",
             "| key | value |",
             "+-----+-------+",
@@ -2517,7 +2518,7 @@ mod tests {
             )
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+-----+--------+",
             "| v   | sintau |",
             "+-----+--------+",

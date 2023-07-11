@@ -34,7 +34,7 @@ async fn test_upload_base(
     let mut input_batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Int32Array::from_slice(range.clone().collect_vec())),
+            Arc::new(Int32Array::from(range.clone().collect_vec())),
             Arc::new(StringArray::from(
                 range
                     .map(|number| if number % 2 == 0 { "even" } else { "odd" })
@@ -216,7 +216,7 @@ async fn test_upload_to_existing_table() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+-------+-------+-------+---------------------+",
         "| col_1 | col_2 | col_3 | col_4               |",
         "+-------+-------+-------+---------------------+",
@@ -287,7 +287,7 @@ async fn test_upload_to_existing_table() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+-------+-------+-------+---------------------+",
         "| col_1 | col_2 | col_3 | col_4               |",
         "+-------+-------+-------+---------------------+",

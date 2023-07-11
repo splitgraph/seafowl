@@ -19,7 +19,7 @@ async fn test_create_table() {
     // Check table columns
     let results = list_columns_query(&context).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------+------------+------------------+------------------------------+",
         "| table_schema | table_name | column_name      | data_type                    |",
         "+--------------+------------+------------------+------------------------------+",
@@ -60,7 +60,7 @@ async fn test_create_table_as() {
     let plan = context.plan_query("SELECT * FROM test_ctas").await.unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+------------+----------------+-------------+",
         "| some_value | some_int_value | some_minute |",
         "+------------+----------------+-------------+",
@@ -93,8 +93,7 @@ async fn test_create_table_as_from_ns_column() {
 
     let results = list_columns_query(&context).await;
 
-    let expected = vec![
-        "+--------------+----------------------+----------------+------------------------------+",
+    let expected = ["+--------------+----------------------+----------------+------------------------------+",
         "| table_schema | table_name           | column_name    | data_type                    |",
         "+--------------+----------------------+----------------+------------------------------+",
         "| staging      | table_with_ns_column | some_int_value | Int64                        |",
@@ -103,8 +102,7 @@ async fn test_create_table_as_from_ns_column() {
         "| public       | table_with_us_column | some_int_value | Int64                        |",
         "| public       | table_with_us_column | some_time      | Timestamp(Microsecond, None) |",
         "| public       | table_with_us_column | some_value     | Float32                      |",
-        "+--------------+----------------------+----------------+------------------------------+",
-    ];
+        "+--------------+----------------------+----------------+------------------------------+"];
 
     assert_batches_eq!(expected, &results);
 
@@ -115,7 +113,7 @@ async fn test_create_table_as_from_ns_column() {
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+----------------+---------------------+------------+",
         "| some_int_value | some_time           | some_value |",
         "+----------------+---------------------+------------+",
@@ -178,7 +176,7 @@ async fn test_create_table_move_and_drop(
 
     let results = list_tables_query(&context).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------------+--------------+",
         "| table_schema       | table_name   |",
         "+--------------------+--------------+",
@@ -213,7 +211,7 @@ async fn test_create_table_move_and_drop(
 
     let results = list_tables_query(&context).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------------+--------------+",
         "| table_schema       | table_name   |",
         "+--------------------+--------------+",
@@ -234,7 +232,7 @@ async fn test_create_table_move_and_drop(
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+------------+",
         "| some_value |",
         "+------------+",
@@ -254,8 +252,7 @@ async fn test_create_table_move_and_drop(
 
     let results = list_columns_query(&context).await;
 
-    let expected = vec![
-        "+--------------+--------------+------------------+------------------------------+",
+    let expected = ["+--------------+--------------+------------------+------------------------------+",
         "| table_schema | table_name   | column_name      | data_type                    |",
         "+--------------+--------------+------------------+------------------------------+",
         "| public       | test_table_2 | some_time        | Timestamp(Microsecond, None) |",
@@ -263,8 +260,7 @@ async fn test_create_table_move_and_drop(
         "| public       | test_table_2 | some_other_value | Decimal128(38, 10)           |",
         "| public       | test_table_2 | some_bool_value  | Boolean                      |",
         "| public       | test_table_2 | some_int_value   | Int64                        |",
-        "+--------------+--------------+------------------+------------------------------+",
-    ];
+        "+--------------+--------------+------------------+------------------------------+"];
 
     assert_batches_eq!(expected, &results);
 
@@ -311,7 +307,7 @@ async fn test_create_table_drop_schema(
 
     let results = list_tables_query(&context).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------------+--------------+",
         "| table_schema       | table_name   |",
         "+--------------------+--------------+",
@@ -333,7 +329,7 @@ async fn test_create_table_drop_schema(
 
     let results = list_tables_query(&context).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------------+--------------+",
         "| table_schema       | table_name   |",
         "+--------------------+--------------+",
@@ -354,7 +350,7 @@ async fn test_create_table_drop_schema(
 
     let results = list_tables_query(&context).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------------+-------------+",
         "| table_schema       | table_name  |",
         "+--------------------+-------------+",
@@ -375,7 +371,7 @@ async fn test_create_table_drop_schema(
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+--------------+--------------+-----------------+",
         "| table_schema | table_name   | deletion_status |",
         "+--------------+--------------+-----------------+",
@@ -404,7 +400,7 @@ async fn test_create_table_drop_schema(
 
     let results = list_tables_query(&context).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------------+--------------+",
         "| table_schema       | table_name   |",
         "+--------------------+--------------+",
@@ -565,7 +561,7 @@ async fn test_create_external_table(
     // Test we see the table in the information_schema
     let results = list_tables_query(&context).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------------+-------------+",
         "| table_schema       | table_name  |",
         "+--------------------+-------------+",
@@ -616,7 +612,7 @@ async fn test_create_external_table(
 
     let results = list_tables_query(&context).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------------+-------------+",
         "| table_schema       | table_name  |",
         "+--------------------+-------------+",

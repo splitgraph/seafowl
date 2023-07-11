@@ -1,7 +1,7 @@
 use crate::provider::RemoteTable;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
-use datafusion::datasource::datasource::TableProviderFactory;
+use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionState;
