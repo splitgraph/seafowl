@@ -4,6 +4,13 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Upgrade to DataFusion 27 and Arrow 42 (<https://github.com/splitgraph/seafowl/pull/453>)
+- Load schemas without tables and double-check missing DB ids in a given context
+  (<https://github.com/splitgraph/seafowl/pull/446>)
+- Implement schema coercion and file streaming in the upload endpoint
+  (<https://github.com/splitgraph/seafowl/pull/439>)
+- Return timing data in response headers (<https://github.com/splitgraph/seafowl/pull/438>)
+
 ## [0.4.3] - 2023-06-07
 
 - Enable creating external tables on cloud object stores
