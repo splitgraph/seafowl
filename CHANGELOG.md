@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.5.0] - 2023-07-12
+
 - Upgrade to DataFusion 27 and Arrow 42 (<https://github.com/splitgraph/seafowl/pull/453>)
 - Load schemas without tables and double-check missing DB ids in a given context
   (<https://github.com/splitgraph/seafowl/pull/446>)
@@ -179,7 +181,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.4.3...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/splitgraph/seafowl/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/splitgraph/seafowl/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/splitgraph/seafowl/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/splitgraph/seafowl/compare/v0.4.0...v0.4.1
