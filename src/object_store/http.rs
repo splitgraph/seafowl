@@ -30,6 +30,9 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::AsyncWrite;
 use url::Url;
+use warp::hyper::header::{
+    IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_UNMODIFIED_SINCE, RANGE,
+};
 
 pub const ANYHOST: &str = "anyhost";
 
@@ -144,6 +147,42 @@ impl HttpObjectStore {
         )
     }
 
+    // TODO: Use `GetOptionsExt::with_get_options` on the `RequestBuilder` returned by `self.request_builder`
+    // when it becomes public.
+    fn request_builder_with_get_options(
+        &self,
+        path: &Path,
+        options: GetOptions,
+    ) -> RequestBuilder {
+        let mut request_builder = self.request_builder(path);
+
+        if let Some(range) = options.range {
+            let range = format!("bytes={}-{}", range.start, range.end.saturating_sub(1));
+            request_builder = request_builder.header(RANGE, range);
+        }
+
+        if let Some(tag) = options.if_match {
+            request_builder = request_builder.header(IF_MATCH, tag);
+        }
+
+        if let Some(tag) = options.if_none_match {
+            request_builder = request_builder.header(IF_NONE_MATCH, tag);
+        }
+
+        const DATE_FORMAT: &str = "%a, %d %b %Y %H:%M:%S GMT";
+        if let Some(date) = options.if_unmodified_since {
+            request_builder = request_builder
+                .header(IF_UNMODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
+        }
+
+        if let Some(date) = options.if_modified_since {
+            request_builder = request_builder
+                .header(IF_MODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
+        }
+
+        request_builder
+    }
+
     /// Send a request, converting non-2xx/3xx errors to actual Error structs
     async fn send(
         &self,
@@ -220,7 +259,17 @@ impl ObjectStore for HttpObjectStore {
     }
 
     async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-        let response = self.send(self.request_builder(location)).await?;
+        self.get_opts(location, GetOptions::default()).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        let response = self
+            .send(self.request_builder_with_get_options(location, options))
+            .await?;
 
         let body = response.bytes_stream();
 
@@ -228,15 +277,6 @@ impl ObjectStore for HttpObjectStore {
             body.map(|c| c.map_err(|e| HttpObjectStoreError::HttpClientError(e).into()))
                 .boxed(),
         ))
-    }
-
-    // TODO: see if we can/need to use some of the options provided as arguments here
-    async fn get_opts(
-        &self,
-        location: &Path,
-        _options: GetOptions,
-    ) -> object_store::Result<GetResult> {
-        self.get(location).await
     }
 
     async fn get_range(
