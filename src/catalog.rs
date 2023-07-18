@@ -227,6 +227,7 @@ pub trait FunctionCatalog: Sync + Send {
         &self,
         database_id: DatabaseId,
         function_name: &str,
+        or_replace: bool,
         details: &CreateFunctionDetails,
     ) -> Result<FunctionId>;
 
@@ -635,17 +636,17 @@ impl FunctionCatalog for DefaultCatalog {
         &self,
         database_id: DatabaseId,
         function_name: &str,
+        or_replace: bool,
         details: &CreateFunctionDetails,
     ) -> Result<FunctionId> {
         self.repository
-            .create_function(database_id, function_name, details)
+            .create_function(database_id, function_name, or_replace, details)
             .await
             .map_err(|e| match e {
                 RepositoryError::FKConstraintViolation(_) => {
                     Error::DatabaseDoesNotExist { id: database_id }
                 }
                 RepositoryError::UniqueConstraintViolation(_) => {
-                    // TODO overwrite function defns instead?
                     Error::FunctionAlreadyExists {
                         name: function_name.to_string(),
                     }

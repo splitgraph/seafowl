@@ -162,6 +162,7 @@ pub trait Repository: Send + Sync + Debug {
         &self,
         database_id: DatabaseId,
         function_name: &str,
+        or_replace: bool,
         details: &CreateFunctionDetails,
     ) -> Result<FunctionId, Error>;
 
@@ -400,6 +401,7 @@ pub mod tests {
             .create_function(
                 database_id,
                 "testfun",
+                false,
                 &CreateFunctionDetails {
                     entrypoint: "entrypoint".to_string(),
                     language: CreateFunctionLanguage::Wasm,
@@ -430,6 +432,48 @@ pub mod tests {
             return_type: "INT".to_string(),
             data: "data".to_string(),
             volatility: "Volatile".to_string(),
+        }];
+        assert_eq!(all_functions, expected_functions);
+
+        // Now try to replace the function, effectively only upserting the new function details
+        let new_function_id = repository
+            .create_function(
+                database_id,
+                "testfun",
+                true,
+                &CreateFunctionDetails {
+                    entrypoint: "entrypoint".to_string(),
+                    language: CreateFunctionLanguage::WasmMessagePack,
+                    input_types: vec![
+                        CreateFunctionDataType::VARCHAR,
+                        CreateFunctionDataType::DOUBLE,
+                        CreateFunctionDataType::DATE,
+                    ],
+                    return_type: CreateFunctionDataType::BOOLEAN,
+                    data: "replaced_data".to_string(),
+                    volatility: CreateFunctionVolatility::Immutable,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(new_function_id, function_id);
+
+        // Load function and assert changes have been made to the original entry
+        let all_functions = repository
+            .get_all_functions_in_database(database_id)
+            .await
+            .unwrap();
+
+        let expected_functions = vec![AllDatabaseFunctionsResult {
+            name: "testfun".to_string(),
+            id: function_id,
+            entrypoint: "entrypoint".to_string(),
+            language: "WasmMessagePack".to_string(),
+            input_types: r#"["varchar","double","date"]"#.to_string(),
+            return_type: "BOOLEAN".to_string(),
+            data: "replaced_data".to_string(),
+            volatility: "Immutable".to_string(),
         }];
         assert_eq!(all_functions, expected_functions);
     }

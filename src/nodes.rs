@@ -25,6 +25,7 @@ pub struct CreateTable {
 pub struct CreateFunction {
     /// The function name
     pub name: String,
+    pub or_replace: bool,
     pub details: CreateFunctionDetails,
     /// Dummy result schema for the plan (empty)
     pub output_schema: DFSchemaRef,

@@ -30,7 +30,6 @@ use seafowl::system_tables::SYSTEM_SCHEMA;
 
 mod ddl;
 mod dml;
-mod function;
 mod query;
 // Hack because integration tests do not set cfg(test)
 // https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
