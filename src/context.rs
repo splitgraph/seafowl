@@ -1172,6 +1172,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                 Statement::CreateTable { .. } => state.statement_to_plan(statement).await,
 
                 Statement::CreateFunction {
+                    or_replace,
                     temporary: false,
                     name,
                     params: CreateFunctionBody { as_: Some( FunctionDefinition::SingleQuotedDef(details) ), .. },
@@ -1186,6 +1187,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                         Ok(LogicalPlan::Extension(Extension {
                             node: Arc::new(SeafowlExtensionNode::CreateFunction(CreateFunction {
+                                or_replace,
                                 name: name.to_string(),
                                 details: function_details,
                                 output_schema: Arc::new(DFSchema::empty())
@@ -1712,6 +1714,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         }
                         SeafowlExtensionNode::CreateFunction(CreateFunction {
                             name,
+                            or_replace,
                             details,
                             output_schema: _,
                         }) => {
@@ -1719,7 +1722,12 @@ impl SeafowlContext for DefaultSeafowlContext {
 
                             // Persist the function in the metadata storage
                             self.function_catalog
-                                .create_function(self.database_id, name, details)
+                                .create_function(
+                                    self.database_id,
+                                    name,
+                                    *or_replace,
+                                    details,
+                                )
                                 .await?;
 
                             Ok(make_dummy_exec())
@@ -2489,22 +2497,55 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::regular_type_names("float", "float")]
+    #[case::legacy_type_names("f32", "f32")]
+    #[case::uppercase_type_names("FLOAT", "REAL")]
     #[tokio::test]
-    async fn test_register_udf() -> Result<()> {
+    async fn test_register_udf(
+        #[case] input_type: &str,
+        #[case] return_type: &str,
+    ) -> Result<()> {
         let sf_context = in_memory_context().await;
 
         // Source: https://gist.github.com/going-digital/02e46c44d89237c07bc99cd440ebfa43
-        sf_context.collect(sf_context.plan_query(
-            r#"CREATE FUNCTION sintau AS '
-            {
-                "entrypoint": "sintau",
-                "language": "wasm",
-                "input_types": ["float"],
-                "return_type": "float",
-                "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
-            }';"#,
-        )
-        .await?).await?;
+        let create_function_stmt = r#"CREATE FUNCTION sintau AS '
+        {
+            "entrypoint": "sintau",
+            "language": "wasm",
+            "input_types": ["int"],
+            "return_type": "int",
+            "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
+        }';"#;
+
+        sf_context.plan_query(create_function_stmt).await?;
+
+        // Run the same query again to make sure we raise an error if the function already exists
+        let err = sf_context
+            .plan_query(create_function_stmt)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Error during planning: Function \"sintau\" already exists"
+        );
+
+        // Now replace the function using proper input/return types
+        let replace_function_stmt = format!(
+            r#"CREATE OR REPLACE FUNCTION sintau AS '
+        {{
+            "entrypoint": "sintau",
+            "language": "wasm",
+            "input_types": ["{input_type}"],
+            "return_type": "{return_type}",
+            "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
+        }}';"#
+        );
+
+        sf_context
+            .plan_query(replace_function_stmt.as_str())
+            .await?;
 
         let results = sf_context
             .collect(

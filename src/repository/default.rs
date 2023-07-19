@@ -376,15 +376,29 @@ impl Repository for $repo {
         &self,
         database_id: DatabaseId,
         function_name: &str,
+        or_replace: bool,
         details: &CreateFunctionDetails,
     ) -> Result<FunctionId, Error> {
         let input_types = serde_json::to_string(&details.input_types).expect("Couldn't serialize input types!");
 
-        let new_function_id: i64 = sqlx::query(
+        let query = format!(
             r#"
         INSERT INTO "function" (database_id, name, entrypoint, language, input_types, return_type, data, volatility)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING (id);
-        "#)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8){} RETURNING (id);
+        "#,
+            if or_replace {
+                " ON CONFLICT (database_id, name) DO UPDATE SET entrypoint = EXCLUDED.entrypoint, \
+                language = EXCLUDED.language, \
+                input_types = EXCLUDED.input_types, \
+                return_type = EXCLUDED.return_type, \
+                data = EXCLUDED.data, \
+                volatility = EXCLUDED.volatility"
+            } else {
+                ""
+            }
+        );
+
+        let new_function_id: i64 = sqlx::query(query.as_str())
             .bind(database_id)
             .bind(function_name)
             .bind(details.entrypoint.clone())

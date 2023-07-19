@@ -255,6 +255,8 @@ impl<'a> DFParser<'a> {
 
     /// Parse a SQL CREATE statement
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
+        let or_replace = self.parser.parse_keywords(&[Keyword::OR, Keyword::REPLACE]);
+
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
             self.parse_create_external_table(false)
         } else if self.parser.parse_keyword(Keyword::UNBOUNDED) {
@@ -264,7 +266,7 @@ impl<'a> DFParser<'a> {
         // XXX SEAFOWL: this is the change to get CREATE FUNCTION parsing working
         else if self.parser.parse_keyword(Keyword::FUNCTION) {
             // assume we don't have CREATE TEMPORARY FUNCTION (since we don't care about TEMPORARY)
-            self.parse_create_function(false, false)
+            self.parse_create_function(or_replace, false)
         // XXX SEAFOWL: change ends here
         } else {
             Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
