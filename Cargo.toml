@@ -55,7 +55,7 @@ datafusion-expr = "27.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "56dfd25a8e9395527f4b87de5c6f0f6f3698c7bb", features = ["s3-native-tls", "datafusion-ext"] }
+deltalake = { version = "0.13.0", features = ["s3-native-tls", "datafusion-ext"] }
 dynamodb_lock = { version = "0.4.3", default_features = false, features = ["native-tls"] }
 
 futures = "0.3"
@@ -82,7 +82,7 @@ serde = "1.0.156"
 serde_json = "1.0.93"
 sha2 = ">=0.10.1"
 sqlparser = "0.35.0"
-sqlx = { version = "0.6.2", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
+sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
 tempfile = "3"
@@ -90,11 +90,11 @@ tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signa
 url = "2.2"
 uuid = "1.2.1"
 warp = "0.3.5"
-wasi-common = "8.0.1"
+wasi-common = "9.0.3"
 
 # For WASM user-defined functions
-wasmtime = "8.0.1"
-wasmtime-wasi = "8.0.1"
+wasmtime = "9.0.3"
+wasmtime-wasi = "9.0.3"
 
 [dev-dependencies]
 assert_unordered = "0.3"

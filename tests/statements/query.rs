@@ -368,6 +368,8 @@ async fn test_remote_table_querying(
         _temp_path = temp_file.into_temp_path();
         (format!("sqlite://{dsn}"), "\"source table\"".to_string())
     };
+
+    install_default_drivers();
     let pool = AnyPool::connect(dsn.as_str()).await.unwrap();
 
     if db_type == "Postgres" {

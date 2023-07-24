@@ -19,7 +19,7 @@ arrow-schema = "42.0.0"
 async-trait = "0.1.64"
 
 # Remote query execution for a variety of DBs
-connectorx = { git = "https://github.com/splitgraph/connector-x", branch = "datafusion-27-upgrade", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
+connectorx = { git = "https://github.com/splitgraph/connector-x", branch = "datafusion-27-sqlite-upgrade", features = [ "dst_arrow", "src_postgres", "src_mysql", "src_sqlite" ] }
 
 datafusion = "27.0.0"
 datafusion-common = "27.0.0"
