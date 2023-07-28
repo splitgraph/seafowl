@@ -10,6 +10,7 @@ use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
 use parking_lot::RwLock;
+use sqlparser::ast::DropFunctionDesc;
 use uuid::Uuid;
 
 use crate::object_store::wrapped::InternalObjectStore;
@@ -44,6 +45,7 @@ pub enum Error {
     DatabaseAlreadyExists { name: String },
     CollectionAlreadyExists { name: String },
     FunctionAlreadyExists { name: String },
+    FunctionDoesNotExist { name: String },
     FunctionDeserializationError { reason: String },
     // Creating a table in / dropping the staging schema
     UsedStagingSchema,
@@ -109,6 +111,9 @@ impl From<Error> for DataFusionError {
             }
             Error::FunctionDeserializationError { reason } => DataFusionError::Internal(
                 format!("Error deserializing function: {reason:?}"),
+            ),
+            Error::FunctionDoesNotExist { name } => DataFusionError::Internal(
+                format!("Error deleting function {}", name)
             ),
 
             // Errors that are the user's fault.
@@ -235,6 +240,12 @@ pub trait FunctionCatalog: Sync + Send {
         &self,
         database_id: DatabaseId,
     ) -> Result<Vec<SeafowlFunction>>;
+
+    async fn drop_function(
+        &self,
+        database_id: DatabaseId,
+        func_desc: &Vec<DropFunctionDesc>,
+    ) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -679,5 +690,23 @@ impl FunctionCatalog for DefaultCatalog {
                     })
             })
             .collect::<Result<Vec<SeafowlFunction>>>()
+    }
+
+    async fn drop_function(
+        &self,
+        database_id: DatabaseId,
+        func_desc: &Vec<DropFunctionDesc>,
+    ) -> Result<()> {
+        self.repository
+            .drop_function(database_id, func_desc)
+            .await
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    let names: Vec<String> = func_desc.iter().map(|desc| format!("{}", desc)).collect();
+                    let names_str = names.join(", ");
+                    Error::FunctionDoesNotExist { name: names_str }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 }

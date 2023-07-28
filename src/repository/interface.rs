@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::str::FromStr;
 
 use async_trait::async_trait;
+use sqlparser::ast::DropFunctionDesc;
 use strum::ParseError;
 use strum_macros::{Display, EnumString};
 use uuid::Uuid;
@@ -170,6 +171,12 @@ pub trait Repository: Send + Sync + Debug {
         &self,
         database_id: DatabaseId,
     ) -> Result<Vec<AllDatabaseFunctionsResult>, Error>;
+
+    async fn drop_function(
+        &self,
+        database_id: DatabaseId,
+        func_desc: &Vec<DropFunctionDesc>,
+    ) -> Result<(), Error>;
 
     async fn drop_table(&self, table_id: TableId) -> Result<(), Error>;
 

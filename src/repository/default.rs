@@ -439,6 +439,54 @@ impl Repository for $repo {
         Ok(functions)
     }
 
+
+    async fn drop_function(
+        &self, database_id:
+        DatabaseId,
+        func_desc: &Vec<sqlparser::ast::DropFunctionDesc>
+    ) -> Result<(), Error> {
+
+        for desc in func_desc.iter() {
+            let function_name = &desc.name.to_string();
+            let args = desc.args.as_ref().map(|args|
+                args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ")
+            );
+
+            // Construct the SQL DELETE statement
+            let query = if let Some(_args) = args.clone() {
+                format!(
+                    r#"
+                    DELETE FROM "function"
+                    WHERE database_id = $1 AND name = $2 AND input_types = $3;
+                    "#,
+                )
+            } else {
+                format!(
+                    r#"
+                    DELETE FROM "function"
+                    WHERE database_id = $1 AND name = $2;
+                    "#,
+                )
+            };
+
+            // Execute the SQL DELETE query 1x per function
+            let mut query = sqlx::query(&query)
+                .bind(database_id)
+                .bind(function_name);
+
+            if let Some(_args) = args.clone() {
+                query = query.bind(args);
+            }
+
+            query
+                .execute(&self.executor)
+                .await
+                .map_err($repo::interpret_error)?;
+        }
+
+        Ok(())
+    }
+
     // Drop table/collection/database
 
     // In these methods, return the ID back so that we get an error if the

@@ -111,7 +111,7 @@ use crate::{
     catalog::{FunctionCatalog, TableCatalog},
     data_types::DatabaseId,
     nodes::{
-        CreateFunction, CreateTable, DropSchema, RenameTable, SeafowlExtensionNode,
+        CreateFunction, CreateTable, DropFunction, DropSchema, RenameTable, SeafowlExtensionNode,
         Vacuum,
     },
     schema::Schema as SeafowlSchema,
@@ -1216,6 +1216,18 @@ impl SeafowlContext for DefaultSeafowlContext {
                         })),
                     }))
                 }
+                Statement::DropFunction{
+                    if_exists,
+                    func_desc,
+                    option
+                } => {
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(SeafowlExtensionNode::DropFunction(DropFunction {
+                            func_desc,
+                            output_schema: Arc::new(DFSchema::empty()),
+                        }))
+                    }))
+                }
                 _ => Err(Error::NotImplemented(format!(
                     "Unsupported SQL statement: {s:?}"
                 ))),
@@ -1727,6 +1739,20 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     name,
                                     *or_replace,
                                     details,
+                                )
+                                .await?;
+
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::DropFunction(DropFunction {
+                            func_desc,
+                            output_schema: _,
+                         }) => {
+                            // Drop the function(s) from the metadata storage
+                            self.function_catalog
+                                .drop_function(
+                                    self.database_id,
+                                    func_desc,
                                 )
                                 .await?;
 

@@ -6,6 +6,7 @@ use std::{any::Any, fmt, sync::Arc, vec};
 
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
+use sqlparser::ast::DropFunctionDesc;
 use strum_macros::AsRefStr;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -27,6 +28,13 @@ pub struct CreateFunction {
     pub name: String,
     pub or_replace: bool,
     pub details: CreateFunctionDetails,
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct DropFunction {
+    pub func_desc: Vec<DropFunctionDesc>,
     /// Dummy result schema for the plan (empty)
     pub output_schema: DFSchemaRef,
 }
@@ -63,6 +71,7 @@ pub struct Vacuum {
 pub enum SeafowlExtensionNode {
     CreateTable(CreateTable),
     CreateFunction(CreateFunction),
+    DropFunction(DropFunction),
     RenameTable(RenameTable),
     DropSchema(DropSchema),
     Vacuum(Vacuum),
@@ -100,6 +109,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 output_schema,
                 ..
             }) => output_schema,
+            SeafowlExtensionNode::DropFunction(DropFunction { output_schema, .. }) => {
+                output_schema
+            },
             SeafowlExtensionNode::RenameTable(RenameTable { output_schema, .. }) => {
                 output_schema
             }
@@ -124,6 +136,11 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             }
             SeafowlExtensionNode::CreateFunction(CreateFunction { name, .. }) => {
                 write!(f, "CreateFunction: {name}")
+            }
+            SeafowlExtensionNode::DropFunction(DropFunction { func_desc, .. }) => {
+                let names: Vec<String> = func_desc.iter().map(|desc| format!("{}", desc)).collect();
+                let names_str = names.join(", ");
+                write!(f, "DropFunction: {names_str}")
             }
             SeafowlExtensionNode::RenameTable(RenameTable {
                 old_name, new_name, ..
