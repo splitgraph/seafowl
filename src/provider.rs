@@ -15,7 +15,7 @@ use datafusion::{
     datasource::TableProvider,
 };
 use datafusion_common::DFSchema;
-use datafusion_expr::Expr;
+use datafusion_expr::{expr::Alias, Expr};
 use deltalake::DeltaTable;
 
 use log::warn;
@@ -149,7 +149,7 @@ pub fn project_expressions(
         .zip(schema.fields())
         .map(|(expr, f)| {
             // De-alias the expression
-            let expr = if let Expr::Alias(expr, _) = expr {
+            let expr = if let Expr::Alias(Alias { expr, .. }) = expr {
                 expr
             } else {
                 expr

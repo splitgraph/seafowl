@@ -13,7 +13,7 @@ use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
 #[cfg(feature = "object-store-gcs")]
 use serde_json::json;
 #[cfg(feature = "remote-tables")]
-use sqlx::{AnyPool, Executor};
+use sqlx::{any::install_default_drivers, AnyPool, Executor};
 #[cfg(feature = "remote-tables")]
 use tempfile::{NamedTempFile, TempPath};
 use tokio::time::sleep;

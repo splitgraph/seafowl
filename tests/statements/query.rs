@@ -338,7 +338,7 @@ async fn test_table_time_travel() {
 }
 
 // There's a regression in DF 22, where the two introspection tests fail with
-// "Date64 < Timestamp(Nanosecond, None) can't be evaluated because there isn't a common type to coerce the types to"
+// "Cannot infer common argument type for comparison operation Date64 < Timestamp(Nanosecond, None)"
 // Disabling them for now.
 #[cfg(feature = "remote-tables")]
 #[rstest]
@@ -368,6 +368,8 @@ async fn test_remote_table_querying(
         _temp_path = temp_file.into_temp_path();
         (format!("sqlite://{dsn}"), "\"source table\"".to_string())
     };
+
+    install_default_drivers();
     let pool = AnyPool::connect(dsn.as_str()).await.unwrap();
 
     if db_type == "Postgres" {
