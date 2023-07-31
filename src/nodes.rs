@@ -109,9 +109,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 output_schema,
                 ..
             }) => output_schema,
-            SeafowlExtensionNode::DropFunction(DropFunction { output_schema, .. }) => {
-                output_schema
-            },
+            SeafowlExtensionNode::DropFunction(DropFunction {
+                output_schema, ..
+            }) => output_schema,
             SeafowlExtensionNode::RenameTable(RenameTable { output_schema, .. }) => {
                 output_schema
             }
@@ -138,7 +138,8 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 write!(f, "CreateFunction: {name}")
             }
             SeafowlExtensionNode::DropFunction(DropFunction { func_desc, .. }) => {
-                let names: Vec<String> = func_desc.iter().map(|desc| format!("{}", desc)).collect();
+                let names: Vec<String> =
+                    func_desc.iter().map(|desc| format!("{}", desc)).collect();
                 let names_str = names.join(", ");
                 write!(f, "DropFunction: {names_str}")
             }
