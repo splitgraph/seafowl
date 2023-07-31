@@ -220,18 +220,23 @@ impl TableProvider for RemoteTable {
         Ok(plan)
     }
 
-    fn supports_filter_pushdown(
+    fn supports_filters_pushdown(
         &self,
-        filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
-        if self.filter_expr_to_sql(filter).is_none() {
-            return Ok(TableProviderFilterPushDown::Unsupported);
-        }
-
-        // NB: We can keep this Exact since DF will optimize the plan by preserving the un-shippable
-        // filter nodes for itself, and pass only shippable ones to the scan function.
-        // On the other hand when all filter expressions are (exactly) shippable any limit clause
-        // will also get pushed down, providing additional optimization.
-        Ok(TableProviderFilterPushDown::Exact)
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok(filters
+            .iter()
+            .map(|f| {
+                if self.filter_expr_to_sql(f).is_none() {
+                    TableProviderFilterPushDown::Unsupported
+                } else {
+                    // NB: We can keep this Exact since DF will optimize the plan by preserving the un-shippable
+                    // filter nodes for itself, and pass only shippable ones to the scan function.
+                    // On the other hand when all filter expressions are (exactly) shippable any limit clause
+                    // will also get pushed down, providing additional optimization.
+                    TableProviderFilterPushDown::Exact
+                }
+            })
+            .collect())
     }
 }
