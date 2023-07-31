@@ -175,7 +175,7 @@ pub trait Repository: Send + Sync + Debug {
     async fn drop_function(
         &self,
         database_id: DatabaseId,
-        func_desc: &Vec<DropFunctionDesc>,
+        func_desc: &[DropFunctionDesc],
     ) -> Result<(), Error>;
 
     async fn drop_table(&self, table_id: TableId) -> Result<(), Error>;

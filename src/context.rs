@@ -111,8 +111,8 @@ use crate::{
     catalog::{FunctionCatalog, TableCatalog},
     data_types::DatabaseId,
     nodes::{
-        CreateFunction, CreateTable, DropFunction, DropSchema, RenameTable, SeafowlExtensionNode,
-        Vacuum,
+        CreateFunction, CreateTable, DropFunction, DropSchema, RenameTable,
+        SeafowlExtensionNode, Vacuum,
     },
     schema::Schema as SeafowlSchema,
     version::TableVersionProcessor,
@@ -1217,9 +1217,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                     }))
                 }
                 Statement::DropFunction{
-                    if_exists,
+                    if_exists: _,
                     func_desc,
-                    option
+                    option: _
                 } => {
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::DropFunction(DropFunction {
@@ -1747,13 +1747,10 @@ impl SeafowlContext for DefaultSeafowlContext {
                         SeafowlExtensionNode::DropFunction(DropFunction {
                             func_desc,
                             output_schema: _,
-                         }) => {
+                        }) => {
                             // Drop the function(s) from the metadata storage
                             self.function_catalog
-                                .drop_function(
-                                    self.database_id,
-                                    func_desc,
-                                )
+                                .drop_function(self.database_id, func_desc)
                                 .await?;
 
                             Ok(make_dummy_exec())

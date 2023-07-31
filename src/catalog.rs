@@ -112,9 +112,9 @@ impl From<Error> for DataFusionError {
             Error::FunctionDeserializationError { reason } => DataFusionError::Internal(
                 format!("Error deserializing function: {reason:?}"),
             ),
-            Error::FunctionDoesNotExist { name } => DataFusionError::Internal(
-                format!("Error deleting function {}", name)
-            ),
+            Error::FunctionDoesNotExist { name } => {
+                DataFusionError::Internal(format!("Error deleting function {}", name))
+            }
 
             // Errors that are the user's fault.
 
@@ -244,7 +244,7 @@ pub trait FunctionCatalog: Sync + Send {
     async fn drop_function(
         &self,
         database_id: DatabaseId,
-        func_desc: &Vec<DropFunctionDesc>,
+        func_desc: &[DropFunctionDesc],
     ) -> Result<()>;
 }
 
@@ -695,14 +695,15 @@ impl FunctionCatalog for DefaultCatalog {
     async fn drop_function(
         &self,
         database_id: DatabaseId,
-        func_desc: &Vec<DropFunctionDesc>,
+        func_desc: &[DropFunctionDesc],
     ) -> Result<()> {
         self.repository
             .drop_function(database_id, func_desc)
             .await
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    let names: Vec<String> = func_desc.iter().map(|desc| format!("{}", desc)).collect();
+                    let names: Vec<String> =
+                        func_desc.iter().map(|desc| format!("{}", desc)).collect();
                     let names_str = names.join(", ");
                     Error::FunctionDoesNotExist { name: names_str }
                 }

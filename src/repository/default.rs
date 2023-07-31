@@ -443,7 +443,7 @@ impl Repository for $repo {
     async fn drop_function(
         &self, database_id:
         DatabaseId,
-        func_desc: &Vec<sqlparser::ast::DropFunctionDesc>
+        func_desc: &[sqlparser::ast::DropFunctionDesc],
     ) -> Result<(), Error> {
 
         for desc in func_desc.iter() {
