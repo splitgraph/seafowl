@@ -112,9 +112,6 @@ impl From<Error> for DataFusionError {
             Error::FunctionDeserializationError { reason } => DataFusionError::Internal(
                 format!("Error deserializing function: {reason:?}"),
             ),
-            Error::FunctionDoesNotExist { name } => {
-                DataFusionError::Internal(format!("Error deleting function {}", name))
-            }
 
             // Errors that are the user's fault.
 
@@ -137,6 +134,9 @@ impl From<Error> for DataFusionError {
                 "The staging schema can only be referenced via CREATE EXTERNAL TABLE"
                     .to_string(),
             ),
+            Error::FunctionDoesNotExist { name } => {
+                DataFusionError::Plan(format!("Error deleting function {}", name))
+            }
 
             // Miscellaneous sqlx error. We want to log it but it's not worth showing to the user.
             Error::SqlxError(e) => DataFusionError::Internal(format!(
@@ -701,6 +701,9 @@ impl FunctionCatalog for DefaultCatalog {
             .drop_function(database_id, func_desc)
             .await
             .map_err(|e| match e {
+                RepositoryError::FKConstraintViolation(_) => {
+                    Error::DatabaseDoesNotExist { id: database_id }
+                }
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
                     let names: Vec<String> =
                         func_desc.iter().map(|desc| format!("{}", desc)).collect();
