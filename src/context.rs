@@ -2628,9 +2628,7 @@ mod tests {
 
         // Source: https://gist.github.com/going-digital/02e46c44d89237c07bc99cd440ebfa43
         let plan = sf_context
-            .plan_query(
-                r#"DROP FUNCTION nonexistentfunction"#,
-            )
+            .plan_query(r#"DROP FUNCTION nonexistentfunction"#)
             .await;
         assert!(plan.is_err());
         Ok(())
