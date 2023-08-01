@@ -1752,7 +1752,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                             self.function_catalog
                                 .drop_function(self.database_id, func_desc)
                                 .await?;
-
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::RenameTable(RenameTable {
@@ -2621,4 +2620,21 @@ mod tests {
             "Internal error: Error initializing WASM + MessagePack UDF \"invalidfn\": Internal(\"Error loading WASM module: failed to parse WebAssembly module"));
         Ok(())
     }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_drop_function() -> Result<()> {
+        let sf_context = in_memory_context().await;
+
+        // Source: https://gist.github.com/going-digital/02e46c44d89237c07bc99cd440ebfa43
+        let plan = sf_context
+            .plan_query(
+                r#"DROP FUNCTION nonexistentfunction"#,
+            )
+            .await;
+        assert!(plan.is_err());
+        Ok(())
+    }
+
+    // TODO we want to add a case for deleting an existing function
 }
