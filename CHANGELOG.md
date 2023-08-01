@@ -4,6 +4,12 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Upgrade to DataFusion 28 and Arrow 43 (<https://github.com/splitgraph/seafowl/pull/458>)
+- Implement `CREATE OR REPLACE FUNCTION` statement path
+  (<https://github.com/splitgraph/seafowl/pull/455>)
+- Enable passing of supplied get options via the HTTP object store
+  (<https://github.com/splitgraph/seafowl/pull/454>)
+
 ## [0.5.0] - 2023-07-12
 
 - Upgrade to DataFusion 27 and Arrow 42 (<https://github.com/splitgraph/seafowl/pull/453>)
