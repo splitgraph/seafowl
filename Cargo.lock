@@ -4987,7 +4987,7 @@ dependencies = [
 
 [[package]]
 name = "seafowl"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "arrow",
@@ -5012,7 +5012,7 @@ dependencies = [
  "dynamodb_lock",
  "futures",
  "hex",
- "itertools 0.11.0",
+ "itertools 0.10.5",
  "lazy_static",
  "log",
  "mockall",
@@ -5036,8 +5036,8 @@ dependencies = [
  "sha2 0.10.7",
  "sqlparser",
  "sqlx",
- "strum 0.25.0",
- "strum_macros 0.25.1",
+ "strum 0.24.1",
+ "strum_macros 0.24.3",
  "tempfile",
  "tokio",
  "url",
