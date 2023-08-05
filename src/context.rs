@@ -1217,16 +1217,17 @@ impl SeafowlContext for DefaultSeafowlContext {
                     }))
                 }
                 Statement::DropFunction{
-                    if_exists: _,
+                    if_exists,
                     func_desc,
                     option: _
                 } => {
-                    Ok(LogicalPlan::Extension(Extension {
-                        node: Arc::new(SeafowlExtensionNode::DropFunction(DropFunction {
-                            func_desc,
-                            output_schema: Arc::new(DFSchema::empty()),
+                        Ok(LogicalPlan::Extension(Extension {
+                            node: Arc::new(SeafowlExtensionNode::DropFunction(DropFunction {
+                                if_exists,
+                                func_desc,
+                                output_schema: Arc::new(DFSchema::empty()),
+                            }))
                         }))
-                    }))
                 }
                 _ => Err(Error::NotImplemented(format!(
                     "Unsupported SQL statement: {s:?}"
@@ -1745,12 +1746,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::DropFunction(DropFunction {
+                            if_exists,
                             func_desc,
                             output_schema: _,
                         }) => {
-                            // Drop the function(s) from the metadata storage
                             self.function_catalog
-                                .drop_function(self.database_id, func_desc)
+                                .drop_function(self.database_id, *if_exists, func_desc)
                                 .await?;
                             Ok(make_dummy_exec())
                         }

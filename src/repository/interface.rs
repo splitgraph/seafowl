@@ -175,6 +175,7 @@ pub trait Repository: Send + Sync + Debug {
     async fn drop_function(
         &self,
         database_id: DatabaseId,
+        if_exists: bool,
         func_desc: &[DropFunctionDesc],
     ) -> Result<(), Error>;
 

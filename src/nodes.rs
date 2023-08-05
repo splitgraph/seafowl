@@ -34,6 +34,7 @@ pub struct CreateFunction {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DropFunction {
+    pub if_exists: bool,
     pub func_desc: Vec<DropFunctionDesc>,
     /// Dummy result schema for the plan (empty)
     pub output_schema: DFSchemaRef,

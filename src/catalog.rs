@@ -45,7 +45,6 @@ pub enum Error {
     DatabaseAlreadyExists { name: String },
     CollectionAlreadyExists { name: String },
     FunctionAlreadyExists { name: String },
-    FunctionDoesNotExist { name: String },
     FunctionDeserializationError { reason: String },
     // Creating a table in / dropping the staging schema
     UsedStagingSchema,
@@ -134,10 +133,6 @@ impl From<Error> for DataFusionError {
                 "The staging schema can only be referenced via CREATE EXTERNAL TABLE"
                     .to_string(),
             ),
-            Error::FunctionDoesNotExist { name } => {
-                DataFusionError::Plan(format!("Error deleting function {}", name))
-            }
-
             // Miscellaneous sqlx error. We want to log it but it's not worth showing to the user.
             Error::SqlxError(e) => DataFusionError::Internal(format!(
                 "Internal SQL error: {:?}",
@@ -244,6 +239,7 @@ pub trait FunctionCatalog: Sync + Send {
     async fn drop_function(
         &self,
         database_id: DatabaseId,
+        if_exists: bool,
         func_desc: &[DropFunctionDesc],
     ) -> Result<()>;
 }
@@ -695,20 +691,15 @@ impl FunctionCatalog for DefaultCatalog {
     async fn drop_function(
         &self,
         database_id: DatabaseId,
+        if_exists: bool,
         func_desc: &[DropFunctionDesc],
     ) -> Result<()> {
         self.repository
-            .drop_function(database_id, func_desc)
+            .drop_function(database_id, if_exists, func_desc)
             .await
             .map_err(|e| match e {
                 RepositoryError::FKConstraintViolation(_) => {
                     Error::DatabaseDoesNotExist { id: database_id }
-                }
-                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    let names: Vec<String> =
-                        func_desc.iter().map(|desc| format!("{}", desc)).collect();
-                    let names_str = names.join(", ");
-                    Error::FunctionDoesNotExist { name: names_str }
                 }
                 _ => Self::to_sqlx_error(e),
             })
