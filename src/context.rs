@@ -2642,12 +2642,12 @@ mod tests {
         let plan = sf_context
             .plan_query(r#"DROP FUNCTION IF EXISTS nonexistentfunction"#)
             .await;
-        assert!(!plan.is_err());
+        assert!(plan.is_ok());
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_drop_two_functions() -> Result<()> {
+    async fn test_create_and_drop_two_functions() -> Result<()> {
         let sf_context = in_memory_context().await;
 
         let create_function_stmt = r#"CREATE FUNCTION sintau AS '
@@ -2676,11 +2676,7 @@ mod tests {
         let plan = sf_context
             .plan_query(r#"DROP FUNCTION sintau, sintau2"#)
             .await;
-        assert!(!plan.is_err());
+        assert!(plan.is_ok());
         Ok(())
     }
-
-
-
-    // TODO we want to add a case for deleting an existing function
 }

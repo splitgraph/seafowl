@@ -694,8 +694,10 @@ impl FunctionCatalog for DefaultCatalog {
         if_exists: bool,
         func_desc: &[DropFunctionDesc],
     ) -> Result<()> {
+        let func_names: Vec<String> =
+            func_desc.iter().map(|desc| desc.name.to_string()).collect();
         self.repository
-            .drop_function(database_id, if_exists, func_desc)
+            .drop_function(database_id, if_exists, &func_names)
             .await
             .map_err(|e| match e {
                 RepositoryError::FKConstraintViolation(_) => {

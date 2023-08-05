@@ -444,12 +444,10 @@ impl Repository for $repo {
         &self,
         database_id: DatabaseId,
         if_exists: bool,
-        func_desc: &[sqlparser::ast::DropFunctionDesc],
+        func_names: &[String],
     ) -> Result<(), Error> {
 
-        for desc in func_desc.iter() {
-            let function_name = &desc.name.to_string();
-
+        for function_name in func_names.iter() {
             // Construct the SQL DELETE statement
             let query =
                 format!(

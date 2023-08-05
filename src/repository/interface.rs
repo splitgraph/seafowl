@@ -2,7 +2,6 @@ use std::fmt::Debug;
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use sqlparser::ast::DropFunctionDesc;
 use strum::ParseError;
 use strum_macros::{Display, EnumString};
 use uuid::Uuid;
@@ -176,7 +175,7 @@ pub trait Repository: Send + Sync + Debug {
         &self,
         database_id: DatabaseId,
         if_exists: bool,
-        func_desc: &[DropFunctionDesc],
+        func_names: &[String],
     ) -> Result<(), Error>;
 
     async fn drop_table(&self, table_id: TableId) -> Result<(), Error>;
