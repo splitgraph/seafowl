@@ -697,21 +697,20 @@ impl FunctionCatalog for DefaultCatalog {
         if_exists: bool,
         func_names: &[String],
     ) -> Result<()> {
-        match self.repository
-            .drop_function(database_id, func_names)
-            .await
-        {
+        match self.repository.drop_function(database_id, func_names).await {
             Ok(id) => Ok(id),
             Err(RepositoryError::FKConstraintViolation(_)) => {
                 Err(Error::DatabaseDoesNotExist { id: database_id })
-            },
+            }
             Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => {
                 if if_exists {
                     Ok(())
                 } else {
-                    Err(Error::FunctionNotFound { names: func_names.join(", ") })
+                    Err(Error::FunctionNotFound {
+                        names: func_names.join(", "),
+                    })
                 }
-            },
+            }
             Err(e) => Err(Self::to_sqlx_error(e)),
         }
     }
