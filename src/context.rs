@@ -2628,11 +2628,16 @@ mod tests {
     async fn test_drop_function() -> Result<()> {
         let sf_context = in_memory_context().await;
 
-        // Source: https://gist.github.com/going-digital/02e46c44d89237c07bc99cd440ebfa43
-        let plan = sf_context
+        let err = sf_context
             .plan_query(r#"DROP FUNCTION nonexistentfunction"#)
-            .await;
-        assert!(plan.is_err());
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Error during planning: Function \"nonexistentfunction\" not found"
+        );
+
         Ok(())
     }
 
