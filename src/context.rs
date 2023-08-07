@@ -1221,10 +1221,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                     func_desc,
                     option: _
                 } => {
+                    let func_names: Vec<String> =
+                        func_desc.iter().map(|desc| desc.name.to_string()).collect();
                         Ok(LogicalPlan::Extension(Extension {
                             node: Arc::new(SeafowlExtensionNode::DropFunction(DropFunction {
                                 if_exists,
-                                func_desc,
+                                func_names,
                                 output_schema: Arc::new(DFSchema::empty()),
                             }))
                         }))
@@ -1747,11 +1749,11 @@ impl SeafowlContext for DefaultSeafowlContext {
                         }
                         SeafowlExtensionNode::DropFunction(DropFunction {
                             if_exists,
-                            func_desc,
+                            func_names,
                             output_schema: _,
                         }) => {
                             self.function_catalog
-                                .drop_function(self.database_id, *if_exists, func_desc)
+                                .drop_function(self.database_id, *if_exists, func_names)
                                 .await?;
                             Ok(make_dummy_exec())
                         }

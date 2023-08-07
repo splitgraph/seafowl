@@ -446,39 +446,33 @@ impl Repository for $repo {
         if_exists: bool,
         func_names: &[String],
     ) -> Result<(), Error> {
+        let comma_separated_func_names: String = func_names.join(",");
+        let query =
+            format!(
+                r#"
+                DELETE FROM "function"
+                WHERE database_id = $1
+                AND name IN ($2)
+                RETURNING id;
+                "#,
+            );
 
-        for function_name in func_names.iter() {
-            // Construct the SQL DELETE statement
-            let query =
-                format!(
-                    r#"
-                    DELETE FROM "function"
-                    WHERE database_id = $1 AND name = $2
-                    RETURNING id;
-                    "#,
-                );
+        let query = sqlx::query(&query)
+            .bind(database_id)
+            .bind(&comma_separated_func_names);
 
-            // Execute the SQL DELETE query 1x per function
-            let query = sqlx::query(&query)
-                .bind(database_id)
-                .bind(function_name);
-
-            println!("database_id: {}, function_name: {}", database_id, function_name);
-
-            if if_exists {
-                // If user provided IF EXISTS, tolerate when no function found
-                query
-                    .execute(&self.executor)
-                    .await
-                    .map_err($repo::interpret_error)?;
-            } else {
-                // Otherwise if no function found, we return error
-                query
-                    .fetch_one(&self.executor)
-                    .await
-                    .map_err($repo::interpret_error)?;
-            }
-
+        if if_exists {
+            // If user provided IF EXISTS, tolerate when no function found
+            query
+                .execute(&self.executor)
+                .await
+                .map_err($repo::interpret_error)?;
+        } else {
+            // Otherwise if no function found, we return error
+            query
+                .fetch_one(&self.executor)
+                .await
+                .map_err($repo::interpret_error)?;
         }
 
         Ok(())

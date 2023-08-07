@@ -10,7 +10,6 @@ use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
 use parking_lot::RwLock;
-use sqlparser::ast::DropFunctionDesc;
 use uuid::Uuid;
 
 use crate::object_store::wrapped::InternalObjectStore;
@@ -46,6 +45,7 @@ pub enum Error {
     CollectionAlreadyExists { name: String },
     FunctionAlreadyExists { name: String },
     FunctionDeserializationError { reason: String },
+    FunctionNotFound { names: String },
     // Creating a table in / dropping the staging schema
     UsedStagingSchema,
     SqlxError(sqlx::Error),
@@ -128,6 +128,9 @@ impl From<Error> for DataFusionError {
             }
             Error::FunctionAlreadyExists { name } => {
                 DataFusionError::Plan(format!("Function {name:?} already exists"))
+            }
+            Error::FunctionNotFound { names } => {
+                DataFusionError::Plan(format!("Function {names:?} not found"))
             }
             Error::UsedStagingSchema => DataFusionError::Plan(
                 "The staging schema can only be referenced via CREATE EXTERNAL TABLE"
@@ -240,7 +243,7 @@ pub trait FunctionCatalog: Sync + Send {
         &self,
         database_id: DatabaseId,
         if_exists: bool,
-        func_desc: &[DropFunctionDesc],
+        func_names: &[String],
     ) -> Result<()>;
 }
 
@@ -692,18 +695,24 @@ impl FunctionCatalog for DefaultCatalog {
         &self,
         database_id: DatabaseId,
         if_exists: bool,
-        func_desc: &[DropFunctionDesc],
+        func_names: &[String],
     ) -> Result<()> {
-        let func_names: Vec<String> =
-            func_desc.iter().map(|desc| desc.name.to_string()).collect();
-        self.repository
-            .drop_function(database_id, if_exists, &func_names)
+        match self.repository
+            .drop_function(database_id, func_names)
             .await
-            .map_err(|e| match e {
-                RepositoryError::FKConstraintViolation(_) => {
-                    Error::DatabaseDoesNotExist { id: database_id }
+        {
+            Ok(id) => Ok(id),
+            Err(RepositoryError::FKConstraintViolation(_)) => {
+                Err(Error::DatabaseDoesNotExist { id: database_id })
+            },
+            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => {
+                if if_exists {
+                    Ok(())
+                } else {
+                    Err(Error::FunctionNotFound { names: func_names.join(", ") })
                 }
-                _ => Self::to_sqlx_error(e),
-            })
+            },
+            Err(e) => Err(Self::to_sqlx_error(e)),
+        }
     }
 }

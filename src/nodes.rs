@@ -6,7 +6,6 @@ use std::{any::Any, fmt, sync::Arc, vec};
 
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
-use sqlparser::ast::DropFunctionDesc;
 use strum_macros::AsRefStr;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -35,7 +34,7 @@ pub struct CreateFunction {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DropFunction {
     pub if_exists: bool,
-    pub func_desc: Vec<DropFunctionDesc>,
+    pub func_names: Vec<String>,
     /// Dummy result schema for the plan (empty)
     pub output_schema: DFSchemaRef,
 }
@@ -138,10 +137,8 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::CreateFunction(CreateFunction { name, .. }) => {
                 write!(f, "CreateFunction: {name}")
             }
-            SeafowlExtensionNode::DropFunction(DropFunction { func_desc, .. }) => {
-                let names: Vec<String> =
-                    func_desc.iter().map(|desc| format!("{}", desc)).collect();
-                let names_str = names.join(", ");
+            SeafowlExtensionNode::DropFunction(DropFunction { func_names, .. }) => {
+                let names_str = func_names.join(", ");
                 write!(f, "DropFunction: {names_str}")
             }
             SeafowlExtensionNode::RenameTable(RenameTable {
