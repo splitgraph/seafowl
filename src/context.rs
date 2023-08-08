@@ -2645,7 +2645,6 @@ mod tests {
     async fn test_drop_function_if_exists() -> Result<()> {
         let sf_context = in_memory_context().await;
 
-        // Source: https://gist.github.com/going-digital/02e46c44d89237c07bc99cd440ebfa43
         let plan = sf_context
             .plan_query(r#"DROP FUNCTION IF EXISTS nonexistentfunction"#)
             .await;
@@ -2681,7 +2680,7 @@ mod tests {
 
         // Test dropping both functions in one pass
         let plan = sf_context
-            .plan_query(r#"DROP FUNCTION sintau, sintau2"#)
+            .plan_query(r#"DROP FUNCTION sintau, sintau"#)
             .await;
         assert!(plan.is_ok());
         Ok(())
