@@ -111,8 +111,8 @@ use crate::{
     catalog::{FunctionCatalog, TableCatalog},
     data_types::DatabaseId,
     nodes::{
-        CreateFunction, CreateTable, DropSchema, RenameTable, SeafowlExtensionNode,
-        Vacuum,
+        CreateFunction, CreateTable, DropFunction, DropSchema, RenameTable,
+        SeafowlExtensionNode, Vacuum,
     },
     schema::Schema as SeafowlSchema,
     version::TableVersionProcessor,
@@ -1216,6 +1216,21 @@ impl SeafowlContext for DefaultSeafowlContext {
                         })),
                     }))
                 }
+                Statement::DropFunction{
+                    if_exists,
+                    func_desc,
+                    option: _
+                } => {
+                    let func_names: Vec<String> =
+                        func_desc.iter().map(|desc| desc.name.to_string()).collect();
+                        Ok(LogicalPlan::Extension(Extension {
+                            node: Arc::new(SeafowlExtensionNode::DropFunction(DropFunction {
+                                if_exists,
+                                func_names,
+                                output_schema: Arc::new(DFSchema::empty()),
+                            }))
+                        }))
+                }
                 _ => Err(Error::NotImplemented(format!(
                     "Unsupported SQL statement: {s:?}"
                 ))),
@@ -1730,6 +1745,16 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 )
                                 .await?;
 
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::DropFunction(DropFunction {
+                            if_exists,
+                            func_names,
+                            output_schema: _,
+                        }) => {
+                            self.function_catalog
+                                .drop_function(self.database_id, *if_exists, func_names)
+                                .await?;
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::RenameTable(RenameTable {
@@ -2596,6 +2621,68 @@ mod tests {
         assert!(plan.is_err());
         assert!(plan.err().unwrap().to_string().starts_with(
             "Internal error: Error initializing WASM + MessagePack UDF \"invalidfn\": Internal(\"Error loading WASM module: failed to parse WebAssembly module"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drop_function() -> Result<()> {
+        let sf_context = in_memory_context().await;
+
+        let err = sf_context
+            .plan_query(r#"DROP FUNCTION nonexistentfunction"#)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Error during planning: Function \"nonexistentfunction\" not found"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drop_function_if_exists() -> Result<()> {
+        let sf_context = in_memory_context().await;
+
+        let plan = sf_context
+            .plan_query(r#"DROP FUNCTION IF EXISTS nonexistentfunction"#)
+            .await;
+        assert!(plan.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_and_drop_two_functions() -> Result<()> {
+        let sf_context = in_memory_context().await;
+
+        let create_function_stmt = r#"CREATE FUNCTION sintau AS '
+        {
+            "entrypoint": "sintau",
+            "language": "wasm",
+            "input_types": ["int"],
+            "return_type": "int",
+            "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
+        }';"#;
+
+        let create_function_stmt2 = r#"CREATE FUNCTION sintau2 AS '
+        {
+            "entrypoint": "sintau",
+            "language": "wasm",
+            "input_types": ["int"],
+            "return_type": "int",
+            "data": "AGFzbQEAAAABDQJgAX0BfWADfX9/AX0DBQQAAAABBQQBAUREBxgDBnNpbnRhdQAABGV4cDIAAQRsb2cyAAIKjgEEKQECfUMAAAA/IgIgACAAjpMiACACk4siAZMgAZZBAEEYEAMgAiAAk5gLGQAgACAAjiIAk0EYQSwQA7wgAKhBF3RqvgslAQF/IAC8IgFBF3ZB/wBrsiABQQl0s0MAAIBPlUEsQcQAEAOSCyIBAX0DQCADIACUIAEqAgCSIQMgAUEEaiIBIAJrDQALIAMLC0oBAEEAC0Q/x2FC2eATQUuqKsJzsqY9QAHJQH6V0DZv+V88kPJTPSJndz6sZjE/HQCAP/clMD0D/T++F6bRPkzcNL/Tgrg//IiKNwBqBG5hbWUBHwQABnNpbnRhdQEEZXhwMgIEbG9nMgMIZXZhbHBvbHkCNwQAAwABeAECeDECBGhhbGYBAQABeAICAAF4AQJ4aQMEAAF4AQVzdGFydAIDZW5kAwZyZXN1bHQDCQEDAQAEbG9vcA=="
+        }';"#;
+
+        // Create two functions in two separate passes
+        sf_context.plan_query(create_function_stmt).await?;
+        sf_context.plan_query(create_function_stmt2).await?;
+
+        // Test dropping both functions in one pass
+        let plan = sf_context
+            .plan_query(r#"DROP FUNCTION sintau, sintau2"#)
+            .await;
+        assert!(plan.is_ok());
         Ok(())
     }
 }

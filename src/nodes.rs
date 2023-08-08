@@ -32,6 +32,14 @@ pub struct CreateFunction {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct DropFunction {
+    pub if_exists: bool,
+    pub func_names: Vec<String>,
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RenameTable {
     /// Old name
     pub old_name: String,
@@ -63,6 +71,7 @@ pub struct Vacuum {
 pub enum SeafowlExtensionNode {
     CreateTable(CreateTable),
     CreateFunction(CreateFunction),
+    DropFunction(DropFunction),
     RenameTable(RenameTable),
     DropSchema(DropSchema),
     Vacuum(Vacuum),
@@ -100,6 +109,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 output_schema,
                 ..
             }) => output_schema,
+            SeafowlExtensionNode::DropFunction(DropFunction {
+                output_schema, ..
+            }) => output_schema,
             SeafowlExtensionNode::RenameTable(RenameTable { output_schema, .. }) => {
                 output_schema
             }
@@ -124,6 +136,10 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             }
             SeafowlExtensionNode::CreateFunction(CreateFunction { name, .. }) => {
                 write!(f, "CreateFunction: {name}")
+            }
+            SeafowlExtensionNode::DropFunction(DropFunction { func_names, .. }) => {
+                let names_str = func_names.join(", ");
+                write!(f, "DropFunction: {names_str}")
             }
             SeafowlExtensionNode::RenameTable(RenameTable {
                 old_name, new_name, ..

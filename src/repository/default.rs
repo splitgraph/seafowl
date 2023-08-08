@@ -439,6 +439,34 @@ impl Repository for $repo {
         Ok(functions)
     }
 
+
+    async fn drop_function(
+        &self,
+        database_id: DatabaseId,
+        func_names: &[String],
+    ) -> Result<(), Error> {
+        let query = format!(
+            r#"
+            DELETE FROM "function"
+            WHERE database_id = $1
+            AND name IN ({})
+            RETURNING id;
+            "#,
+            func_names.iter().map(|_| "$2").collect::<Vec<_>>().join(", ")
+        );
+
+        let mut query_builder = sqlx::query(&query).bind(database_id);
+        for func_name in func_names {
+            query_builder = query_builder.bind(func_name);
+        }
+        query_builder
+            .fetch_one(&self.executor)
+            .await
+            .map_err($repo::interpret_error)?;
+
+        Ok(())
+    }
+
     // Drop table/collection/database
 
     // In these methods, return the ID back so that we get an error if the

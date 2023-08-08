@@ -45,6 +45,7 @@ pub enum Error {
     CollectionAlreadyExists { name: String },
     FunctionAlreadyExists { name: String },
     FunctionDeserializationError { reason: String },
+    FunctionNotFound { names: String },
     // Creating a table in / dropping the staging schema
     UsedStagingSchema,
     SqlxError(sqlx::Error),
@@ -128,11 +129,13 @@ impl From<Error> for DataFusionError {
             Error::FunctionAlreadyExists { name } => {
                 DataFusionError::Plan(format!("Function {name:?} already exists"))
             }
+            Error::FunctionNotFound { names } => {
+                DataFusionError::Plan(format!("Function {names:?} not found"))
+            }
             Error::UsedStagingSchema => DataFusionError::Plan(
                 "The staging schema can only be referenced via CREATE EXTERNAL TABLE"
                     .to_string(),
             ),
-
             // Miscellaneous sqlx error. We want to log it but it's not worth showing to the user.
             Error::SqlxError(e) => DataFusionError::Internal(format!(
                 "Internal SQL error: {:?}",
@@ -235,6 +238,13 @@ pub trait FunctionCatalog: Sync + Send {
         &self,
         database_id: DatabaseId,
     ) -> Result<Vec<SeafowlFunction>>;
+
+    async fn drop_function(
+        &self,
+        database_id: DatabaseId,
+        if_exists: bool,
+        func_names: &[String],
+    ) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -679,5 +689,29 @@ impl FunctionCatalog for DefaultCatalog {
                     })
             })
             .collect::<Result<Vec<SeafowlFunction>>>()
+    }
+
+    async fn drop_function(
+        &self,
+        database_id: DatabaseId,
+        if_exists: bool,
+        func_names: &[String],
+    ) -> Result<()> {
+        match self.repository.drop_function(database_id, func_names).await {
+            Ok(id) => Ok(id),
+            Err(RepositoryError::FKConstraintViolation(_)) => {
+                Err(Error::DatabaseDoesNotExist { id: database_id })
+            }
+            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => {
+                if if_exists {
+                    Ok(())
+                } else {
+                    Err(Error::FunctionNotFound {
+                        names: func_names.join(", "),
+                    })
+                }
+            }
+            Err(e) => Err(Self::to_sqlx_error(e)),
+        }
     }
 }

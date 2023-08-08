@@ -171,6 +171,12 @@ pub trait Repository: Send + Sync + Debug {
         database_id: DatabaseId,
     ) -> Result<Vec<AllDatabaseFunctionsResult>, Error>;
 
+    async fn drop_function(
+        &self,
+        database_id: DatabaseId,
+        func_names: &[String],
+    ) -> Result<(), Error>;
+
     async fn drop_table(&self, table_id: TableId) -> Result<(), Error>;
 
     async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error>;
