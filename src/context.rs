@@ -2680,7 +2680,7 @@ mod tests {
 
         // Test dropping both functions in one pass
         let plan = sf_context
-            .plan_query(r#"DROP FUNCTION sintau, sintau"#)
+            .plan_query(r#"DROP FUNCTION sintau, sintau2"#)
             .await;
         assert!(plan.is_ok());
         Ok(())
