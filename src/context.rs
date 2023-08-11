@@ -278,6 +278,14 @@ pub async fn plan_to_object_store(
                 // path (just the file name).
                 let location = Path::from(prefix).child(file_name.clone());
 
+                let size = tokio::fs::metadata(
+                    partition_file_path
+                        .to_str()
+                        .expect("Temporary Parquet file in the FS root"),
+                )
+                .await?
+                .len() as i64;
+
                 // For local FS stores, we can just move the file to the target location
                 if let Some(result) =
                     store.fast_upload(&partition_file_path, &location).await
@@ -347,8 +355,6 @@ pub async fn plan_to_object_store(
 
                     writer.shutdown().await?;
                 }
-
-                let size = store.inner.head(&location).await?.size as i64;
 
                 // Create the corresponding Add action; currently we don't support partition columns
                 // which simplifies things.
