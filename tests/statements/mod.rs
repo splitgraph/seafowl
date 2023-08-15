@@ -36,6 +36,7 @@ mod query;
 #[allow(dead_code)]
 #[path = "../../src/testutils.rs"]
 mod testutils;
+mod time_travel;
 mod vacuum;
 
 enum ObjectStoreType {
@@ -182,10 +183,10 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
     context
         .plan_query(
             format!(
-                "INSERT INTO {table_name:} (some_int_value, some_time, some_value) VALUES
-                (1111, '2022-01-01T20:01:01Z', 42),
-                (2222, '2022-01-01T20:02:02Z', 43),
-                (3333, '2022-01-01T20:03:03Z', 44)"
+                "INSERT INTO {table_name:} (some_int_value, some_other_value, some_time, some_value) VALUES
+                (1111, 1.0, '2022-01-01T20:01:01Z', 42),
+                (2222, 1.0, '2022-01-01T20:02:02Z', 43),
+                (3333, 1.0, '2022-01-01T20:03:03Z', 44)"
             )
             .as_str(),
         )
@@ -240,7 +241,7 @@ async fn create_table_and_some_partitions(
     // Add another partition for table version 2
     context
         .plan_query(
-            format!("INSERT INTO {table_name} (some_value) VALUES (45), (46), (47)")
+            format!("INSERT INTO {table_name} (some_value, some_other_value) VALUES (45, 2.0), (46, 2.0), (47, 2.0)")
                 .as_str(),
         )
         .await
@@ -258,7 +259,7 @@ async fn create_table_and_some_partitions(
     // Add another partition for table_version 3
     context
         .plan_query(
-            format!("INSERT INTO {table_name} (some_value) VALUES (46), (47), (48)")
+            format!("INSERT INTO {table_name} (some_value, some_other_value) VALUES (46, 3.0), (47, 3.0), (48, 3.0)")
                 .as_str(),
         )
         .await
@@ -276,7 +277,7 @@ async fn create_table_and_some_partitions(
     // Add another partition for table_version 4
     context
         .plan_query(
-            format!("INSERT INTO {table_name} (some_value) VALUES (42), (41), (40)")
+            format!("INSERT INTO {table_name} (some_value, some_other_value) VALUES (42, 4.0), (41, 4.0), (40, 4.0)")
                 .as_str(),
         )
         .await
@@ -292,4 +293,8 @@ async fn create_table_and_some_partitions(
     .await;
 
     (version_results, version_timestamps)
+}
+
+fn timestamp_to_rfc3339(timestamp: Timestamp) -> String {
+    Utc.timestamp_opt(timestamp, 0).unwrap().to_rfc3339()
 }
