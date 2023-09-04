@@ -29,14 +29,14 @@ object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
-arrow = "43.0.0"
-arrow-buffer = "43.0.0"
-arrow-csv = "43.0.0"
+arrow = "45.0.0"
+arrow-buffer = "45.0.0"
+arrow-csv = "45.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "43.0.0"
-arrow-schema = "43.0.0"
+arrow-integration-test = "45.0.0"
+arrow-schema = "45.0.0"
 async-trait = "0.1.64"
 base64 = "0.21.0"
 
@@ -46,16 +46,16 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-28-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-28-upgrade", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-30-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-30-upgrade", optional = true }
 
-datafusion = "28.0.0"
-datafusion-common = "28.0.0"
-datafusion-expr = "28.0.0"
+datafusion = "30.0.0"
+datafusion-common = "30.0.0"
+datafusion-expr = "30.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "4f0e009f0453477aaf5b4b55d22a6fc5b9d37edd", features = ["s3-native-tls", "datafusion-ext"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "787c13a63efa9ada96d303c10c093424215aaa80", features = ["s3-native-tls", "datafusion-ext"] }
 dynamodb_lock = { version = "0.4.3", default_features = false, features = ["native-tls"] }
 
 futures = "0.3"
@@ -81,7 +81,7 @@ rmpv = { version = "1.0.0", features = ["with-serde"] }
 serde = "1.0.156"
 serde_json = "1.0.93"
 sha2 = ">=0.10.1"
-sqlparser = "0.35.0"
+sqlparser = "0.36.1"
 sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"

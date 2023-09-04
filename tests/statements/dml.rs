@@ -362,8 +362,8 @@ async fn test_update_statement(
         format!("{}", plan.display_indent()),
         r#"Dml: op=[Update] table=[test_table]
   Projection: Utf8("2022-01-01 21:21:21Z") AS some_time, test_table.some_value - Float32(10) AS some_value, test_table.some_other_value AS some_other_value, test_table.some_bool_value AS some_bool_value, Int64(5555) AS some_int_value
-    Filter: some_value = Float32(41) OR some_value = Float32(42) OR some_value = Float32(43)
-      TableScan: test_table"#
+    Filter: test_table.some_value = Float32(41) OR test_table.some_value = Float32(42) OR test_table.some_value = Float32(43)
+      TableScan: test_table projection=[some_value, some_other_value, some_bool_value], partial_filters=[test_table.some_value = Float32(41) OR test_table.some_value = Float32(42) OR test_table.some_value = Float32(43)]"#
     );
 
     // Now execute and check the results
@@ -507,7 +507,7 @@ async fn test_update_statement_errors() {
 
     assert_eq!(
         err.to_string(),
-        "Schema error: No field named nonexistent. Valid fields are some_time, some_value, some_other_value, some_bool_value, some_int_value."
+        "Schema error: No field named nonexistent. Valid fields are test_table.some_time, test_table.some_value, test_table.some_other_value, test_table.some_bool_value, test_table.some_int_value."
     );
 
     let err = context
@@ -517,7 +517,7 @@ async fn test_update_statement_errors() {
 
     assert_eq!(
         err.to_string(),
-        "Schema error: No field named nonexistent. Valid fields are some_time, some_value, some_other_value, some_bool_value, some_int_value."
+        "Schema error: No field named nonexistent. Valid fields are test_table.some_time, test_table.some_value, test_table.some_other_value, test_table.some_bool_value, test_table.some_int_value."
     );
 
     let err = context

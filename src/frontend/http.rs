@@ -14,11 +14,11 @@ use arrow_integration_test::{schema_from_json, schema_to_json};
 use arrow_schema::SchemaRef;
 use bytes::Buf;
 
-use datafusion::datasource::file_format::file_type::FileType;
 use datafusion::datasource::DefaultTableSource;
 
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
+use datafusion_common::FileType;
 use datafusion_expr::logical_plan::{LogicalPlan, TableScan};
 use deltalake::parquet::data_type::AsBytes;
 use deltalake::DeltaTable;

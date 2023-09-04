@@ -44,7 +44,10 @@ impl TableVersionProcessor {
         } else if let Ok(dt_naive) =
             NaiveDateTime::parse_from_str(version, "%Y-%m-%d %H:%M:%S")
         {
-            DateTime::from_utc(dt_naive, FixedOffset::east_opt(0).unwrap())
+            DateTime::from_naive_utc_and_offset(
+                dt_naive,
+                FixedOffset::east_opt(0).unwrap(),
+            )
         } else {
             return Err(DataFusionError::Execution(format!(
                 "Failed to parse version {version} as timestamp"
