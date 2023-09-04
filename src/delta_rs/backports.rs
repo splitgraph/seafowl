@@ -1,6 +1,6 @@
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow_schema::{ArrowError, DataType, Schema, TimeUnit};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
@@ -108,9 +108,8 @@ fn partitioned_file_from_action(action: &Add, schema: &Schema) -> PartitionedFil
 
     let ts_secs = action.modification_time / 1000;
     let ts_ns = (action.modification_time % 1000) * 1_000_000;
-    let last_modified = DateTime::<Utc>::from_utc(
-        NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap(),
-        Utc,
+    let last_modified = Utc.from_utc_datetime(
+        &NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap(),
     );
     PartitionedFile {
         object_meta: ObjectMeta {

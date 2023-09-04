@@ -40,17 +40,12 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use datafusion::common::DFSchema;
+use datafusion::common::{DFSchema, FileType};
 use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::file_format::file_type::FileType;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 pub use datafusion::error::{DataFusionError as Error, Result};
-use datafusion::optimizer::analyzer::Analyzer;
-use datafusion::optimizer::optimizer::Optimizer;
-use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
-use datafusion::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::physical_expr::expressions::{cast, Column};
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
@@ -1022,32 +1017,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                 }
                 // We only support the most basic form of UPDATE (no aliases or FROM or joins)
                     if with_hints.is_empty() && joins.is_empty() => {
-                    let plan = self.inner.state().statement_to_plan(stmt).await?;
-
-                    // Create a custom optimizer as a workaround for "Optimizer rule 'push_down_projection' failed",
-                    // which seems to be a regression for the UPDATE statement planning.
-                    // We also need to do a analyze round beforehand for type coercion.
-                    // TODO: Move on to using `state.optimize(&plan)`
-                    let analyzer = Analyzer::new();
-                    let plan = analyzer.execute_and_check(
-                        &plan,
-                        self.inner.copied_config().options(),
-                        |_, _| {},
-                    )?;
-                    let optimizer = Optimizer::with_rules(
-                        vec![
-                            Arc::new(SimplifyExpressions::new()),
-                        ]
-                    );
-                    let config = OptimizerContext::default();
-                    optimizer.optimize(&plan, &config, |plan: &LogicalPlan, rule: &dyn OptimizerRule| {
-                            debug!(
-                                "After applying rule '{}':\n{}\n",
-                                rule.name(),
-                                plan.display_indent()
-                            )
-                        }
-                    )
+                    let state = self.inner.state();
+                    let plan = state.statement_to_plan(stmt).await?;
+                    state.optimize(&plan)
                 },
                 Statement::Delete{ .. } => {
                     let state = self.inner.state();
@@ -1191,9 +1163,11 @@ impl SeafowlContext for DefaultSeafowlContext {
             DFStatement::DescribeTableStmt(_) | DFStatement::CreateExternalTable(_) => {
                 self.inner.state().statement_to_plan(stmt).await
             }
-            DFStatement::CopyTo(_) => Err(Error::NotImplemented(format!(
-                "Unsupported SQL statement: {statement:?}"
-            ))),
+            DFStatement::CopyTo(_) | DFStatement::Explain(_) => {
+                Err(Error::NotImplemented(format!(
+                    "Unsupported SQL statement: {statement:?}"
+                )))
+            }
         }
     }
 
@@ -1366,7 +1340,7 @@ impl SeafowlContext for DefaultSeafowlContext {
             }
             LogicalPlan::Dml(DmlStatement {
                 table_name,
-                op: WriteOp::Insert,
+                op: WriteOp::InsertInto,
                 input,
                 ..
             }) => {
@@ -1489,6 +1463,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                             partition_values: Some(remove.partition_values),
                             size: Some(remove.size),
                             tags: None,
+                            deletion_vector: None,
                         }))
                     }
                 }
@@ -1615,6 +1590,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         partition_values: Some(remove.partition_values),
                         size: Some(remove.size),
                         tags: None,
+                        deletion_vector: None,
                     }))
                 }
 
@@ -2214,7 +2190,7 @@ mod tests {
 
         assert_eq!(
             format!("{plan:?}"),
-            "Dml: op=[Insert] table=[testcol.some_table]\
+            "Dml: op=[Insert Into] table=[testcol.some_table]\
             \n  Projection: CAST(column1 AS Date32) AS date, CAST(column2 AS Float64) AS value\
             \n    Values: (Utf8(\"2022-01-01T12:00:00\"), Int64(42))"
         );
@@ -2232,7 +2208,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(format!("{plan:?}"), "Dml: op=[Insert] table=[testcol.some_table]\
+        assert_eq!(format!("{plan:?}"), "Dml: op=[Insert Into] table=[testcol.some_table]\
         \n  Projection: testdb.testcol.some_table.date AS date, testdb.testcol.some_table.value AS value\
         \n    TableScan: testdb.testcol.some_table projection=[date, value]");
     }
@@ -2413,7 +2389,7 @@ mod tests {
 
         assert_eq!(
             format!("{plan:?}"),
-            "Dml: op=[Insert] table=[testcol.some_table]\
+            "Dml: op=[Insert Into] table=[testcol.some_table]\
             \n  Projection: CAST(column1 AS Date32) AS date, CAST(column2 AS Float64) AS value\
             \n    Values: (Utf8(\"2022-01-01T12:00:00\"), Int64(42))"
         );
