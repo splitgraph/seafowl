@@ -26,7 +26,9 @@
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
 pub use datafusion::sql::parser::Statement;
-use datafusion::sql::parser::{CreateExternalTable, DescribeTableStmt};
+use datafusion::sql::parser::{
+    CopyToSource, CopyToStatement, CreateExternalTable, DescribeTableStmt,
+};
 use datafusion_common::parsers::CompressionTypeVariant;
 use sqlparser::ast::{CreateFunctionBody, Expr, ObjectName, OrderByExpr, Value};
 use sqlparser::tokenizer::{TokenWithLocation, Word};
@@ -145,6 +147,13 @@ impl<'a> DFParser<'a> {
                         self.parse_create()
                     }
                     Word {
+                        keyword: Keyword::COPY,
+                        ..
+                    } => {
+                        self.parser.next_token();
+                        self.parse_copy()
+                    }
+                    Word {
                         keyword: Keyword::DESCRIBE,
                         ..
                     } => {
@@ -209,6 +218,37 @@ impl<'a> DFParser<'a> {
             partitions,
             table: false,
         })))
+    }
+
+    /// Parse a SQL `COPY TO` statement
+    pub fn parse_copy(&mut self) -> Result<Statement, ParserError> {
+        // parse as a query
+        let source = if self.parser.consume_token(&Token::LParen) {
+            let query = self.parser.parse_query()?;
+            self.parser.expect_token(&Token::RParen)?;
+            CopyToSource::Query(query)
+        } else {
+            // parse as table reference
+            let table_name = self.parser.parse_object_name()?;
+            CopyToSource::Relation(table_name)
+        };
+
+        self.parser.expect_keyword(Keyword::TO)?;
+
+        let target = self.parser.parse_literal_string()?;
+
+        // check for options in parens
+        let options = if self.parser.peek_token().token == Token::LParen {
+            self.parse_value_options()?
+        } else {
+            vec![]
+        };
+
+        Ok(Statement::CopyTo(CopyToStatement {
+            source,
+            target,
+            options,
+        }))
     }
 
     /// Parse the next token as a key name for an option list
@@ -606,6 +646,33 @@ impl<'a> DFParser<'a> {
             let key = self.parser.parse_literal_string()?;
             let value = self.parser.parse_literal_string()?;
             options.insert(key, value);
+            let comma = self.parser.consume_token(&Token::Comma);
+            if self.parser.consume_token(&Token::RParen) {
+                // allow a trailing comma, even though it's not in standard
+                break;
+            } else if !comma {
+                return self.expected(
+                    "',' or ')' after option definition",
+                    self.parser.peek_token(),
+                );
+            }
+        }
+        Ok(options)
+    }
+
+    /// Parses (key value) style options into a map of String --> [`Value`].
+    ///
+    /// Unlike [`Self::parse_string_options`], this method supports
+    /// keywords as key names as well as multiple value types such as
+    /// Numbers as well as Strings.
+    fn parse_value_options(&mut self) -> Result<Vec<(String, Value)>, ParserError> {
+        let mut options = vec![];
+        self.parser.expect_token(&Token::LParen)?;
+
+        loop {
+            let key = self.parse_option_key()?;
+            let value = self.parse_option_value()?;
+            options.push((key, value));
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
                 // allow a trailing comma, even though it's not in standard

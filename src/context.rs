@@ -374,6 +374,7 @@ pub fn is_read_only(plan: &LogicalPlan) -> bool {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Extension(_)
+            | LogicalPlan::Copy(_)
     )
 }
 
@@ -1160,14 +1161,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                     "Unsupported SQL statement: {s:?}"
                 ))),
             },
-            DFStatement::DescribeTableStmt(_) | DFStatement::CreateExternalTable(_) => {
-                self.inner.state().statement_to_plan(stmt).await
-            }
-            DFStatement::CopyTo(_) | DFStatement::Explain(_) => {
-                Err(Error::NotImplemented(format!(
-                    "Unsupported SQL statement: {statement:?}"
-                )))
-            }
+            DFStatement::DescribeTableStmt(_)
+            | DFStatement::CreateExternalTable(_)
+            | DFStatement::CopyTo(_) => self.inner.state().statement_to_plan(stmt).await,
+            DFStatement::Explain(_) => Err(Error::NotImplemented(format!(
+                "Unsupported SQL statement: {statement:?}"
+            ))),
         }
     }
 
@@ -1196,6 +1195,13 @@ impl SeafowlContext for DefaultSeafowlContext {
         // Similarly to DataFrame::sql, run certain logical plans outside of the actual execution flow
         // and produce a dummy physical plan instead
         match plan {
+            LogicalPlan::Copy(_) => {
+                let physical = self.inner.state().create_physical_plan(plan).await?;
+
+                // Eagerly execute the COPY TO plan to align with other DML plans in here.
+                self.collect(physical).await?;
+                Ok(make_dummy_exec())
+            }
             // CREATE EXTERNAL TABLE copied from DataFusion's source code
             // It uses ListingTable which queries data at a given location using the ObjectStore
             // abstraction (URL: scheme://some-path.to.file.parquet) and it's easier to reuse this

@@ -529,3 +529,44 @@ async fn test_update_statement_errors() {
         .to_string()
         .contains("Cannot cast string 'nope' to value of Int64 type"));
 }
+
+#[tokio::test]
+async fn test_copy_to_statement() -> Result<(), DataFusionError> {
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
+    create_table_and_insert(&context, "test_table").await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let location = format!("{}/copy.parquet", temp_dir.path().to_string_lossy());
+
+    // Execute the COPY TO statement
+    context
+        .plan_query(format!("COPY test_table TO '{location}'").as_str())
+        .await?;
+
+    // Check results
+    context
+        .plan_query(
+            format!(
+                "CREATE EXTERNAL TABLE copied_table \
+            STORED AS PARQUET \
+            LOCATION '{location}'"
+            )
+            .as_str(),
+        )
+        .await?;
+
+    let results_original = context
+        .collect(context.plan_query("SELECT * FROM test_table").await?)
+        .await?;
+    let results_copied = context
+        .collect(
+            context
+                .plan_query("SELECT * FROM staging.copied_table")
+                .await?,
+        )
+        .await?;
+
+    assert_eq!(results_original, results_copied);
+
+    Ok(())
+}
