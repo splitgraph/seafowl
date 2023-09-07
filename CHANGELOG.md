@@ -4,6 +4,11 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Wire up COPY TO statement (<https://github.com/splitgraph/seafowl/pull/462>)
+- Upgrade to DataFusion 30 and Arrow 45 (<https://github.com/splitgraph/seafowl/pull/461>)
+- Enable time travel for write statements with source queries
+  (<https://github.com/splitgraph/seafowl/pull/460>)
+
 ## [0.5.1] - 2023-08-01
 
 - Upgrade to DataFusion 28 and Arrow 43 (<https://github.com/splitgraph/seafowl/pull/458>)
