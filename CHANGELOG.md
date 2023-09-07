@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.5.2] - 2023-09-07
+
 - Wire up COPY TO statement (<https://github.com/splitgraph/seafowl/pull/462>)
 - Upgrade to DataFusion 30 and Arrow 45 (<https://github.com/splitgraph/seafowl/pull/461>)
 - Enable time travel for write statements with source queries
@@ -194,7 +196,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.1...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/splitgraph/seafowl/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/splitgraph/seafowl/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/splitgraph/seafowl/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/splitgraph/seafowl/compare/v0.4.2...v0.4.3
