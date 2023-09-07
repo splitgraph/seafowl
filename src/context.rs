@@ -52,6 +52,7 @@ use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::sql::parser::{CopyToSource, CopyToStatement};
 use datafusion::{
     arrow::{
         datatypes::{Schema, SchemaRef},
@@ -374,6 +375,7 @@ pub fn is_read_only(plan: &LogicalPlan) -> bool {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Extension(_)
+            | LogicalPlan::Copy(_)
     )
 }
 
@@ -1160,14 +1162,20 @@ impl SeafowlContext for DefaultSeafowlContext {
                     "Unsupported SQL statement: {s:?}"
                 ))),
             },
+            DFStatement::CopyTo(CopyToStatement { ref mut source, .. }) => {
+                let state = if let CopyToSource::Query(ref mut query) = source {
+                    self.rewrite_time_travel_query(query).await?
+                } else {
+                    self.inner.state()
+                };
+                state.statement_to_plan(stmt).await
+            }
             DFStatement::DescribeTableStmt(_) | DFStatement::CreateExternalTable(_) => {
                 self.inner.state().statement_to_plan(stmt).await
             }
-            DFStatement::CopyTo(_) | DFStatement::Explain(_) => {
-                Err(Error::NotImplemented(format!(
-                    "Unsupported SQL statement: {statement:?}"
-                )))
-            }
+            DFStatement::Explain(_) => Err(Error::NotImplemented(format!(
+                "Unsupported SQL statement: {statement:?}"
+            ))),
         }
     }
 
@@ -1196,6 +1204,13 @@ impl SeafowlContext for DefaultSeafowlContext {
         // Similarly to DataFrame::sql, run certain logical plans outside of the actual execution flow
         // and produce a dummy physical plan instead
         match plan {
+            LogicalPlan::Copy(_) => {
+                let physical = self.inner.state().create_physical_plan(plan).await?;
+
+                // Eagerly execute the COPY TO plan to align with other DML plans in here.
+                self.collect(physical).await?;
+                Ok(make_dummy_exec())
+            }
             // CREATE EXTERNAL TABLE copied from DataFusion's source code
             // It uses ListingTable which queries data at a given location using the ObjectStore
             // abstraction (URL: scheme://some-path.to.file.parquet) and it's easier to reuse this
