@@ -1181,6 +1181,7 @@ impl SeafowlContext for DefaultSeafowlContext {
 
     async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
         let mut statements = self.parse_query(sql).await?;
+        println!("create_logical_plan() statements {:?}", statements);
 
         if statements.len() != 1 {
             return Err(Error::NotImplemented(
@@ -1188,8 +1189,10 @@ impl SeafowlContext for DefaultSeafowlContext {
             ));
         }
 
-        self.create_logical_plan_from_statement(statements.pop().unwrap())
-            .await
+        let plan = self.create_logical_plan_from_statement(statements.pop().unwrap())
+            .await;
+        println!("create_logical_plan() plan {:?}", plan);
+        plan
     }
 
     async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1949,6 +1952,21 @@ mod tests {
         "part-00001-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
 
     use crate::testutils::assert_uploaded_objects;
+
+    async fn get_logical_plan(query: &str) -> String {
+        let sf_context = mock_context().await;
+        let plan = sf_context.create_logical_plan(query).await.unwrap();
+        format!("{:?}", plan)
+    }
+
+    #[tokio::test]
+    async fn test_create_schema_name_in_quotes() {
+
+        assert_eq!(
+            get_logical_plan("CREATE SCHEMA \"schema_name\"").await,
+            "Create: table_name"
+        );
+    }
 
     #[rstest]
     #[case::in_memory_object_store_standard(false)]
