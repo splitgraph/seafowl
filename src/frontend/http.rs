@@ -390,7 +390,7 @@ pub async fn upload(
     let mut has_header = true;
     let mut schema: Option<SchemaRef> = None;
     let mut filename = String::new();
-    let mut temp_file = context.inner.runtime_env().disk_manager.create_tmp_file(
+    let ref_temp_file = context.inner.runtime_env().disk_manager.create_tmp_file(
         format!("Creating a target file to append to {database_name}.{schema_name}.{table_name}").as_str(),
     )?;
     while let Some(maybe_part) = form.next().await {
@@ -421,7 +421,7 @@ pub async fn upload(
 
             // Write out the incoming bytes into the temporary file
             while let Some(maybe_bytes) = part.data().await {
-                temp_file.write_all(
+                ref_temp_file.inner().write_all(
                     maybe_bytes.map_err(ApiError::UploadBodyLoadError)?.chunk(),
                 )?;
             }
@@ -443,7 +443,7 @@ pub async fn upload(
     };
 
     // Execute the plan and persist objects as well as table/partition metadata
-    let temp_path = temp_file.into_temp_path();
+    let temp_path = ref_temp_file.path();
     let table = context
         .file_to_table(
             temp_path.display().to_string(),
@@ -456,7 +456,7 @@ pub async fn upload(
         .await?;
 
     Ok(warp::reply::with_status(
-        Ok(format!(
+        Ok::<String, ApiError>(format!(
             "{filename} appended to table {table_name} version {}\n",
             table.version()
         )),

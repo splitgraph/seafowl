@@ -13,7 +13,7 @@ use tokio::io::AsyncWrite;
 
 use tokio::fs::{copy, create_dir_all, remove_file, rename};
 
-use deltalake::storage::DeltaObjectStore;
+use deltalake::logstore::{default_logstore::DefaultLogStore, LogStoreConfig};
 use object_store::prefix::PrefixStore;
 use std::path::Path as StdPath;
 use std::str::FromStr;
@@ -66,14 +66,20 @@ impl InternalObjectStore {
     //     `InternalObjectStore` comes in.
     // This does mean that we have 3 layers of indirection before we hit the "real" object store
     // (`DeltaObjectStore` -> `PrefixStore` -> `InternalObjectStore` -> `inner`).
-    pub fn for_delta_table(&self, table_uuid: Uuid) -> Arc<DeltaObjectStore> {
+    pub fn get_log_store(&self, table_uuid: Uuid) -> Arc<DefaultLogStore> {
         let prefixed_store: PrefixStore<InternalObjectStore> =
             PrefixStore::new(self.clone(), table_uuid.to_string());
 
-        Arc::from(DeltaObjectStore::new(
-            Arc::from(prefixed_store),
+        let url =
             Url::from_str(format!("{}/{}", self.root_uri.as_str(), table_uuid).as_str())
-                .unwrap(),
+                .unwrap();
+
+        Arc::from(DefaultLogStore::new(
+            Arc::from(prefixed_store),
+            LogStoreConfig {
+                location: url,
+                options: Default::default(),
+            },
         ))
     }
 
@@ -104,7 +110,9 @@ impl InternalObjectStore {
             StdPath::new(&object_store_path).join(StdPath::new(to.to_string().as_str()));
 
         // Ensure all directories on the target path exist
-        if let Some(parent_dir) = target_path.parent() && parent_dir != StdPath::new("") {
+        if let Some(parent_dir) = target_path.parent()
+            && parent_dir != StdPath::new("")
+        {
             create_dir_all(parent_dir).await.ok();
         }
 

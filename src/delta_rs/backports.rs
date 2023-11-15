@@ -11,7 +11,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{Result, ScalarValue};
-use deltalake::action::Add;
+use deltalake::kernel::Add;
 use deltalake::DeltaTable;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -53,7 +53,7 @@ pub async fn parquet_scan_from_actions(
             .collect::<Vec<_>>(),
     ));
 
-    let object_store_url = table.object_store().object_store_url();
+    let object_store_url = table.log_store().object_store_url();
     let url: &Url = object_store_url.as_ref();
     state
         .runtime_env()

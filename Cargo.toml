@@ -29,14 +29,14 @@ object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
-arrow = "45.0.0"
-arrow-buffer = "45.0.0"
-arrow-csv = "45.0.0"
+arrow = "47.0.0"
+arrow-buffer = "47.0.0"
+arrow-csv = "47.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "45.0.0"
-arrow-schema = "45.0.0"
+arrow-integration-test = "47.0.0"
+arrow-schema = "47.0.0"
 async-trait = "0.1.64"
 base64 = "0.21.0"
 
@@ -46,17 +46,17 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-30-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-30-upgrade", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-32-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-32-upgrade", optional = true }
 
-datafusion = "30.0.0"
-datafusion-common = "30.0.0"
-datafusion-expr = "30.0.0"
+datafusion = "32.0.0"
+datafusion-common = "32.0.0"
+datafusion-expr = "32.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "787c13a63efa9ada96d303c10c093424215aaa80", features = ["s3-native-tls", "datafusion-ext"] }
-dynamodb_lock = { version = "0.4.3", default_features = false, features = ["native-tls"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "2b913b37e71ed96212dcec8c3fc8e865754ced82", features = ["s3-native-tls", "datafusion-ext"] }
+dynamodb_lock = { version = "0.6.1", default_features = false, features = ["native-tls"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
@@ -64,7 +64,7 @@ itertools = ">=0.10.0"
 lazy_static = ">=1.4.0"
 log = "0.4"
 moka = { version = "0.11.0", default_features = false, features = ["future", "atomic64", "quanta"] }
-object_store = "0.6.1"
+object_store = "0.7"
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
 pretty_env_logger = "0.4"
@@ -81,7 +81,7 @@ rmpv = { version = "1.0.0", features = ["with-serde"] }
 serde = "1.0.156"
 serde_json = "1.0.93"
 sha2 = ">=0.10.1"
-sqlparser = "0.36.1"
+sqlparser = "0.38"
 sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
@@ -90,11 +90,11 @@ tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signa
 url = "2.2"
 uuid = "1.2.1"
 warp = "0.3.5"
-wasi-common = "11.0.0"
+wasi-common = "14.0.0"
 
 # For WASM user-defined functions
-wasmtime = "11.0.0"
-wasmtime-wasi = "11.0.0"
+wasmtime = "14.0.0"
+wasmtime-wasi = "14.0.0"
 
 [dev-dependencies]
 assert_unordered = "0.3"
@@ -105,7 +105,7 @@ wiremock = "0.5"
 
 [build-dependencies]
 anyhow = "1.0.63"  # for build.rs
-prost-build = "0.11.6"
+prost-build = "0.12.1"
 vergen = "7"
 
 [profile.release]

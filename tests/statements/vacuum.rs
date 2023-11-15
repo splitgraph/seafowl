@@ -2,7 +2,7 @@ use crate::statements::*;
 
 #[tokio::test]
 async fn test_vacuum_table() -> Result<(), DataFusionError> {
-    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
+    let (context, _) = make_context_with_pg(ObjectStoreType::Local).await;
 
     // Create table_1 and make tombstone by replacing the first file
     create_table_and_insert(&context, "table_1").await;
@@ -57,7 +57,10 @@ async fn test_vacuum_table() -> Result<(), DataFusionError> {
 
     // Check initial directory state
     testutils::assert_uploaded_objects(
-        context.internal_object_store.for_delta_table(table_1_uuid),
+        context
+            .internal_object_store
+            .get_log_store(table_1_uuid)
+            .object_store(),
         vec![
             Path::from("_delta_log/00000000000000000000.json"),
             Path::from("_delta_log/00000000000000000001.json"),
@@ -91,13 +94,19 @@ async fn test_vacuum_table() -> Result<(), DataFusionError> {
     assert_batches_eq!(expected, &results);
 
     // Check table_1_v1_file is gone as it's been tombstoned's by the `DELETE` command. Note that
-    // no changes have been made to the _delta_log folder
+    // two additional delta log entries have been made, corresponding to `VACUUM START` and
+    // `VACUUM END` operations.
     testutils::assert_uploaded_objects(
-        context.internal_object_store.for_delta_table(table_1_uuid),
+        context
+            .internal_object_store
+            .get_log_store(table_1_uuid)
+            .object_store(),
         vec![
             Path::from("_delta_log/00000000000000000000.json"),
             Path::from("_delta_log/00000000000000000001.json"),
             Path::from("_delta_log/00000000000000000002.json"),
+            Path::from("_delta_log/00000000000000000003.json"),
+            Path::from("_delta_log/00000000000000000004.json"),
             table_1_v2_file,
         ],
     )
@@ -137,7 +146,10 @@ async fn test_vacuum_table() -> Result<(), DataFusionError> {
     // However, no changes have been made to the actual table_2 storage since `table_2_v1_file` is
     // referenced by the latest table version.
     testutils::assert_uploaded_objects(
-        context.internal_object_store.for_delta_table(table_2_uuid),
+        context
+            .internal_object_store
+            .get_log_store(table_2_uuid)
+            .object_store(),
         vec![
             Path::from("_delta_log/00000000000000000000.json"),
             Path::from("_delta_log/00000000000000000001.json"),
@@ -247,7 +259,10 @@ async fn test_vacuum_database(
 
     // Check that objects are still there physically
     testutils::assert_uploaded_objects(
-        context.internal_object_store.for_delta_table(table_1_uuid),
+        context
+            .internal_object_store
+            .get_log_store(table_1_uuid)
+            .object_store(),
         vec![
             Path::from("_delta_log/00000000000000000000.json"),
             Path::from("_delta_log/00000000000000000001.json"),
@@ -256,7 +271,10 @@ async fn test_vacuum_database(
     )
     .await;
     testutils::assert_uploaded_objects(
-        context.internal_object_store.for_delta_table(table_2_uuid),
+        context
+            .internal_object_store
+            .get_log_store(table_2_uuid)
+            .object_store(),
         vec![
             Path::from("_delta_log/00000000000000000000.json"),
             Path::from("_delta_log/00000000000000000001.json"),
@@ -292,12 +310,18 @@ async fn test_vacuum_database(
 
     // Check that objects have been physically deleted as well
     testutils::assert_uploaded_objects(
-        context.internal_object_store.for_delta_table(table_1_uuid),
+        context
+            .internal_object_store
+            .get_log_store(table_1_uuid)
+            .object_store(),
         vec![],
     )
     .await;
     testutils::assert_uploaded_objects(
-        context.internal_object_store.for_delta_table(table_2_uuid),
+        context
+            .internal_object_store
+            .get_log_store(table_2_uuid)
+            .object_store(),
         vec![],
     )
     .await;

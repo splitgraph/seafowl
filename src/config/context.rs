@@ -138,7 +138,7 @@ pub fn build_state_with_table_factories(
     config: SessionConfig,
     runtime: Arc<RuntimeEnv>,
 ) -> SessionState {
-    let mut state = SessionState::with_config_rt(config, runtime);
+    let mut state = SessionState::new_with_config_rt(config, runtime);
 
     state
         .table_factories_mut()
@@ -171,7 +171,7 @@ pub async fn build_context(
 
     let runtime_env = RuntimeEnv::new(runtime_config)?;
     let state = build_state_with_table_factories(session_config, Arc::new(runtime_env));
-    let context = SessionContext::with_state(state);
+    let context = SessionContext::new_with_state(state);
 
     let object_store = build_object_store(&cfg.object_store);
     let internal_object_store = Arc::new(InternalObjectStore::new(
