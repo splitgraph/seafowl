@@ -135,23 +135,23 @@ pub struct S3 {
 impl S3 {
     pub fn from_bucket_and_options(
         bucket: String,
-        map: &HashMap<String, String>,
+        map: &mut HashMap<String, String>,
     ) -> Result<Self, ConfigError> {
         Ok(S3 {
             region: map.get("region").cloned(),
             access_key_id: map
-                .get("access_key_id")
+                .remove("access_key_id")
                 .ok_or(ConfigError::Message(
                     "'access_key_id' not found in provided options".to_string(),
                 ))?
                 .clone(),
             secret_access_key: map
-                .get("secret_access_key")
+                .remove("secret_access_key")
                 .ok_or(ConfigError::Message(
                     "'secret_access_key' not found in provided options".to_string(),
                 ))?
                 .clone(),
-            endpoint: map.get("endpoint").cloned(),
+            endpoint: map.remove("endpoint"),
             bucket,
             cache_properties: Some(ObjectCacheProperties::default()),
         })
@@ -168,13 +168,11 @@ pub struct GCS {
 impl GCS {
     pub fn from_bucket_and_options(
         bucket: String,
-        map: &HashMap<String, String>,
+        map: &mut HashMap<String, String>,
     ) -> Self {
         GCS {
             bucket,
-            google_application_credentials: map
-                .get("google_application_credentials")
-                .cloned(),
+            google_application_credentials: map.remove("google_application_credentials"),
             cache_properties: Some(ObjectCacheProperties::default()),
         }
     }

@@ -7,6 +7,7 @@ use chrono::{TimeZone, Utc};
 use datafusion::assert_batches_eq;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{assert_contains, DataFusionError};
+use deltalake::logstore::LogStore;
 use itertools::sorted;
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};

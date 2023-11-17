@@ -287,9 +287,9 @@ impl DefaultCatalog {
         // TODO: this means that any `information_schema.columns` query will serially load all
         // delta tables present in the database. The real fix for this is to make DF use `TableSource`
         // for the information schema, and then implement `TableSource` for `DeltaTable` in delta-rs.
-        let table_object_store = self.object_store.for_delta_table(table_uuid);
+        let table_log_store = self.object_store.get_log_store(table_uuid);
 
-        let table = DeltaTable::new(table_object_store, Default::default());
+        let table = DeltaTable::new(table_log_store, Default::default());
         (Arc::from(table_name.to_string()), Arc::new(table) as _)
     }
 
@@ -302,9 +302,15 @@ impl DefaultCatalog {
         I: Iterator<Item = &'a AllDatabaseColumnsResult>,
     {
         let tables = collection_columns
-            .filter_map(|col| if let Some(table_name) = &col.table_name && let Some(table_uuid) = col.table_uuid {
-                Some(self.build_table(table_name, table_uuid))
-            } else { None })
+            .filter_map(|col| {
+                if let Some(table_name) = &col.table_name
+                    && let Some(table_uuid) = col.table_uuid
+                {
+                    Some(self.build_table(table_name, table_uuid))
+                } else {
+                    None
+                }
+            })
             .collect::<HashMap<_, _>>();
 
         (

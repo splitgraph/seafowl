@@ -569,7 +569,7 @@ fn make_scalar_function_wasm_messagepack(
         }
 
         // Length of the vectorized array
-        let array_len = args.get(0).unwrap().len();
+        let array_len = args.first().unwrap().len();
 
         // Buffer for the results
         let mut encoded_results: Vec<Value> = Vec::with_capacity(array_len);
@@ -656,7 +656,7 @@ fn make_scalar_function_from_wasm(
         assert_eq!(args.len(), input_types.len());
 
         // Length of the vectorized array
-        let array_len = args.get(0).unwrap().len();
+        let array_len = args.first().unwrap().len();
 
         // Buffer for the results
         let mut results: Vec<Val> = Vec::new();

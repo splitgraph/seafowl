@@ -1,4 +1,6 @@
-use arrow_schema::{DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
+use arrow_schema::{
+    DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
+};
 use sqlparser::ast::{
     ColumnDef as SQLColumnDef, ColumnOption, DataType as SQLDataType, ExactNumberInfo,
     Ident, TimezoneInfo,
@@ -6,7 +8,8 @@ use sqlparser::ast::{
 
 use datafusion::arrow::datatypes::{Field, Schema};
 use datafusion::config::ConfigOptions;
-pub use datafusion::error::{DataFusionError as Error, Result};
+pub use datafusion::error::Result;
+use datafusion_common::{not_impl_err, DataFusionError};
 
 // Normalize an identifier to a lowercase string unless the identifier is quoted.
 pub(crate) fn normalize_ident(id: &Ident) -> String {
@@ -43,20 +46,20 @@ pub(crate) fn build_schema(columns: Vec<SQLColumnDef>) -> Result<Schema> {
 // simply use the default `time_zone` config value.
 pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
     match sql_type {
-        SQLDataType::Boolean => Ok(DataType::Boolean),
+        SQLDataType::Boolean | SQLDataType::Bool => Ok(DataType::Boolean),
         SQLDataType::TinyInt(_) => Ok(DataType::Int8),
-        SQLDataType::SmallInt(_) => Ok(DataType::Int16),
-        SQLDataType::Int(_) | SQLDataType::Integer(_) => Ok(DataType::Int32),
-        SQLDataType::BigInt(_) => Ok(DataType::Int64),
+        SQLDataType::SmallInt(_) | SQLDataType::Int2(_) => Ok(DataType::Int16),
+        SQLDataType::Int(_) | SQLDataType::Integer(_) | SQLDataType::Int4(_) => Ok(DataType::Int32),
+        SQLDataType::BigInt(_) | SQLDataType::Int8(_) => Ok(DataType::Int64),
         SQLDataType::UnsignedTinyInt(_) => Ok(DataType::UInt8),
-        SQLDataType::UnsignedSmallInt(_) => Ok(DataType::UInt16),
-        SQLDataType::UnsignedInt(_) | SQLDataType::UnsignedInteger(_) => {
+        SQLDataType::UnsignedSmallInt(_) | SQLDataType::UnsignedInt2(_) => Ok(DataType::UInt16),
+        SQLDataType::UnsignedInt(_) | SQLDataType::UnsignedInteger(_) | SQLDataType::UnsignedInt4(_) => {
             Ok(DataType::UInt32)
         }
-        SQLDataType::UnsignedBigInt(_) => Ok(DataType::UInt64),
+        SQLDataType::UnsignedBigInt(_) | SQLDataType::UnsignedInt8(_) => Ok(DataType::UInt64),
         SQLDataType::Float(_) => Ok(DataType::Float32),
-        SQLDataType::Real => Ok(DataType::Float32),
-        SQLDataType::Double | SQLDataType::DoublePrecision => Ok(DataType::Float64),
+        SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
+        SQLDataType::Double | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
         SQLDataType::Char(_)
         | SQLDataType::Varchar(_)
         | SQLDataType::Text
@@ -82,14 +85,14 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
             {
                 Ok(DataType::Time64(TimeUnit::Nanosecond))
             } else {
-                // We don't support TIMETZ and TIME WITH TIME ZONE for now.
-                Err(Error::NotImplemented(format!(
-                    "Unsupported SQL type {sql_type:?}"
-                )))
+                // We dont support TIMETZ and TIME WITH TIME ZONE for now
+                not_impl_err!(
+                        "Unsupported SQL type {sql_type:?}"
+                    )
             }
         }
         SQLDataType::Numeric(exact_number_info)
-        |SQLDataType::Decimal(exact_number_info) => {
+        | SQLDataType::Decimal(exact_number_info) => {
             let (precision, scale) = match *exact_number_info {
                 ExactNumberInfo::None => (None, None),
                 ExactNumberInfo::Precision(precision) => (Some(precision), None),
@@ -100,19 +103,17 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
             make_decimal_type(precision, scale)
         }
         SQLDataType::Bytea => Ok(DataType::Binary),
+        SQLDataType::Interval => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
         // Explicitly list all other types so that if sqlparser
         // adds/changes the `SQLDataType` the compiler will tell us on upgrade
         // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
         SQLDataType::Nvarchar(_)
+        | SQLDataType::JSON
         | SQLDataType::Uuid
         | SQLDataType::Binary(_)
-        | SQLDataType::BigNumeric(_)
-        | SQLDataType::BigDecimal(_)
         | SQLDataType::Varbinary(_)
         | SQLDataType::Blob(_)
         | SQLDataType::Datetime(_)
-        | SQLDataType::Interval
-        | SQLDataType::JSON
         | SQLDataType::Regclass
         | SQLDataType::Custom(_, _)
         | SQLDataType::Array(_)
@@ -130,9 +131,12 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         // precision is not supported
         | SQLDataType::Time(Some(_), _)
         | SQLDataType::Dec(_)
-        | SQLDataType::Clob(_) => Err(Error::NotImplemented(format!(
-            "Unsupported SQL type {sql_type:?}"
-        ))),
+        | SQLDataType::BigNumeric(_)
+        | SQLDataType::BigDecimal(_)
+        | SQLDataType::Clob(_)
+        => not_impl_err!(
+                "Unsupported SQL type {sql_type:?}"
+            ),
     }
 }
 
@@ -147,7 +151,7 @@ pub(crate) fn make_decimal_type(
         (Some(p), Some(s)) => (p as u8, s as i8),
         (Some(p), None) => (p as u8, 0),
         (None, Some(_)) => {
-            return Err(Error::Internal(
+            return Err(DataFusionError::Internal(
                 "Cannot specify only scale for decimal data type".to_string(),
             ))
         }
@@ -159,7 +163,7 @@ pub(crate) fn make_decimal_type(
         || precision > DECIMAL128_MAX_PRECISION
         || scale.unsigned_abs() > precision
     {
-        Err(Error::Internal(format!(
+        Err(DataFusionError::Internal(format!(
             "Decimal(precision = {precision}, scale = {scale}) should satisfy `0 < precision <= 38`, and `scale <= precision`."
         )))
     } else {

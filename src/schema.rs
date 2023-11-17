@@ -43,6 +43,7 @@ impl Schema {
     }
 }
 
+#[allow(clippy::map_identity)]
 #[cfg(test)]
 mod tests {
     use super::*;

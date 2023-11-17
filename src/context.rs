@@ -16,7 +16,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use std::fs::File;
 
 use datafusion::execution::context::SessionState;
-use datafusion::execution::DiskManager;
 
 use crate::datafusion::parser::{DFParser, Statement as DFStatement};
 use crate::datafusion::utils::build_schema;
@@ -76,15 +75,16 @@ use datafusion_expr::logical_plan::{
     DropTable, Extension, LogicalPlan, Projection,
 };
 use datafusion_expr::{DdlStatement, DmlStatement, Filter, WriteOp};
-use deltalake::action::{Action, Add, DeltaOperation, Remove, SaveMode};
+use deltalake::kernel::{Action, Add, Remove, Schema as DeltaSchema};
 use deltalake::operations::create::CreateBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
+use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::writer::create_add;
-use deltalake::{DeltaTable, Schema as DeltaSchema};
+use deltalake::DeltaTable;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
-use tempfile::TempPath;
+use tempfile::{NamedTempFile, TempPath};
 use tokio::sync::Semaphore;
 use url::Url;
 use uuid::Uuid;
@@ -158,11 +158,10 @@ fn make_dummy_exec() -> Arc<dyn ExecutionPlan> {
 
 /// Open a temporary file to write partition and return a handle and a writer for it.
 fn temp_partition_file_writer(
-    disk_manager: Arc<DiskManager>,
     arrow_schema: SchemaRef,
 ) -> Result<(TempPath, ArrowWriter<File>)> {
     let partition_file =
-        disk_manager.create_tmp_file("Open a temporary file to write partition")?;
+        NamedTempFile::new().expect("Open a temporary file to write partition");
 
     // Hold on to the path of the file, in case we need to just move it instead of
     // uploading the data to the object store. This can be a consistency/security issue, but the
@@ -191,12 +190,11 @@ pub async fn plan_to_object_store(
     plan: &Arc<dyn ExecutionPlan>,
     store: Arc<InternalObjectStore>,
     prefix: String,
-    disk_manager: Arc<DiskManager>,
     max_partition_size: u32,
 ) -> Result<Vec<Add>> {
     let mut current_partition_size = 0;
     let (mut current_partition_file_path, mut writer) =
-        temp_partition_file_writer(disk_manager.clone(), plan.schema())?;
+        temp_partition_file_writer(plan.schema())?;
     let mut partition_file_paths = vec![current_partition_file_path];
     let mut partition_metadata = vec![];
     let mut tasks = vec![];
@@ -235,7 +233,7 @@ pub async fn plan_to_object_store(
                 leftover_partition_capacity = max_partition_size as usize;
 
                 (current_partition_file_path, writer) =
-                    temp_partition_file_writer(disk_manager.clone(), plan.schema())?;
+                    temp_partition_file_writer(plan.schema())?;
                 partition_file_paths.push(current_partition_file_path);
             }
 
@@ -472,7 +470,7 @@ impl DefaultSeafowlContext {
             build_state_with_table_factories(session_config, self.inner().runtime_env());
 
         Ok(Arc::from(DefaultSeafowlContext {
-            inner: SessionContext::with_state(state),
+            inner: SessionContext::new_with_state(state),
             table_catalog: self.table_catalog.clone(),
             function_catalog: self.function_catalog.clone(),
             internal_object_store: self.internal_object_store.clone(),
@@ -534,7 +532,7 @@ impl DefaultSeafowlContext {
         // conditions leading to schema provider map leaking into other queries (and
         // thus polluting e.g. the information_schema output), or even worse reloading
         // the map and having the versioned query fail during execution.
-        let session_ctx = SessionContext::with_state(self.inner.state());
+        let session_ctx = SessionContext::new_with_state(self.inner.state());
 
         for (table, version) in &version_processor.table_versions {
             let name_with_version =
@@ -546,11 +544,10 @@ impl DefaultSeafowlContext {
 
             // We only support datetime DeltaTable version specification for start
             let table_uuid = self.get_table_uuid(resolved_ref.clone()).await?;
-            let table_object_store =
-                self.internal_object_store.for_delta_table(table_uuid);
+            let table_log_store = self.internal_object_store.get_log_store(table_uuid);
             let datetime = TableVersionProcessor::version_to_datetime(version)?;
 
-            let mut delta_table = DeltaTable::new(table_object_store, Default::default());
+            let mut delta_table = DeltaTable::new(table_log_store, Default::default());
             delta_table.load_with_datetime(datetime).await?;
             let table_provider_for_version = Arc::from(delta_table);
 
@@ -630,7 +627,7 @@ impl DefaultSeafowlContext {
         &self,
         table_name: impl Into<TableReference<'a>>,
     ) -> Result<DeltaTable> {
-        let table_object_store = self
+        let table_log_store = self
             .inner
             .table_provider(table_name)
             .await?
@@ -639,11 +636,11 @@ impl DefaultSeafowlContext {
             .ok_or_else(|| {
                 DataFusionError::Execution("Table {table_name} not found".to_string())
             })?
-            .object_store();
+            .log_store();
 
         // We can't just keep hold of the downcasted ref from above because of
         // `temporary value dropped while borrowed`
-        Ok(DeltaTable::new(table_object_store, Default::default()))
+        Ok(DeltaTable::new(table_log_store, Default::default()))
     }
 
     // Parse the uuid from the Delta table uri if available
@@ -711,15 +708,15 @@ impl DefaultSeafowlContext {
         // with the returned uuid (and delete the catalog entry if the object store creation fails).
         // On the other hand that would complicate etag testing logic.
         let table_uuid = get_uuid();
-        let table_object_store = self.internal_object_store.for_delta_table(table_uuid);
+        let table_log_store = self.internal_object_store.get_log_store(table_uuid);
 
         // NB: there's also a uuid generated below for table's `DeltaTableMetaData::id`, so it would
         // be nice if those two could match
         let table = Arc::new(
             CreateBuilder::new()
-                .with_object_store(table_object_store)
+                .with_log_store(table_log_store)
                 .with_table_name(&*table_name)
-                .with_columns(delta_schema.get_fields().clone())
+                .with_columns(delta_schema.fields().clone())
                 .with_comment(format!(
                     "Created by Seafowl version {}",
                     env!("CARGO_PKG_VERSION")
@@ -779,7 +776,7 @@ impl DefaultSeafowlContext {
         plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<DeltaTable> {
         let table_uuid = self.get_table_uuid(name).await?;
-        let table_object_store = self.internal_object_store.for_delta_table(table_uuid);
+        let table_log_store = self.internal_object_store.get_log_store(table_uuid);
 
         // Upload partition files to table's root directory
         let adds = plan_to_object_store(
@@ -787,23 +784,22 @@ impl DefaultSeafowlContext {
             plan,
             self.internal_object_store.clone(),
             table_uuid.to_string(),
-            self.inner.runtime_env().disk_manager.clone(),
             self.max_partition_size,
         )
         .await?;
 
         // Commit the write into a new version
-        let mut table = DeltaTable::new(table_object_store, Default::default());
+        let mut table = DeltaTable::new(table_log_store.clone(), Default::default());
         table.load().await?;
 
-        let actions: Vec<Action> = adds.into_iter().map(Action::add).collect();
+        let actions: Vec<Action> = adds.into_iter().map(Action::Add).collect();
         let op = DeltaOperation::Write {
             mode: SaveMode::Append,
             partition_by: None,
             predicate: None,
         };
         let version = commit(
-            table.object_store().as_ref(),
+            table_log_store.as_ref(),
             &actions,
             op,
             table.get_state(),
@@ -1068,9 +1064,14 @@ impl SeafowlContext for DefaultSeafowlContext {
                 },
 
                 // ALTER TABLE ... RENAME TO
-                Statement::AlterTable { name, operation: AlterTableOperation::RenameTable {table_name: new_name }} => {
+                Statement::AlterTable { name, operations, ..} => {
                     let old_table_name = name.to_string();
-                    let new_table_name = new_name.to_string();
+                    let new_table_name = match operations[..] {
+                        [AlterTableOperation::RenameTable {ref table_name}] => table_name.to_string(),
+                        _ => return Err(Error::Plan(
+                            "Unsupported ALTER TABLE statement".to_string()
+                        ))
+                    };
 
                     if self.get_table_provider(old_table_name.to_owned()).await.is_err() {
                         return Err(Error::Plan(
@@ -1254,17 +1255,24 @@ impl SeafowlContext for DefaultSeafowlContext {
                         .to_string();
 
                     let config = if scheme == "s3" {
-                        let s3 = if cmd.options.is_empty() && let schema::ObjectStore::S3(s3) = self.internal_object_store.config.clone() {
-                            S3{ bucket, ..s3 }
+                        let s3 = if cmd.options.is_empty()
+                            && let schema::ObjectStore::S3(s3) =
+                                self.internal_object_store.config.clone()
+                        {
+                            S3 { bucket, ..s3 }
                         } else {
-                            S3::from_bucket_and_options(bucket, &cmd.options).map_err(|e| DataFusionError::Execution(e.to_string()))?
+                            S3::from_bucket_and_options(bucket, &mut cmd.options)
+                                .map_err(|e| DataFusionError::Execution(e.to_string()))?
                         };
                         schema::ObjectStore::S3(s3)
                     } else {
-                        let gcs = if cmd.options.is_empty() && let schema::ObjectStore::GCS(gcs) = self.internal_object_store.config.clone() {
-                            GCS{ bucket, ..gcs }
+                        let gcs = if cmd.options.is_empty()
+                            && let schema::ObjectStore::GCS(gcs) =
+                                self.internal_object_store.config.clone()
+                        {
+                            GCS { bucket, ..gcs }
                         } else {
-                            GCS::from_bucket_and_options(bucket, &cmd.options)
+                            GCS::from_bucket_and_options(bucket, &mut cmd.options)
                         };
                         schema::ObjectStore::GCS(gcs)
                     };
@@ -1458,7 +1466,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                         &update_plan,
                         self.internal_object_store.clone(),
                         uuid.to_string(),
-                        self.inner.runtime_env().disk_manager.clone(),
                         self.max_partition_size,
                     )
                     .await?;
@@ -1468,9 +1475,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                         .unwrap()
                         .as_millis() as i64;
 
-                    actions = adds.into_iter().map(Action::add).collect();
+                    actions = adds.into_iter().map(Action::Add).collect();
                     for remove in removes {
-                        actions.push(Action::remove(Remove {
+                        actions.push(Action::Remove(Remove {
                             path: remove.path,
                             deletion_timestamp: Some(deletion_timestamp),
                             data_change: true,
@@ -1479,6 +1486,8 @@ impl SeafowlContext for DefaultSeafowlContext {
                             size: Some(remove.size),
                             tags: None,
                             deletion_vector: None,
+                            base_row_id: None,
+                            default_row_commit_version: None,
                         }))
                     }
                 }
@@ -1489,7 +1498,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                     predicate: None,
                 };
                 let version = commit(
-                    table.object_store().as_ref(),
+                    table.log_store().as_ref(),
                     &actions,
                     op,
                     table.get_state(),
@@ -1576,7 +1585,6 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 &filter_plan,
                                 self.internal_object_store.clone(),
                                 uuid.to_string(),
-                                self.inner.runtime_env().disk_manager.clone(),
                                 self.max_partition_size,
                             )
                             .await?;
@@ -1595,9 +1603,9 @@ impl SeafowlContext for DefaultSeafowlContext {
                     .as_millis() as i64;
 
                 let mut actions: Vec<Action> =
-                    adds.into_iter().map(Action::add).collect();
+                    adds.into_iter().map(Action::Add).collect();
                 for remove in removes {
-                    actions.push(Action::remove(Remove {
+                    actions.push(Action::Remove(Remove {
                         path: remove.path,
                         deletion_timestamp: Some(deletion_timestamp),
                         data_change: true,
@@ -1606,12 +1614,14 @@ impl SeafowlContext for DefaultSeafowlContext {
                         size: Some(remove.size),
                         tags: None,
                         deletion_vector: None,
+                        base_row_id: None,
+                        default_row_commit_version: None,
                     }))
                 }
 
                 let op = DeltaOperation::Delete { predicate: None };
                 let version = commit(
-                    table.object_store().as_ref(),
+                    table.log_store().as_ref(),
                     &actions,
                     op,
                     table.get_state(),
@@ -1818,7 +1828,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                                     // time-travel querying syntax), but are not represented in `system.table_versions` table.
                                     delta_table.load().await?;
                                     let plan = VacuumBuilder::new(
-                                        delta_table.object_store(),
+                                        delta_table.log_store(),
                                         delta_table.state.clone(),
                                     )
                                     .with_enforce_retention_duration(false)
@@ -1929,13 +1939,13 @@ mod tests {
 
     use std::sync::Arc;
 
-    use datafusion::execution::disk_manager::DiskManagerConfig;
     use object_store::memory::InMemory;
     use rstest::rstest;
 
     use crate::config::schema;
     use datafusion::assert_batches_eq;
     use datafusion::physical_plan::memory::MemoryExec;
+    use deltalake::logstore::LogStore;
     use object_store::local::LocalFileSystem;
     use serde_json::{json, Value};
 
@@ -1996,13 +2006,11 @@ mod tests {
         };
 
         let table_uuid = Uuid::default();
-        let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
         let adds = plan_to_object_store(
             &sf_context.inner.state(),
             &execution_plan,
             object_store.clone(),
             table_uuid.to_string(),
-            disk_manager,
             2,
         )
         .await
@@ -2037,7 +2045,7 @@ mod tests {
             vec![
                 (
                     PART_0_FILE_NAME.to_string(),
-                    1262,
+                    1269,
                     true,
                     true,
                     true,
@@ -2062,7 +2070,7 @@ mod tests {
                 ),
                 (
                     PART_1_FILE_NAME.to_string(),
-                    1277,
+                    1284,
                     true,
                     true,
                     true,
@@ -2089,7 +2097,7 @@ mod tests {
         );
 
         assert_uploaded_objects(
-            object_store.for_delta_table(table_uuid),
+            object_store.get_log_store(table_uuid).object_store(),
             vec![
                 Path::from(PART_0_FILE_NAME.to_string()),
                 Path::from(PART_1_FILE_NAME.to_string()),
@@ -2158,13 +2166,11 @@ mod tests {
             Arc::new(InMemory::new()),
             schema::ObjectStore::InMemory(schema::InMemory {}),
         ));
-        let disk_manager = DiskManager::try_new(DiskManagerConfig::new()).unwrap();
         let adds = plan_to_object_store(
             &sf_context.inner.state(),
             &execution_plan,
             object_store,
             "test".to_string(),
-            disk_manager,
             max_partition_size,
         )
         .await

@@ -347,9 +347,6 @@ pub fn visit_select<'ast, V: VisitorMut<'ast> + ?Sized>(
     if let Some(selection) = &mut select.selection {
         visitor.visit_where(selection);
     }
-    if !select.group_by.is_empty() {
-        visitor.visit_group_by(&mut select.group_by);
-    }
     if let Some(having) = &mut select.having {
         visitor.visit_having(having);
     }
@@ -391,6 +388,7 @@ pub fn visit_table_factor<'ast, V: VisitorMut<'ast> + ?Sized>(
             alias,
             args,
             with_hints,
+            ..
         } => visitor.visit_table_table_factor(name, alias.as_mut(), args, with_hints),
         TableFactor::Derived {
             lateral,

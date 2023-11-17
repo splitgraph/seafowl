@@ -1,15 +1,18 @@
 /// ObjectStore implementation for HTTP/HTTPs for DataFusion's CREATE EXTERNAL TABLE
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::Utc;
 use futures::stream::BoxStream;
 use futures::{stream, StreamExt};
 
+use chrono::{DateTime, TimeZone, Utc};
 use object_store::path::Path;
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
+    ObjectStore,
 };
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
+use warp::hyper::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
+use warp::hyper::HeaderMap;
 
 use crate::object_store::cache::{
     CachingObjectStore, DEFAULT_CACHE_CAPACITY, DEFAULT_CACHE_ENTRY_TTL,
@@ -60,6 +63,7 @@ enum HttpObjectStoreError {
     ListingUnsupported,
     HttpClientError(reqwest::Error),
     RangesUnsupported,
+    HeaderParsingError(String),
 }
 
 impl From<HttpObjectStoreError> for object_store::Error {
@@ -89,6 +93,9 @@ impl Display for HttpObjectStoreError {
                 writeln!(f, "This server does not support byte range fetches")
             }
             Self::HttpClientError(e) => writeln!(f, "HTTP error: {e:?}"),
+            Self::HeaderParsingError(e) => {
+                writeln!(f, "HTTP response header error: {e:?}")
+            }
         }
     }
 }
@@ -267,16 +274,23 @@ impl ObjectStore for HttpObjectStore {
         location: &Path,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
+        let range = options.range.clone();
         let response = self
             .send(self.request_builder_with_get_options(location, options))
             .await?;
+        let meta = header_meta(location, response.headers())?;
 
         let body = response.bytes_stream();
 
-        Ok(GetResult::Stream(
+        let stream = GetResultPayload::Stream(
             body.map(|c| c.map_err(|e| HttpObjectStoreError::HttpClientError(e).into()))
                 .boxed(),
-        ))
+        );
+        Ok(GetResult {
+            range: range.unwrap_or(0..meta.size),
+            payload: stream,
+            meta,
+        })
     }
 
     async fn get_range(
@@ -473,6 +487,71 @@ pub fn try_prepare_http_url(location: &str) -> Option<String> {
             ))
         },
     )
+}
+
+// Adapted from `object_store/src/client/header.rs` as it's private in the `object_store` crate
+/// Extracts [`ObjectMeta`] from the provided [`HeaderMap`]
+pub fn header_meta(
+    location: &Path,
+    headers: &HeaderMap,
+) -> object_store::Result<ObjectMeta> {
+    let last_modified = match headers.get(LAST_MODIFIED) {
+        Some(last_modified) => {
+            let last_modified = last_modified.to_str().map_err(|e| {
+                HttpObjectStoreError::HeaderParsingError(format!(
+                    "Couldn't parse `last-modified`: {e:?}"
+                ))
+            })?;
+            DateTime::parse_from_rfc2822(last_modified)
+                .map_err(|e| {
+                    HttpObjectStoreError::HeaderParsingError(format!(
+                        "Couldn't parse rfc2822 datetime from {last_modified}: {e:?}"
+                    ))
+                })?
+                .with_timezone(&Utc)
+        }
+        None => Utc.timestamp_nanos(0),
+    };
+
+    let e_tag = headers
+        .get(ETAG)
+        .map(|h| {
+            Ok::<String, HttpObjectStoreError>(
+                h.to_str()
+                    .map_err(|e| {
+                        HttpObjectStoreError::HeaderParsingError(format!(
+                            "Couldn't parse `etag`: {e:?}"
+                        ))
+                    })?
+                    .to_string(),
+            )
+        })
+        .transpose()?;
+
+    let size = headers
+        .get(CONTENT_LENGTH)
+        .ok_or(HttpObjectStoreError::HeaderParsingError(format!(
+            "Missing `content-length` in headers: {headers:?}"
+        )))?
+        .to_str()
+        .map_err(|e| {
+            HttpObjectStoreError::HeaderParsingError(format!(
+                "Couldn't parse `content-length`: {e:?}"
+            ))
+        })?
+        .parse()
+        .map_err(|e| {
+            HttpObjectStoreError::HeaderParsingError(format!(
+                "Couldn't parse `content-length` as int: {e:?}"
+            ))
+        })?;
+
+    Ok(ObjectMeta {
+        location: location.clone(),
+        last_modified,
+        size,
+        e_tag,
+    })
 }
 
 #[cfg(test)]
