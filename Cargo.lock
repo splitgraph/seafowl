@@ -5062,7 +5062,6 @@ dependencies = [
  "datafusion-expr",
  "datafusion-remote-tables",
  "deltalake",
- "dynamodb_lock",
  "futures",
  "hex",
  "itertools 0.11.0",

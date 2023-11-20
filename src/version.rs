@@ -2,11 +2,10 @@ use chrono::{DateTime, FixedOffset, NaiveDateTime, Utc};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::sql::TableReference;
 use sqlparser::ast::{
-    Expr, FunctionArg, FunctionArgExpr, Ident, ObjectName, TableAlias, Value,
+    Expr, FunctionArg, FunctionArgExpr, Ident, ObjectName, TableFactor, Value, VisitorMut,
 };
 use std::collections::HashSet;
-
-use crate::datafusion::visit::{visit_table_table_factor, VisitorMut};
+use std::ops::ControlFlow;
 
 // A struct for walking the query AST, visiting all tables and rewriting any table reference that
 // uses time travel syntax (i.e. table function syntax such as `table('2022-01-01 20:01:01Z')`).
@@ -58,18 +57,23 @@ impl TableVersionProcessor {
     }
 }
 
-impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
-    fn visit_table_table_factor(
+impl VisitorMut for TableVersionProcessor {
+    type Break = ();
+
+    fn pre_visit_table_factor(
         &mut self,
-        name: &'ast mut ObjectName,
-        alias: Option<&'ast mut TableAlias>,
-        args: &'ast mut Option<Vec<FunctionArg>>,
-        with_hints: &'ast mut [Expr],
-    ) {
-        if let Some(func_args) = args {
-            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
-                Value::SingleQuotedString(value),
-            ))) = &func_args[0]
+        table_factor: &mut TableFactor,
+    ) -> ControlFlow<()> {
+        if let TableFactor::Table {
+            name, ref mut args, ..
+        } = table_factor
+        {
+            // If a function arg expression is a single string interpret this as a version specifier
+            if let Some(
+                [FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                    Value::SingleQuotedString(value),
+                )))],
+            ) = &args.as_deref()
             {
                 let unresolved_name = name.to_string();
                 let resolved_ref = TableReference::from(unresolved_name.as_str())
@@ -89,7 +93,8 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
                 *args = None;
             }
         }
-        visit_table_table_factor(self, name, alias, args, with_hints)
+
+        ControlFlow::Continue(())
     }
 }
 
@@ -97,11 +102,10 @@ impl<'ast> VisitorMut<'ast> for TableVersionProcessor {
 mod tests {
     use datafusion::sql::parser::Statement;
     use rstest::rstest;
-    use sqlparser::ast::Statement as SQLStatement;
+    use sqlparser::ast::{Statement as SQLStatement, VisitMut};
     use std::ops::Deref;
 
     use crate::datafusion::parser::DFParser;
-    use crate::datafusion::visit::VisitorMut;
     use crate::version::TableVersionProcessor;
 
     #[rstest]
@@ -139,7 +143,7 @@ mod tests {
             "test_catalog".to_string(),
             "test_schema".to_string(),
         );
-        rewriter.visit_query(&mut q);
+        q.visit(&mut rewriter);
 
         // Ensure table name in the original query has been renamed to appropriate version
         assert_eq!(
