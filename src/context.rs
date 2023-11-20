@@ -30,7 +30,7 @@ use object_store::path::Path;
 
 use sqlparser::ast::{
     AlterTableOperation, CreateFunctionBody, Expr as SqlExpr, FunctionDefinition,
-    ObjectType, Query, Statement, TableFactor, TableWithJoins,
+    ObjectType, Query, Statement, TableFactor, TableWithJoins, VisitMut,
 };
 
 use arrow_schema::{DataType, TimeUnit};
@@ -93,7 +93,6 @@ use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::config::context::{build_object_store, build_state_with_table_factories};
 use crate::config::schema;
 use crate::config::schema::{GCS, S3};
-use crate::datafusion::visit::VisitorMut;
 use crate::delta_rs::backports::parquet_scan_from_actions;
 #[cfg(test)]
 use crate::frontend::http::tests::deterministic_uuid;
@@ -519,7 +518,7 @@ impl DefaultSeafowlContext {
     async fn rewrite_time_travel_query(&self, q: &mut Query) -> Result<SessionState> {
         let mut version_processor =
             TableVersionProcessor::new(self.database.clone(), DEFAULT_SCHEMA.to_string());
-        version_processor.visit_query(q);
+        q.visit(&mut version_processor);
 
         if version_processor.table_versions.is_empty() {
             // No time-travel syntax detected, just return the regular session state
