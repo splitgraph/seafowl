@@ -44,7 +44,6 @@ bytes = "1.4.0"
 chrono = { version = "0.4", default_features = false }
 clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
-rustyline = "12.0"
 
 # PG wire protocol support
 convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-32-upgrade", optional = true }
@@ -78,6 +77,7 @@ reqwest = { version = "0.11.14", features = [ "stream" ] }
 rmp = "0.8.11"
 rmp-serde = "1.1.1"
 rmpv = { version = "1.0.0", features = ["with-serde"] }
+rustyline = "12.0"
 serde = "1.0.156"
 serde_json = "1.0.93"
 sha2 = ">=0.10.1"

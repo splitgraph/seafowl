@@ -3,16 +3,15 @@ mod helper;
 
 use crate::context::{DefaultSeafowlContext, SeafowlContext};
 use arrow::util::pretty::pretty_format_batches_with_options;
+use commands::Command;
 use datafusion_common::Result;
+use helper::CliHelper;
 use rustyline::{error::ReadlineError, Editor};
 use std::sync::Arc;
 use std::time::Instant;
-use commands::Command;
-use helper::CliHelper;
-
 
 pub struct SeafowlCli {
-    ctx: Arc<DefaultSeafowlContext>
+    ctx: Arc<DefaultSeafowlContext>,
 }
 
 impl SeafowlCli {
@@ -36,7 +35,7 @@ impl SeafowlCli {
                         match cmd {
                             Command::Quit => break,
                             _ => {
-                                if let Err(e) = self.handle_command(&cmd).await {
+                                if let Err(e) = self.handle_command(cmd).await {
                                     eprintln!("{e}")
                                 }
                             }
@@ -62,7 +61,7 @@ impl SeafowlCli {
                     break;
                 }
                 Err(err) => {
-                    eprintln!("Error while reading input: {err:?}", );
+                    eprintln!("Error while reading input: {err:?}",);
                     break;
                 }
             }
@@ -76,8 +75,13 @@ impl SeafowlCli {
         match cmd {
             Command::Help => todo!(),
             Command::ListTables => self.exec_and_print("SHOW TABLES").await,
-            Command::DescribeTable(name) => self.exec_and_print(&format!("SHOW COLUMNS FROM {name}")).await,
-            Command::Quit => panic!("Unexpected quit, this should be handled in the repl loop"),
+            Command::DescribeTable(name) => {
+                self.exec_and_print(&format!("SHOW COLUMNS FROM {name}"))
+                    .await
+            }
+            Command::Quit => {
+                panic!("Unexpected quit, this should be handled in the repl loop")
+            }
         }
     }
 
@@ -90,7 +94,10 @@ impl SeafowlCli {
         // Generate physical plans from the statements
         let mut plans = vec![];
         for statement in statements {
-            let logical = self.ctx.create_logical_plan_from_statement(statement).await?;
+            let logical = self
+                .ctx
+                .create_logical_plan_from_statement(statement)
+                .await?;
             plans.push(self.ctx.create_physical_plan(&logical).await?);
         }
 

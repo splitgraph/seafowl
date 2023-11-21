@@ -13,6 +13,7 @@ pub struct CliHelper {}
 // The accompanying helper for SeafowlCli.
 // For now only supports multi-line statements through the `Validator` override.
 impl CliHelper {
+    #[allow(clippy::if_same_then_else)]
     fn validate_input(&self, input: &str) -> Result<ValidationResult> {
         if input.ends_with(';') {
             // TODO: actually perform validation here
@@ -31,7 +32,6 @@ impl Highlighter for CliHelper {}
 impl Hinter for CliHelper {
     type Hint = String;
 }
-
 
 impl Completer for CliHelper {
     type Candidate = Pair;

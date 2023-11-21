@@ -1,6 +1,5 @@
 use std::str::FromStr;
 
-
 /// Commands available inside the CLI
 #[derive(Debug)]
 pub enum Command {
