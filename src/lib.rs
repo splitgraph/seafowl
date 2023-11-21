@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod catalog;
+pub mod cli;
 pub mod config;
 pub mod context;
 pub mod data_types;

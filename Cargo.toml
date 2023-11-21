@@ -44,6 +44,7 @@ bytes = "1.4.0"
 chrono = { version = "0.4", default_features = false }
 clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
+rustyline = "12.0"
 
 # PG wire protocol support
 convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-32-upgrade", optional = true }
