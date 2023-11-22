@@ -69,6 +69,18 @@ fn test_cli_basic() -> std::io::Result<()> {
     ]);
 
     // Test some commands
+    writeln!(stdin, "\\?")?;
+    expected_stdout.extend(vec![
+        "+---------+------------------+",
+        "| Command | Description      |",
+        "+---------+------------------+",
+        "| \\q      | quit seafowl cli |",
+        "| \\?      | help             |",
+        "| \\d      | list tables      |",
+        "| \\d name | describe table   |",
+        "+---------+------------------+",
+    ]);
+
     writeln!(stdin, "\\d")?;
     expected_stdout.extend(vec![
         "+---------------+--------------------+----------------+------------+",

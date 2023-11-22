@@ -1,6 +1,7 @@
 mod commands;
 mod helper;
 
+use crate::cli::commands::all_commands_info;
 use crate::context::{DefaultSeafowlContext, SeafowlContext};
 use arrow::util::pretty::pretty_format_batches_with_options;
 use commands::Command;
@@ -73,7 +74,14 @@ impl SeafowlCli {
     // Handle a client command
     async fn handle_command(&self, cmd: &Command) -> Result<()> {
         match cmd {
-            Command::Help => todo!(),
+            Command::Help => {
+                let help = all_commands_info();
+                println!(
+                    "{}",
+                    pretty_format_batches_with_options(&[help], &Default::default())?
+                );
+                Ok(())
+            }
             Command::ListTables => self.exec_and_print("SHOW TABLES").await,
             Command::DescribeTable(name) => {
                 self.exec_and_print(&format!("SHOW COLUMNS FROM {name}"))

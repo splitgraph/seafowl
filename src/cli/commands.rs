@@ -1,12 +1,28 @@
+use arrow::array::{ArrayRef, RecordBatch, StringArray};
+use arrow_schema::{DataType, Field, Schema};
 use std::str::FromStr;
+use std::sync::Arc;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
 /// Commands available inside the CLI
-#[derive(Debug)]
+#[derive(Debug, EnumIter)]
 pub enum Command {
     Quit,
     Help,
     ListTables,
     DescribeTable(String),
+}
+
+impl Command {
+    fn get_name_and_description(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Quit => ("\\q", "quit seafowl cli"),
+            Self::ListTables => ("\\d", "list tables"),
+            Self::DescribeTable(_) => ("\\d name", "describe table"),
+            Self::Help => ("\\?", "help"),
+        }
+    }
 }
 
 impl FromStr for Command {
@@ -26,4 +42,22 @@ impl FromStr for Command {
             _ => return Err(()),
         })
     }
+}
+
+pub fn all_commands_info() -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("Command", DataType::Utf8, false),
+        Field::new("Description", DataType::Utf8, false),
+    ]));
+    let (names, description): (Vec<&str>, Vec<&str>) = Command::iter()
+        .map(|c| c.get_name_and_description())
+        .unzip();
+    RecordBatch::try_new(
+        schema,
+        [names, description]
+            .into_iter()
+            .map(|i| Arc::new(StringArray::from(i)) as ArrayRef)
+            .collect::<Vec<_>>(),
+    )
+    .expect("This should not fail")
 }
