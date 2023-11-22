@@ -113,6 +113,42 @@ EOF
 ...
 ```
 
+## CLI
+
+Seafowl also provides a CLI to accommodate frictionless prototyping, troubleshooting and testing of
+the core features :
+
+```bash
+$ ./seafowl --cli -c /path/to/seafowl.toml
+default> CREATE TABLE t
+AS VALUES
+(1, 'one'),
+(2, 'two');
+Time: 0.021s
+default> SELECT * FROM t;
++---------+---------+
+| column1 | column2 |
++---------+---------+
+| 1       | one     |
+| 2       | two     |
++---------+---------+
+Time: 0.009s
+default> \d t
++---------------+--------------+------------+-------------+-----------+-------------+
+| table_catalog | table_schema | table_name | column_name | data_type | is_nullable |
++---------------+--------------+------------+-------------+-----------+-------------+
+| default       | public       | t          | column1     | Int64     | YES         |
+| default       | public       | t          | column2     | Utf8      | YES         |
++---------------+--------------+------------+-------------+-----------+-------------+
+Time: 0.005s
+default> \q
+$
+```
+
+It does so by circumventing Seafowl's primary HTTP interface, which involves properly formatting
+HTTP requests with queries, authentication, as well as dealing with potentially faulty networking
+setup, which can sometimes be too tedious for a quick manual interactive session.
+
 ## Documentation
 
 See the [documentation](https://www.splitgraph.com/docs/seafowl/getting-started/introduction) for
