@@ -1,8 +1,12 @@
 use crate::statements::*;
 
+#[rstest]
 #[tokio::test]
-async fn test_create_table() {
-    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
+async fn test_create_table(
+    #[values(ObjectStoreType::InMemory, ObjectStoreType::Gcs)]
+    object_store_type: ObjectStoreType,
+) {
+    let (context, _) = make_context_with_pg(object_store_type).await;
 
     context
         .plan_query(
@@ -490,42 +494,51 @@ async fn test_create_table_in_staging_schema() {
     assert_eq!(err.to_string(), expected_err,);
 }
 
+// Test creating external table in the native object store type (`in`)
+// that is stored in the external object store (`from`).
 #[rstest]
-#[case::minio_http(
+#[case::in_mem_from_mock_http(None, "", ObjectStoreType::InMemory)]
+#[case::in_mem_from_minio_http(
     Some("http://localhost:9000/seafowl-test-bucket/table_with_ns_column.parquet"),
     "",
     ObjectStoreType::InMemory
 )]
-// Tests the case of inheriting the credentials from the underlying object store, since none are
-// provided via the `OPTIONS` clause, so we must use `ObjectStoreType::S3`.
-#[case::minio_s3(
+// Tests the case of inheriting the credentials from the native object store, since none are
+// provided via the `OPTIONS` clause.
+#[case::in_minio_s3_from_minio_s3(
     Some("s3://seafowl-test-bucket/table_with_ns_column.parquet"),
     "",
     ObjectStoreType::S3(None)
 )]
+#[case::in_gcs_from_gcs(
+    Some("gs://test-data/table_with_ns_column.parquet"),
+    "",
+    ObjectStoreType::Gcs
+)]
 // Tests the case of explicitly specifying the `OPTIONS` clause to construct a dynamic object store.
-// so we can use anything other than `ObjectStoreType::S3`.
-#[case::minio_s3_with_options(Some(
-    "s3://seafowl-test-bucket/table_with_ns_column.parquet"
-), " OPTIONS ('access_key_id' 'minioadmin', 'secret_access_key' 'minioadmin', 'endpoint' 'http://127.0.0.1:9000') ", ObjectStoreType::InMemory)]
-#[case::mock_http_server(None, "", ObjectStoreType::InMemory)]
+// so we can use anything other than the native object store.
+#[case::in_mem_from_minio_s3_with_options(
+    Some("s3://seafowl-test-bucket/table_with_ns_column.parquet"),
+    " OPTIONS ('access_key_id' 'minioadmin', 'secret_access_key' 'minioadmin', 'endpoint' 'http://127.0.0.1:9000') ",
+    ObjectStoreType::InMemory,
+)]
+#[case::in_gcs_from_minio_s3_with_options(
+    Some("s3://seafowl-test-bucket/table_with_ns_column.parquet"),
+    " OPTIONS ('access_key_id' 'minioadmin', 'secret_access_key' 'minioadmin', 'endpoint' 'http://127.0.0.1:9000') ",
+    ObjectStoreType::Gcs,
+)]
+#[case::in_minio_s3_from_gcs_with_options(
+    Some("gs://test-data/table_with_ns_column.parquet"),
+    &format!(" OPTIONS ('google_application_credentials' '{FAKE_GCS_CREDS_PATH}') "),
+    ObjectStoreType::S3(None),
+)]
 #[tokio::test]
 async fn test_create_external_table(
-    #[case] minio_url: Option<&str>,
+    #[case] location: Option<&str>,
     #[case] options: &str,
     #[case] object_store_type: ObjectStoreType,
 ) {
-    /*
-    Test CREATE EXTERNAL TABLE works with an HTTP mock server and MinIO.
-
-    This also works with https + actual S3 (tested manually)
-
-    SELECT * FROM datafusion.public.supply_chains LIMIT 1 results in:
-
-    bytes_scanned{filename=seafowl-public.s3.eu-west-1.amazonaws.com/tutorial/trase-supply-chains.parquet}=232699
-    */
-
-    let url = match minio_url {
+    let url = match location {
         None => {
             let (mock_server, _) = testutils::make_mock_parquet_server(true, true).await;
             // Add a query string that's ignored by the mock (make sure DataFusion doesn't eat the whole URL)
@@ -590,7 +603,7 @@ async fn test_create_external_table(
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
-    let expected = if minio_url.is_none() {
+    let expected = if location.is_none() {
         vec![
             "+-------+",
             "| col_1 |",
