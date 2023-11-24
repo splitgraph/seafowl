@@ -128,7 +128,12 @@ async fn test_create_table_as_from_ns_column() {
 #[rstest]
 #[tokio::test]
 async fn test_create_table_move_and_drop(
-    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local, ObjectStoreType::S3)]
+    #[values(
+        ObjectStoreType::InMemory,
+        ObjectStoreType::Local,
+        ObjectStoreType::S3(None),
+        ObjectStoreType::S3(Some("/path/to/folder"))
+    )]
     object_store_type: ObjectStoreType,
 ) {
     // Create two tables, insert some data into them
@@ -275,7 +280,12 @@ async fn test_create_table_move_and_drop(
 #[rstest]
 #[tokio::test]
 async fn test_create_table_drop_schema(
-    #[values(ObjectStoreType::InMemory, ObjectStoreType::Local, ObjectStoreType::S3)]
+    #[values(
+        ObjectStoreType::InMemory,
+        ObjectStoreType::Local,
+        ObjectStoreType::S3(None),
+        ObjectStoreType::S3(Some("/path/to/folder"))
+    )]
     object_store_type: ObjectStoreType,
 ) {
     let (context, _temp_dir) = make_context_with_pg(object_store_type).await;
@@ -491,7 +501,7 @@ async fn test_create_table_in_staging_schema() {
 #[case::minio_s3(
     Some("s3://seafowl-test-bucket/table_with_ns_column.parquet"),
     "",
-    ObjectStoreType::S3
+    ObjectStoreType::S3(None)
 )]
 // Tests the case of explicitly specifying the `OPTIONS` clause to construct a dynamic object store.
 // so we can use anything other than `ObjectStoreType::S3`.

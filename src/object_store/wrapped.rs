@@ -54,30 +54,35 @@ impl InternalObjectStore {
         }
     }
 
-    // Wrap our object store with a prefixed one corresponding to the full path to the actual table
-    // root, and then wrap that with a delta object store. This is done because:
-    // 1. `DeltaObjectStore` needs an object store with "/" pointing at delta table root
-    //     (i.e. where `_delta_log` is located), hence the `PrefixStore`.
-    // 2. We want to re-use the underlying object store that we build initially during startup,
-    //     instead of re-building one from scratch whenever we need it (not necessarily for perf
-    //     reasons, but rather because the memory object store doesn't work otherwise). However,
-    //     `PrefixStore` has a trait bound of `T: ObjectStore`, which isn't satisfied by
-    //     `Arc<dyn ObjectStore>`, so we need another intermediary, which is where
-    //     `InternalObjectStore` comes in.
-    // This does mean that we have 3 layers of indirection before we hit the "real" object store
-    // (`DeltaObjectStore` -> `PrefixStore` -> `InternalObjectStore` -> `inner`).
-    pub fn get_log_store(&self, table_uuid: Uuid) -> Arc<DefaultLogStore> {
-        let prefixed_store: PrefixStore<InternalObjectStore> =
-            PrefixStore::new(self.clone(), table_uuid.to_string());
+    // Get the table prefix relative to the root of the internal object store.
+    // This is either just a UUID, or potentially UUID prepended by some path.
+    pub fn table_prefix(&self, table_uuid: Uuid) -> Path {
+        match self.config.clone() {
+            schema::ObjectStore::S3(_) | schema::ObjectStore::GCS(_) => {
+                // In case the config bucket contains a path as well,
+                // take it and prepend it to the table UUID.
+                Path::from(format!("{}/{table_uuid}", self.root_uri.path()))
+            }
+            _ => Path::from(table_uuid.to_string()),
+        }
+    }
 
-        let url =
-            Url::from_str(format!("{}/{}", self.root_uri.as_str(), table_uuid).as_str())
-                .unwrap();
+    // Wrap our object store with a prefixed one corresponding to the full path to the actual table
+    // root, and then wrap that with a default delta `LogStore`. This is done because:
+    // 1. `LogStore` needs an object store with "/" pointing at delta table root
+    //     (i.e. where `_delta_log` is located), hence the `PrefixStore`.
+    // 2. We want to override `rename_if_not_exists` for AWS S3
+    // This means we have 2 layers of indirection before we hit the "real" object store:
+    // (Delta `LogStore` -> `PrefixStore` -> `InternalObjectStore` -> `inner`).
+    pub fn get_log_store(&self, table_uuid: Uuid) -> Arc<DefaultLogStore> {
+        let prefix = self.table_prefix(table_uuid);
+        let prefixed_store: PrefixStore<InternalObjectStore> =
+            PrefixStore::new(self.clone(), prefix);
 
         Arc::from(DefaultLogStore::new(
             Arc::from(prefixed_store),
             LogStoreConfig {
-                location: url,
+                location: self.root_uri.join(&table_uuid.to_string()).unwrap(),
                 options: Default::default(),
             },
         ))

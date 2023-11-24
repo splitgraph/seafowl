@@ -10,7 +10,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
 use hex::encode;
 use log::{info, warn};
-use object_store::path::Path;
 use sha2::{Digest, Sha256};
 use tokio::{fs::File, io::AsyncWrite};
 
@@ -68,9 +67,10 @@ pub async fn gc_databases(
             dt.database_name, dt.collection_name, dt.table_name, dt.uuid,
         );
 
+        let table_prefix = context.internal_object_store.table_prefix(dt.uuid);
         let result = context
             .internal_object_store
-            .delete_in_prefix(&Path::from(dt.uuid.to_string()))
+            .delete_in_prefix(&table_prefix)
             .await;
 
         if let Err(err) = result {

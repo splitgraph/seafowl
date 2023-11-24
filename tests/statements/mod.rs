@@ -44,7 +44,8 @@ enum ObjectStoreType {
     _Gcs, // TODO: GCS Bucket tests await github.com/fsouza/fake-gcs-server/issues/852
     Local,
     InMemory,
-    S3,
+    // S3 object store with an optional path to the actual data folder
+    S3(Option<&'static str>),
 }
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
@@ -68,17 +69,19 @@ data_dir = "{}""#,
             )
         }
         ObjectStoreType::InMemory => (r#"type = "memory""#.to_string(), None),
-        ObjectStoreType::S3 => (
-            r#"type = "s3"
+        ObjectStoreType::S3(path) => (
+            format!(
+                r#"type = "s3"
 access_key_id = "minioadmin"
 secret_access_key = "minioadmin"
 endpoint = "http://127.0.0.1:9000"
-bucket = "seafowl-test-bucket"
+bucket = "seafowl-test-bucket{}"
 
 [object_store.cache_properties]
 ttl = 30
-"#
-            .to_string(),
+"#,
+                path.unwrap_or("")
+            ),
             None,
         ),
         ObjectStoreType::_Gcs => {
