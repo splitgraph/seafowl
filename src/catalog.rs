@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
+use arrow_schema::Schema;
 use async_trait::async_trait;
 use datafusion::catalog::schema::MemorySchemaProvider;
 use datafusion::datasource::TableProvider;
@@ -27,7 +28,6 @@ use crate::{
         AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Error as RepositoryError,
         Repository, TableVersionsResult,
     },
-    schema::Schema,
 };
 
 pub const DEFAULT_DB: &str = "default";

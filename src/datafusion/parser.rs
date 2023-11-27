@@ -30,6 +30,7 @@ use datafusion::sql::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DescribeTableStmt,
 };
 use datafusion_common::parsers::CompressionTypeVariant;
+use lazy_static::lazy_static;
 use sqlparser::ast::{CreateFunctionBody, Expr, ObjectName, OrderByExpr, Value};
 use sqlparser::tokenizer::{TokenWithLocation, Word};
 use sqlparser::{
@@ -41,7 +42,6 @@ use sqlparser::{
 use std::collections::{HashMap, VecDeque};
 use std::str::FromStr;
 use std::string::ToString;
-use strum_macros::Display;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -63,10 +63,12 @@ pub struct DFParser<'a> {
     parser: Parser<'a>,
 }
 
-#[derive(Debug, Clone, Display)]
-#[strum(serialize_all = "UPPERCASE")]
-enum KeywordExtensions {
-    Vacuum,
+// Hacky way to distinguish `COPY TO` statement from `CONVERT TO DELTA`.
+// We should really introduce our own Statement enum which encapsulates
+// the DataFusion one and adds our custom variants (this one and `VACUUM`).
+lazy_static! {
+    pub static ref CONVERT_TO_DELTA: (String, Value) =
+        ("CONVERT_TO_DELTA".to_string(), Value::Boolean(true));
 }
 
 impl<'a> DFParser<'a> {
@@ -136,39 +138,25 @@ impl<'a> DFParser<'a> {
     pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
         match self.parser.peek_token().token {
             Token::Word(w) => {
-                match w {
-                    Word {
-                        keyword: Keyword::CREATE,
-                        ..
-                    } => {
-                        // move one token forward
+                match w.keyword {
+                    Keyword::CREATE => {
                         self.parser.next_token();
-                        // use custom parsing
                         self.parse_create()
                     }
-                    Word {
-                        keyword: Keyword::COPY,
-                        ..
-                    } => {
+                    Keyword::CONVERT => {
+                        self.parser.next_token();
+                        self.parse_convert()
+                    }
+                    Keyword::COPY => {
                         self.parser.next_token();
                         self.parse_copy()
                     }
-                    Word {
-                        keyword: Keyword::DESCRIBE,
-                        ..
-                    } => {
-                        // move one token forward
+                    Keyword::DESCRIBE => {
                         self.parser.next_token();
-                        // use custom parsing
                         self.parse_describe()
                     }
-                    Word { value, .. }
-                        if value.to_uppercase()
-                            == KeywordExtensions::Vacuum.to_string() =>
-                    {
-                        // move one token forward
+                    Keyword::VACUUM => {
                         self.parser.next_token();
-                        // use custom parsing
                         self.parse_vacuum()
                     }
                     _ => {
@@ -192,6 +180,22 @@ impl<'a> DFParser<'a> {
         let table_name = self.parser.parse_object_name()?;
         Ok(Statement::DescribeTableStmt(DescribeTableStmt {
             table_name,
+        }))
+    }
+
+    // Parse `CONVERT location TO DELTA table_name` type statement
+    pub fn parse_convert(&mut self) -> Result<Statement, ParserError> {
+        let location = self.parser.parse_literal_string()?;
+        self.parser
+            .expect_keywords(&[Keyword::TO, Keyword::DELTA])?;
+        let table_name = self.parser.parse_object_name()?;
+
+        // We'll use the CopyToStatement struct to pass the location and table name
+        // as it's the closest match to what we need.
+        Ok(Statement::CopyTo(CopyToStatement {
+            source: CopyToSource::Relation(table_name),
+            target: location,
+            options: vec![CONVERT_TO_DELTA.clone()],
         }))
     }
 

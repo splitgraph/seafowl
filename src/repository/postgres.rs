@@ -1,5 +1,7 @@
 use std::{fmt::Debug, time::Duration};
 
+use arrow_integration_test::field_to_json;
+use arrow_schema::Schema;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use sqlx::{
@@ -12,7 +14,6 @@ use uuid::Uuid;
 use crate::{
     data_types::{CollectionId, DatabaseId, FunctionId, TableId, TableVersionId},
     implement_repository,
-    schema::Schema,
     wasm_udf::data_types::CreateFunctionDetails,
 };
 

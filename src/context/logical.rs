@@ -1,11 +1,11 @@
 use crate::catalog::DEFAULT_SCHEMA;
 use crate::context::SeafowlContext;
-use crate::datafusion::parser::{DFParser, Statement as DFStatement};
+use crate::datafusion::parser::{DFParser, Statement as DFStatement, CONVERT_TO_DELTA};
 use crate::datafusion::utils::build_schema;
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     nodes::{
-        CreateFunction, CreateTable, DropFunction, DropSchema, RenameTable,
+        ConvertTable, CreateFunction, CreateTable, DropFunction, DropSchema, RenameTable,
         SeafowlExtensionNode, Vacuum,
     },
     version::TableVersionProcessor,
@@ -267,7 +267,11 @@ impl SeafowlContext {
                     "Unsupported SQL statement: {s:?}"
                 ))),
             },
-            DFStatement::CopyTo(CopyToStatement { ref mut source, .. }) => {
+            DFStatement::CopyTo(CopyToStatement {
+                ref mut source,
+                options,
+                ..
+            }) if !options.contains(&CONVERT_TO_DELTA) => {
                 let state = if let CopyToSource::Query(ref mut query) = source {
                     self.rewrite_time_travel_query(query).await?
                 } else {
@@ -275,12 +279,27 @@ impl SeafowlContext {
                 };
                 state.statement_to_plan(stmt).await
             }
+            DFStatement::CopyTo(CopyToStatement {
+                source: CopyToSource::Relation(table_name),
+                target,
+                options,
+            }) if options.contains(&CONVERT_TO_DELTA) => {
+                Ok(LogicalPlan::Extension(Extension {
+                    node: Arc::new(SeafowlExtensionNode::ConvertTable(ConvertTable {
+                        location: target.clone(),
+                        name: table_name.to_string(),
+                        output_schema: Arc::new(DFSchema::empty()),
+                    })),
+                }))
+            }
             DFStatement::DescribeTableStmt(_) | DFStatement::CreateExternalTable(_) => {
                 self.inner.state().statement_to_plan(stmt).await
             }
-            DFStatement::Explain(_) => Err(Error::NotImplemented(format!(
-                "Unsupported SQL statement: {statement:?}"
-            ))),
+            DFStatement::CopyTo(_) | DFStatement::Explain(_) => {
+                Err(Error::NotImplemented(format!(
+                    "Unsupported SQL statement: {statement:?}"
+                )))
+            }
         }
     }
 

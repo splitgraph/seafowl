@@ -1,18 +1,16 @@
 use std::fmt::Debug;
 use std::str::FromStr;
 
+use arrow_schema::Schema;
 use async_trait::async_trait;
 use strum::ParseError;
 use strum_macros::{Display, EnumString};
 use uuid::Uuid;
 
-use crate::wasm_udf::data_types::CreateFunctionDetails;
-use crate::{
-    data_types::{
-        CollectionId, DatabaseId, FunctionId, TableId, TableVersionId, Timestamp,
-    },
-    schema::Schema,
+use crate::data_types::{
+    CollectionId, DatabaseId, FunctionId, TableId, TableVersionId, Timestamp,
 };
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 #[derive(sqlx::FromRow, Default, Debug, PartialEq, Eq)]
 pub struct AllDatabaseColumnsResult {
@@ -232,14 +230,11 @@ pub mod tests {
             .create_collection(database_id, DEFAULT_SCHEMA)
             .await
             .expect("Error creating default schema");
-        let empty_schema = Schema {
-            arrow_schema: Arc::new(ArrowSchema::empty()),
-        };
         repository
             .create_table(
                 default_schema_id,
                 "empty_table",
-                &empty_schema,
+                &ArrowSchema::empty(),
                 Uuid::default(),
             )
             .await
@@ -254,12 +249,9 @@ pub mod tests {
             ArrowField::new("date", ArrowDataType::Date64, false),
             ArrowField::new("value", ArrowDataType::Float64, false),
         ]);
-        let schema = Schema {
-            arrow_schema: Arc::new(arrow_schema),
-        };
 
         let (table_id, table_version_id) = repository
-            .create_table(collection_id, "testtable", &schema, Uuid::default())
+            .create_table(collection_id, "testtable", &arrow_schema, Uuid::default())
             .await
             .expect("Error creating table");
 
@@ -564,10 +556,6 @@ pub mod tests {
         ));
 
         // Make a new table in the existing collection with the same name
-        let schema = Schema {
-            arrow_schema: Arc::new(ArrowSchema::empty()),
-        };
-
         let collection_id_1 = repository
             .get_collection_id_by_name("testdb", "testcol")
             .await
@@ -579,7 +567,12 @@ pub mod tests {
 
         assert!(matches!(
             repository
-                .create_table(collection_id_2, "testtable2", &schema, Uuid::default())
+                .create_table(
+                    collection_id_2,
+                    "testtable2",
+                    &ArrowSchema::empty(),
+                    Uuid::default()
+                )
                 .await
                 .unwrap_err(),
             Error::UniqueConstraintViolation(_)
@@ -587,7 +580,12 @@ pub mod tests {
 
         // Make a new table in the previous collection, try renaming
         let (new_table_id, _) = repository
-            .create_table(collection_id_1, "testtable2", &schema, Uuid::default())
+            .create_table(
+                collection_id_1,
+                "testtable2",
+                &ArrowSchema::empty(),
+                Uuid::default(),
+            )
             .await
             .unwrap();
 

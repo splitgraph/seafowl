@@ -1,3 +1,4 @@
+use super::delta::CreateDeltaTableDetails;
 use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::config::context::build_object_store;
 use crate::config::schema;
@@ -6,7 +7,7 @@ use crate::context::delta::plan_to_object_store;
 use crate::context::SeafowlContext;
 use crate::delta_rs::backports::parquet_scan_from_actions;
 use crate::nodes::{
-    CreateFunction, CreateTable, DropFunction, DropSchema, RenameTable,
+    ConvertTable, CreateFunction, CreateTable, DropFunction, DropSchema, RenameTable,
     SeafowlExtensionNode, Vacuum,
 };
 use crate::object_store::http::try_prepare_http_url;
@@ -49,6 +50,7 @@ use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
 use log::info;
+use object_store::path::Path;
 use std::borrow::Cow;
 use std::ops::Deref;
 use std::ops::Not;
@@ -226,8 +228,11 @@ impl SeafowlContext {
                 // TODO: this means we'll have 2 table versions at the end, 1st from the create
                 // and 2nd from the insert, while it seems more reasonable that in this case we have
                 // only one
-                self.create_delta_table(name, plan.schema().as_ref())
-                    .await?;
+                self.create_delta_table(
+                    name,
+                    CreateDeltaTableDetails::WithSchema(plan.schema().as_ref().clone()),
+                )
+                .await?;
                 self.plan_to_delta_table(name, &plan).await?;
 
                 Ok(make_dummy_exec())
@@ -544,12 +549,31 @@ impl SeafowlContext {
                 // Other custom nodes we made like CREATE TABLE/INSERT/ALTER
                 match SeafowlExtensionNode::from_dynamic(node) {
                     Some(sfe_node) => match sfe_node {
+                        SeafowlExtensionNode::ConvertTable(ConvertTable {
+                            location,
+                            name,
+                            ..
+                        }) => {
+                            self.create_delta_table(
+                                name,
+                                CreateDeltaTableDetails::FromFiles(Path::from(
+                                    location.as_str(),
+                                )),
+                            )
+                            .await?;
+
+                            Ok(make_dummy_exec())
+                        }
                         SeafowlExtensionNode::CreateTable(CreateTable {
                             schema,
                             name,
                             ..
                         }) => {
-                            self.create_delta_table(name.as_str(), schema).await?;
+                            self.create_delta_table(
+                                name.as_str(),
+                                CreateDeltaTableDetails::WithSchema(schema.clone()),
+                            )
+                            .await?;
 
                             Ok(make_dummy_exec())
                         }
@@ -870,8 +894,11 @@ impl SeafowlContext {
         };
 
         if !table_exists {
-            self.create_delta_table(table_ref.clone(), plan.schema().as_ref())
-                .await?;
+            self.create_delta_table(
+                table_ref.clone(),
+                CreateDeltaTableDetails::WithSchema(plan.schema().as_ref().clone()),
+            )
+            .await?;
         }
 
         self.plan_to_delta_table(table_ref, &plan).await
