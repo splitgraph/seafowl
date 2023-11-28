@@ -13,6 +13,7 @@ use futures::{future::join_all, Future, FutureExt};
 
 use pretty_env_logger::env_logger;
 use seafowl::{
+    cli,
     config::{
         context::build_context,
         schema::{build_default_config, load_config, SeafowlConfig, DEFAULT_DATA_DIR},
@@ -52,6 +53,13 @@ struct Args {
 
     #[clap(short, long, help = "Run a one-off command and exit")]
     one_off: Option<String>,
+
+    #[clap(
+        long,
+        help = "Run commands interactively from a CLI",
+        takes_value = false
+    )]
+    cli: bool,
 }
 
 fn prepare_frontends(
@@ -135,15 +143,17 @@ async fn main() {
         return;
     }
 
-    let mut builder = pretty_env_logger::formatted_timed_builder();
+    if !args.cli {
+        let mut builder = pretty_env_logger::formatted_timed_builder();
 
-    builder
-        .parse_filters(
-            env::var(env_logger::DEFAULT_FILTER_ENV)
-                .unwrap_or_else(|_| "sqlx=warn,info".to_string())
-                .as_str(),
-        )
-        .init();
+        builder
+            .parse_filters(
+                env::var(env_logger::DEFAULT_FILTER_ENV)
+                    .unwrap_or_else(|_| "sqlx=warn,info".to_string())
+                    .as_str(),
+            )
+            .init();
+    }
 
     info!("Starting Seafowl {}", env!("VERGEN_BUILD_SEMVER"));
 
@@ -173,7 +183,9 @@ async fn main() {
     if let Some(one_off_cmd) = args.one_off {
         run_one_off_command(context, &one_off_cmd, io::stdout()).await;
         return;
-    };
+    } else if args.cli {
+        return cli::SeafowlCli::new(context).command_loop().await.unwrap();
+    }
 
     // Ref: https://tokio.rs/tokio/topics/shutdown#waiting-for-things-to-finish-shutting-down
     let (shutdown, _) = channel(1);

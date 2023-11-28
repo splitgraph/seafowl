@@ -11,3 +11,6 @@
 # Memory profiler output
 memory-profiling_*
 profile-*
+
+# CLI history
+.history
