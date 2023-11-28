@@ -184,7 +184,7 @@ async fn main() {
         run_one_off_command(context, &one_off_cmd, io::stdout()).await;
         return;
     } else if args.cli {
-        return cli::SeafowlCli::new(context).repl_loop().await.unwrap();
+        return cli::SeafowlCli::new(context).command_loop().await.unwrap();
     }
 
     // Ref: https://tokio.rs/tokio/topics/shutdown#waiting-for-things-to-finish-shutting-down

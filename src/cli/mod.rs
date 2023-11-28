@@ -11,6 +11,8 @@ use rustyline::{error::ReadlineError, Editor};
 use std::sync::Arc;
 use std::time::Instant;
 
+const SEAFOWL_CLI_HISTORY: &str = ".history";
+
 pub struct SeafowlCli {
     ctx: Arc<DefaultSeafowlContext>,
 }
@@ -22,10 +24,10 @@ impl SeafowlCli {
     }
 
     // Interactive loop for running commands from a CLI
-    pub async fn repl_loop(&self) -> rustyline::Result<()> {
+    pub async fn command_loop(&self) -> rustyline::Result<()> {
         let mut rl = Editor::new()?;
         rl.set_helper(Some(CliHelper {}));
-        rl.load_history(".history").ok();
+        rl.load_history(SEAFOWL_CLI_HISTORY).ok();
 
         loop {
             match rl.readline(format!("{}> ", self.ctx.database).as_str()) {
@@ -68,7 +70,7 @@ impl SeafowlCli {
             }
         }
 
-        rl.save_history(".history")
+        rl.save_history(SEAFOWL_CLI_HISTORY)
     }
 
     // Handle a client command

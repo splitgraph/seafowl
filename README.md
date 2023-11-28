@@ -116,7 +116,7 @@ EOF
 ## CLI
 
 Seafowl also provides a CLI to accommodate frictionless prototyping, troubleshooting and testing of
-the core features :
+the core features:
 
 ```bash
 $ ./seafowl --cli -c /path/to/seafowl.toml
@@ -145,9 +145,9 @@ default> \q
 $
 ```
 
-It does so by circumventing Seafowl's primary HTTP interface, which involves properly formatting
-HTTP requests with queries, authentication, as well as dealing with potentially faulty networking
-setup, which can sometimes be too tedious for a quick manual interactive session.
+It does so by circumventing Seafowl's primary HTTP interface, which involves properly formatted HTTP
+requests with queries, authentication, as well as dealing with potentially faulty networking setups,
+and can sometimes be too tedious for a quick manual interactive session.
 
 ## Documentation
 
