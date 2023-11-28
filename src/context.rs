@@ -188,7 +188,7 @@ pub async fn plan_to_object_store(
     state: &SessionState,
     plan: &Arc<dyn ExecutionPlan>,
     store: Arc<InternalObjectStore>,
-    prefix: String,
+    prefix: Path,
     max_partition_size: u32,
 ) -> Result<Vec<Add>> {
     let mut current_partition_size = 0;
@@ -269,7 +269,7 @@ pub async fn plan_to_object_store(
                 // root, so we need to fully qualify the path with the appropriate uuid prefix.
                 // On the other hand, when creating deltalake `Add`s below we only need the relative
                 // path (just the file name).
-                let location = Path::from(prefix).child(file_name.clone());
+                let location = prefix.child(file_name.clone());
 
                 let size = tokio::fs::metadata(
                     partition_file_path
@@ -776,13 +776,14 @@ impl DefaultSeafowlContext {
     ) -> Result<DeltaTable> {
         let table_uuid = self.get_table_uuid(name).await?;
         let table_log_store = self.internal_object_store.get_log_store(table_uuid);
+        let table_prefix = self.internal_object_store.table_prefix(table_uuid);
 
         // Upload partition files to table's root directory
         let adds = plan_to_object_store(
             &self.inner.state(),
             plan,
             self.internal_object_store.clone(),
-            table_uuid.to_string(),
+            table_prefix,
             self.max_partition_size,
         )
         .await?;
@@ -1276,7 +1277,7 @@ impl SeafowlContext for DefaultSeafowlContext {
                         schema::ObjectStore::GCS(gcs)
                     };
 
-                    let object_store = build_object_store(&config);
+                    let object_store = build_object_store(&config)?;
                     self.inner
                         .runtime_env()
                         .register_object_store(url, object_store);
@@ -1460,11 +1461,12 @@ impl SeafowlContext for DefaultSeafowlContext {
                     );
 
                     // Write the new files with updated data
+                    let table_prefix = self.internal_object_store.table_prefix(uuid);
                     let adds = plan_to_object_store(
                         &state,
                         &update_plan,
                         self.internal_object_store.clone(),
-                        uuid.to_string(),
+                        table_prefix,
                         self.max_partition_size,
                     )
                     .await?;
@@ -1579,11 +1581,13 @@ impl SeafowlContext for DefaultSeafowlContext {
                                 Arc::new(FilterExec::try_new(filter_expr, base_scan)?);
 
                             // Write the filtered out data
+                            let table_prefix =
+                                self.internal_object_store.table_prefix(uuid);
                             let adds = plan_to_object_store(
                                 &state,
                                 &filter_plan,
                                 self.internal_object_store.clone(),
-                                uuid.to_string(),
+                                table_prefix,
                                 self.max_partition_size,
                             )
                             .await?;
@@ -2009,7 +2013,7 @@ mod tests {
             &sf_context.inner.state(),
             &execution_plan,
             object_store.clone(),
-            table_uuid.to_string(),
+            object_store.table_prefix(table_uuid),
             2,
         )
         .await
@@ -2169,7 +2173,7 @@ mod tests {
             &sf_context.inner.state(),
             &execution_plan,
             object_store,
-            "test".to_string(),
+            Path::from("test"),
             max_partition_size,
         )
         .await

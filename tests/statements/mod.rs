@@ -40,11 +40,14 @@ mod testutils;
 mod time_travel;
 mod vacuum;
 
+const FAKE_GCS_CREDS_PATH: &str = "/tmp/fake-gcs-server.json";
+
 enum ObjectStoreType {
-    _Gcs, // TODO: GCS Bucket tests await github.com/fsouza/fake-gcs-server/issues/852
+    Gcs, // TODO: GCS bucket tests with multipart uploads await github.com/fsouza/fake-gcs-server/issues/852
     Local,
     InMemory,
-    S3,
+    // S3 object store with an optional path to the actual data folder
+    S3(Option<&'static str>),
 }
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
@@ -68,24 +71,30 @@ data_dir = "{}""#,
             )
         }
         ObjectStoreType::InMemory => (r#"type = "memory""#.to_string(), None),
-        ObjectStoreType::S3 => (
-            r#"type = "s3"
+        ObjectStoreType::S3(path) => (
+            format!(
+                r#"type = "s3"
 access_key_id = "minioadmin"
 secret_access_key = "minioadmin"
 endpoint = "http://127.0.0.1:9000"
 bucket = "seafowl-test-bucket"
-
+{}
 [object_store.cache_properties]
 ttl = 30
-"#
-            .to_string(),
+"#,
+                if let Some(path) = path {
+                    format!("prefix = \"{path}\"")
+                } else {
+                    "".to_string()
+                }
+            ),
             None,
         ),
-        ObjectStoreType::_Gcs => {
+        ObjectStoreType::Gcs => {
             let creds_json = json!({"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""});
             // gcs_base_url should match docker-compose.yml:fake-gcs-server
             let google_application_credentials_path =
-                std::path::Path::new("/tmp/fake-gcs-server.json");
+                std::path::Path::new(FAKE_GCS_CREDS_PATH);
             std::fs::write(
                 google_application_credentials_path,
                 serde_json::to_vec(&creds_json).expect("Unable to serialize creds JSON"),

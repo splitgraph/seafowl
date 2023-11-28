@@ -23,20 +23,13 @@ services:
       test-minio/seafowl-test-bucket/table_with_ns_column.parquet; exit 0; "
 
   fake-gcs:
-    image: fsouza/fake-gcs-server
+    image: tustvold/fake-gcs-server
     command:
-      [
-        "-scheme",
-        "http",
-        "-port",
-        "4443",
-        "-external-url",
-        "http://[::]:4443",
-        "-backend",
-        "memory",
-      ]
+      ["-scheme", "http", "-backend", "memory", "-data", "test/", "-public-host", "localhost:4443"]
     ports:
       - "4443:4443"
+    volumes:
+      - ./tests/data:/test/test-data
 
   create-fake-gcs-buckets:
     image: curlimages/curl:8.00.1

@@ -129,6 +129,7 @@ pub struct S3 {
     pub secret_access_key: String,
     pub endpoint: Option<String>,
     pub bucket: String,
+    pub prefix: Option<String>,
     pub cache_properties: Option<ObjectCacheProperties>,
 }
 
@@ -153,6 +154,7 @@ impl S3 {
                 .clone(),
             endpoint: map.remove("endpoint"),
             bucket,
+            prefix: None,
             cache_properties: Some(ObjectCacheProperties::default()),
         })
     }
@@ -161,6 +163,7 @@ impl S3 {
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct GCS {
     pub bucket: String,
+    pub prefix: Option<String>,
     pub google_application_credentials: Option<String>,
     pub cache_properties: Option<ObjectCacheProperties>,
 }
@@ -172,6 +175,7 @@ impl GCS {
     ) -> Self {
         GCS {
             bucket,
+            prefix: None,
             google_application_credentials: map.remove("google_application_credentials"),
             cache_properties: Some(ObjectCacheProperties::default()),
         }
@@ -582,6 +586,7 @@ cache_control = "private, max-age=86400"
                 secret_access_key: "ABC...".to_string(),
                 endpoint: Some("https://s3.amazonaws.com:9000".to_string()),
                 bucket: "seafowl".to_string(),
+                prefix: None,
                 cache_properties: cache_props,
             })
         );

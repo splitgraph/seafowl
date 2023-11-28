@@ -9,7 +9,7 @@ use crate::{
 };
 use datafusion::execution::context::SessionState;
 use datafusion::{
-    error::DataFusionError,
+    common::Result,
     execution::runtime_env::{RuntimeConfig, RuntimeEnv},
     prelude::{SessionConfig, SessionContext},
 };
@@ -69,12 +69,11 @@ async fn build_catalog(
 
 pub fn build_object_store(
     object_store_cfg: &schema::ObjectStore,
-) -> Arc<dyn ObjectStore> {
-    match &object_store_cfg {
-        schema::ObjectStore::Local(schema::Local { data_dir }) => Arc::new(
-            LocalFileSystem::new_with_prefix(data_dir)
-                .expect("Error creating object store"),
-        ),
+) -> Result<Arc<dyn ObjectStore>> {
+    Ok(match &object_store_cfg {
+        schema::ObjectStore::Local(schema::Local { data_dir }) => {
+            Arc::new(LocalFileSystem::new_with_prefix(data_dir)?)
+        }
         schema::ObjectStore::InMemory(_) => Arc::new(InMemory::new()),
         #[cfg(feature = "object-store-s3")]
         schema::ObjectStore::S3(S3 {
@@ -84,6 +83,7 @@ pub fn build_object_store(
             endpoint,
             bucket,
             cache_properties,
+            ..
         }) => {
             let mut builder = AmazonS3Builder::new()
                 .with_access_key_id(access_key_id)
@@ -96,19 +96,20 @@ pub fn build_object_store(
                 builder = builder.with_endpoint(endpoint);
             }
 
-            let store = builder.build().expect("Error creating object store");
+            let store = builder.build()?;
 
             if let Some(props) = cache_properties {
-                return props.wrap_store(Arc::new(store));
+                props.wrap_store(Arc::new(store))
+            } else {
+                Arc::new(store)
             }
-
-            Arc::new(store)
         }
         #[cfg(feature = "object-store-gcs")]
         schema::ObjectStore::GCS(GCS {
             bucket,
             google_application_credentials,
             cache_properties,
+            ..
         }) => {
             let gcs_builder: GoogleCloudStorageBuilder =
                 GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
@@ -119,17 +120,15 @@ pub fn build_object_store(
                 gcs_builder
             };
 
-            let store = gcs_builder
-                .build()
-                .expect("Error creating GCS object store");
+            let store = gcs_builder.build()?;
 
             if let Some(props) = cache_properties {
-                return props.wrap_store(Arc::new(store));
+                props.wrap_store(Arc::new(store))
+            } else {
+                Arc::new(store)
             }
-
-            Arc::new(store)
         }
-    }
+    })
 }
 
 // Construct the session state and register additional table factories besides the default ones for
@@ -152,9 +151,7 @@ pub fn build_state_with_table_factories(
     state
 }
 
-pub async fn build_context(
-    cfg: &schema::SeafowlConfig,
-) -> Result<DefaultSeafowlContext, DataFusionError> {
+pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<DefaultSeafowlContext> {
     let mut runtime_config = RuntimeConfig::new();
     if let Some(max_memory) = cfg.runtime.max_memory {
         runtime_config = runtime_config
@@ -173,7 +170,7 @@ pub async fn build_context(
     let state = build_state_with_table_factories(session_config, Arc::new(runtime_env));
     let context = SessionContext::new_with_state(state);
 
-    let object_store = build_object_store(&cfg.object_store);
+    let object_store = build_object_store(&cfg.object_store)?;
     let internal_object_store = Arc::new(InternalObjectStore::new(
         object_store.clone(),
         cfg.object_store.clone(),

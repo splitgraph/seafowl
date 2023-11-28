@@ -33,19 +33,45 @@ pub struct InternalObjectStore {
 
 impl InternalObjectStore {
     pub fn new(inner: Arc<dyn ObjectStore>, config: schema::ObjectStore) -> Self {
-        let root_uri = match config.clone() {
+        let mut root_uri = match config.clone() {
             schema::ObjectStore::Local(Local { data_dir }) => {
                 let canonical_path = StdPath::new(&data_dir).canonicalize().unwrap();
                 Url::from_directory_path(canonical_path).unwrap()
             }
             schema::ObjectStore::InMemory(_) => Url::from_str("memory://").unwrap(),
-            schema::ObjectStore::S3(S3 { bucket, .. }) => {
-                Url::from_str(&format!("s3://{bucket}")).unwrap()
+            schema::ObjectStore::S3(S3 {
+                bucket,
+                endpoint,
+                prefix,
+                ..
+            }) => {
+                let mut base_url = if let Some(endpoint) = endpoint {
+                    // We're assuming here that the bucket isn't contained in the endpoint itself
+                    format!("{endpoint}/{bucket}")
+                } else {
+                    format!("s3://{bucket}")
+                };
+
+                if let Some(prefix) = prefix {
+                    base_url = format!("{base_url}/{prefix}");
+                }
+
+                Url::from_str(&base_url).unwrap()
             }
-            schema::ObjectStore::GCS(GCS { bucket, .. }) => {
-                Url::from_str(&format!("gs://{bucket}")).unwrap()
+            schema::ObjectStore::GCS(GCS { bucket, prefix, .. }) => {
+                let mut base_url = format!("gs://{bucket}");
+                if let Some(prefix) = prefix {
+                    base_url = format!("{base_url}/{prefix}");
+                }
+
+                Url::from_str(&base_url).unwrap()
             }
         };
+
+        // If a configured bucket contains a path without a trailing slash add one.
+        if !root_uri.path().ends_with('/') {
+            root_uri.set_path(&format!("{}/", root_uri.path()));
+        }
 
         Self {
             inner,
@@ -54,30 +80,38 @@ impl InternalObjectStore {
         }
     }
 
-    // Wrap our object store with a prefixed one corresponding to the full path to the actual table
-    // root, and then wrap that with a delta object store. This is done because:
-    // 1. `DeltaObjectStore` needs an object store with "/" pointing at delta table root
-    //     (i.e. where `_delta_log` is located), hence the `PrefixStore`.
-    // 2. We want to re-use the underlying object store that we build initially during startup,
-    //     instead of re-building one from scratch whenever we need it (not necessarily for perf
-    //     reasons, but rather because the memory object store doesn't work otherwise). However,
-    //     `PrefixStore` has a trait bound of `T: ObjectStore`, which isn't satisfied by
-    //     `Arc<dyn ObjectStore>`, so we need another intermediary, which is where
-    //     `InternalObjectStore` comes in.
-    // This does mean that we have 3 layers of indirection before we hit the "real" object store
-    // (`DeltaObjectStore` -> `PrefixStore` -> `InternalObjectStore` -> `inner`).
-    pub fn get_log_store(&self, table_uuid: Uuid) -> Arc<DefaultLogStore> {
-        let prefixed_store: PrefixStore<InternalObjectStore> =
-            PrefixStore::new(self.clone(), table_uuid.to_string());
+    // Get the table prefix relative to the root of the internal object store.
+    // This is either just a UUID, or potentially UUID prepended by some path.
+    pub fn table_prefix(&self, table_uuid: Uuid) -> Path {
+        match self.config.clone() {
+            schema::ObjectStore::S3(S3 {
+                prefix: Some(prefix),
+                ..
+            })
+            | schema::ObjectStore::GCS(GCS {
+                prefix: Some(prefix),
+                ..
+            }) => Path::from(format!("{prefix}/{table_uuid}")),
+            _ => Path::from(table_uuid.to_string()),
+        }
+    }
 
-        let url =
-            Url::from_str(format!("{}/{}", self.root_uri.as_str(), table_uuid).as_str())
-                .unwrap();
+    // Wrap our object store with a prefixed one corresponding to the full path to the actual table
+    // root, and then wrap that with a default delta `LogStore`. This is done because:
+    // 1. `LogStore` needs an object store with "/" pointing at delta table root
+    //     (i.e. where `_delta_log` is located), hence the `PrefixStore`.
+    // 2. We want to override `rename_if_not_exists` for AWS S3
+    // This means we have 2 layers of indirection before we hit the "real" object store:
+    // (Delta `LogStore` -> `PrefixStore` -> `InternalObjectStore` -> `inner`).
+    pub fn get_log_store(&self, table_uuid: Uuid) -> Arc<DefaultLogStore> {
+        let prefix = self.table_prefix(table_uuid);
+        let prefixed_store: PrefixStore<InternalObjectStore> =
+            PrefixStore::new(self.clone(), prefix);
 
         Arc::from(DefaultLogStore::new(
             Arc::from(prefixed_store),
             LogStoreConfig {
-                location: url,
+                location: self.root_uri.join(&table_uuid.to_string()).unwrap(),
                 options: Default::default(),
             },
         ))
@@ -250,5 +284,69 @@ impl ObjectStore for InternalObjectStore {
             return self.inner.rename(from, to).await;
         }
         self.inner.rename_if_not_exists(from, to).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::context::build_object_store;
+    use crate::config::schema::{ObjectStore, S3};
+    use crate::frontend::http::tests::deterministic_uuid;
+    use crate::object_store::wrapped::InternalObjectStore;
+    use datafusion::common::Result;
+    use deltalake::logstore::LogStore;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::bucket_root("test-bucket", None, "01020304-0506-4708-890a-0b0c0d0e0f10")]
+    #[case::path_no_delimiter(
+        "test-bucket",
+        Some("some/path/no/delimiter"),
+        "some/path/no/delimiter/01020304-0506-4708-890a-0b0c0d0e0f10"
+    )]
+    #[case::path_with_delimiter(
+        "test-bucket",
+        Some("some/path/with/delimiter/"),
+        "some/path/with/delimiter/01020304-0506-4708-890a-0b0c0d0e0f10"
+    )]
+    #[test]
+    fn test_table_location_s3(
+        #[case] bucket: &str,
+        #[case] prefix: Option<&str>,
+        #[case] table_prefix: &str,
+        #[values(None, Some("http://127.0.0.1:9000".to_string()))] endpoint: Option<
+            String,
+        >,
+    ) -> Result<()> {
+        let config = ObjectStore::S3(S3 {
+            region: None,
+            access_key_id: "access_key_id".to_string(),
+            secret_access_key: "secret_access_key".to_string(),
+            bucket: bucket.to_string(),
+            prefix: prefix.map(|p| p.to_string()),
+            endpoint: endpoint.clone(),
+            cache_properties: None,
+        });
+        // In principle for this test we could use any object store since we only exercise the
+        // prefix/log store uri logic
+        let inner_store = build_object_store(&config)?;
+
+        let store = InternalObjectStore::new(inner_store, config);
+
+        let uuid = deterministic_uuid();
+        let prefix = store.table_prefix(uuid);
+        let uri = store.get_log_store(uuid).root_uri();
+
+        assert_eq!(prefix, table_prefix.into());
+
+        let expected_uri = if let Some(endpoint) = endpoint {
+            format!("{endpoint}/{bucket}/{table_prefix}")
+        } else {
+            format!("s3://{bucket}/{table_prefix}")
+        };
+
+        assert_eq!(uri, expected_uri);
+
+        Ok(())
     }
 }
