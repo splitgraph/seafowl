@@ -77,12 +77,16 @@ data_dir = "{}""#,
 access_key_id = "minioadmin"
 secret_access_key = "minioadmin"
 endpoint = "http://127.0.0.1:9000"
-bucket = "seafowl-test-bucket{}"
-
+bucket = "seafowl-test-bucket"
+{}
 [object_store.cache_properties]
 ttl = 30
 "#,
-                path.unwrap_or("")
+                if let Some(path) = path {
+                    format!("prefix = \"{path}\"")
+                } else {
+                    "".to_string()
+                }
             ),
             None,
         ),

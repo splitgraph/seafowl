@@ -40,17 +40,31 @@ impl InternalObjectStore {
             }
             schema::ObjectStore::InMemory(_) => Url::from_str("memory://").unwrap(),
             schema::ObjectStore::S3(S3 {
-                bucket, endpoint, ..
+                bucket,
+                endpoint,
+                prefix,
+                ..
             }) => {
-                if let Some(endpoint) = endpoint {
+                let mut base_url = if let Some(endpoint) = endpoint {
                     // We're assuming here that the bucket isn't contained in the endpoint itself
-                    Url::from_str(&format!("{endpoint}/{bucket}")).unwrap()
+                    format!("{endpoint}/{bucket}")
                 } else {
-                    Url::from_str(&format!("s3://{bucket}")).unwrap()
+                    format!("s3://{bucket}")
+                };
+
+                if let Some(prefix) = prefix {
+                    base_url = format!("{base_url}/{prefix}");
                 }
+
+                Url::from_str(&base_url).unwrap()
             }
-            schema::ObjectStore::GCS(GCS { bucket, .. }) => {
-                Url::from_str(&format!("gs://{bucket}")).unwrap()
+            schema::ObjectStore::GCS(GCS { bucket, prefix, .. }) => {
+                let mut base_url = format!("gs://{bucket}");
+                if let Some(prefix) = prefix {
+                    base_url = format!("{base_url}/{prefix}");
+                }
+
+                Url::from_str(&base_url).unwrap()
             }
         };
 
@@ -71,28 +85,13 @@ impl InternalObjectStore {
     pub fn table_prefix(&self, table_uuid: Uuid) -> Path {
         match self.config.clone() {
             schema::ObjectStore::S3(S3 {
-                endpoint: Some(_), ..
-            }) => {
-                // In case when there's an endpoint specified, the bucket is not the host but the
-                // first element in the path, so we need to discard it when creating a prefix.
-                let mut segments =
-                    self.root_uri.path_segments().unwrap().collect::<Vec<_>>();
-
-                // Add the last path segment which is the table UUID
-                let uuid_str = table_uuid.to_string();
-                segments.push(&uuid_str);
-
-                // Remove the first path segment which is actually the bucket
-                segments.remove(0);
-                Path::from(segments.join("/"))
-            }
-            schema::ObjectStore::S3(S3 { endpoint: None, .. })
-            | schema::ObjectStore::GCS(_) =>
-            // In case the config bucket contains a path as well,
-            // take it and prepend it to the table UUID.
-            {
-                Path::from(format!("{}/{table_uuid}", self.root_uri.path()))
-            }
+                prefix: Some(prefix),
+                ..
+            })
+            | schema::ObjectStore::GCS(GCS {
+                prefix: Some(prefix),
+                ..
+            }) => Path::from(format!("{prefix}/{table_uuid}")),
             _ => Path::from(table_uuid.to_string()),
         }
     }
@@ -299,18 +298,21 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::bucket_root("test-bucket", "01020304-0506-4708-890a-0b0c0d0e0f10")]
+    #[case::bucket_root("test-bucket", None, "01020304-0506-4708-890a-0b0c0d0e0f10")]
     #[case::path_no_delimiter(
-        "test-bucket/some/path/no/delimiter",
+        "test-bucket",
+        Some("some/path/no/delimiter"),
         "some/path/no/delimiter/01020304-0506-4708-890a-0b0c0d0e0f10"
     )]
     #[case::path_with_delimiter(
-        "test-bucket/some/path/with/delimiter/",
+        "test-bucket",
+        Some("some/path/with/delimiter/"),
         "some/path/with/delimiter/01020304-0506-4708-890a-0b0c0d0e0f10"
     )]
     #[test]
     fn test_table_location_s3(
         #[case] bucket: &str,
+        #[case] prefix: Option<&str>,
         #[case] table_prefix: &str,
         #[values(None, Some("http://127.0.0.1:9000".to_string()))] endpoint: Option<
             String,
@@ -321,6 +323,7 @@ mod tests {
             access_key_id: "access_key_id".to_string(),
             secret_access_key: "secret_access_key".to_string(),
             bucket: bucket.to_string(),
+            prefix: prefix.map(|p| p.to_string()),
             endpoint: endpoint.clone(),
             cache_properties: None,
         });
@@ -337,9 +340,9 @@ mod tests {
         assert_eq!(prefix, table_prefix.into());
 
         let expected_uri = if let Some(endpoint) = endpoint {
-            format!("{endpoint}/test-bucket/{table_prefix}")
+            format!("{endpoint}/{bucket}/{table_prefix}")
         } else {
-            format!("s3://test-bucket/{table_prefix}")
+            format!("s3://{bucket}/{table_prefix}")
         };
 
         assert_eq!(uri, expected_uri);

@@ -83,9 +83,8 @@ pub fn build_object_store(
             endpoint,
             bucket,
             cache_properties,
+            ..
         }) => {
-            // Bucket from the config may contain some path so extract the proper bucket
-            let bucket = bucket.split('/').next().unwrap_or(bucket);
             let mut builder = AmazonS3Builder::new()
                 .with_access_key_id(access_key_id)
                 .with_secret_access_key(secret_access_key)
@@ -110,9 +109,8 @@ pub fn build_object_store(
             bucket,
             google_application_credentials,
             cache_properties,
+            ..
         }) => {
-            // Bucket from the config may contain some path so extract the proper bucket
-            let bucket = bucket.split('/').next().unwrap_or(bucket);
             let gcs_builder: GoogleCloudStorageBuilder =
                 GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
 
