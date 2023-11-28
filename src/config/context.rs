@@ -217,7 +217,6 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
 
 #[cfg(test)]
 mod tests {
-    use crate::context::SeafowlContext;
     use sqlx::sqlite::SqliteJournalMode;
 
     use super::*;

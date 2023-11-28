@@ -722,9 +722,11 @@ impl SeafowlContext {
                                     Ok(row_count) => {
                                         info!("Deleted {} old table versions", row_count);
                                     }
-                                    Err(error) => return Err(Error::Internal(format!(
+                                    Err(error) => {
+                                        return Err(Error::Internal(format!(
                                         "Failed to delete old table versions: {error:?}"
-                                    ))),
+                                    )))
+                                    }
                                 }
                             }
 
@@ -831,9 +833,11 @@ impl SeafowlContext {
         {
             Some(_) => {
                 // Schema exists, check if existing table's schema matches the new one
-                match self.get_table_provider(&table_name).await {
-                    Ok(table) => {
-                        table_schema = Some(table.schema());
+                match self.try_get_delta_table(&table_name).await {
+                    Ok(mut table) => {
+                        // Update table state to pick up the most recent schema
+                        table.update().await?;
+                        table_schema = Some(TableProvider::schema(&table));
                         true
                     }
                     Err(_) => false,

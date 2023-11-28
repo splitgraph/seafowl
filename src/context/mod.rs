@@ -13,7 +13,6 @@ use crate::{
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use datafusion::datasource::TableProvider;
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::{error::DataFusionError, prelude::SessionContext, sql::TableReference};
 use datafusion_common::OwnedTableReference;
@@ -139,38 +138,6 @@ impl SeafowlContext {
         }
 
         Ok(TableReference::from(resolved_reference).to_owned_reference())
-    }
-
-    /// Get a provider for a given table, return Err if it doesn't exist
-    async fn get_table_provider(
-        &self,
-        table_name: impl Into<String>,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let table_name = table_name.into();
-        let table_ref = TableReference::from(table_name.as_str());
-
-        let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
-
-        self.inner
-            .catalog(&resolved_ref.catalog)
-            .ok_or_else(|| {
-                Error::Plan(format!(
-                    "failed to resolve catalog: {}",
-                    resolved_ref.catalog
-                ))
-            })?
-            .schema(&resolved_ref.schema)
-            .ok_or_else(|| {
-                Error::Plan(format!("failed to resolve schema: {}", resolved_ref.schema))
-            })?
-            .table(&resolved_ref.table)
-            .await
-            .ok_or_else(|| {
-                Error::Plan(format!(
-                    "'{}.{}.{}' not found",
-                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
-                ))
-            })
     }
 
     /// Resolve a table reference into a Delta table
