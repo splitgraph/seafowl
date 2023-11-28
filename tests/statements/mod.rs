@@ -24,7 +24,7 @@ use tempfile::TempDir;
 
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
-use seafowl::context::{DefaultSeafowlContext, SeafowlContext};
+use seafowl::context::SeafowlContext;
 use seafowl::data_types::Timestamp;
 use seafowl::repository::postgres::testutils::get_random_schema;
 use seafowl::system_tables::SYSTEM_SCHEMA;
@@ -53,7 +53,7 @@ enum ObjectStoreType {
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
 async fn make_context_with_pg(
     object_store_type: ObjectStoreType,
-) -> (DefaultSeafowlContext, Option<TempDir>) {
+) -> (SeafowlContext, Option<TempDir>) {
     let dsn = env::var("DATABASE_URL").unwrap();
     let schema = get_random_schema();
 
@@ -131,7 +131,7 @@ schema = "{schema}""#
 }
 
 /// Get a batch of results with all tables and columns in a database
-async fn list_columns_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch> {
+async fn list_columns_query(context: &SeafowlContext) -> Vec<RecordBatch> {
     context
         .collect(
             context
@@ -152,7 +152,7 @@ async fn list_columns_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch>
 }
 
 /// Get a batch of results with all tables in a database
-async fn list_tables_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch> {
+async fn list_tables_query(context: &SeafowlContext) -> Vec<RecordBatch> {
     context
         .collect(
             context
@@ -172,7 +172,7 @@ async fn list_tables_query(context: &DefaultSeafowlContext) -> Vec<RecordBatch> 
         .unwrap()
 }
 
-async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &str) {
+async fn create_table_and_insert(context: &SeafowlContext, table_name: &str) {
     context
         .plan_query(
             // SQL injection here, fine for test code
@@ -205,7 +205,7 @@ async fn create_table_and_insert(context: &DefaultSeafowlContext, table_name: &s
 }
 
 async fn create_table_and_some_partitions(
-    context: &DefaultSeafowlContext,
+    context: &SeafowlContext,
     table_name: &str,
     delay: Option<Duration>,
 ) -> (HashMap<i64, Vec<RecordBatch>>, HashMap<i64, Timestamp>) {
@@ -213,7 +213,7 @@ async fn create_table_and_some_partitions(
     let mut version_timestamps = HashMap::<i64, Timestamp>::new();
 
     async fn record_latest_version_snapshot(
-        context: &DefaultSeafowlContext,
+        context: &SeafowlContext,
         version_id: i64,
         table_name: &str,
         delay: Option<Duration>,

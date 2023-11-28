@@ -34,7 +34,7 @@ use datafusion::assert_batches_eq;
 use datafusion::parquet::arrow::ArrowWriter;
 use itertools::Itertools;
 use rstest::rstest;
-use seafowl::context::{DefaultSeafowlContext, SeafowlContext};
+use seafowl::context::SeafowlContext;
 use std::net::SocketAddr;
 use tempfile::Builder;
 use tokio::sync::oneshot;
@@ -54,7 +54,7 @@ async fn make_read_only_http_server() -> (
     SocketAddr,
     Pin<Box<dyn Future<Output = ()> + Send>>,
     Sender<()>,
-    Arc<DefaultSeafowlContext>,
+    Arc<SeafowlContext>,
 ) {
     let config_text = r#"
 [object_store]

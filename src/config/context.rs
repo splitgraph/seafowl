@@ -4,7 +4,7 @@ use crate::{
     catalog::{
         DefaultCatalog, FunctionCatalog, TableCatalog, DEFAULT_DB, DEFAULT_SCHEMA,
     },
-    context::DefaultSeafowlContext,
+    context::SeafowlContext,
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
 use datafusion::execution::context::SessionState;
@@ -151,7 +151,7 @@ pub fn build_state_with_table_factories(
     state
 }
 
-pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<DefaultSeafowlContext> {
+pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext> {
     let mut runtime_config = RuntimeConfig::new();
     if let Some(max_memory) = cfg.runtime.max_memory {
         runtime_config = runtime_config
@@ -203,7 +203,7 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<DefaultSeafowl
     // the user is connected to), but in this case we can just use the same context everywhere
     // (it will reload its schema before running the query)
 
-    Ok(DefaultSeafowlContext {
+    Ok(SeafowlContext {
         inner: context,
         table_catalog: tables,
         function_catalog: functions,

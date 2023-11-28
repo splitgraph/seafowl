@@ -41,9 +41,8 @@ use crate::catalog::DEFAULT_DB;
 use crate::config::schema::{AccessSettings, MEBIBYTES};
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
-    context::{
-        is_read_only, is_statement_read_only, DefaultSeafowlContext, SeafowlContext,
-    },
+    context::logical::{is_read_only, is_statement_read_only},
+    context::SeafowlContext,
 };
 
 const QUERY_HEADER: &str = "X-Seafowl-Query";
@@ -138,7 +137,7 @@ fn batch_to_json(batch: RecordBatch) -> Result<Vec<u8>, ArrowError> {
 
 // Execute the plan and stream the results
 async fn plan_to_response(
-    context: Arc<DefaultSeafowlContext>,
+    context: Arc<SeafowlContext>,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Response, DataFusionError> {
     let stream = context
@@ -154,7 +153,7 @@ pub async fn uncached_read_write_query(
     database_name: String,
     user_context: UserContext,
     query: String,
-    mut context: Arc<DefaultSeafowlContext>,
+    mut context: Arc<SeafowlContext>,
 ) -> Result<Response, ApiError> {
     let timer = Instant::now();
 
@@ -292,7 +291,7 @@ pub async fn cached_read_query(
     query_or_hash: String,
     maybe_raw_query: Option<String>,
     if_none_match: Option<String>,
-    mut context: Arc<DefaultSeafowlContext>,
+    mut context: Arc<SeafowlContext>,
 ) -> Result<Response, ApiError> {
     let timer = Instant::now();
 
@@ -377,7 +376,7 @@ pub async fn upload(
     table_name: String,
     user_context: UserContext,
     mut form: FormData,
-    mut context: Arc<DefaultSeafowlContext>,
+    mut context: Arc<SeafowlContext>,
 ) -> Result<Response, ApiError> {
     if !user_context.can_perform_action(Action::Write) {
         return Err(ApiError::WriteForbidden);
@@ -476,7 +475,7 @@ async fn load_part(mut part: Part) -> Result<Vec<u8>, ApiError> {
 // We need the allow to silence the compiler: it asks us to add warp::generic::Tuple to the first
 // parameter of the return type, but that struct is not exportable (generic is private).
 pub fn filters(
-    context: Arc<DefaultSeafowlContext>,
+    context: Arc<SeafowlContext>,
     config: HttpFrontend,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let access_policy = AccessPolicy::from_config(&config);
@@ -573,7 +572,7 @@ pub fn filters(
 }
 
 pub async fn run_server(
-    context: Arc<DefaultSeafowlContext>,
+    context: Arc<SeafowlContext>,
     config: HttpFrontend,
     mut shutdown: Receiver<()>,
 ) {
@@ -621,7 +620,7 @@ pub mod tests {
     use crate::config::schema::{str_to_hex_hash, HttpFrontend};
     use crate::testutils::{assert_header_is_float, schema_from_header};
     use crate::{
-        context::{test_utils::in_memory_context, DefaultSeafowlContext, SeafowlContext},
+        context::{test_utils::in_memory_context, SeafowlContext},
         frontend::http::{filters, QUERY_HEADER, QUERY_TIME_HEADER},
     };
 
@@ -653,7 +652,7 @@ pub mod tests {
     /// and has version ID 1 (otherwise the hashes won't match).
     async fn in_memory_context_with_single_table(
         new_db: Option<&str>,
-    ) -> Arc<DefaultSeafowlContext> {
+    ) -> Arc<SeafowlContext> {
         let mut context = Arc::new(in_memory_context().await);
 
         if let Some(db_name) = new_db {
@@ -691,7 +690,7 @@ pub mod tests {
 
     async fn in_memory_context_with_modified_table(
         new_db: Option<&str>,
-    ) -> Arc<DefaultSeafowlContext> {
+    ) -> Arc<SeafowlContext> {
         let mut context = in_memory_context_with_single_table(new_db).await;
 
         if let Some(db_name) = new_db {
