@@ -2,7 +2,7 @@ mod commands;
 mod helper;
 
 use crate::cli::commands::all_commands_info;
-use crate::context::{DefaultSeafowlContext, SeafowlContext};
+use crate::context::SeafowlContext;
 use arrow::util::pretty::pretty_format_batches_with_options;
 use commands::Command;
 use datafusion_common::Result;
@@ -14,12 +14,12 @@ use std::time::Instant;
 const SEAFOWL_CLI_HISTORY: &str = ".history";
 
 pub struct SeafowlCli {
-    ctx: Arc<DefaultSeafowlContext>,
+    ctx: Arc<SeafowlContext>,
 }
 
 impl SeafowlCli {
     // Instantiate new CLI instance
-    pub fn new(ctx: Arc<DefaultSeafowlContext>) -> Self {
+    pub fn new(ctx: Arc<SeafowlContext>) -> Self {
         SeafowlCli { ctx }
     }
 

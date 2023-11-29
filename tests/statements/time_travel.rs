@@ -68,7 +68,7 @@ async fn test_read_time_travel() {
     //
 
     async fn query_table_version(
-        context: &DefaultSeafowlContext,
+        context: &SeafowlContext,
         version_id: i64,
         version_results: &HashMap<i64, Vec<RecordBatch>>,
         version_timestamps: &HashMap<i64, Timestamp>,

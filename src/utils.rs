@@ -13,12 +13,12 @@ use log::{info, warn};
 use sha2::{Digest, Sha256};
 use tokio::{fs::File, io::AsyncWrite};
 
-use crate::context::{DefaultSeafowlContext, SeafowlContext};
+use crate::context::SeafowlContext;
 use crate::repository::interface::DroppedTableDeletionStatus;
 
 // Run a one-off command and output its results to a writer
 pub async fn run_one_off_command<W>(
-    context: Arc<DefaultSeafowlContext>,
+    context: Arc<SeafowlContext>,
     command: &str,
     mut output: W,
 ) where
@@ -44,10 +44,7 @@ pub async fn run_one_off_command<W>(
 }
 
 // Physically delete dropped tables for a given context
-pub async fn gc_databases(
-    context: &DefaultSeafowlContext,
-    database_name: Option<String>,
-) {
+pub async fn gc_databases(context: &SeafowlContext, database_name: Option<String>) {
     let mut dropped_tables = context
         .table_catalog
         .get_dropped_tables(database_name)

@@ -18,7 +18,7 @@ use seafowl::{
         context::build_context,
         schema::{build_default_config, load_config, SeafowlConfig, DEFAULT_DATA_DIR},
     },
-    context::DefaultSeafowlContext,
+    context::SeafowlContext,
     frontend::http::run_server,
     utils::{gc_databases, run_one_off_command},
 };
@@ -63,7 +63,7 @@ struct Args {
 }
 
 fn prepare_frontends(
-    context: Arc<DefaultSeafowlContext>,
+    context: Arc<SeafowlContext>,
     config: &SeafowlConfig,
     shutdown: &Sender<()>,
 ) -> Vec<Pin<Box<dyn Future<Output = ()> + Send>>> {
