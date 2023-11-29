@@ -556,7 +556,7 @@ impl SeafowlContext {
                         }) => {
                             self.create_delta_table(
                                 name,
-                                CreateDeltaTableDetails::FromFiles(Path::from(
+                                CreateDeltaTableDetails::FromPath(Path::from(
                                     location.as_str(),
                                 )),
                             )

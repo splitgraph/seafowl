@@ -275,7 +275,7 @@ pub async fn plan_to_object_store(
 
 pub(super) enum CreateDeltaTableDetails {
     WithSchema(Schema),
-    FromFiles(Path),
+    FromPath(Path),
 }
 
 impl SeafowlContext {
@@ -297,23 +297,23 @@ impl SeafowlContext {
                 Error::Plan(format!("Schema {schema_name:?} does not exist!"))
             })?;
 
-        // TODO: we could be doing this inside the DB itself (i.e. `... DEFAULT gen_random_uuid()`
-        // in Postgres and `... DEFAULT (uuid())` in SQLite) however we won't be able to do it until
-        // sqlx 0.7 is released (which has libsqlite3-sys > 0.25, with the SQLite version that has
-        // the `uuid()` function).
-        // Then we could create the table in our catalog first and try to create the delta table itself
-        // with the returned uuid (and delete the catalog entry if the object store creation fails).
-        // On the other hand that would complicate etag testing logic.
-        let table_uuid = get_uuid();
-        let table_log_store = self.internal_object_store.get_log_store(table_uuid);
-
         // NB: there's also a uuid generated below for table's `DeltaTableMetaData::id`, so it would
         // be nice if those two could match somehow
-        let table = Arc::new(match details {
+        let (table_uuid, table) = match details {
             CreateDeltaTableDetails::WithSchema(schema) => {
+                // TODO: we could be doing this inside the DB itself (i.e. `... DEFAULT gen_random_uuid()`
+                // in Postgres and `... DEFAULT (uuid())` in SQLite) however we won't be able to do it until
+                // sqlx 0.7 is released (which has libsqlite3-sys > 0.25, with the SQLite version that has
+                // the `uuid()` function).
+                // Then we could create the table in our catalog first and try to create the delta table itself
+                // with the returned uuid (and delete the catalog entry if the object store creation fails).
+                // On the other hand that would complicate etag testing logic.
+                let table_uuid = get_uuid();
+                let table_log_store =
+                    self.internal_object_store.get_log_store(table_uuid);
                 let delta_schema = DeltaSchema::try_from(&schema)?;
 
-                CreateBuilder::new()
+                let table = CreateBuilder::new()
                     .with_log_store(table_log_store)
                     .with_table_name(&*table_name)
                     .with_columns(delta_schema.fields().clone())
@@ -321,20 +321,30 @@ impl SeafowlContext {
                         "Created by Seafowl {}",
                         env!("CARGO_PKG_VERSION")
                     ))
-                    .await?
+                    .await?;
+                (table_uuid, table)
             }
-            CreateDeltaTableDetails::FromFiles(_path) => {
-                // Now convert them to a Delta table
-                ConvertToDeltaBuilder::new()
+            CreateDeltaTableDetails::FromPath(path) => {
+                // For now interpret the path as containing only the final UUID table prefix,
+                // in accordance with Seafowl convention
+                let table_uuid = Uuid::try_parse(path.as_ref()).map_err(|e| {
+                    DataFusionError::Execution(format!(
+                        "Unable to parse the UUID path of the table: {e}"
+                    ))
+                })?;
+                let table_log_store =
+                    self.internal_object_store.get_log_store(table_uuid);
+                let table = ConvertToDeltaBuilder::new()
                     .with_log_store(table_log_store)
                     .with_table_name(&*table_name)
                     .with_comment(format!(
                         "Converted by Seafowl {}",
                         env!("CARGO_PKG_VERSION")
                     ))
-                    .await?
+                    .await?;
+                (table_uuid, table)
             }
-        });
+        };
 
         // We still persist the table into our own catalog, one reason is us being able to load all
         // tables and their schemas in bulk to satisfy information_schema queries.
@@ -344,11 +354,12 @@ impl SeafowlContext {
             .create_table(
                 collection_id,
                 &table_name,
-                TableProvider::schema(table.as_ref()).as_ref(),
+                TableProvider::schema(&table).as_ref(),
                 table_uuid,
             )
             .await?;
 
+        let table = Arc::new(table);
         self.inner.register_table(resolved_ref, table.clone())?;
         debug!("Created new table {table}");
         Ok(table)
