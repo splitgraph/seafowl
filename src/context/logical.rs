@@ -177,11 +177,11 @@ impl SeafowlContext {
                         ))
                     };
 
-                    if self.try_get_delta_table(old_table_name.to_owned()).await.is_err() {
+                    if self.inner.table_provider(old_table_name.to_owned()).await.is_err() {
                         return Err(Error::Plan(
                             format!("Source table {old_table_name:?} doesn't exist")
                         ))
-                    } else if self.try_get_delta_table(new_table_name.to_owned()).await.is_ok() {
+                    } else if self.inner.table_provider(new_table_name.to_owned()).await.is_ok() {
                         return Err(Error::Plan(
                             format!("Target table {new_table_name:?} already exists")
                         ))

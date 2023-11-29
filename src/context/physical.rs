@@ -29,15 +29,13 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::{collect, execute_stream};
 use datafusion::{
     arrow::{datatypes::SchemaRef, record_batch::RecordBatch},
     datasource::file_format::{parquet::ParquetFormat, FileFormat},
     error::DataFusionError,
     execution::context::TaskContext,
-    physical_plan::{
-        coalesce_partitions::CoalescePartitionsExec, EmptyRecordBatchStream,
-        ExecutionPlan, SendableRecordBatchStream,
-    },
+    physical_plan::{ExecutionPlan, SendableRecordBatchStream},
     sql::TableReference,
 };
 use datafusion_expr::logical_plan::{
@@ -50,7 +48,6 @@ use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
-use futures::TryStreamExt;
 use log::info;
 use std::borrow::Cow;
 use std::ops::Deref;
@@ -777,34 +774,16 @@ impl SeafowlContext {
         &self,
         physical_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Vec<RecordBatch>> {
-        let stream = self.execute_stream(physical_plan).await?;
-        stream.err_into().try_collect().await
+        let task_context = Arc::new(TaskContext::from(self.inner()));
+        collect(physical_plan, task_context).await
     }
 
     pub async fn execute_stream(
         &self,
         physical_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {
-        match physical_plan.output_partitioning().partition_count() {
-            0 => Ok(Box::pin(EmptyRecordBatchStream::new(
-                physical_plan.schema(),
-            ))),
-            1 => self.execute_stream_partitioned(&physical_plan, 0).await,
-            _ => {
-                let plan: Arc<dyn ExecutionPlan> =
-                    Arc::new(CoalescePartitionsExec::new(physical_plan));
-                self.execute_stream_partitioned(&plan, 0).await
-            }
-        }
-    }
-
-    async fn execute_stream_partitioned(
-        &self,
-        physical_plan: &Arc<dyn ExecutionPlan>,
-        partition: usize,
-    ) -> Result<SendableRecordBatchStream> {
         let task_context = Arc::new(TaskContext::from(self.inner()));
-        physical_plan.execute(partition, task_context)
+        execute_stream(physical_plan, task_context)
     }
 
     /// Append data from the provided file, creating a new schema/table if absent
@@ -833,11 +812,9 @@ impl SeafowlContext {
         {
             Some(_) => {
                 // Schema exists, check if existing table's schema matches the new one
-                match self.try_get_delta_table(&table_name).await {
-                    Ok(mut table) => {
-                        // Update table state to pick up the most recent schema
-                        table.update().await?;
-                        table_schema = Some(TableProvider::schema(&table));
+                match self.inner.table_provider(&table_name).await {
+                    Ok(table) => {
+                        table_schema = Some(table.schema());
                         true
                     }
                     Err(_) => false,
