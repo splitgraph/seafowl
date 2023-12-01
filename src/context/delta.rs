@@ -274,7 +274,7 @@ pub async fn plan_to_object_store(
 }
 
 pub(super) enum CreateDeltaTableDetails {
-    WithSchema(Schema),
+    EmptyTable(Schema),
     FromPath(Path),
 }
 
@@ -300,7 +300,7 @@ impl SeafowlContext {
         // NB: there's also a uuid generated below for table's `DeltaTableMetaData::id`, so it would
         // be nice if those two could match somehow
         let (table_uuid, table) = match details {
-            CreateDeltaTableDetails::WithSchema(schema) => {
+            CreateDeltaTableDetails::EmptyTable(schema) => {
                 // TODO: we could be doing this inside the DB itself (i.e. `... DEFAULT gen_random_uuid()`
                 // in Postgres and `... DEFAULT (uuid())` in SQLite) however we won't be able to do it until
                 // sqlx 0.7 is released (which has libsqlite3-sys > 0.25, with the SQLite version that has

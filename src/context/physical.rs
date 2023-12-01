@@ -230,7 +230,7 @@ impl SeafowlContext {
                 // only one
                 self.create_delta_table(
                     name,
-                    CreateDeltaTableDetails::WithSchema(plan.schema().as_ref().clone()),
+                    CreateDeltaTableDetails::EmptyTable(plan.schema().as_ref().clone()),
                 )
                 .await?;
                 self.plan_to_delta_table(name, &plan).await?;
@@ -571,7 +571,7 @@ impl SeafowlContext {
                         }) => {
                             self.create_delta_table(
                                 name.as_str(),
-                                CreateDeltaTableDetails::WithSchema(schema.clone()),
+                                CreateDeltaTableDetails::EmptyTable(schema.clone()),
                             )
                             .await?;
 
@@ -896,7 +896,7 @@ impl SeafowlContext {
         if !table_exists {
             self.create_delta_table(
                 table_ref.clone(),
-                CreateDeltaTableDetails::WithSchema(plan.schema().as_ref().clone()),
+                CreateDeltaTableDetails::EmptyTable(plan.schema().as_ref().clone()),
             )
             .await?;
         }
