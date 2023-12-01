@@ -17,7 +17,9 @@ use serde_json::json;
 use sqlx::{any::install_default_drivers, AnyPool, Executor};
 #[cfg(feature = "remote-tables")]
 use tempfile::{NamedTempFile, TempPath};
+use tokio::fs::create_dir;
 use tokio::time::sleep;
+use uuid::Uuid;
 
 use rstest::rstest;
 use tempfile::TempDir;
@@ -34,6 +36,7 @@ mod dml;
 mod query;
 // Hack because integration tests do not set cfg(test)
 // https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2
+mod convert;
 #[allow(dead_code)]
 #[path = "../../src/testutils.rs"]
 mod testutils;

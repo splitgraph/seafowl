@@ -239,10 +239,16 @@ impl Repository for $repo {
 
         // Create columns
         // TODO this breaks if we have more than (bind limit) columns
-        if !schema.arrow_schema.fields().is_empty() {
+        if !schema.fields().is_empty() {
             let mut builder: QueryBuilder<_> =
                 QueryBuilder::new("INSERT INTO table_column(table_version_id, name, type) ");
-            builder.push_values(schema.to_column_names_types(), |mut b, col| {
+
+            let fields: Vec<(String, String)> = schema.fields()
+                .iter()
+                .map(|f| (f.name().clone(), field_to_json(f).to_string()))
+                .collect();
+
+            builder.push_values(fields, |mut b, col| {
                 b.push_bind(new_version_id)
                     .push_bind(col.0)
                     .push_bind(col.1);

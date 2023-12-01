@@ -3,7 +3,6 @@ use crate::context::SeafowlContext;
 #[cfg(test)]
 use crate::frontend::http::tests::deterministic_uuid;
 use crate::object_store::wrapped::InternalObjectStore;
-use crate::schema::Schema as SeafowlSchema;
 
 use bytes::BytesMut;
 use datafusion::error::{DataFusionError as Error, Result};
@@ -11,6 +10,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::parquet::basic::{Compression, ZstdLevel};
 use datafusion::{
     arrow::datatypes::{Schema, SchemaRef},
+    datasource::TableProvider,
     error::DataFusionError,
     execution::context::TaskContext,
     parquet::{arrow::ArrowWriter, file::properties::WriterProperties},
@@ -18,8 +18,9 @@ use datafusion::{
     sql::TableReference,
 };
 use deltalake::kernel::{Action, Add, Schema as DeltaSchema};
-use deltalake::operations::create::CreateBuilder;
-use deltalake::operations::transaction::commit;
+use deltalake::operations::{
+    convert_to_delta::ConvertToDeltaBuilder, create::CreateBuilder, transaction::commit,
+};
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::writer::create_add;
 use deltalake::DeltaTable;
@@ -272,20 +273,22 @@ pub async fn plan_to_object_store(
         .collect()
 }
 
+pub(super) enum CreateDeltaTableDetails {
+    EmptyTable(Schema),
+    FromPath(Path),
+}
+
 impl SeafowlContext {
     pub(super) async fn create_delta_table<'a>(
         &self,
         name: impl Into<TableReference<'a>>,
-        schema: &Schema,
+        details: CreateDeltaTableDetails,
     ) -> Result<Arc<DeltaTable>> {
         let table_ref: TableReference = name.into();
         let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
         let schema_name = resolved_ref.schema.clone();
         let table_name = resolved_ref.table.clone();
 
-        let sf_schema = SeafowlSchema {
-            arrow_schema: Arc::new(schema.clone()),
-        };
         let collection_id = self
             .table_catalog
             .get_collection_id_by_name(&self.database, &schema_name)
@@ -294,40 +297,69 @@ impl SeafowlContext {
                 Error::Plan(format!("Schema {schema_name:?} does not exist!"))
             })?;
 
-        let delta_schema = DeltaSchema::try_from(schema)?;
-
-        // TODO: we could be doing this inside the DB itself (i.e. `... DEFAULT gen_random_uuid()`
-        // in Postgres and `... DEFAULT (uuid())` in SQLite) however we won't be able to do it until
-        // sqlx 0.7 is released (which has libsqlite3-sys > 0.25, with the SQLite version that has
-        // the `uuid()` function).
-        // Then we could create the table in our catalog first and try to create the delta table itself
-        // with the returned uuid (and delete the catalog entry if the object store creation fails).
-        // On the other hand that would complicate etag testing logic.
-        let table_uuid = get_uuid();
-        let table_log_store = self.internal_object_store.get_log_store(table_uuid);
-
         // NB: there's also a uuid generated below for table's `DeltaTableMetaData::id`, so it would
-        // be nice if those two could match
-        let table = Arc::new(
-            CreateBuilder::new()
-                .with_log_store(table_log_store)
-                .with_table_name(&*table_name)
-                .with_columns(delta_schema.fields().clone())
-                .with_comment(format!(
-                    "Created by Seafowl version {}",
-                    env!("CARGO_PKG_VERSION")
-                ))
-                .await?,
-        );
+        // be nice if those two could match somehow
+        let (table_uuid, table) = match details {
+            CreateDeltaTableDetails::EmptyTable(schema) => {
+                // TODO: we could be doing this inside the DB itself (i.e. `... DEFAULT gen_random_uuid()`
+                // in Postgres and `... DEFAULT (uuid())` in SQLite) however we won't be able to do it until
+                // sqlx 0.7 is released (which has libsqlite3-sys > 0.25, with the SQLite version that has
+                // the `uuid()` function).
+                // Then we could create the table in our catalog first and try to create the delta table itself
+                // with the returned uuid (and delete the catalog entry if the object store creation fails).
+                // On the other hand that would complicate etag testing logic.
+                let table_uuid = get_uuid();
+                let table_log_store =
+                    self.internal_object_store.get_log_store(table_uuid);
+                let delta_schema = DeltaSchema::try_from(&schema)?;
+
+                let table = CreateBuilder::new()
+                    .with_log_store(table_log_store)
+                    .with_table_name(&*table_name)
+                    .with_columns(delta_schema.fields().clone())
+                    .with_comment(format!(
+                        "Created by Seafowl {}",
+                        env!("CARGO_PKG_VERSION")
+                    ))
+                    .await?;
+                (table_uuid, table)
+            }
+            CreateDeltaTableDetails::FromPath(path) => {
+                // For now interpret the path as containing only the final UUID table prefix,
+                // in accordance with Seafowl convention
+                let table_uuid = Uuid::try_parse(path.as_ref()).map_err(|e| {
+                    DataFusionError::Execution(format!(
+                        "Unable to parse the UUID path of the table: {e}"
+                    ))
+                })?;
+                let table_log_store =
+                    self.internal_object_store.get_log_store(table_uuid);
+                let table = ConvertToDeltaBuilder::new()
+                    .with_log_store(table_log_store)
+                    .with_table_name(&*table_name)
+                    .with_comment(format!(
+                        "Converted by Seafowl {}",
+                        env!("CARGO_PKG_VERSION")
+                    ))
+                    .await?;
+                (table_uuid, table)
+            }
+        };
 
         // We still persist the table into our own catalog, one reason is us being able to load all
         // tables and their schemas in bulk to satisfy information_schema queries.
         // Another is to keep track of table uuid's, which are used to construct the table uri.
         // We may look into doing this via delta-rs somehow eventually.
         self.table_catalog
-            .create_table(collection_id, &table_name, &sf_schema, table_uuid)
+            .create_table(
+                collection_id,
+                &table_name,
+                TableProvider::schema(&table).as_ref(),
+                table_uuid,
+            )
             .await?;
 
+        let table = Arc::new(table);
         self.inner.register_table(resolved_ref, table.clone())?;
         debug!("Created new table {table}");
         Ok(table)

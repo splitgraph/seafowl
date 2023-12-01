@@ -9,6 +9,16 @@ use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use strum_macros::AsRefStr;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ConvertTable {
+    /// Location from which to convert
+    pub location: String,
+    /// Name of the table to convert to
+    pub name: String,
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct CreateTable {
     /// The table schema
     pub schema: Schema,
@@ -69,6 +79,7 @@ pub struct Vacuum {
 
 #[derive(AsRefStr, Debug, Clone, Hash, PartialEq, Eq)]
 pub enum SeafowlExtensionNode {
+    ConvertTable(ConvertTable),
     CreateTable(CreateTable),
     CreateFunction(CreateFunction),
     DropFunction(DropFunction),
@@ -102,6 +113,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
         // (& means it has to have been borrowed and we can't own anything, since this
         // function will exit soon)
         match self {
+            SeafowlExtensionNode::ConvertTable(ConvertTable {
+                output_schema, ..
+            }) => output_schema,
             SeafowlExtensionNode::CreateTable(CreateTable { output_schema, .. }) => {
                 output_schema
             }
@@ -131,6 +145,11 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
 
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            SeafowlExtensionNode::ConvertTable(ConvertTable {
+                location, name, ..
+            }) => {
+                write!(f, "Convert: {location} to {name}")
+            }
             SeafowlExtensionNode::CreateTable(CreateTable { name, .. }) => {
                 write!(f, "Create: {name}")
             }
