@@ -5175,7 +5175,7 @@ dependencies = [
 
 [[package]]
 name = "seafowl"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "arrow",
@@ -5200,7 +5200,7 @@ dependencies = [
  "deltalake",
  "futures",
  "hex",
- "itertools 0.11.0",
+ "itertools 0.10.5",
  "lazy_static",
  "log",
  "mockall",
