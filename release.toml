@@ -1,5 +1,4 @@
 consolidate-commits = false
-consolidate-pushes = true
 allow-branch = ["main"]
 pre-release-hook = ["./pre-release-hook.sh"]
 

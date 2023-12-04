@@ -4,6 +4,12 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Implement CONVERT TO DELTA statement (<https://github.com/splitgraph/seafowl/pull/473>)
+- Support sub-folder paths as data firs in object stores
+  (<https://github.com/splitgraph/seafowl/pull/472>)
+- Introduce Seafowl CLI (<https://github.com/splitgraph/seafowl/pull/468>)
+- Upgrade to DataFusion 32 (<https://github.com/splitgraph/seafowl/pull/465>)
+
 ## [0.5.2] - 2023-09-07
 
 - Wire up COPY TO statement (<https://github.com/splitgraph/seafowl/pull/462>)
