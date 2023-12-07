@@ -207,7 +207,7 @@ async fn create_table_and_insert(context: &SeafowlContext, table_name: &str) {
         .unwrap();
 }
 
-async fn create_table_and_some_partitions(
+pub async fn create_table_and_some_partitions(
     context: &SeafowlContext,
     table_name: &str,
     delay: Option<Duration>,

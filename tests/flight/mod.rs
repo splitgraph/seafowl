@@ -2,6 +2,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_flight::error::Result;
 use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt};
 use arrow_flight::{FlightClient, FlightDescriptor};
+use datafusion_common::assert_batches_eq;
 use futures::TryStreamExt;
 use prost::Message;
 use seafowl::config::context::build_context;
@@ -15,7 +16,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tonic::transport::Channel;
 
-mod flight_client;
+mod client;
 
 async fn start_flight_server() -> (
     Arc<SeafowlContext>,
