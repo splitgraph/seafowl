@@ -35,9 +35,8 @@ async fn test_basic_queries() -> Result<()> {
         .clone()
         .expect("expected ticket");
 
-    // Retrieve the corresponding Flight stream with do_get
+    // Retrieve the corresponding Flight stream and collect into batches
     let flight_stream = client.do_get(ticket).await.expect("error fetching data");
-
     let results: Vec<RecordBatch> = flight_stream.try_collect().await?;
 
     let expected = [

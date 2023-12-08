@@ -12,6 +12,7 @@ use clap::Parser;
 use futures::{future::join_all, Future, FutureExt};
 
 use pretty_env_logger::env_logger;
+#[cfg(feature = "frontend-arrow-flight")]
 use seafowl::frontend::flight::run_flight_server;
 use seafowl::{
     cli,

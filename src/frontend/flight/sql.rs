@@ -84,7 +84,7 @@ impl FlightSqlService for SeafowlFlightHandler {
 
         let flight_info = FlightInfo::new()
             .try_with_schema(&schema)
-            .expect("encoding schema")
+            .map_err(|e| Status::internal(e.to_string()))?
             .with_endpoint(endpoint)
             .with_descriptor(request.into_inner());
 
