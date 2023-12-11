@@ -1,3 +1,4 @@
+use crate::statements::create_table_and_insert;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::error::Result;
 use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt};
@@ -54,4 +55,15 @@ bind_port = {}"#,
     );
 
     (context, addr, Box::pin(flight))
+}
+
+async fn create_flight_client(addr: SocketAddr) -> FlightClient {
+    let port = addr.port();
+    let channel = Channel::from_shared(format!("http://localhost:{port}"))
+        .expect("Endpoint created")
+        .connect()
+        .await
+        .expect("Channel connected");
+
+    FlightClient::new(channel)
 }

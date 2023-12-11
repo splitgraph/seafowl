@@ -17,6 +17,7 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 use prost::Message;
 use std::pin::Pin;
+use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
@@ -37,7 +38,16 @@ impl FlightSqlService for SeafowlFlightHandler {
             payload: vec![].into(),
         };
         let output = futures::stream::iter(vec![Ok(result)]);
-        Ok(Response::new(Box::pin(output)))
+
+        let mut resp: Response<Pin<Box<dyn Stream<Item = Result<_, _>> + Send>>> =
+            Response::new(Box::pin(output));
+
+        // Include a dummy auth header, so that clients that expect it don't error out (e.g. Python's
+        // adbc_driver_flightsql)
+        let md = MetadataValue::try_from("Bearer empty")
+            .map_err(|_| Status::invalid_argument("authorization not parsable"))?;
+        resp.metadata_mut().insert("authorization", md);
+        Ok(resp)
     }
 
     // Get metadata about the Flight SQL server

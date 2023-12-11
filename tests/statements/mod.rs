@@ -175,7 +175,7 @@ async fn list_tables_query(context: &SeafowlContext) -> Vec<RecordBatch> {
         .unwrap()
 }
 
-async fn create_table_and_insert(context: &SeafowlContext, table_name: &str) {
+pub async fn create_table_and_insert(context: &SeafowlContext, table_name: &str) {
     context
         .plan_query(
             // SQL injection here, fine for test code

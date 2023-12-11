@@ -62,7 +62,7 @@ impl SeafowlFlightHandler {
         let (_, batch_stream_mutex) =
             self.results
                 .remove(&query_id)
-                .ok_or(DataFusionError::Internal(format!(
+                .ok_or(DataFusionError::Execution(format!(
                     "No results found for query id {query_id}"
                 )))?;
 
