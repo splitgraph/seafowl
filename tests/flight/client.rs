@@ -1,5 +1,30 @@
 use crate::flight::*;
 
+async fn get_flight_batches(
+    client: &mut FlightClient,
+    query: String,
+) -> Result<Vec<RecordBatch>> {
+    let cmd = CommandStatementQuery {
+        query,
+        transaction_id: None,
+    };
+    let request = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+    let response = client.get_flight_info(request).await?;
+
+    // Get the returned ticket
+    let ticket = response.endpoint[0]
+        .ticket
+        .clone()
+        .expect("expected ticket");
+
+    // Retrieve the corresponding Flight stream and collect into batches
+    let flight_stream = client.do_get(ticket).await?;
+
+    let batches = flight_stream.try_collect().await?;
+
+    Ok(batches)
+}
+
 #[tokio::test]
 async fn test_basic_queries() -> Result<()> {
     let (context, addr, flight) = start_flight_server().await;
@@ -11,24 +36,8 @@ async fn test_basic_queries() -> Result<()> {
     // Test the handshake works
     let _ = client.handshake("test").await.expect("error handshaking");
 
-    // Try out the actual query
-    let cmd = CommandStatementQuery {
-        query: "SELECT * FROM flight_table".to_string(),
-        transaction_id: None,
-    };
-    let request = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
-    let response = client.get_flight_info(request).await?;
-
-    // Get the returned ticket
-    let ticket = response.endpoint[0]
-        // Extract the ticket
-        .ticket
-        .clone()
-        .expect("expected ticket");
-
-    // Retrieve the corresponding Flight stream and collect into batches
-    let flight_stream = client.do_get(ticket).await.expect("error fetching data");
-    let results: Vec<RecordBatch> = flight_stream.try_collect().await?;
+    let results =
+        get_flight_batches(&mut client, "SELECT * FROM flight_table".to_string()).await?;
 
     let expected = [
         "+---------------------+------------+------------------+-----------------+----------------+",
@@ -117,6 +126,61 @@ async fn test_interleaving_queries() -> Result<()> {
         "+----------------------------------+",
         "| 3333                             |",
         "+----------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_ddl_types_roundtrip() -> Result<()> {
+    let (_context, addr, flight) = start_flight_server().await;
+    tokio::task::spawn(flight);
+
+    let mut client = create_flight_client(addr).await;
+
+    let all_types_query = r#"
+SELECT
+  1::TINYINT AS tinyint_val,
+  1000::SMALLINT AS smallint_val,
+  1000000::INT AS integer_val,
+  1000000000::BIGINT AS bigint_val,
+  'c'::CHAR AS char_val,
+  'varchar'::VARCHAR AS varchar_val,
+  'text'::TEXT AS text_val,
+  'string'::STRING AS string_val,
+  12.345::DECIMAL(5, 2) AS decimal_val,
+  12.345::FLOAT AS float_val,
+  12.345::REAL AS real_val,
+  12.3456789101112131415::DOUBLE AS double_val,
+  'true'::BOOLEAN AS bool_val,
+  '2022-01-01'::DATE AS date_val,
+  '2022-01-01T12:03:11.123456Z'::TIMESTAMP AS timestamp_val,
+  [1,2,3,4,5] AS int_array_val,
+  ['one','two'] AS text_array_val
+"#;
+
+    // Create a table from the above query
+    let results = get_flight_batches(
+        &mut client,
+        format!("CREATE TABLE flight_types AS ({all_types_query})"),
+    )
+    .await?;
+
+    // There should be no results from the table creation
+    assert!(results.is_empty());
+
+    // Now check the transmitted batches
+    let results =
+        get_flight_batches(&mut client, "SELECT * FROM flight_types".to_string()).await?;
+
+    let expected = [
+        "+-------------+--------------+-------------+------------+----------+-------------+----------+------------+-------------+-----------+----------+--------------------+----------+------------+----------------------------+-----------------+----------------+",
+        "| tinyint_val | smallint_val | integer_val | bigint_val | char_val | varchar_val | text_val | string_val | decimal_val | float_val | real_val | double_val         | bool_val | date_val   | timestamp_val              | int_array_val   | text_array_val |",
+        "+-------------+--------------+-------------+------------+----------+-------------+----------+------------+-------------+-----------+----------+--------------------+----------+------------+----------------------------+-----------------+----------------+",
+        "| 1           | 1000         | 1000000     | 1000000000 | c        | varchar     | text     | string     | 12.35       | 12.345    | 12.345   | 12.345678910111213 | true     | 2022-01-01 | 2022-01-01T12:03:11.123456 | [1, 2, 3, 4, 5] | [one, two]     |",
+        "+-------------+--------------+-------------+------------+----------+-------------+----------+------------+-------------+-----------+----------+--------------------+----------+------------+----------------------------+-----------------+----------------+",
     ];
 
     assert_batches_eq!(expected, &results);

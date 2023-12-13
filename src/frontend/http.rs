@@ -1537,7 +1537,7 @@ pub mod tests {
     #[rstest]
     #[case::cached_get(
         "GET",
-        "/q/f7ff4745e8469a83bffdf247aef5f9ee2bbb9019bbf4a725b31ee36993d5d484"
+        "/q/20d000bdf79cec1a968b422ed8c719122b236ec3831f00114c7dfd09f9a62d83"
     )]
     #[case::uncached_post("POST", "/q")]
     #[tokio::test]
@@ -1553,13 +1553,15 @@ pub mod tests {
 
         let query = r#"
 SELECT
-  1::SMALLINT AS smallint_val,
+  1::TINYINT AS tinyint_val,
+  1000::SMALLINT AS smallint_val,
   1000000::INT AS integer_val,
-  10000000000::BIGINT AS bigint_val,
+  1000000000::BIGINT AS bigint_val,
   'c'::CHAR AS char_val,
   'varchar'::VARCHAR AS varchar_val,
   'text'::TEXT AS text_val,
-  -- Unsupported 12.345::DECIMAL(5, 2) AS decimal_val,
+  'string'::STRING AS string_val,
+  -- Unsupported in the JSON output 12.345::DECIMAL(5, 2) AS decimal_val,
   12.345::FLOAT AS float_val,
   12.345::REAL AS real_val,
   12.3456789101112131415::DOUBLE AS double_val,
@@ -1594,7 +1596,7 @@ SELECT
         assert_eq!(
             resp.body(),
             &Bytes::from(
-                r#"{"bigint_val":10000000000,"bool_val":true,"char_val":"c","date_val":"2022-01-01","double_val":12.345678910111213,"float_val":12.345,"int_array_val":[1,2,3,4,5],"integer_val":1000000,"real_val":12.345,"smallint_val":1,"text_array_val":["one","two"],"text_val":"text","timestamp_val":"2022-01-01T12:03:11.123456","varchar_val":"varchar"}
+                r#"{"bigint_val":1000000000,"bool_val":true,"char_val":"c","date_val":"2022-01-01","double_val":12.345678910111213,"float_val":12.345,"int_array_val":[1,2,3,4,5],"integer_val":1000000,"real_val":12.345,"smallint_val":1000,"string_val":"string","text_array_val":["one","two"],"text_val":"text","timestamp_val":"2022-01-01T12:03:11.123456","tinyint_val":1,"varchar_val":"varchar"}
 "#
             )
         );
