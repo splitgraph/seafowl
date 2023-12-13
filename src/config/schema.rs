@@ -260,9 +260,27 @@ fn default_schema() -> String {
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Default, Clone)]
 pub struct Frontend {
+    #[cfg(feature = "frontend-arrow-flight")]
+    pub flight: Option<FlightFrontend>,
     #[cfg(feature = "frontend-postgres")]
     pub postgres: Option<PostgresFrontend>,
     pub http: Option<HttpFrontend>,
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(default)]
+pub struct FlightFrontend {
+    pub bind_host: String,
+    pub bind_port: u16,
+}
+
+impl Default for FlightFrontend {
+    fn default() -> Self {
+        Self {
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 47470,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -607,6 +625,8 @@ cache_control = "private, max-age=86400"
                     schema: "public".to_string()
                 }),
                 frontend: Frontend {
+                    #[cfg(feature = "frontend-arrow-flight")]
+                    flight: None,
                     #[cfg(feature = "frontend-postgres")]
                     postgres: None,
                     http: Some(HttpFrontend {
@@ -698,6 +718,8 @@ cache_control = "private, max-age=86400"
                     read_only: false,
                 }),
                 frontend: Frontend {
+                    #[cfg(feature = "frontend-arrow-flight")]
+                    flight: None,
                     #[cfg(feature = "frontend-postgres")]
                     postgres: None,
                     http: Some(HttpFrontend {

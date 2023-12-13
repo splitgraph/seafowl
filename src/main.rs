@@ -12,6 +12,8 @@ use clap::Parser;
 use futures::{future::join_all, Future, FutureExt};
 
 use pretty_env_logger::env_logger;
+#[cfg(feature = "frontend-arrow-flight")]
+use seafowl::frontend::flight::run_flight_server;
 use seafowl::{
     cli,
     config::{
@@ -68,6 +70,27 @@ fn prepare_frontends(
     shutdown: &Sender<()>,
 ) -> Vec<Pin<Box<dyn Future<Output = ()> + Send>>> {
     let mut result: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = Vec::new();
+
+    #[cfg(feature = "frontend-arrow-flight")]
+    if let Some(flight) = &config.frontend.flight {
+        let server = run_flight_server(context.clone(), flight.clone());
+        info!(
+            "Starting the Arrow Flight frontend on {}:{}",
+            flight.bind_host, flight.bind_port
+        );
+        warn!(
+            "The Arrow Flight frontend doesn't have authentication or encryption and should only be used in development!"
+        );
+
+        let mut shutdown_r = shutdown.subscribe();
+        result.push(Box::pin(async move {
+            let handle = tokio::spawn(server);
+
+            shutdown_r.recv().await.unwrap();
+            info!("Shutting down the Arrow Flight frontend");
+            handle.abort()
+        }));
+    };
 
     #[cfg(feature = "frontend-postgres")]
     if let Some(pg) = &config.frontend.postgres {

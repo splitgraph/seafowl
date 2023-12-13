@@ -231,6 +231,8 @@ mod tests {
                 read_only: false,
             }),
             frontend: schema::Frontend {
+                #[cfg(feature = "frontend-arrow-flight")]
+                flight: None,
                 #[cfg(feature = "frontend-postgres")]
                 postgres: Some(schema::PostgresFrontend {
                     bind_host: "127.0.0.1".to_string(),
