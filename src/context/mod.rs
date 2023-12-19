@@ -2,15 +2,12 @@ pub mod delta;
 pub mod logical;
 pub mod physical;
 
+use crate::catalog::{FunctionCatalog, TableCatalog};
 use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::config::context::build_state_with_table_factories;
 use crate::object_store::wrapped::InternalObjectStore;
 use crate::wasm_udf::data_types::{get_volatility, CreateFunctionDetails};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
-use crate::{
-    catalog::{FunctionCatalog, TableCatalog},
-    data_types::DatabaseId,
-};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 pub use datafusion::error::{DataFusionError as Error, Result};
@@ -19,7 +16,7 @@ use datafusion_common::OwnedTableReference;
 use deltalake::DeltaTable;
 use object_store::path::Path;
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -31,33 +28,25 @@ pub struct SeafowlContext {
     pub function_catalog: Arc<dyn FunctionCatalog>,
     pub internal_object_store: Arc<InternalObjectStore>,
     pub database: String,
-    pub database_id: DatabaseId,
-    pub all_database_ids: Arc<RwLock<HashMap<String, DatabaseId>>>,
+    pub all_databases: Arc<RwLock<HashSet<String>>>,
     pub max_partition_size: u32,
 }
 
 impl SeafowlContext {
     // Create a new `SeafowlContext` with a new inner context scoped to a different default DB
     pub async fn scope_to_database(&self, name: String) -> Result<Arc<SeafowlContext>> {
-        let maybe_database_id = self.all_database_ids.read().get(name.as_str()).cloned();
-        let database_id = match maybe_database_id {
-            Some(db_id) => db_id,
-            None => {
-                // Perhaps the db was created on another node; try to reload from catalog
-                let new_db_ids = self.table_catalog.load_database_ids().await?;
-                new_db_ids
-                    .get(name.as_str())
-                    .cloned()
-                    .map(|db_id| {
-                        self.all_database_ids.write().insert(name.clone(), db_id);
-                        db_id
-                    })
-                    .ok_or_else(|| {
-                        DataFusionError::Plan(format!(
-                            "Unknown database {name}; try creating one with CREATE DATABASE first"
-                        ))
-                    })?
-            }
+        // TODO: do we need this? The only goal here is to keep the list of databases in memory and
+        // fail early if one is missing, but we can defer that to resolution time.
+        let maybe_database = self.all_databases.read().get(&name).cloned();
+        let all_databases = self.all_databases.clone();
+        if maybe_database.is_none() {
+            // Perhaps the db was created on another node; try to reload from catalog
+            let _ = self.table_catalog.get_catalog(&name).await.map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "Unknown database {name}; try creating one with CREATE DATABASE first"
+                ))
+            })?;
+            all_databases.write().insert(name.clone());
         };
 
         // Swap the default database in the new internal context's session config
@@ -75,8 +64,7 @@ impl SeafowlContext {
             function_catalog: self.function_catalog.clone(),
             internal_object_store: self.internal_object_store.clone(),
             database: name,
-            database_id,
-            all_database_ids: self.all_database_ids.clone(),
+            all_databases,
             max_partition_size: self.max_partition_size,
         }))
     }
@@ -100,12 +88,12 @@ impl SeafowlContext {
 
         self.inner.register_catalog(
             &self.database,
-            Arc::new(self.table_catalog.load_database(self.database_id).await?),
+            Arc::new(self.table_catalog.load_database(&self.database).await?),
         );
 
         // Register all functions in the database
         self.function_catalog
-            .get_all_functions_in_database(self.database_id)
+            .get_all_functions_in_database(&self.database)
             .await?
             .iter()
             .try_for_each(|f| self.register_function(&f.name, &f.details))
@@ -253,7 +241,7 @@ pub mod test_utils {
         // place on another node
         context
             .table_catalog
-            .create_database("testdb")
+            .create_catalog("testdb")
             .await
             .unwrap();
 

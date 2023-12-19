@@ -12,18 +12,17 @@ use sqlx::{
 };
 use uuid::Uuid;
 
-use crate::{
-    data_types::{CollectionId, DatabaseId, FunctionId, TableId, TableVersionId},
-    wasm_udf::data_types::CreateFunctionDetails,
-};
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 use crate::implement_repository;
 
 use super::{
     default::RepositoryQueries,
     interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, DroppedTableDeletionStatus,
-        DroppedTablesResult, Error, Repository, Result, TableVersionsResult,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, CollectionId,
+        CollectionRecord, DatabaseId, DatabaseRecord, DroppedTableDeletionStatus,
+        DroppedTablesResult, Error, FunctionId, Repository, Result, TableId, TableRecord,
+        TableVersionId, TableVersionsResult,
     },
 };
 
@@ -155,10 +154,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            ro_repository
-                .get_database_id_by_name("testdb")
-                .await
-                .unwrap(),
+            ro_repository.get_database("testdb").await.unwrap().id,
             db_id
         );
     }

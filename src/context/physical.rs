@@ -173,7 +173,7 @@ impl SeafowlContext {
                 // CREATE SCHEMA
                 // Create a schema and register it
                 self.table_catalog
-                    .create_collection(self.database_id, schema_name)
+                    .create_schema(&self.database, schema_name)
                     .await?;
                 Ok(make_dummy_exec())
             }
@@ -182,12 +182,7 @@ impl SeafowlContext {
                 if_not_exists,
                 ..
             })) => {
-                if self
-                    .table_catalog
-                    .get_database_id_by_name(catalog_name)
-                    .await?
-                    .is_some()
-                {
+                if self.table_catalog.get_catalog(catalog_name).await.is_ok() {
                     if !*if_not_exists {
                         return Err(DataFusionError::Plan(format!(
                             "Database {catalog_name} already exists"
@@ -198,18 +193,15 @@ impl SeafowlContext {
                 }
 
                 // Persist DB into metadata catalog
-                let database_id =
-                    self.table_catalog.create_database(catalog_name).await?;
+                self.table_catalog.create_catalog(catalog_name).await?;
 
                 // Create the corresponding default schema as well
                 self.table_catalog
-                    .create_collection(database_id, DEFAULT_SCHEMA)
+                    .create_schema(catalog_name, DEFAULT_SCHEMA)
                     .await?;
 
                 // Update the shared in-memory map of DB names -> ids
-                self.all_database_ids
-                    .write()
-                    .insert(catalog_name.clone(), database_id);
+                self.all_databases.write().insert(catalog_name.clone());
 
                 Ok(make_dummy_exec())
             }
@@ -527,19 +519,13 @@ impl SeafowlContext {
                     return Ok(make_dummy_exec());
                 }
 
-                let table_id = self
-                    .table_catalog
-                    .get_table_id_by_name(
+                self.table_catalog
+                    .drop_table(
                         &resolved_ref.catalog,
                         &resolved_ref.schema,
                         &resolved_ref.table,
                     )
-                    .await?
-                    .ok_or_else(|| {
-                        DataFusionError::Execution(format!("Table {name} not found"))
-                    })?;
-
-                self.table_catalog.drop_table(table_id).await?;
+                    .await?;
                 Ok(make_dummy_exec())
             }
             LogicalPlan::Ddl(DdlStatement::CreateView(_)) => Err(Error::Plan(
@@ -588,7 +574,7 @@ impl SeafowlContext {
                             // Persist the function in the metadata storage
                             self.function_catalog
                                 .create_function(
-                                    self.database_id,
+                                    &self.database,
                                     name,
                                     *or_replace,
                                     details,
@@ -603,7 +589,7 @@ impl SeafowlContext {
                             output_schema: _,
                         }) => {
                             self.function_catalog
-                                .drop_function(self.database_id, *if_exists, func_names)
+                                .drop_function(&self.database, *if_exists, func_names)
                                 .await?;
                             Ok(make_dummy_exec())
                         }
@@ -623,65 +609,28 @@ impl SeafowlContext {
                                 ));
                             }
 
-                            // Resolve old table reference and fetch the table id
+                            // Resolve old table reference
                             let old_table_ref = TableReference::from(old_name.as_str());
                             let resolved_old_ref =
                                 old_table_ref.resolve(&self.database, DEFAULT_SCHEMA);
 
-                            let table_id = self
-                                .table_catalog
-                                .get_table_id_by_name(
-                                    &resolved_old_ref.catalog,
-                                    &resolved_old_ref.schema,
-                                    &resolved_old_ref.table,
-                                )
-                                .await?
-                                .ok_or_else(|| {
-                                    DataFusionError::Execution(format!(
-                                        "Table {old_name} not found"
-                                    ))
-                                })?;
-
-                            // If the old and new table schema is different check that the
-                            // corresponding collection already exists
-                            let new_schema_id =
-                                if resolved_new_ref.schema != resolved_old_ref.schema {
-                                    let collection_id = self
-                                        .table_catalog
-                                        .get_collection_id_by_name(
-                                            &self.database,
-                                            &resolved_new_ref.schema,
-                                        )
-                                        .await?
-                                        .ok_or_else(|| {
-                                            Error::Plan(format!(
-                                                "Schema \"{}\" does not exist!",
-                                                &resolved_new_ref.schema,
-                                            ))
-                                        })?;
-                                    Some(collection_id)
-                                } else {
-                                    None
-                                };
-
                             // Finally update our catalog entry
                             self.table_catalog
                                 .move_table(
-                                    table_id,
+                                    &resolved_old_ref.catalog,
+                                    &resolved_old_ref.schema,
+                                    &resolved_old_ref.table,
+                                    &resolved_new_ref.catalog,
+                                    &resolved_new_ref.schema,
                                     &resolved_new_ref.table,
-                                    new_schema_id,
                                 )
                                 .await?;
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
-                            if let Some(collection_id) = self
-                                .table_catalog
-                                .get_collection_id_by_name(&self.database, name)
-                                .await?
-                            {
-                                self.table_catalog.drop_collection(collection_id).await?
-                            };
+                            self.table_catalog
+                                .delete_schema(&self.database, name)
+                                .await?;
 
                             Ok(make_dummy_exec())
                         }
@@ -697,22 +646,8 @@ impl SeafowlContext {
                                 let resolved_ref =
                                     table_ref.resolve(&self.database, DEFAULT_SCHEMA);
 
-                                let table_id = self
-                                    .table_catalog
-                                    .get_table_id_by_name(
-                                        &resolved_ref.catalog,
-                                        &resolved_ref.schema,
-                                        &resolved_ref.table,
-                                    )
-                                    .await?
-                                    .ok_or_else(|| {
-                                        DataFusionError::Execution(
-                                            "Table {table_name} not found".to_string(),
-                                        )
-                                    })?;
-
                                 if let Ok(mut delta_table) =
-                                    self.try_get_delta_table(resolved_ref).await
+                                    self.try_get_delta_table(resolved_ref.clone()).await
                                 {
                                     // TODO: The Delta protocol doesn't vacuum old table versions per se, but only files no longer tied to the latest table version.
                                     // This means that the VACUUM could be a no-op, for instance, in the case when append-only writes have been performed.
@@ -737,7 +672,11 @@ impl SeafowlContext {
 
                                 match self
                                     .table_catalog
-                                    .delete_old_table_versions(table_id)
+                                    .delete_old_table_versions(
+                                        &resolved_ref.catalog,
+                                        &resolved_ref.schema,
+                                        &resolved_ref.table,
+                                    )
                                     .await
                                 {
                                     Ok(row_count) => {
@@ -847,7 +786,7 @@ impl SeafowlContext {
             None => {
                 // Schema doesn't exist; create one first, and then reload to pick it up
                 self.table_catalog
-                    .create_collection(self.database_id, &schema_name)
+                    .create_schema(&self.database, &schema_name)
                     .await?;
                 self.reload_schema().await?;
                 false

@@ -7,10 +7,41 @@ use strum::ParseError;
 use strum_macros::{Display, EnumString};
 use uuid::Uuid;
 
-use crate::data_types::{
-    CollectionId, DatabaseId, FunctionId, TableId, TableVersionId, Timestamp,
-};
 use crate::wasm_udf::data_types::CreateFunctionDetails;
+
+pub type DatabaseId = i64;
+pub type CollectionId = i64;
+pub type TableId = i64;
+pub type TableVersionId = i64;
+pub type Timestamp = i64;
+pub type FunctionId = i64;
+
+#[derive(sqlx::FromRow, Default, Debug, PartialEq, Eq)]
+pub struct DatabaseRecord {
+    pub id: DatabaseId,
+    pub name: String,
+}
+
+#[derive(sqlx::FromRow, Default, Debug, PartialEq, Eq)]
+pub struct CollectionRecord {
+    pub id: CollectionId,
+    pub database_id: DatabaseId,
+    pub name: String,
+}
+
+#[derive(sqlx::FromRow, Default, Debug, PartialEq, Eq)]
+pub struct TableRecord {
+    pub id: TableId,
+    pub collection_id: CollectionId,
+    pub name: String,
+}
+
+#[derive(sqlx::FromRow, Default, Debug, PartialEq, Eq)]
+pub struct TableVersion {
+    pub id: TableVersionId,
+    pub table_id: TableId,
+    pub creation_time: Timestamp,
+}
 
 #[derive(sqlx::FromRow, Default, Debug, PartialEq, Eq)]
 pub struct AllDatabaseColumnsResult {
@@ -96,28 +127,25 @@ pub trait Repository: Send + Sync + Debug {
 
     async fn get_all_columns_in_database(
         &self,
-        database_id: DatabaseId,
+        name: &str,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
-    async fn get_collection_id_by_name(
+    async fn list_databases(&self) -> Result<Vec<DatabaseRecord>, Error>;
+
+    async fn get_database(&self, name: &str) -> Result<DatabaseRecord, Error>;
+
+    async fn get_collection(
         &self,
         database_name: &str,
         collection_name: &str,
-    ) -> Result<CollectionId, Error>;
+    ) -> Result<CollectionRecord, Error>;
 
-    async fn get_database_id_by_name(
-        &self,
-        database_name: &str,
-    ) -> Result<DatabaseId, Error>;
-
-    async fn get_table_id_by_name(
+    async fn get_table(
         &self,
         database_name: &str,
         collection_name: &str,
         table_name: &str,
-    ) -> Result<TableId, Error>;
-
-    async fn get_all_database_ids(&self) -> Result<Vec<(String, DatabaseId)>, Error>;
+    ) -> Result<TableRecord, Error>;
 
     async fn create_database(&self, database_name: &str) -> Result<DatabaseId, Error>;
 
@@ -179,7 +207,7 @@ pub trait Repository: Send + Sync + Debug {
 
     async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error>;
 
-    async fn drop_database(&self, database_id: DatabaseId) -> Result<(), Error>;
+    async fn delete_database(&self, database_id: DatabaseId) -> Result<(), Error>;
 
     async fn insert_dropped_tables(
         &self,
@@ -217,11 +245,13 @@ pub mod tests {
 
     use super::*;
 
+    static TEST_DB: &str = "testdb";
+
     async fn make_database_with_single_table(
         repository: Arc<dyn Repository>,
     ) -> (DatabaseId, CollectionId, TableId, TableVersionId) {
         let database_id = repository
-            .create_database("testdb")
+            .create_database(TEST_DB)
             .await
             .expect("Error creating database");
 
@@ -330,17 +360,10 @@ pub mod tests {
         let (database_id, _, table_id, table_version_id) =
             make_database_with_single_table(repository.clone()).await;
 
-        let all_database_ids = repository
-            .get_all_database_ids()
-            .await
-            .expect("Error getting all database ids");
-
-        assert_eq!(all_database_ids, vec![("testdb".to_string(), database_id)]);
-
         // Test loading all columns
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id)
+            .get_all_columns_in_database(TEST_DB)
             .await
             .expect("Error getting all columns");
 
@@ -362,7 +385,7 @@ pub mod tests {
 
         // Test all columns again: we should have the schema for the latest table version
         let all_columns = repository
-            .get_all_columns_in_database(database_id)
+            .get_all_columns_in_database(TEST_DB)
             .await
             .expect("Error getting all columns");
 
@@ -489,7 +512,7 @@ pub mod tests {
             .unwrap();
 
         let all_columns = repository
-            .get_all_columns_in_database(database_id)
+            .get_all_columns_in_database(TEST_DB)
             .await
             .expect("Error getting all columns");
 
@@ -514,7 +537,7 @@ pub mod tests {
             .unwrap();
 
         let mut all_columns = repository
-            .get_all_columns_in_database(database_id)
+            .get_all_columns_in_database(TEST_DB)
             .await
             .expect("Error getting all columns");
         all_columns.sort_by_key(|c| c.collection_name.clone());
@@ -556,19 +579,19 @@ pub mod tests {
         ));
 
         // Make a new table in the existing collection with the same name
-        let collection_id_1 = repository
-            .get_collection_id_by_name("testdb", "testcol")
+        let collection_1 = repository
+            .get_collection("testdb", "testcol")
             .await
             .unwrap();
-        let collection_id_2 = repository
-            .get_collection_id_by_name("testdb", "testcol2")
+        let collection_2 = repository
+            .get_collection("testdb", "testcol2")
             .await
             .unwrap();
 
         assert!(matches!(
             repository
                 .create_table(
-                    collection_id_2,
+                    collection_2.id,
                     "testtable2",
                     &ArrowSchema::empty(),
                     Uuid::default()
@@ -581,7 +604,7 @@ pub mod tests {
         // Make a new table in the previous collection, try renaming
         let (new_table_id, _) = repository
             .create_table(
-                collection_id_1,
+                collection_1.id,
                 "testtable2",
                 &ArrowSchema::empty(),
                 Uuid::default(),
@@ -591,7 +614,7 @@ pub mod tests {
 
         assert!(matches!(
             repository
-                .move_table(new_table_id, "testtable2", Some(collection_id_2))
+                .move_table(new_table_id, "testtable2", Some(collection_2.id))
                 .await
                 .unwrap_err(),
             Error::UniqueConstraintViolation(_)

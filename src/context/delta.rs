@@ -5,7 +5,7 @@ use crate::frontend::http::tests::deterministic_uuid;
 use crate::object_store::wrapped::InternalObjectStore;
 
 use bytes::BytesMut;
-use datafusion::error::{DataFusionError as Error, Result};
+use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
 use datafusion::parquet::basic::{Compression, ZstdLevel};
 use datafusion::{
@@ -289,13 +289,10 @@ impl SeafowlContext {
         let schema_name = resolved_ref.schema.clone();
         let table_name = resolved_ref.table.clone();
 
-        let collection_id = self
+        let _ = self
             .table_catalog
-            .get_collection_id_by_name(&self.database, &schema_name)
-            .await?
-            .ok_or_else(|| {
-                Error::Plan(format!("Schema {schema_name:?} does not exist!"))
-            })?;
+            .get_schema(&self.database, &schema_name)
+            .await?;
 
         // NB: there's also a uuid generated below for table's `DeltaTableMetaData::id`, so it would
         // be nice if those two could match somehow
@@ -352,7 +349,8 @@ impl SeafowlContext {
         // We may look into doing this via delta-rs somehow eventually.
         self.table_catalog
             .create_table(
-                collection_id,
+                &self.database,
+                &schema_name,
                 &table_name,
                 TableProvider::schema(&table).as_ref(),
                 table_uuid,

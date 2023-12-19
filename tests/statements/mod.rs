@@ -27,7 +27,7 @@ use tempfile::TempDir;
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::SeafowlContext;
-use seafowl::data_types::Timestamp;
+use seafowl::repository::interface::Timestamp;
 use seafowl::repository::postgres::testutils::get_random_schema;
 use seafowl::system_tables::SYSTEM_SCHEMA;
 

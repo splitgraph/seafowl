@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::{
@@ -19,6 +20,7 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
 
+use crate::catalog::Error;
 use crate::object_store::http::add_http_object_store;
 use crate::object_store::wrapped::InternalObjectStore;
 #[cfg(feature = "remote-tables")]
@@ -182,20 +184,22 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
     let (tables, functions) = build_catalog(cfg, internal_object_store.clone()).await;
 
     // Create default DB/collection
-    let default_db = match tables.get_database_id_by_name(DEFAULT_DB).await? {
-        Some(id) => id,
-        None => tables.create_database(DEFAULT_DB).await.unwrap(),
-    };
+    if let Err(Error::CatalogDoesNotExist { .. }) = tables.get_catalog(DEFAULT_DB).await {
+        tables.create_catalog(DEFAULT_DB).await.unwrap();
+    }
 
-    match tables
-        .get_collection_id_by_name(DEFAULT_DB, DEFAULT_SCHEMA)
-        .await?
+    if let Err(Error::SchemaDoesNotExist { .. }) =
+        tables.get_schema(DEFAULT_DB, DEFAULT_SCHEMA).await
     {
-        Some(id) => id,
-        None => tables.create_collection(default_db, DEFAULT_SCHEMA).await?,
-    };
+        tables.create_schema(DEFAULT_DB, DEFAULT_SCHEMA).await?;
+    }
 
-    let all_database_ids = tables.load_database_ids().await?;
+    let all_databases: HashSet<String> = tables
+        .list_catalogs()
+        .await?
+        .iter()
+        .map(|db| db.name.clone())
+        .collect();
 
     // Convergence doesn't support connecting to different DB names. We are supposed
     // to do one context per query (as we need to load the schema before executing every
@@ -209,8 +213,7 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
         function_catalog: functions,
         internal_object_store,
         database: DEFAULT_DB.to_string(),
-        database_id: default_db,
-        all_database_ids: Arc::from(RwLock::new(all_database_ids)),
+        all_databases: Arc::from(RwLock::new(all_databases)),
         max_partition_size: cfg.misc.max_partition_size,
     })
 }

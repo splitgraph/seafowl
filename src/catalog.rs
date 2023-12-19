@@ -15,18 +15,20 @@ use uuid::Uuid;
 
 use crate::object_store::wrapped::InternalObjectStore;
 use crate::provider::SeafowlFunction;
-use crate::repository::interface::{DroppedTableDeletionStatus, DroppedTablesResult};
+use crate::repository::interface::{
+    DatabaseRecord, DroppedTableDeletionStatus, DroppedTablesResult, TableRecord,
+};
 use crate::system_tables::SystemSchemaProvider;
 use crate::wasm_udf::data_types::{
     CreateFunctionDataType, CreateFunctionDetails, CreateFunctionLanguage,
     CreateFunctionVolatility,
 };
 use crate::{
-    data_types::{CollectionId, DatabaseId, FunctionId, TableId, TableVersionId},
-    provider::{SeafowlCollection, SeafowlDatabase},
+    provider::{SeafowlDatabase, SeafowlSchema},
     repository::interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, Error as RepositoryError,
-        Repository, TableVersionsResult,
+        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, CollectionId,
+        CollectionRecord, DatabaseId, Error as RepositoryError, FunctionId, Repository,
+        TableId, TableVersionId, TableVersionsResult,
     },
 };
 
@@ -36,13 +38,13 @@ pub const STAGING_SCHEMA: &str = "staging";
 
 #[derive(Debug)]
 pub enum Error {
-    DatabaseDoesNotExist { id: DatabaseId },
-    CollectionDoesNotExist { id: CollectionId },
-    TableDoesNotExist { id: TableId },
+    CatalogDoesNotExist { name: String },
+    SchemaDoesNotExist { name: String },
+    TableDoesNotExist { name: String },
     TableUuidDoesNotExist { uuid: Uuid },
     TableAlreadyExists { name: String },
-    DatabaseAlreadyExists { name: String },
-    CollectionAlreadyExists { name: String },
+    CatalogAlreadyExists { name: String },
+    SchemaAlreadyExists { name: String },
     FunctionAlreadyExists { name: String },
     FunctionDeserializationError { reason: String },
     FunctionNotFound { names: String },
@@ -93,20 +95,17 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 impl From<Error> for DataFusionError {
     fn from(val: Error) -> Self {
         match val {
-            // These errors are raised by routines that already take an ID instead of
-            // a database/schema/table name and so the ID is supposed to be valid. An error
-            // in this case is an internal consistency issue.
-            Error::DatabaseDoesNotExist { id } => {
-                DataFusionError::Internal(format!("Database with ID {id} doesn't exist"))
+            Error::CatalogDoesNotExist { name } => {
+                DataFusionError::Plan(format!("Database {name:?} doesn't exist"))
             }
-            Error::CollectionDoesNotExist { id } => {
-                DataFusionError::Internal(format!("Schema with ID {id} doesn't exist"))
+            Error::SchemaDoesNotExist { name } => {
+                DataFusionError::Plan(format!("Schema {name:?} doesn't exist"))
             }
-            Error::TableDoesNotExist { id } => {
-                DataFusionError::Internal(format!("Table with ID {id} doesn't exist"))
+            Error::TableDoesNotExist { name } => {
+                DataFusionError::Plan(format!("Table {name:?} doesn't exist"))
             }
             Error::TableUuidDoesNotExist { uuid } => {
-                DataFusionError::Internal(format!("Table with UUID {uuid} doesn't exist"))
+                DataFusionError::Plan(format!("Table with UUID {uuid} doesn't exist"))
             }
             Error::FunctionDeserializationError { reason } => DataFusionError::Internal(
                 format!("Error deserializing function: {reason:?}"),
@@ -120,10 +119,10 @@ impl From<Error> for DataFusionError {
             Error::TableAlreadyExists { name } => {
                 DataFusionError::Plan(format!("Table {name:?} already exists"))
             }
-            Error::DatabaseAlreadyExists { name } => {
+            Error::CatalogAlreadyExists { name } => {
                 DataFusionError::Plan(format!("Database {name:?} already exists"))
             }
-            Error::CollectionAlreadyExists { name } => {
+            Error::SchemaAlreadyExists { name } => {
                 DataFusionError::Plan(format!("Schema {name:?} already exists"))
             }
             Error::FunctionAlreadyExists { name } => {
@@ -137,10 +136,9 @@ impl From<Error> for DataFusionError {
                     .to_string(),
             ),
             // Miscellaneous sqlx error. We want to log it but it's not worth showing to the user.
-            Error::SqlxError(e) => DataFusionError::Internal(format!(
-                "Internal SQL error: {:?}",
-                e.to_string()
-            )),
+            Error::SqlxError(e) => {
+                DataFusionError::Plan(format!("Internal SQL error: {:?}", e.to_string()))
+            }
         }
     }
 }
@@ -148,41 +146,47 @@ impl From<Error> for DataFusionError {
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait TableCatalog: Sync + Send {
-    async fn load_database(&self, id: DatabaseId) -> Result<SeafowlDatabase>;
-    async fn load_database_ids(&self) -> Result<HashMap<String, DatabaseId>>;
-    async fn get_database_id_by_name(
+    async fn load_database(&self, name: &str) -> Result<SeafowlDatabase>;
+    async fn get_catalog(&self, name: &str) -> Result<DatabaseRecord, Error>;
+
+    async fn list_catalogs(&self) -> Result<Vec<DatabaseRecord>, Error>;
+
+    async fn get_schema(
         &self,
-        database_name: &str,
-    ) -> Result<Option<DatabaseId>>;
-    async fn get_collection_id_by_name(
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> Result<CollectionRecord, Error>;
+
+    async fn get_table(
         &self,
-        database_name: &str,
-        collection_name: &str,
-    ) -> Result<Option<CollectionId>>;
-    async fn get_table_id_by_name(
-        &self,
-        database_name: &str,
-        collection_name: &str,
+        catalog_name: &str,
+        schema_name: &str,
         table_name: &str,
-    ) -> Result<Option<TableId>>;
+    ) -> Result<TableRecord, Error>;
 
-    async fn create_database(&self, database_name: &str) -> Result<DatabaseId>;
+    async fn create_catalog(&self, catalog_name: &str) -> Result<DatabaseId>;
 
-    async fn create_collection(
+    async fn create_schema(
         &self,
-        database_id: DatabaseId,
-        collection_name: &str,
+        catalog_name: &str,
+        schema_name: &str,
     ) -> Result<CollectionId>;
 
     async fn create_table(
         &self,
-        collection_id: CollectionId,
+        catalog_name: &str,
+        schema_name: &str,
         table_name: &str,
         schema: &Schema,
         uuid: Uuid,
     ) -> Result<(TableId, TableVersionId)>;
 
-    async fn delete_old_table_versions(&self, table_id: TableId) -> Result<u64, Error>;
+    async fn delete_old_table_versions(
+        &self,
+        catalog_name: &str,
+        collection_name: &str,
+        table_name: &str,
+    ) -> Result<u64, Error>;
 
     async fn create_new_table_version(
         &self,
@@ -192,26 +196,34 @@ pub trait TableCatalog: Sync + Send {
 
     async fn get_all_table_versions(
         &self,
-        database_name: &str,
+        catalog_name: &str,
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>>;
 
     async fn move_table(
         &self,
-        table_id: TableId,
+        old_catalog_name: &str,
+        old_schema_name: &str,
+        old_table_name: &str,
+        new_catalog_name: &str,
+        new_schema_name: &str,
         new_table_name: &str,
-        new_collection_id: Option<CollectionId>,
     ) -> Result<()>;
 
-    async fn drop_table(&self, table_id: TableId) -> Result<()>;
+    async fn drop_table(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<()>;
 
-    async fn drop_collection(&self, collection_id: CollectionId) -> Result<()>;
+    async fn delete_schema(&self, catalog_name: &str, schema_name: &str) -> Result<()>;
 
-    async fn drop_database(&self, database_id: DatabaseId) -> Result<()>;
+    async fn delete_catalog(&self, name: &str) -> Result<()>;
 
     async fn get_dropped_tables(
         &self,
-        database_name: Option<String>,
+        catalog_name: Option<String>,
     ) -> Result<Vec<DroppedTablesResult>>;
 
     async fn update_dropped_table(
@@ -228,7 +240,7 @@ pub trait TableCatalog: Sync + Send {
 pub trait FunctionCatalog: Sync + Send {
     async fn create_function(
         &self,
-        database_id: DatabaseId,
+        catalog_name: &str,
         function_name: &str,
         or_replace: bool,
         details: &CreateFunctionDetails,
@@ -236,12 +248,12 @@ pub trait FunctionCatalog: Sync + Send {
 
     async fn get_all_functions_in_database(
         &self,
-        database_id: DatabaseId,
+        catalog_name: &str,
     ) -> Result<Vec<SeafowlFunction>>;
 
     async fn drop_function(
         &self,
-        database_id: DatabaseId,
+        catalog_name: &str,
         if_exists: bool,
         func_names: &[String],
     ) -> Result<()>;
@@ -293,11 +305,11 @@ impl DefaultCatalog {
         (Arc::from(table_name.to_string()), Arc::new(table) as _)
     }
 
-    fn build_collection<'a, I>(
+    fn build_schema<'a, I>(
         &self,
         collection_name: &str,
         collection_columns: I,
-    ) -> (Arc<str>, Arc<SeafowlCollection>)
+    ) -> (Arc<str>, Arc<SeafowlSchema>)
     where
         I: Iterator<Item = &'a AllDatabaseColumnsResult>,
     {
@@ -315,7 +327,7 @@ impl DefaultCatalog {
 
         (
             Arc::from(collection_name.to_string()),
-            Arc::new(SeafowlCollection {
+            Arc::new(SeafowlSchema {
                 name: Arc::from(collection_name.to_string()),
                 tables: RwLock::new(tables),
             }),
@@ -325,10 +337,10 @@ impl DefaultCatalog {
 
 #[async_trait]
 impl TableCatalog for DefaultCatalog {
-    async fn load_database(&self, database_id: DatabaseId) -> Result<SeafowlDatabase> {
+    async fn load_database(&self, name: &str) -> Result<SeafowlDatabase> {
         let all_columns = self
             .repository
-            .get_all_columns_in_database(database_id)
+            .get_all_columns_in_database(name)
             .await
             .map_err(Self::to_sqlx_error)?;
 
@@ -337,11 +349,11 @@ impl TableCatalog for DefaultCatalog {
 
         // Turn the list of all collections, tables and their columns into a nested map.
 
-        let collections: HashMap<Arc<str>, Arc<SeafowlCollection>> = all_columns
+        let schemas: HashMap<Arc<str>, Arc<SeafowlSchema>> = all_columns
             .iter()
             .group_by(|col| &col.collection_name)
             .into_iter()
-            .map(|(cn, cc)| self.build_collection(cn, cc))
+            .map(|(cn, cc)| self.build_schema(cn, cc))
             .collect();
 
         // TODO load the database name too
@@ -349,7 +361,7 @@ impl TableCatalog for DefaultCatalog {
 
         Ok(SeafowlDatabase {
             name: name.clone(),
-            collections,
+            schemas,
             staging_schema: self.staging_schema.clone(),
             system_schema: Arc::new(SystemSchemaProvider::new(
                 name,
@@ -358,25 +370,18 @@ impl TableCatalog for DefaultCatalog {
         })
     }
 
-    async fn load_database_ids(&self) -> Result<HashMap<String, DatabaseId>> {
-        let all_db_ids = self
-            .repository
-            .get_all_database_ids()
-            .await
-            .map_err(Self::to_sqlx_error)?;
-
-        Ok(HashMap::from_iter(all_db_ids))
-    }
-
     async fn create_table(
         &self,
-        collection_id: CollectionId,
+        catalog_name: &str,
+        schema_name: &str,
         table_name: &str,
         schema: &Schema,
         uuid: Uuid,
     ) -> Result<(TableId, TableVersionId)> {
+        let collection = self.get_schema(catalog_name, schema_name).await?;
+
         self.repository
-            .create_table(collection_id, table_name, schema, uuid)
+            .create_table(collection.id, table_name, schema, uuid)
             .await
             .map_err(|e| match e {
                 RepositoryError::UniqueConstraintViolation(_) => {
@@ -384,102 +389,125 @@ impl TableCatalog for DefaultCatalog {
                         name: table_name.to_string(),
                     }
                 }
-                RepositoryError::FKConstraintViolation(_) => {
-                    Error::CollectionDoesNotExist { id: collection_id }
-                }
+                RepositoryError::FKConstraintViolation(_) => Error::SchemaDoesNotExist {
+                    name: schema_name.to_string(),
+                },
                 RepositoryError::SqlxError(e) => Error::SqlxError(e),
             })
     }
 
-    async fn delete_old_table_versions(&self, table_id: TableId) -> Result<u64, Error> {
+    async fn delete_old_table_versions(
+        &self,
+        catalog_name: &str,
+        collection_name: &str,
+        table_name: &str,
+    ) -> Result<u64, Error> {
+        let table = self
+            .get_table(catalog_name, collection_name, table_name)
+            .await?;
+
         self.repository
-            .delete_old_table_versions(table_id)
+            .delete_old_table_versions(table.id)
             .await
             .map_err(Self::to_sqlx_error)
     }
 
-    async fn get_collection_id_by_name(
+    async fn get_catalog(&self, name: &str) -> Result<DatabaseRecord> {
+        match self.repository.get_database(name).await {
+            Ok(database) => Ok(database),
+            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => {
+                Err(Error::CatalogDoesNotExist {
+                    name: name.to_string(),
+                })
+            }
+            Err(e) => Err(Self::to_sqlx_error(e)),
+        }
+    }
+
+    async fn list_catalogs(&self) -> Result<Vec<DatabaseRecord>, Error> {
+        match self.repository.list_databases().await {
+            Ok(databases) => Ok(databases),
+            Err(e) => Err(Self::to_sqlx_error(e)),
+        }
+    }
+
+    async fn get_schema(
         &self,
-        database_name: &str,
-        collection_name: &str,
-    ) -> Result<Option<CollectionId>> {
-        if collection_name == STAGING_SCHEMA {
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> Result<CollectionRecord> {
+        if schema_name == STAGING_SCHEMA {
             return Err(Error::UsedStagingSchema);
         }
 
         match self
             .repository
-            .get_collection_id_by_name(database_name, collection_name)
+            .get_collection(catalog_name, schema_name)
             .await
         {
-            Ok(id) => Ok(Some(id)),
-            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => Ok(None),
+            Ok(schema) => Ok(schema),
+            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => {
+                Err(Error::SchemaDoesNotExist {
+                    name: schema_name.to_string(),
+                })
+            }
             Err(e) => Err(Self::to_sqlx_error(e)),
         }
     }
 
-    async fn get_database_id_by_name(
+    async fn get_table(
         &self,
-        database_name: &str,
-    ) -> Result<Option<DatabaseId>> {
-        match self.repository.get_database_id_by_name(database_name).await {
-            Ok(id) => Ok(Some(id)),
-            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => Ok(None),
-            Err(e) => Err(Self::to_sqlx_error(e)),
-        }
-    }
-
-    async fn get_table_id_by_name(
-        &self,
-        database_name: &str,
-        collection_name: &str,
+        catalog_name: &str,
+        schema_name: &str,
         table_name: &str,
-    ) -> Result<Option<TableId>> {
-        if collection_name == STAGING_SCHEMA {
-            return Err(Error::UsedStagingSchema);
-        }
-
+    ) -> Result<TableRecord> {
         match self
             .repository
-            .get_table_id_by_name(database_name, collection_name, table_name)
+            .get_table(catalog_name, schema_name, table_name)
             .await
         {
-            Ok(id) => Ok(Some(id)),
-            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => Ok(None),
+            Ok(table) => Ok(table),
+            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => {
+                Err(Error::TableDoesNotExist {
+                    name: table_name.to_string(),
+                })
+            }
             Err(e) => Err(Self::to_sqlx_error(e)),
         }
     }
 
-    async fn create_database(&self, database_name: &str) -> Result<DatabaseId> {
+    async fn create_catalog(&self, catalog_name: &str) -> Result<DatabaseId> {
         self.repository
-            .create_database(database_name)
+            .create_database(catalog_name)
             .await
             .map_err(|e| match e {
                 RepositoryError::UniqueConstraintViolation(_) => {
-                    Error::DatabaseAlreadyExists {
-                        name: database_name.to_string(),
+                    Error::CatalogAlreadyExists {
+                        name: catalog_name.to_string(),
                     }
                 }
                 _ => Self::to_sqlx_error(e),
             })
     }
 
-    async fn create_collection(
+    async fn create_schema(
         &self,
-        database_id: DatabaseId,
-        collection_name: &str,
+        catalog_name: &str,
+        schema_name: &str,
     ) -> Result<CollectionId> {
-        if collection_name == STAGING_SCHEMA {
+        if schema_name == STAGING_SCHEMA {
             return Err(Error::UsedStagingSchema);
         }
 
+        let database = self.get_catalog(catalog_name).await?;
+
         self.repository
-            .create_collection(database_id, collection_name)
+            .create_collection(database.id, schema_name)
             .await
             .map_err(|e| match e {
                 RepositoryError::UniqueConstraintViolation(_) => {
-                    Error::CollectionAlreadyExists {
-                        name: collection_name.to_string(),
+                    Error::SchemaAlreadyExists {
+                        name: schema_name.to_string(),
                     }
                 }
                 _ => Self::to_sqlx_error(e),
@@ -504,29 +532,42 @@ impl TableCatalog for DefaultCatalog {
 
     async fn get_all_table_versions(
         &self,
-        database_name: &str,
+        catalog_name: &str,
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>> {
         self.repository
-            .get_all_table_versions(database_name, table_names)
+            .get_all_table_versions(catalog_name, table_names)
             .await
             .map_err(Self::to_sqlx_error)
     }
 
     async fn move_table(
         &self,
-        table_id: TableId,
+        old_catalog_name: &str,
+        old_schema_name: &str,
+        old_table_name: &str,
+        _new_catalog_name: &str, // For now we don't support moving across catalogs
+        new_schema_name: &str,
         new_table_name: &str,
-        new_collection_id: Option<CollectionId>,
     ) -> Result<()> {
+        let table = self
+            .get_table(old_catalog_name, old_schema_name, old_table_name)
+            .await?;
+        let new_schema_id = if new_schema_name != old_schema_name {
+            let schema = self.get_schema(old_catalog_name, new_schema_name).await?;
+            Some(schema.id)
+        } else {
+            None
+        };
+
         self.repository
-            .move_table(table_id, new_table_name, new_collection_id)
+            .move_table(table.id, new_table_name, new_schema_id)
             .await
             .map_err(|e| match e {
                 RepositoryError::FKConstraintViolation(_) => {
                     // We only FK on collection_id, so this will be Some
-                    Error::CollectionDoesNotExist {
-                        id: new_collection_id.unwrap(),
+                    Error::SchemaDoesNotExist {
+                        name: new_schema_name.to_string(),
                     }
                 }
                 RepositoryError::UniqueConstraintViolation(_) => {
@@ -535,43 +576,64 @@ impl TableCatalog for DefaultCatalog {
                     }
                 }
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    Error::TableDoesNotExist { id: table_id }
+                    Error::TableDoesNotExist {
+                        name: old_table_name.to_string(),
+                    }
                 }
                 _ => Self::to_sqlx_error(e),
             })
     }
 
-    async fn drop_table(&self, table_id: TableId) -> Result<()> {
+    async fn drop_table(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<()> {
+        let table = self
+            .get_table(catalog_name, schema_name, table_name)
+            .await?;
+
         self.repository
-            .drop_table(table_id)
+            .drop_table(table.id)
             .await
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    Error::TableDoesNotExist { id: table_id }
+                    Error::TableDoesNotExist {
+                        name: table_name.to_string(),
+                    }
                 }
                 _ => Self::to_sqlx_error(e),
             })
     }
 
-    async fn drop_collection(&self, collection_id: CollectionId) -> Result<()> {
+    async fn delete_schema(&self, catalog_name: &str, schema_name: &str) -> Result<()> {
+        let schema = self.get_schema(catalog_name, schema_name).await?;
+
         self.repository
-            .drop_collection(collection_id)
+            .drop_collection(schema.id)
             .await
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    Error::CollectionDoesNotExist { id: collection_id }
+                    Error::SchemaDoesNotExist {
+                        name: schema_name.to_string(),
+                    }
                 }
                 _ => Self::to_sqlx_error(e),
             })
     }
 
-    async fn drop_database(&self, database_id: DatabaseId) -> Result<()> {
+    async fn delete_catalog(&self, name: &str) -> Result<()> {
+        let database = self.get_catalog(name).await?;
+
         self.repository
-            .drop_database(database_id)
+            .delete_database(database.id)
             .await
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    Error::DatabaseDoesNotExist { id: database_id }
+                    Error::CatalogDoesNotExist {
+                        name: name.to_string(),
+                    }
                 }
                 _ => Self::to_sqlx_error(e),
             })
@@ -579,10 +641,10 @@ impl TableCatalog for DefaultCatalog {
 
     async fn get_dropped_tables(
         &self,
-        database_name: Option<String>,
+        catalog_name: Option<String>,
     ) -> Result<Vec<DroppedTablesResult>> {
         self.repository
-            .get_dropped_tables(database_name)
+            .get_dropped_tables(catalog_name)
             .await
             .map_err(Self::to_sqlx_error)
     }
@@ -650,18 +712,20 @@ impl DefaultCatalog {
 impl FunctionCatalog for DefaultCatalog {
     async fn create_function(
         &self,
-        database_id: DatabaseId,
+        catalog_name: &str,
         function_name: &str,
         or_replace: bool,
         details: &CreateFunctionDetails,
     ) -> Result<FunctionId> {
+        let database = self.get_catalog(catalog_name).await?;
+
         self.repository
-            .create_function(database_id, function_name, or_replace, details)
+            .create_function(database.id, function_name, or_replace, details)
             .await
             .map_err(|e| match e {
-                RepositoryError::FKConstraintViolation(_) => {
-                    Error::DatabaseDoesNotExist { id: database_id }
-                }
+                RepositoryError::FKConstraintViolation(_) => Error::CatalogDoesNotExist {
+                    name: catalog_name.to_string(),
+                },
                 RepositoryError::UniqueConstraintViolation(_) => {
                     Error::FunctionAlreadyExists {
                         name: function_name.to_string(),
@@ -673,11 +737,13 @@ impl FunctionCatalog for DefaultCatalog {
 
     async fn get_all_functions_in_database(
         &self,
-        database_id: DatabaseId,
+        catalog_name: &str,
     ) -> Result<Vec<SeafowlFunction>> {
+        let database = self.get_catalog(catalog_name).await?;
+
         let all_functions = self
             .repository
-            .get_all_functions_in_database(database_id)
+            .get_all_functions_in_database(database.id)
             .await
             .map_err(Self::to_sqlx_error)?;
 
@@ -699,14 +765,18 @@ impl FunctionCatalog for DefaultCatalog {
 
     async fn drop_function(
         &self,
-        database_id: DatabaseId,
+        catalog_name: &str,
         if_exists: bool,
         func_names: &[String],
     ) -> Result<()> {
-        match self.repository.drop_function(database_id, func_names).await {
+        let database = self.get_catalog(catalog_name).await?;
+
+        match self.repository.drop_function(database.id, func_names).await {
             Ok(id) => Ok(id),
             Err(RepositoryError::FKConstraintViolation(_)) => {
-                Err(Error::DatabaseDoesNotExist { id: database_id })
+                Err(Error::CatalogDoesNotExist {
+                    name: catalog_name.to_string(),
+                })
             }
             Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => {
                 if if_exists {
