@@ -15,8 +15,6 @@ use datafusion::{error::DataFusionError, prelude::SessionContext, sql::TableRefe
 use datafusion_common::OwnedTableReference;
 use deltalake::DeltaTable;
 use object_store::path::Path;
-use parking_lot::RwLock;
-use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -27,28 +25,13 @@ pub struct SeafowlContext {
     pub metastore: Arc<Metastore>,
     pub internal_object_store: Arc<InternalObjectStore>,
     pub database: String,
-    pub all_databases: Arc<RwLock<HashSet<String>>>,
     pub max_partition_size: u32,
 }
 
 impl SeafowlContext {
     // Create a new `SeafowlContext` with a new inner context scoped to a different default DB
     pub async fn scope_to_database(&self, name: String) -> Result<Arc<SeafowlContext>> {
-        // TODO: do we need this? The only goal here is to keep the list of databases in memory and
-        // fail early if one is missing, but we can defer that to resolution time.
-        let maybe_database = self.all_databases.read().get(&name).cloned();
-        let all_databases = self.all_databases.clone();
-        if maybe_database.is_none() {
-            // Perhaps the db was created on another node; try to reload from catalog
-            let _ = self.metastore.catalogs.get(&name).await.map_err(|_| {
-                DataFusionError::Plan(format!(
-                    "Unknown database {name}; try creating one with CREATE DATABASE first"
-                ))
-            })?;
-            all_databases.write().insert(name.clone());
-        };
-
-        // Swap the default database in the new internal context's session config
+        // Swap the default catalog in the new internal context's session config
         let session_config = self
             .inner()
             .copied_config()
@@ -62,7 +45,6 @@ impl SeafowlContext {
             metastore: self.metastore.clone(),
             internal_object_store: self.internal_object_store.clone(),
             database: name,
-            all_databases,
             max_partition_size: self.max_partition_size,
         }))
     }

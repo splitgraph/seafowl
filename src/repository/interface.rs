@@ -37,13 +37,6 @@ pub struct TableRecord {
 }
 
 #[derive(sqlx::FromRow, Default, Debug, PartialEq, Eq)]
-pub struct TableVersion {
-    pub id: TableVersionId,
-    pub table_id: TableId,
-    pub creation_time: Timestamp,
-}
-
-#[derive(sqlx::FromRow, Default, Debug, PartialEq, Eq)]
 pub struct AllDatabaseColumnsResult {
     pub database_name: String,
     pub collection_name: String,
@@ -120,17 +113,10 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub trait Repository: Send + Sync + Debug {
     async fn setup(&self);
 
-    async fn get_collections_in_database(
-        &self,
-        database_id: DatabaseId,
-    ) -> Result<Vec<String>, Error>;
-
     async fn get_all_columns_in_database(
         &self,
         name: &str,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
-
-    async fn list_databases(&self) -> Result<Vec<DatabaseRecord>, Error>;
 
     async fn get_database(&self, name: &str) -> Result<DatabaseRecord, Error>;
 
@@ -289,7 +275,7 @@ pub mod tests {
     }
 
     pub async fn run_generic_repository_tests(repository: Arc<dyn Repository>) {
-        test_get_collections_empty(repository.clone()).await;
+        test_get_tables_empty(repository.clone()).await;
         let (database_id, table_id, table_version_id) =
             test_create_database_collection_table(repository.clone()).await;
         test_create_functions(repository.clone(), database_id).await;
@@ -303,13 +289,13 @@ pub mod tests {
         test_error_propagation(repository, table_id).await;
     }
 
-    async fn test_get_collections_empty(repository: Arc<dyn Repository>) {
+    async fn test_get_tables_empty(repository: Arc<dyn Repository>) {
         assert_eq!(
             repository
-                .get_collections_in_database(0)
+                .get_all_columns_in_database(TEST_DB)
                 .await
                 .expect("error getting collections"),
-            Vec::<String>::new()
+            Vec::<AllDatabaseColumnsResult>::new()
         );
     }
 

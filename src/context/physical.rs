@@ -202,9 +202,6 @@ impl SeafowlContext {
                     .create(catalog_name, DEFAULT_SCHEMA)
                     .await?;
 
-                // Update the shared in-memory map of DB names -> ids
-                self.all_databases.write().insert(catalog_name.clone());
-
                 Ok(make_dummy_exec())
             }
             LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {

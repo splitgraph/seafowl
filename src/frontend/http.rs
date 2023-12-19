@@ -1023,7 +1023,7 @@ pub mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
-            "Error during planning: Unknown database missing_db; try creating one with CREATE DATABASE first"
+            "Error during planning: Database \"missing_db\" doesn't exist"
         );
     }
 

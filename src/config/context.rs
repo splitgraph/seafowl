@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::{
@@ -26,7 +25,6 @@ use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
 use object_store::gcp::GoogleCloudStorageBuilder;
-use parking_lot::lock_api::RwLock;
 
 use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
 
@@ -199,14 +197,6 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
         metastore.schemas.create(DEFAULT_DB, DEFAULT_SCHEMA).await?;
     }
 
-    let all_databases: HashSet<String> = metastore
-        .catalogs
-        .list()
-        .await?
-        .iter()
-        .map(|db| db.name.clone())
-        .collect();
-
     // Convergence doesn't support connecting to different DB names. We are supposed
     // to do one context per query (as we need to load the schema before executing every
     // query) and per database (since the context is supposed to be limited to the database
@@ -218,7 +208,6 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
         metastore: Arc::new(metastore),
         internal_object_store,
         database: DEFAULT_DB.to_string(),
-        all_databases: Arc::from(RwLock::new(all_databases)),
         max_partition_size: cfg.misc.max_partition_size,
     })
 }

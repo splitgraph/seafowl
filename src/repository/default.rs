@@ -65,18 +65,6 @@ impl Repository for $repo {
             .expect("error running migrations");
     }
 
-    async fn get_collections_in_database(
-        &self,
-        database_id: DatabaseId,
-    ) -> Result<Vec<String>, Error> {
-        let names = sqlx::query("SELECT name FROM collection WHERE database_id = $1")
-            .bind(database_id)
-            .fetch(&self.executor)
-            .map_ok(|row| row.get("name"))
-            .try_collect()
-            .await.map_err($repo::interpret_error)?;
-        Ok(names)
-    }
     async fn get_all_columns_in_database(
         &self,
         name: &str,
@@ -179,13 +167,6 @@ impl Repository for $repo {
         .await.map_err($repo::interpret_error)?;
 
         Ok(table)
-    }
-
-    async fn list_databases(&self) -> Result<Vec<DatabaseRecord>> {
-        sqlx::query_as(r#"SELECT name, id FROM database"#)
-            .fetch_all(&self.executor)
-            .await.map_err($repo::interpret_error)
-
     }
 
     async fn create_collection(

@@ -8,8 +8,6 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::DataFusionError;
 use deltalake::DeltaTable;
 use itertools::Itertools;
-#[cfg(test)]
-use mockall::automock;
 use parking_lot::RwLock;
 use uuid::Uuid;
 
@@ -143,6 +141,10 @@ impl From<Error> for DataFusionError {
     }
 }
 
+// This is the main entrypoint to all individual catalogs for various objects types.
+// The intention is to make it extensible and de-coupled from the underlying metastore
+// persistence mechanism (such as the presently used `Repository`).
+#[derive(Clone)]
 pub struct Metastore {
     pub catalogs: Arc<dyn CatalogStore>,
     pub schemas: Arc<dyn SchemaStore>,
@@ -150,21 +152,17 @@ pub struct Metastore {
     pub functions: Arc<dyn FunctionStore>,
 }
 
-#[cfg_attr(test, automock)]
 #[async_trait]
 pub trait CatalogStore: Sync + Send {
     async fn create(&self, catalog_name: &str) -> Result<DatabaseId>;
 
     async fn load_database(&self, name: &str) -> Result<SeafowlDatabase>;
 
-    async fn list(&self) -> Result<Vec<DatabaseRecord>, Error>;
-
     async fn get(&self, name: &str) -> Result<DatabaseRecord, Error>;
 
     async fn delete(&self, name: &str) -> Result<()>;
 }
 
-#[cfg_attr(test, automock)]
 #[async_trait]
 pub trait SchemaStore: Sync + Send {
     async fn create(&self, catalog_name: &str, schema_name: &str)
@@ -179,7 +177,6 @@ pub trait SchemaStore: Sync + Send {
     async fn delete(&self, catalog_name: &str, schema_name: &str) -> Result<()>;
 }
 
-#[cfg_attr(test, automock)]
 #[async_trait]
 pub trait TableStore: Sync + Send {
     async fn create(
@@ -248,7 +245,6 @@ pub trait TableStore: Sync + Send {
     async fn delete_dropped_table(&self, uuid: Uuid) -> Result<()>;
 }
 
-#[cfg_attr(test, automock)]
 #[async_trait]
 pub trait FunctionStore: Sync + Send {
     async fn create(
@@ -392,13 +388,6 @@ impl CatalogStore for DefaultCatalog {
                 Arc::new(self.clone()),
             )),
         })
-    }
-
-    async fn list(&self) -> Result<Vec<DatabaseRecord>, Error> {
-        match self.repository.list_databases().await {
-            Ok(databases) => Ok(databases),
-            Err(e) => Err(Self::to_sqlx_error(e)),
-        }
     }
 
     async fn get(&self, name: &str) -> Result<DatabaseRecord> {
