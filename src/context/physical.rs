@@ -172,8 +172,9 @@ impl SeafowlContext {
             )) => {
                 // CREATE SCHEMA
                 // Create a schema and register it
-                self.table_catalog
-                    .create_schema(&self.database, schema_name)
+                self.metastore
+                    .schemas
+                    .create(&self.database, schema_name)
                     .await?;
                 Ok(make_dummy_exec())
             }
@@ -182,7 +183,7 @@ impl SeafowlContext {
                 if_not_exists,
                 ..
             })) => {
-                if self.table_catalog.get_catalog(catalog_name).await.is_ok() {
+                if self.metastore.catalogs.get(catalog_name).await.is_ok() {
                     if !*if_not_exists {
                         return Err(DataFusionError::Plan(format!(
                             "Database {catalog_name} already exists"
@@ -193,11 +194,12 @@ impl SeafowlContext {
                 }
 
                 // Persist DB into metadata catalog
-                self.table_catalog.create_catalog(catalog_name).await?;
+                self.metastore.catalogs.create(catalog_name).await?;
 
                 // Create the corresponding default schema as well
-                self.table_catalog
-                    .create_schema(catalog_name, DEFAULT_SCHEMA)
+                self.metastore
+                    .schemas
+                    .create(catalog_name, DEFAULT_SCHEMA)
                     .await?;
 
                 // Update the shared in-memory map of DB names -> ids
@@ -374,8 +376,9 @@ impl SeafowlContext {
                     None,
                 )
                 .await?;
-                self.table_catalog
-                    .create_new_table_version(uuid, version)
+                self.metastore
+                    .tables
+                    .create_new_version(uuid, version)
                     .await?;
 
                 Ok(make_dummy_exec())
@@ -499,8 +502,9 @@ impl SeafowlContext {
                     None,
                 )
                 .await?;
-                self.table_catalog
-                    .create_new_table_version(uuid, version)
+                self.metastore
+                    .tables
+                    .create_new_version(uuid, version)
                     .await?;
 
                 Ok(make_dummy_exec())
@@ -519,8 +523,9 @@ impl SeafowlContext {
                     return Ok(make_dummy_exec());
                 }
 
-                self.table_catalog
-                    .drop_table(
+                self.metastore
+                    .tables
+                    .delete(
                         &resolved_ref.catalog,
                         &resolved_ref.schema,
                         &resolved_ref.table,
@@ -572,13 +577,9 @@ impl SeafowlContext {
                             self.register_function(name, details)?;
 
                             // Persist the function in the metadata storage
-                            self.function_catalog
-                                .create_function(
-                                    &self.database,
-                                    name,
-                                    *or_replace,
-                                    details,
-                                )
+                            self.metastore
+                                .functions
+                                .create(&self.database, name, *or_replace, details)
                                 .await?;
 
                             Ok(make_dummy_exec())
@@ -588,8 +589,9 @@ impl SeafowlContext {
                             func_names,
                             output_schema: _,
                         }) => {
-                            self.function_catalog
-                                .drop_function(&self.database, *if_exists, func_names)
+                            self.metastore
+                                .functions
+                                .delete(&self.database, *if_exists, func_names)
                                 .await?;
                             Ok(make_dummy_exec())
                         }
@@ -615,8 +617,9 @@ impl SeafowlContext {
                                 old_table_ref.resolve(&self.database, DEFAULT_SCHEMA);
 
                             // Finally update our catalog entry
-                            self.table_catalog
-                                .move_table(
+                            self.metastore
+                                .tables
+                                .update(
                                     &resolved_old_ref.catalog,
                                     &resolved_old_ref.schema,
                                     &resolved_old_ref.table,
@@ -628,9 +631,7 @@ impl SeafowlContext {
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
-                            self.table_catalog
-                                .delete_schema(&self.database, name)
-                                .await?;
+                            self.metastore.schemas.delete(&self.database, name).await?;
 
                             Ok(make_dummy_exec())
                         }
@@ -671,8 +672,9 @@ impl SeafowlContext {
                                 }
 
                                 match self
-                                    .table_catalog
-                                    .delete_old_table_versions(
+                                    .metastore
+                                    .tables
+                                    .delete_old_versions(
                                         &resolved_ref.catalog,
                                         &resolved_ref.schema,
                                         &resolved_ref.table,
@@ -785,8 +787,9 @@ impl SeafowlContext {
             }
             None => {
                 // Schema doesn't exist; create one first, and then reload to pick it up
-                self.table_catalog
-                    .create_schema(&self.database, &schema_name)
+                self.metastore
+                    .schemas
+                    .create(&self.database, &schema_name)
                     .await?;
                 self.reload_schema().await?;
                 false

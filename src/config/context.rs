@@ -2,9 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::{
-    catalog::{
-        DefaultCatalog, FunctionCatalog, TableCatalog, DEFAULT_DB, DEFAULT_SCHEMA,
-    },
+    catalog::{DefaultCatalog, DEFAULT_DB, DEFAULT_SCHEMA},
     context::SeafowlContext,
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
@@ -20,7 +18,7 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
 
-use crate::catalog::Error;
+use crate::catalog::{Error, Metastore};
 use crate::object_store::http::add_http_object_store;
 use crate::object_store::wrapped::InternalObjectStore;
 #[cfg(feature = "remote-tables")]
@@ -32,10 +30,10 @@ use parking_lot::lock_api::RwLock;
 
 use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
 
-async fn build_catalog(
+async fn build_metastore(
     config: &schema::SeafowlConfig,
     object_store: Arc<InternalObjectStore>,
-) -> (Arc<dyn TableCatalog>, Arc<dyn FunctionCatalog>) {
+) -> Metastore {
     // Initialize the repository
     let repository: Arc<dyn Repository> = match &config.catalog {
         #[cfg(feature = "catalog-postgres")]
@@ -66,7 +64,12 @@ async fn build_catalog(
 
     let catalog = Arc::new(DefaultCatalog::new(repository, object_store));
 
-    (catalog.clone(), catalog)
+    Metastore {
+        catalogs: catalog.clone(),
+        schemas: catalog.clone(),
+        tables: catalog.clone(),
+        functions: catalog,
+    }
 }
 
 pub fn build_object_store(
@@ -181,21 +184,24 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
     // Register the HTTP object store for external tables
     add_http_object_store(&context, &cfg.misc.ssl_cert_file);
 
-    let (tables, functions) = build_catalog(cfg, internal_object_store.clone()).await;
+    let metastore = build_metastore(cfg, internal_object_store.clone()).await;
 
     // Create default DB/collection
-    if let Err(Error::CatalogDoesNotExist { .. }) = tables.get_catalog(DEFAULT_DB).await {
-        tables.create_catalog(DEFAULT_DB).await.unwrap();
+    if let Err(Error::CatalogDoesNotExist { .. }) =
+        metastore.catalogs.get(DEFAULT_DB).await
+    {
+        metastore.catalogs.create(DEFAULT_DB).await.unwrap();
     }
 
     if let Err(Error::SchemaDoesNotExist { .. }) =
-        tables.get_schema(DEFAULT_DB, DEFAULT_SCHEMA).await
+        metastore.schemas.get(DEFAULT_DB, DEFAULT_SCHEMA).await
     {
-        tables.create_schema(DEFAULT_DB, DEFAULT_SCHEMA).await?;
+        metastore.schemas.create(DEFAULT_DB, DEFAULT_SCHEMA).await?;
     }
 
-    let all_databases: HashSet<String> = tables
-        .list_catalogs()
+    let all_databases: HashSet<String> = metastore
+        .catalogs
+        .list()
         .await?
         .iter()
         .map(|db| db.name.clone())
@@ -209,8 +215,7 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
 
     Ok(SeafowlContext {
         inner: context,
-        table_catalog: tables,
-        function_catalog: functions,
+        metastore: Arc::new(metastore),
         internal_object_store,
         database: DEFAULT_DB.to_string(),
         all_databases: Arc::from(RwLock::new(all_databases)),

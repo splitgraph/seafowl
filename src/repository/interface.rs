@@ -163,21 +163,21 @@ pub trait Repository: Send + Sync + Debug {
         uuid: Uuid,
     ) -> Result<(TableId, TableVersionId), Error>;
 
-    async fn delete_old_table_versions(&self, table_id: TableId) -> Result<u64, Error>;
+    async fn delete_old_versions(&self, table_id: TableId) -> Result<u64, Error>;
 
-    async fn create_new_table_version(
+    async fn create_new_version(
         &self,
         uuid: Uuid,
         version: i64,
     ) -> Result<TableVersionId, Error>;
 
-    async fn get_all_table_versions(
+    async fn get_all_versions(
         &self,
         database_name: &str,
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>>;
 
-    async fn move_table(
+    async fn rename_table(
         &self,
         table_id: TableId,
         new_table_name: &str,
@@ -379,7 +379,7 @@ pub mod tests {
 
         // Duplicate the table
         let new_version_id = repository
-            .create_new_table_version(Uuid::default(), 1)
+            .create_new_version(Uuid::default(), 1)
             .await
             .unwrap();
 
@@ -401,7 +401,7 @@ pub mod tests {
 
         // Check the existing table versions
         let all_table_versions: Vec<TableVersionId> = repository
-            .get_all_table_versions("testdb", Some(vec!["testtable".to_string()]))
+            .get_all_versions("testdb", Some(vec!["testtable".to_string()]))
             .await
             .expect("Error getting all columns")
             .iter()
@@ -507,7 +507,7 @@ pub mod tests {
     ) {
         // Rename the table to something else
         repository
-            .move_table(table_id, "testtable2", None)
+            .rename_table(table_id, "testtable2", None)
             .await
             .unwrap();
 
@@ -532,7 +532,7 @@ pub mod tests {
             .await
             .unwrap();
         repository
-            .move_table(table_id, "testtable2", Some(collection_id))
+            .rename_table(table_id, "testtable2", Some(collection_id))
             .await
             .unwrap();
 
@@ -563,7 +563,7 @@ pub mod tests {
         // Nonexistent table ID
         assert!(matches!(
             repository
-                .move_table(-1, "doesntmatter", None)
+                .rename_table(-1, "doesntmatter", None)
                 .await
                 .unwrap_err(),
             Error::SqlxError(sqlx::Error::RowNotFound)
@@ -572,7 +572,7 @@ pub mod tests {
         // Existing table ID, moved to a nonexistent collection (FK violation)
         assert!(matches!(
             repository
-                .move_table(table_id, "doesntmatter", Some(-1))
+                .rename_table(table_id, "doesntmatter", Some(-1))
                 .await
                 .unwrap_err(),
             Error::FKConstraintViolation(_)
@@ -614,7 +614,7 @@ pub mod tests {
 
         assert!(matches!(
             repository
-                .move_table(new_table_id, "testtable2", Some(collection_2.id))
+                .rename_table(new_table_id, "testtable2", Some(collection_2.id))
                 .await
                 .unwrap_err(),
             Error::UniqueConstraintViolation(_)

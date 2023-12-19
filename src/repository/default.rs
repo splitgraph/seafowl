@@ -254,7 +254,7 @@ impl Repository for $repo {
         Ok((new_table_id, new_version_id))
     }
 
-    async fn delete_old_table_versions(
+    async fn delete_old_versions(
         &self,
         table_id: TableId,
     ) -> Result<u64, Error> {
@@ -270,7 +270,7 @@ impl Repository for $repo {
         Ok(delete_result.rows_affected())
     }
 
-    async fn create_new_table_version(
+    async fn create_new_version(
         &self,
         uuid: Uuid,
         version: i64,
@@ -308,7 +308,7 @@ impl Repository for $repo {
         Ok(new_version_id)
     }
 
-    async fn get_all_table_versions(
+    async fn get_all_versions(
         &self,
         database_name: &str,
         table_names: Option<Vec<String>>,
@@ -354,7 +354,7 @@ impl Repository for $repo {
         Ok(table_versions)
     }
 
-    async fn move_table(
+    async fn rename_table(
         &self,
         table_id: TableId,
         new_table_name: &str,

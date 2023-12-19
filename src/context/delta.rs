@@ -290,8 +290,9 @@ impl SeafowlContext {
         let table_name = resolved_ref.table.clone();
 
         let _ = self
-            .table_catalog
-            .get_schema(&self.database, &schema_name)
+            .metastore
+            .schemas
+            .get(&self.database, &schema_name)
             .await?;
 
         // NB: there's also a uuid generated below for table's `DeltaTableMetaData::id`, so it would
@@ -347,8 +348,9 @@ impl SeafowlContext {
         // tables and their schemas in bulk to satisfy information_schema queries.
         // Another is to keep track of table uuid's, which are used to construct the table uri.
         // We may look into doing this via delta-rs somehow eventually.
-        self.table_catalog
-            .create_table(
+        self.metastore
+            .tables
+            .create(
                 &self.database,
                 &schema_name,
                 &table_name,
@@ -405,8 +407,9 @@ impl SeafowlContext {
         // TODO: if `DeltaTable::get_version_timestamp` was globally public we could also pass the
         // exact version timestamp, instead of creating one automatically in our own catalog (which
         // could lead to minor timestamp differences).
-        self.table_catalog
-            .create_new_table_version(table_uuid, version)
+        self.metastore
+            .tables
+            .create_new_version(table_uuid, version)
             .await?;
 
         debug!("Written table version {version} for {table}");

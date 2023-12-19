@@ -2,7 +2,7 @@ pub mod delta;
 pub mod logical;
 pub mod physical;
 
-use crate::catalog::{FunctionCatalog, TableCatalog};
+use crate::catalog::Metastore;
 use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::config::context::build_state_with_table_factories;
 use crate::object_store::wrapped::InternalObjectStore;
@@ -24,8 +24,7 @@ use uuid::Uuid;
 // interacting with the catalog and object store.
 pub struct SeafowlContext {
     pub inner: SessionContext,
-    pub table_catalog: Arc<dyn TableCatalog>,
-    pub function_catalog: Arc<dyn FunctionCatalog>,
+    pub metastore: Arc<Metastore>,
     pub internal_object_store: Arc<InternalObjectStore>,
     pub database: String,
     pub all_databases: Arc<RwLock<HashSet<String>>>,
@@ -41,7 +40,7 @@ impl SeafowlContext {
         let all_databases = self.all_databases.clone();
         if maybe_database.is_none() {
             // Perhaps the db was created on another node; try to reload from catalog
-            let _ = self.table_catalog.get_catalog(&name).await.map_err(|_| {
+            let _ = self.metastore.catalogs.get(&name).await.map_err(|_| {
                 DataFusionError::Plan(format!(
                     "Unknown database {name}; try creating one with CREATE DATABASE first"
                 ))
@@ -60,8 +59,7 @@ impl SeafowlContext {
 
         Ok(Arc::from(SeafowlContext {
             inner: SessionContext::new_with_state(state),
-            table_catalog: self.table_catalog.clone(),
-            function_catalog: self.function_catalog.clone(),
+            metastore: self.metastore.clone(),
             internal_object_store: self.internal_object_store.clone(),
             database: name,
             all_databases,
@@ -88,12 +86,18 @@ impl SeafowlContext {
 
         self.inner.register_catalog(
             &self.database,
-            Arc::new(self.table_catalog.load_database(&self.database).await?),
+            Arc::new(
+                self.metastore
+                    .catalogs
+                    .load_database(&self.database)
+                    .await?,
+            ),
         );
 
         // Register all functions in the database
-        self.function_catalog
-            .get_all_functions_in_database(&self.database)
+        self.metastore
+            .functions
+            .list(&self.database)
             .await?
             .iter()
             .try_for_each(|f| self.register_function(&f.name, &f.details))
@@ -239,11 +243,7 @@ pub mod test_utils {
 
         // Create new non-default database; we're doing this in catalog only to simulate it taking
         // place on another node
-        context
-            .table_catalog
-            .create_catalog("testdb")
-            .await
-            .unwrap();
+        context.metastore.catalogs.create("testdb").await.unwrap();
 
         let context = context
             .scope_to_database("testdb".to_string())

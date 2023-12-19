@@ -143,36 +143,46 @@ impl From<Error> for DataFusionError {
     }
 }
 
+pub struct Metastore {
+    pub catalogs: Arc<dyn CatalogStore>,
+    pub schemas: Arc<dyn SchemaStore>,
+    pub tables: Arc<dyn TableStore>,
+    pub functions: Arc<dyn FunctionStore>,
+}
+
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait TableCatalog: Sync + Send {
+pub trait CatalogStore: Sync + Send {
+    async fn create(&self, catalog_name: &str) -> Result<DatabaseId>;
+
     async fn load_database(&self, name: &str) -> Result<SeafowlDatabase>;
-    async fn get_catalog(&self, name: &str) -> Result<DatabaseRecord, Error>;
 
-    async fn list_catalogs(&self) -> Result<Vec<DatabaseRecord>, Error>;
+    async fn list(&self) -> Result<Vec<DatabaseRecord>, Error>;
 
-    async fn get_schema(
+    async fn get(&self, name: &str) -> Result<DatabaseRecord, Error>;
+
+    async fn delete(&self, name: &str) -> Result<()>;
+}
+
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait SchemaStore: Sync + Send {
+    async fn create(&self, catalog_name: &str, schema_name: &str)
+        -> Result<CollectionId>;
+
+    async fn get(
         &self,
         catalog_name: &str,
         schema_name: &str,
     ) -> Result<CollectionRecord, Error>;
 
-    async fn get_table(
-        &self,
-        catalog_name: &str,
-        schema_name: &str,
-        table_name: &str,
-    ) -> Result<TableRecord, Error>;
+    async fn delete(&self, catalog_name: &str, schema_name: &str) -> Result<()>;
+}
 
-    async fn create_catalog(&self, catalog_name: &str) -> Result<DatabaseId>;
-
-    async fn create_schema(
-        &self,
-        catalog_name: &str,
-        schema_name: &str,
-    ) -> Result<CollectionId>;
-
-    async fn create_table(
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait TableStore: Sync + Send {
+    async fn create(
         &self,
         catalog_name: &str,
         schema_name: &str,
@@ -181,26 +191,33 @@ pub trait TableCatalog: Sync + Send {
         uuid: Uuid,
     ) -> Result<(TableId, TableVersionId)>;
 
-    async fn delete_old_table_versions(
+    async fn get(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+    ) -> Result<TableRecord, Error>;
+
+    async fn create_new_version(
+        &self,
+        uuid: Uuid,
+        version: i64,
+    ) -> Result<TableVersionId>;
+
+    async fn delete_old_versions(
         &self,
         catalog_name: &str,
         collection_name: &str,
         table_name: &str,
     ) -> Result<u64, Error>;
 
-    async fn create_new_table_version(
-        &self,
-        uuid: Uuid,
-        version: i64,
-    ) -> Result<TableVersionId>;
-
-    async fn get_all_table_versions(
+    async fn get_all_versions(
         &self,
         catalog_name: &str,
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>>;
 
-    async fn move_table(
+    async fn update(
         &self,
         old_catalog_name: &str,
         old_schema_name: &str,
@@ -210,16 +227,12 @@ pub trait TableCatalog: Sync + Send {
         new_table_name: &str,
     ) -> Result<()>;
 
-    async fn drop_table(
+    async fn delete(
         &self,
         catalog_name: &str,
         schema_name: &str,
         table_name: &str,
     ) -> Result<()>;
-
-    async fn delete_schema(&self, catalog_name: &str, schema_name: &str) -> Result<()>;
-
-    async fn delete_catalog(&self, name: &str) -> Result<()>;
 
     async fn get_dropped_tables(
         &self,
@@ -237,8 +250,8 @@ pub trait TableCatalog: Sync + Send {
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait FunctionCatalog: Sync + Send {
-    async fn create_function(
+pub trait FunctionStore: Sync + Send {
+    async fn create(
         &self,
         catalog_name: &str,
         function_name: &str,
@@ -246,12 +259,9 @@ pub trait FunctionCatalog: Sync + Send {
         details: &CreateFunctionDetails,
     ) -> Result<FunctionId>;
 
-    async fn get_all_functions_in_database(
-        &self,
-        catalog_name: &str,
-    ) -> Result<Vec<SeafowlFunction>>;
+    async fn list(&self, catalog_name: &str) -> Result<Vec<SeafowlFunction>>;
 
-    async fn drop_function(
+    async fn delete(
         &self,
         catalog_name: &str,
         if_exists: bool,
@@ -336,7 +346,21 @@ impl DefaultCatalog {
 }
 
 #[async_trait]
-impl TableCatalog for DefaultCatalog {
+impl CatalogStore for DefaultCatalog {
+    async fn create(&self, catalog_name: &str) -> Result<DatabaseId> {
+        self.repository
+            .create_database(catalog_name)
+            .await
+            .map_err(|e| match e {
+                RepositoryError::UniqueConstraintViolation(_) => {
+                    Error::CatalogAlreadyExists {
+                        name: catalog_name.to_string(),
+                    }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
+    }
+
     async fn load_database(&self, name: &str) -> Result<SeafowlDatabase> {
         let all_columns = self
             .repository
@@ -370,49 +394,14 @@ impl TableCatalog for DefaultCatalog {
         })
     }
 
-    async fn create_table(
-        &self,
-        catalog_name: &str,
-        schema_name: &str,
-        table_name: &str,
-        schema: &Schema,
-        uuid: Uuid,
-    ) -> Result<(TableId, TableVersionId)> {
-        let collection = self.get_schema(catalog_name, schema_name).await?;
-
-        self.repository
-            .create_table(collection.id, table_name, schema, uuid)
-            .await
-            .map_err(|e| match e {
-                RepositoryError::UniqueConstraintViolation(_) => {
-                    Error::TableAlreadyExists {
-                        name: table_name.to_string(),
-                    }
-                }
-                RepositoryError::FKConstraintViolation(_) => Error::SchemaDoesNotExist {
-                    name: schema_name.to_string(),
-                },
-                RepositoryError::SqlxError(e) => Error::SqlxError(e),
-            })
+    async fn list(&self) -> Result<Vec<DatabaseRecord>, Error> {
+        match self.repository.list_databases().await {
+            Ok(databases) => Ok(databases),
+            Err(e) => Err(Self::to_sqlx_error(e)),
+        }
     }
 
-    async fn delete_old_table_versions(
-        &self,
-        catalog_name: &str,
-        collection_name: &str,
-        table_name: &str,
-    ) -> Result<u64, Error> {
-        let table = self
-            .get_table(catalog_name, collection_name, table_name)
-            .await?;
-
-        self.repository
-            .delete_old_table_versions(table.id)
-            .await
-            .map_err(Self::to_sqlx_error)
-    }
-
-    async fn get_catalog(&self, name: &str) -> Result<DatabaseRecord> {
+    async fn get(&self, name: &str) -> Result<DatabaseRecord> {
         match self.repository.get_database(name).await {
             Ok(database) => Ok(database),
             Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => {
@@ -424,14 +413,50 @@ impl TableCatalog for DefaultCatalog {
         }
     }
 
-    async fn list_catalogs(&self) -> Result<Vec<DatabaseRecord>, Error> {
-        match self.repository.list_databases().await {
-            Ok(databases) => Ok(databases),
-            Err(e) => Err(Self::to_sqlx_error(e)),
+    async fn delete(&self, name: &str) -> Result<()> {
+        let database = CatalogStore::get(self, name).await?;
+
+        self.repository
+            .delete_database(database.id)
+            .await
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::CatalogDoesNotExist {
+                        name: name.to_string(),
+                    }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
+    }
+}
+
+#[async_trait]
+impl SchemaStore for DefaultCatalog {
+    async fn create(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> Result<CollectionId> {
+        if schema_name == STAGING_SCHEMA {
+            return Err(Error::UsedStagingSchema);
         }
+
+        let database = CatalogStore::get(self, catalog_name).await?;
+
+        self.repository
+            .create_collection(database.id, schema_name)
+            .await
+            .map_err(|e| match e {
+                RepositoryError::UniqueConstraintViolation(_) => {
+                    Error::SchemaAlreadyExists {
+                        name: schema_name.to_string(),
+                    }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
     }
 
-    async fn get_schema(
+    async fn get(
         &self,
         catalog_name: &str,
         schema_name: &str,
@@ -455,7 +480,52 @@ impl TableCatalog for DefaultCatalog {
         }
     }
 
-    async fn get_table(
+    async fn delete(&self, catalog_name: &str, schema_name: &str) -> Result<()> {
+        let schema = SchemaStore::get(self, catalog_name, schema_name).await?;
+
+        self.repository
+            .drop_collection(schema.id)
+            .await
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::SchemaDoesNotExist {
+                        name: schema_name.to_string(),
+                    }
+                }
+                _ => Self::to_sqlx_error(e),
+            })
+    }
+}
+
+#[async_trait]
+impl TableStore for DefaultCatalog {
+    async fn create(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        schema: &Schema,
+        uuid: Uuid,
+    ) -> Result<(TableId, TableVersionId)> {
+        let collection = SchemaStore::get(self, catalog_name, schema_name).await?;
+
+        self.repository
+            .create_table(collection.id, table_name, schema, uuid)
+            .await
+            .map_err(|e| match e {
+                RepositoryError::UniqueConstraintViolation(_) => {
+                    Error::TableAlreadyExists {
+                        name: table_name.to_string(),
+                    }
+                }
+                RepositoryError::FKConstraintViolation(_) => Error::SchemaDoesNotExist {
+                    name: schema_name.to_string(),
+                },
+                RepositoryError::SqlxError(e) => Error::SqlxError(e),
+            })
+    }
+
+    async fn get(
         &self,
         catalog_name: &str,
         schema_name: &str,
@@ -476,51 +546,13 @@ impl TableCatalog for DefaultCatalog {
         }
     }
 
-    async fn create_catalog(&self, catalog_name: &str) -> Result<DatabaseId> {
-        self.repository
-            .create_database(catalog_name)
-            .await
-            .map_err(|e| match e {
-                RepositoryError::UniqueConstraintViolation(_) => {
-                    Error::CatalogAlreadyExists {
-                        name: catalog_name.to_string(),
-                    }
-                }
-                _ => Self::to_sqlx_error(e),
-            })
-    }
-
-    async fn create_schema(
-        &self,
-        catalog_name: &str,
-        schema_name: &str,
-    ) -> Result<CollectionId> {
-        if schema_name == STAGING_SCHEMA {
-            return Err(Error::UsedStagingSchema);
-        }
-
-        let database = self.get_catalog(catalog_name).await?;
-
-        self.repository
-            .create_collection(database.id, schema_name)
-            .await
-            .map_err(|e| match e {
-                RepositoryError::UniqueConstraintViolation(_) => {
-                    Error::SchemaAlreadyExists {
-                        name: schema_name.to_string(),
-                    }
-                }
-                _ => Self::to_sqlx_error(e),
-            })
-    }
-
-    async fn create_new_table_version(
+    async fn create_new_version(
         &self,
         uuid: Uuid,
         version: i64,
     ) -> Result<TableVersionId> {
         self.repository
-            .create_new_table_version(uuid, version)
+            .create_new_version(uuid, version)
             .await
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
@@ -530,18 +562,33 @@ impl TableCatalog for DefaultCatalog {
             })
     }
 
-    async fn get_all_table_versions(
+    async fn delete_old_versions(
+        &self,
+        catalog_name: &str,
+        collection_name: &str,
+        table_name: &str,
+    ) -> Result<u64, Error> {
+        let table =
+            TableStore::get(self, catalog_name, collection_name, table_name).await?;
+
+        self.repository
+            .delete_old_versions(table.id)
+            .await
+            .map_err(Self::to_sqlx_error)
+    }
+
+    async fn get_all_versions(
         &self,
         catalog_name: &str,
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>> {
         self.repository
-            .get_all_table_versions(catalog_name, table_names)
+            .get_all_versions(catalog_name, table_names)
             .await
             .map_err(Self::to_sqlx_error)
     }
 
-    async fn move_table(
+    async fn update(
         &self,
         old_catalog_name: &str,
         old_schema_name: &str,
@@ -550,18 +597,19 @@ impl TableCatalog for DefaultCatalog {
         new_schema_name: &str,
         new_table_name: &str,
     ) -> Result<()> {
-        let table = self
-            .get_table(old_catalog_name, old_schema_name, old_table_name)
-            .await?;
+        let table =
+            TableStore::get(self, old_catalog_name, old_schema_name, old_table_name)
+                .await?;
         let new_schema_id = if new_schema_name != old_schema_name {
-            let schema = self.get_schema(old_catalog_name, new_schema_name).await?;
+            let schema =
+                SchemaStore::get(self, old_catalog_name, new_schema_name).await?;
             Some(schema.id)
         } else {
             None
         };
 
         self.repository
-            .move_table(table.id, new_table_name, new_schema_id)
+            .rename_table(table.id, new_table_name, new_schema_id)
             .await
             .map_err(|e| match e {
                 RepositoryError::FKConstraintViolation(_) => {
@@ -584,15 +632,13 @@ impl TableCatalog for DefaultCatalog {
             })
     }
 
-    async fn drop_table(
+    async fn delete(
         &self,
         catalog_name: &str,
         schema_name: &str,
         table_name: &str,
     ) -> Result<()> {
-        let table = self
-            .get_table(catalog_name, schema_name, table_name)
-            .await?;
+        let table = TableStore::get(self, catalog_name, schema_name, table_name).await?;
 
         self.repository
             .drop_table(table.id)
@@ -601,38 +647,6 @@ impl TableCatalog for DefaultCatalog {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
                     Error::TableDoesNotExist {
                         name: table_name.to_string(),
-                    }
-                }
-                _ => Self::to_sqlx_error(e),
-            })
-    }
-
-    async fn delete_schema(&self, catalog_name: &str, schema_name: &str) -> Result<()> {
-        let schema = self.get_schema(catalog_name, schema_name).await?;
-
-        self.repository
-            .drop_collection(schema.id)
-            .await
-            .map_err(|e| match e {
-                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    Error::SchemaDoesNotExist {
-                        name: schema_name.to_string(),
-                    }
-                }
-                _ => Self::to_sqlx_error(e),
-            })
-    }
-
-    async fn delete_catalog(&self, name: &str) -> Result<()> {
-        let database = self.get_catalog(name).await?;
-
-        self.repository
-            .delete_database(database.id)
-            .await
-            .map_err(|e| match e {
-                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
-                    Error::CatalogDoesNotExist {
-                        name: name.to_string(),
                     }
                 }
                 _ => Self::to_sqlx_error(e),
@@ -709,15 +723,15 @@ impl DefaultCatalog {
 }
 
 #[async_trait]
-impl FunctionCatalog for DefaultCatalog {
-    async fn create_function(
+impl FunctionStore for DefaultCatalog {
+    async fn create(
         &self,
         catalog_name: &str,
         function_name: &str,
         or_replace: bool,
         details: &CreateFunctionDetails,
     ) -> Result<FunctionId> {
-        let database = self.get_catalog(catalog_name).await?;
+        let database = CatalogStore::get(self, catalog_name).await?;
 
         self.repository
             .create_function(database.id, function_name, or_replace, details)
@@ -735,11 +749,8 @@ impl FunctionCatalog for DefaultCatalog {
             })
     }
 
-    async fn get_all_functions_in_database(
-        &self,
-        catalog_name: &str,
-    ) -> Result<Vec<SeafowlFunction>> {
-        let database = self.get_catalog(catalog_name).await?;
+    async fn list(&self, catalog_name: &str) -> Result<Vec<SeafowlFunction>> {
+        let database = CatalogStore::get(self, catalog_name).await?;
 
         let all_functions = self
             .repository
@@ -763,13 +774,14 @@ impl FunctionCatalog for DefaultCatalog {
             .collect::<Result<Vec<SeafowlFunction>>>()
     }
 
-    async fn drop_function(
+    async fn delete(
         &self,
         catalog_name: &str,
         if_exists: bool,
+
         func_names: &[String],
     ) -> Result<()> {
-        let database = self.get_catalog(catalog_name).await?;
+        let database = CatalogStore::get(self, catalog_name).await?;
 
         match self.repository.drop_function(database.id, func_names).await {
             Ok(id) => Ok(id),
