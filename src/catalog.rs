@@ -287,14 +287,6 @@ impl DefaultCatalog {
         }
     }
 
-    fn to_sqlx_error(error: RepositoryError) -> Error {
-        Error::SqlxError(match error {
-            RepositoryError::UniqueConstraintViolation(e) => e,
-            RepositoryError::FKConstraintViolation(e) => e,
-            RepositoryError::SqlxError(e) => e,
-        })
-    }
-
     fn build_table(
         &self,
         table_name: &str,
@@ -341,6 +333,16 @@ impl DefaultCatalog {
     }
 }
 
+impl From<RepositoryError> for Error {
+    fn from(err: RepositoryError) -> Error {
+        Error::SqlxError(match err {
+            RepositoryError::UniqueConstraintViolation(e) => e,
+            RepositoryError::FKConstraintViolation(e) => e,
+            RepositoryError::SqlxError(e) => e,
+        })
+    }
+}
+
 #[async_trait]
 impl CatalogStore for DefaultCatalog {
     async fn create(&self, catalog_name: &str) -> Result<DatabaseId> {
@@ -353,16 +355,12 @@ impl CatalogStore for DefaultCatalog {
                         name: catalog_name.to_string(),
                     }
                 }
-                _ => Self::to_sqlx_error(e),
+                e => e.into(),
             })
     }
 
     async fn load_database(&self, name: &str) -> Result<SeafowlDatabase> {
-        let all_columns = self
-            .repository
-            .get_all_columns_in_database(name)
-            .await
-            .map_err(Self::to_sqlx_error)?;
+        let all_columns = self.repository.get_all_columns_in_database(name).await?;
 
         // NB we can't distinguish between a database without tables and a database
         // that doesn't exist at all due to our query.
@@ -398,7 +396,7 @@ impl CatalogStore for DefaultCatalog {
                     name: name.to_string(),
                 })
             }
-            Err(e) => Err(Self::to_sqlx_error(e)),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -414,7 +412,7 @@ impl CatalogStore for DefaultCatalog {
                         name: name.to_string(),
                     }
                 }
-                _ => Self::to_sqlx_error(e),
+                e => e.into(),
             })
     }
 }
@@ -441,7 +439,7 @@ impl SchemaStore for DefaultCatalog {
                         name: schema_name.to_string(),
                     }
                 }
-                _ => Self::to_sqlx_error(e),
+                e => e.into(),
             })
     }
 
@@ -465,7 +463,7 @@ impl SchemaStore for DefaultCatalog {
                     name: schema_name.to_string(),
                 })
             }
-            Err(e) => Err(Self::to_sqlx_error(e)),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -481,7 +479,7 @@ impl SchemaStore for DefaultCatalog {
                         name: schema_name.to_string(),
                     }
                 }
-                _ => Self::to_sqlx_error(e),
+                e => e.into(),
             })
     }
 }
@@ -531,7 +529,7 @@ impl TableStore for DefaultCatalog {
                     name: table_name.to_string(),
                 })
             }
-            Err(e) => Err(Self::to_sqlx_error(e)),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -547,7 +545,7 @@ impl TableStore for DefaultCatalog {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
                     Error::TableUuidDoesNotExist { uuid }
                 }
-                _ => Self::to_sqlx_error(e),
+                e => e.into(),
             })
     }
 
@@ -560,10 +558,7 @@ impl TableStore for DefaultCatalog {
         let table =
             TableStore::get(self, catalog_name, collection_name, table_name).await?;
 
-        self.repository
-            .delete_old_versions(table.id)
-            .await
-            .map_err(Self::to_sqlx_error)
+        Ok(self.repository.delete_old_versions(table.id).await?)
     }
 
     async fn get_all_versions(
@@ -571,10 +566,10 @@ impl TableStore for DefaultCatalog {
         catalog_name: &str,
         table_names: Option<Vec<String>>,
     ) -> Result<Vec<TableVersionsResult>> {
-        self.repository
+        Ok(self
+            .repository
             .get_all_versions(catalog_name, table_names)
-            .await
-            .map_err(Self::to_sqlx_error)
+            .await?)
     }
 
     async fn update(
@@ -617,7 +612,7 @@ impl TableStore for DefaultCatalog {
                         name: old_table_name.to_string(),
                     }
                 }
-                _ => Self::to_sqlx_error(e),
+                e => e.into(),
             })
     }
 
@@ -638,7 +633,7 @@ impl TableStore for DefaultCatalog {
                         name: table_name.to_string(),
                     }
                 }
-                _ => Self::to_sqlx_error(e),
+                e => e.into(),
             })
     }
 
@@ -646,10 +641,7 @@ impl TableStore for DefaultCatalog {
         &self,
         catalog_name: Option<String>,
     ) -> Result<Vec<DroppedTablesResult>> {
-        self.repository
-            .get_dropped_tables(catalog_name)
-            .await
-            .map_err(Self::to_sqlx_error)
+        Ok(self.repository.get_dropped_tables(catalog_name).await?)
     }
 
     async fn update_dropped_table(
@@ -664,7 +656,7 @@ impl TableStore for DefaultCatalog {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
                     Error::TableUuidDoesNotExist { uuid }
                 }
-                _ => Self::to_sqlx_error(e),
+                e => e.into(),
             })
     }
 
@@ -676,7 +668,7 @@ impl TableStore for DefaultCatalog {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
                     Error::TableUuidDoesNotExist { uuid }
                 }
-                _ => Self::to_sqlx_error(e),
+                e => e.into(),
             })
     }
 }
@@ -734,7 +726,7 @@ impl FunctionStore for DefaultCatalog {
                         name: function_name.to_string(),
                     }
                 }
-                _ => Self::to_sqlx_error(e),
+                e => e.into(),
             })
     }
 
@@ -744,8 +736,7 @@ impl FunctionStore for DefaultCatalog {
         let all_functions = self
             .repository
             .get_all_functions_in_database(database.id)
-            .await
-            .map_err(Self::to_sqlx_error)?;
+            .await?;
 
         all_functions
             .iter()
@@ -788,7 +779,7 @@ impl FunctionStore for DefaultCatalog {
                     })
                 }
             }
-            Err(e) => Err(Self::to_sqlx_error(e)),
+            Err(e) => Err(e.into()),
         }
     }
 }
