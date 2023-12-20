@@ -150,13 +150,156 @@ pub struct Metastore {
     pub schemas: Arc<dyn SchemaStore>,
     pub tables: Arc<dyn TableStore>,
     pub functions: Arc<dyn FunctionStore>,
+    staging_schema: Arc<MemorySchemaProvider>,
+    object_store: Arc<InternalObjectStore>,
+}
+
+pub struct RepositoryStore {
+    pub repository: Arc<dyn Repository>,
+}
+
+impl Metastore {
+    pub fn new_from_repository(
+        repository: Arc<dyn Repository>,
+        object_store: Arc<InternalObjectStore>,
+    ) -> Self {
+        let repository_store = Arc::new(RepositoryStore { repository });
+
+        let staging_schema = Arc::new(MemorySchemaProvider::new());
+        Self {
+            catalogs: repository_store.clone(),
+            schemas: repository_store.clone(),
+            tables: repository_store.clone(),
+            functions: repository_store,
+            staging_schema,
+            object_store,
+        }
+    }
+
+    pub async fn build_catalog(&self, catalog_name: &str) -> Result<SeafowlDatabase> {
+        let all_columns = self.schemas.list(catalog_name).await?;
+
+        // NB we can't distinguish between a database without tables and a database
+        // that doesn't exist at all due to our query.
+
+        // Turn the list of all collections, tables and their columns into a nested map.
+
+        let schemas: HashMap<Arc<str>, Arc<SeafowlSchema>> = all_columns
+            .iter()
+            .group_by(|col| &col.collection_name)
+            .into_iter()
+            .map(|(cn, cc)| self.build_schema(cn, cc))
+            .collect();
+
+        let name: Arc<str> = Arc::from(catalog_name);
+
+        Ok(SeafowlDatabase {
+            name: name.clone(),
+            schemas,
+            staging_schema: self.staging_schema.clone(),
+            system_schema: Arc::new(SystemSchemaProvider::new(name, self.tables.clone())),
+        })
+    }
+
+    fn build_schema<'a, I>(
+        &self,
+        collection_name: &str,
+        collection_columns: I,
+    ) -> (Arc<str>, Arc<SeafowlSchema>)
+    where
+        I: Iterator<Item = &'a AllDatabaseColumnsResult>,
+    {
+        let tables = collection_columns
+            .filter_map(|col| {
+                if let Some(table_name) = &col.table_name
+                    && let Some(table_uuid) = col.table_uuid
+                {
+                    Some(self.build_table(table_name, table_uuid))
+                } else {
+                    None
+                }
+            })
+            .collect::<HashMap<_, _>>();
+
+        (
+            Arc::from(collection_name.to_string()),
+            Arc::new(SeafowlSchema {
+                name: Arc::from(collection_name.to_string()),
+                tables: RwLock::new(tables),
+            }),
+        )
+    }
+
+    fn build_table(
+        &self,
+        table_name: &str,
+        table_uuid: Uuid,
+    ) -> (Arc<str>, Arc<dyn TableProvider>) {
+        // Build a delta table but don't load it yet; we'll do that only for tables that are
+        // actually referenced in a statement, via the async `table` method of the schema provider.
+        // TODO: this means that any `information_schema.columns` query will serially load all
+        // delta tables present in the database. The real fix for this is to make DF use `TableSource`
+        // for the information schema, and then implement `TableSource` for `DeltaTable` in delta-rs.
+        let table_log_store = self.object_store.get_log_store(table_uuid);
+
+        let table = DeltaTable::new(table_log_store, Default::default());
+        (Arc::from(table_name.to_string()), Arc::new(table) as _)
+    }
+
+    pub async fn build_functions(
+        &self,
+        catalog_name: &str,
+    ) -> Result<Vec<SeafowlFunction>> {
+        let functions = self.functions.list(catalog_name).await?;
+
+        functions
+            .iter()
+            .map(|item| {
+                Self::parse_create_function_details(item)
+                    .map(|details| SeafowlFunction {
+                        function_id: item.id,
+                        name: item.name.to_owned(),
+                        details,
+                    })
+                    .map_err(|e| Error::FunctionDeserializationError {
+                        reason: e.message,
+                    })
+            })
+            .collect::<Result<Vec<SeafowlFunction>>>()
+    }
+
+    fn parse_create_function_details(
+        item: &AllDatabaseFunctionsResult,
+    ) -> std::result::Result<CreateFunctionDetails, CreateFunctionError> {
+        let AllDatabaseFunctionsResult {
+            id: _,
+            name: _,
+            entrypoint,
+            language,
+            input_types,
+            return_type,
+            data,
+            volatility,
+        } = item;
+
+        Ok(CreateFunctionDetails {
+            entrypoint: entrypoint.to_string(),
+            language: CreateFunctionLanguage::from_str(language.as_str())?,
+            input_types: serde_json::from_str::<Vec<CreateFunctionDataType>>(
+                input_types,
+            )?,
+            return_type: CreateFunctionDataType::from_str(
+                &return_type.as_str().to_ascii_uppercase(),
+            )?,
+            data: data.to_string(),
+            volatility: CreateFunctionVolatility::from_str(volatility.as_str())?,
+        })
+    }
 }
 
 #[async_trait]
 pub trait CatalogStore: Sync + Send {
-    async fn create(&self, catalog_name: &str) -> Result<DatabaseId>;
-
-    async fn load_database(&self, name: &str) -> Result<SeafowlDatabase>;
+    async fn create(&self, name: &str) -> Result<DatabaseId>;
 
     async fn get(&self, name: &str) -> Result<DatabaseRecord, Error>;
 
@@ -167,6 +310,11 @@ pub trait CatalogStore: Sync + Send {
 pub trait SchemaStore: Sync + Send {
     async fn create(&self, catalog_name: &str, schema_name: &str)
         -> Result<CollectionId>;
+
+    async fn list(
+        &self,
+        catalog_name: &str,
+    ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
     async fn get(
         &self,
@@ -204,7 +352,7 @@ pub trait TableStore: Sync + Send {
     async fn delete_old_versions(
         &self,
         catalog_name: &str,
-        collection_name: &str,
+        schema_name: &str,
         table_name: &str,
     ) -> Result<u64, Error>;
 
@@ -255,7 +403,7 @@ pub trait FunctionStore: Sync + Send {
         details: &CreateFunctionDetails,
     ) -> Result<FunctionId>;
 
-    async fn list(&self, catalog_name: &str) -> Result<Vec<SeafowlFunction>>;
+    async fn list(&self, catalog_name: &str) -> Result<Vec<AllDatabaseFunctionsResult>>;
 
     async fn delete(
         &self,
@@ -263,74 +411,6 @@ pub trait FunctionStore: Sync + Send {
         if_exists: bool,
         func_names: &[String],
     ) -> Result<()>;
-}
-
-#[derive(Clone)]
-pub struct DefaultCatalog {
-    repository: Arc<dyn Repository>,
-
-    // DataFusion's in-memory schema provider for staging external tables
-    staging_schema: Arc<MemorySchemaProvider>,
-    object_store: Arc<InternalObjectStore>,
-}
-
-impl DefaultCatalog {
-    pub fn new(
-        repository: Arc<dyn Repository>,
-        object_store: Arc<InternalObjectStore>,
-    ) -> Self {
-        let staging_schema = Arc::new(MemorySchemaProvider::new());
-        Self {
-            repository,
-            staging_schema,
-            object_store,
-        }
-    }
-
-    fn build_table(
-        &self,
-        table_name: &str,
-        table_uuid: Uuid,
-    ) -> (Arc<str>, Arc<dyn TableProvider>) {
-        // Build a delta table but don't load it yet; we'll do that only for tables that are
-        // actually referenced in a statement, via the async `table` method of the schema provider.
-        // TODO: this means that any `information_schema.columns` query will serially load all
-        // delta tables present in the database. The real fix for this is to make DF use `TableSource`
-        // for the information schema, and then implement `TableSource` for `DeltaTable` in delta-rs.
-        let table_log_store = self.object_store.get_log_store(table_uuid);
-
-        let table = DeltaTable::new(table_log_store, Default::default());
-        (Arc::from(table_name.to_string()), Arc::new(table) as _)
-    }
-
-    fn build_schema<'a, I>(
-        &self,
-        collection_name: &str,
-        collection_columns: I,
-    ) -> (Arc<str>, Arc<SeafowlSchema>)
-    where
-        I: Iterator<Item = &'a AllDatabaseColumnsResult>,
-    {
-        let tables = collection_columns
-            .filter_map(|col| {
-                if let Some(table_name) = &col.table_name
-                    && let Some(table_uuid) = col.table_uuid
-                {
-                    Some(self.build_table(table_name, table_uuid))
-                } else {
-                    None
-                }
-            })
-            .collect::<HashMap<_, _>>();
-
-        (
-            Arc::from(collection_name.to_string()),
-            Arc::new(SeafowlSchema {
-                name: Arc::from(collection_name.to_string()),
-                tables: RwLock::new(tables),
-            }),
-        )
-    }
 }
 
 impl From<RepositoryError> for Error {
@@ -344,48 +424,20 @@ impl From<RepositoryError> for Error {
 }
 
 #[async_trait]
-impl CatalogStore for DefaultCatalog {
-    async fn create(&self, catalog_name: &str) -> Result<DatabaseId> {
+
+impl CatalogStore for RepositoryStore {
+    async fn create(&self, name: &str) -> Result<DatabaseId> {
         self.repository
-            .create_database(catalog_name)
+            .create_database(name)
             .await
             .map_err(|e| match e {
                 RepositoryError::UniqueConstraintViolation(_) => {
                     Error::CatalogAlreadyExists {
-                        name: catalog_name.to_string(),
+                        name: name.to_string(),
                     }
                 }
                 e => e.into(),
             })
-    }
-
-    async fn load_database(&self, name: &str) -> Result<SeafowlDatabase> {
-        let all_columns = self.repository.get_all_columns_in_database(name).await?;
-
-        // NB we can't distinguish between a database without tables and a database
-        // that doesn't exist at all due to our query.
-
-        // Turn the list of all collections, tables and their columns into a nested map.
-
-        let schemas: HashMap<Arc<str>, Arc<SeafowlSchema>> = all_columns
-            .iter()
-            .group_by(|col| &col.collection_name)
-            .into_iter()
-            .map(|(cn, cc)| self.build_schema(cn, cc))
-            .collect();
-
-        // TODO load the database name too
-        let name: Arc<str> = Arc::from(DEFAULT_DB);
-
-        Ok(SeafowlDatabase {
-            name: name.clone(),
-            schemas,
-            staging_schema: self.staging_schema.clone(),
-            system_schema: Arc::new(SystemSchemaProvider::new(
-                name,
-                Arc::new(self.clone()),
-            )),
-        })
     }
 
     async fn get(&self, name: &str) -> Result<DatabaseRecord> {
@@ -418,7 +470,7 @@ impl CatalogStore for DefaultCatalog {
 }
 
 #[async_trait]
-impl SchemaStore for DefaultCatalog {
+impl SchemaStore for RepositoryStore {
     async fn create(
         &self,
         catalog_name: &str,
@@ -441,6 +493,13 @@ impl SchemaStore for DefaultCatalog {
                 }
                 e => e.into(),
             })
+    }
+
+    async fn list(
+        &self,
+        catalog_name: &str,
+    ) -> Result<Vec<AllDatabaseColumnsResult>, Error> {
+        Ok(self.repository.list_collections(catalog_name).await?)
     }
 
     async fn get(
@@ -485,7 +544,7 @@ impl SchemaStore for DefaultCatalog {
 }
 
 #[async_trait]
-impl TableStore for DefaultCatalog {
+impl TableStore for RepositoryStore {
     async fn create(
         &self,
         catalog_name: &str,
@@ -552,11 +611,10 @@ impl TableStore for DefaultCatalog {
     async fn delete_old_versions(
         &self,
         catalog_name: &str,
-        collection_name: &str,
+        schema_name: &str,
         table_name: &str,
     ) -> Result<u64, Error> {
-        let table =
-            TableStore::get(self, catalog_name, collection_name, table_name).await?;
+        let table = TableStore::get(self, catalog_name, schema_name, table_name).await?;
 
         Ok(self.repository.delete_old_versions(table.id).await?)
     }
@@ -673,38 +731,8 @@ impl TableStore for DefaultCatalog {
     }
 }
 
-impl DefaultCatalog {
-    fn parse_create_function_details(
-        item: &AllDatabaseFunctionsResult,
-    ) -> std::result::Result<CreateFunctionDetails, CreateFunctionError> {
-        let AllDatabaseFunctionsResult {
-            id: _,
-            name: _,
-            entrypoint,
-            language,
-            input_types,
-            return_type,
-            data,
-            volatility,
-        } = item;
-
-        Ok(CreateFunctionDetails {
-            entrypoint: entrypoint.to_string(),
-            language: CreateFunctionLanguage::from_str(language.as_str())?,
-            input_types: serde_json::from_str::<Vec<CreateFunctionDataType>>(
-                input_types,
-            )?,
-            return_type: CreateFunctionDataType::from_str(
-                &return_type.as_str().to_ascii_uppercase(),
-            )?,
-            data: data.to_string(),
-            volatility: CreateFunctionVolatility::from_str(volatility.as_str())?,
-        })
-    }
-}
-
 #[async_trait]
-impl FunctionStore for DefaultCatalog {
+impl FunctionStore for RepositoryStore {
     async fn create(
         &self,
         catalog_name: &str,
@@ -730,28 +758,13 @@ impl FunctionStore for DefaultCatalog {
             })
     }
 
-    async fn list(&self, catalog_name: &str) -> Result<Vec<SeafowlFunction>> {
+    async fn list(&self, catalog_name: &str) -> Result<Vec<AllDatabaseFunctionsResult>> {
         let database = CatalogStore::get(self, catalog_name).await?;
 
-        let all_functions = self
+        Ok(self
             .repository
             .get_all_functions_in_database(database.id)
-            .await?;
-
-        all_functions
-            .iter()
-            .map(|item| {
-                Self::parse_create_function_details(item)
-                    .map(|details| SeafowlFunction {
-                        function_id: item.id,
-                        name: item.name.to_owned(),
-                        details,
-                    })
-                    .map_err(|e| Error::FunctionDeserializationError {
-                        reason: e.message,
-                    })
-            })
-            .collect::<Result<Vec<SeafowlFunction>>>()
+            .await?)
     }
 
     async fn delete(

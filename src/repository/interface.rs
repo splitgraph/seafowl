@@ -113,9 +113,9 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub trait Repository: Send + Sync + Debug {
     async fn setup(&self);
 
-    async fn get_all_columns_in_database(
+    async fn list_collections(
         &self,
-        name: &str,
+        database_name: &str,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
 
     async fn get_database(&self, name: &str) -> Result<DatabaseRecord, Error>;
@@ -292,7 +292,7 @@ pub mod tests {
     async fn test_get_tables_empty(repository: Arc<dyn Repository>) {
         assert_eq!(
             repository
-                .get_all_columns_in_database(TEST_DB)
+                .list_collections(TEST_DB)
                 .await
                 .expect("error getting collections"),
             Vec::<AllDatabaseColumnsResult>::new()
@@ -349,7 +349,7 @@ pub mod tests {
         // Test loading all columns
 
         let all_columns = repository
-            .get_all_columns_in_database(TEST_DB)
+            .list_collections(TEST_DB)
             .await
             .expect("Error getting all columns");
 
@@ -371,7 +371,7 @@ pub mod tests {
 
         // Test all columns again: we should have the schema for the latest table version
         let all_columns = repository
-            .get_all_columns_in_database(TEST_DB)
+            .list_collections(TEST_DB)
             .await
             .expect("Error getting all columns");
 
@@ -498,7 +498,7 @@ pub mod tests {
             .unwrap();
 
         let all_columns = repository
-            .get_all_columns_in_database(TEST_DB)
+            .list_collections(TEST_DB)
             .await
             .expect("Error getting all columns");
 
@@ -523,7 +523,7 @@ pub mod tests {
             .unwrap();
 
         let mut all_columns = repository
-            .get_all_columns_in_database(TEST_DB)
+            .list_collections(TEST_DB)
             .await
             .expect("Error getting all columns");
         all_columns.sort_by_key(|c| c.collection_name.clone());

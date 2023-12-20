@@ -65,9 +65,9 @@ impl Repository for $repo {
             .expect("error running migrations");
     }
 
-    async fn get_all_columns_in_database(
+    async fn list_collections(
         &self,
-        name: &str,
+        database_name: &str,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error> {
         let mut builder: QueryBuilder<_> = QueryBuilder::new($repo::QUERIES.latest_table_versions);
 
@@ -87,7 +87,7 @@ impl Repository for $repo {
         LEFT JOIN desired_table_versions ON "table".id = desired_table_versions.table_id
         LEFT JOIN table_column ON table_column.table_version_id = desired_table_versions.id
         WHERE database.name = "#);
-        builder.push_bind(name);
+        builder.push_bind(database_name);
 
         builder.push(r#"
         ORDER BY collection_name, table_name, table_version_id, column_name

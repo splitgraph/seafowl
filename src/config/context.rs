@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    catalog::{DefaultCatalog, DEFAULT_DB, DEFAULT_SCHEMA},
+    catalog::{DEFAULT_DB, DEFAULT_SCHEMA},
     context::SeafowlContext,
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
@@ -60,14 +60,7 @@ async fn build_metastore(
         ),
     };
 
-    let catalog = Arc::new(DefaultCatalog::new(repository, object_store));
-
-    Metastore {
-        catalogs: catalog.clone(),
-        schemas: catalog.clone(),
-        tables: catalog.clone(),
-        functions: catalog,
-    }
+    Metastore::new_from_repository(repository, object_store)
 }
 
 pub fn build_object_store(

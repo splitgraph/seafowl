@@ -68,18 +68,12 @@ impl SeafowlContext {
 
         self.inner.register_catalog(
             &self.database,
-            Arc::new(
-                self.metastore
-                    .catalogs
-                    .load_database(&self.database)
-                    .await?,
-            ),
+            Arc::new(self.metastore.build_catalog(&self.database).await?),
         );
 
         // Register all functions in the database
         self.metastore
-            .functions
-            .list(&self.database)
+            .build_functions(&self.database)
             .await?
             .iter()
             .try_for_each(|f| self.register_function(&f.name, &f.details))
