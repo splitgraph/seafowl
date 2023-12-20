@@ -160,7 +160,7 @@ pub async fn uncached_read_write_query(
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
     if database_name != context.database {
-        context = context.scope_to_database(database_name).await?;
+        context = context.scope_to_database(database_name);
     }
 
     let statements = context.parse_query(&query).await?;
@@ -325,7 +325,7 @@ pub async fn cached_read_query(
     // If a specific DB name was used as a parameter in the route, scope the context to it,
     // effectively making it the default DB for the duration of the session.
     if database_name != context.database {
-        context = context.scope_to_database(database_name).await?;
+        context = context.scope_to_database(database_name);
     }
 
     // Plan the query
@@ -383,7 +383,7 @@ pub async fn upload(
     };
 
     if database_name != context.database {
-        context = context.scope_to_database(database_name.clone()).await?;
+        context = context.scope_to_database(database_name.clone());
     }
 
     let mut has_header = true;
@@ -661,10 +661,7 @@ pub mod tests {
                 .await
                 .unwrap();
 
-            context = context
-                .scope_to_database(db_name.to_string())
-                .await
-                .unwrap();
+            context = context.scope_to_database(db_name.to_string());
         }
 
         context
@@ -679,10 +676,7 @@ pub mod tests {
 
         if new_db.is_some() {
             // Re-scope to the original DB
-            return context
-                .scope_to_database(DEFAULT_DB.to_string())
-                .await
-                .unwrap();
+            return context.scope_to_database(DEFAULT_DB.to_string());
         }
 
         context
@@ -694,10 +688,7 @@ pub mod tests {
         let mut context = in_memory_context_with_single_table(new_db).await;
 
         if let Some(db_name) = new_db {
-            context = context
-                .scope_to_database(db_name.to_string())
-                .await
-                .unwrap();
+            context = context.scope_to_database(db_name.to_string());
         }
 
         context
@@ -707,10 +698,7 @@ pub mod tests {
 
         if new_db.is_some() {
             // Re-scope to the original DB
-            return context
-                .scope_to_database(DEFAULT_DB.to_string())
-                .await
-                .unwrap();
+            return context.scope_to_database(DEFAULT_DB.to_string());
         }
 
         context

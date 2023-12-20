@@ -113,10 +113,7 @@ async fn test_upload_base(
 
     // Verify the newly created table contents
     if let Some(db_name) = db_prefix {
-        context = context
-            .scope_to_database(db_name.to_string())
-            .await
-            .unwrap();
+        context = context.scope_to_database(db_name.to_string());
     }
     let plan = context
         .plan_query(format!("SELECT * FROM test_upload.{table_name}").as_str())

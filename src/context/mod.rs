@@ -30,7 +30,7 @@ pub struct SeafowlContext {
 
 impl SeafowlContext {
     // Create a new `SeafowlContext` with a new inner context scoped to a different default DB
-    pub async fn scope_to_database(&self, name: String) -> Result<Arc<SeafowlContext>> {
+    pub fn scope_to_database(&self, name: String) -> Arc<SeafowlContext> {
         // Swap the default catalog in the new internal context's session config
         let session_config = self
             .inner()
@@ -40,13 +40,13 @@ impl SeafowlContext {
         let state =
             build_state_with_table_factories(session_config, self.inner().runtime_env());
 
-        Ok(Arc::from(SeafowlContext {
+        Arc::from(SeafowlContext {
             inner: SessionContext::new_with_state(state),
             metastore: self.metastore.clone(),
             internal_object_store: self.internal_object_store.clone(),
             database: name,
             max_partition_size: self.max_partition_size,
-        }))
+        })
     }
 
     pub fn inner(&self) -> &SessionContext {
@@ -221,10 +221,7 @@ pub mod test_utils {
         // place on another node
         context.metastore.catalogs.create("testdb").await.unwrap();
 
-        let context = context
-            .scope_to_database("testdb".to_string())
-            .await
-            .expect("'testdb' should exist");
+        let context = context.scope_to_database("testdb".to_string());
 
         // Create new non-default collection
         context.plan_query("CREATE SCHEMA testcol").await.unwrap();
