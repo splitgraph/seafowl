@@ -441,15 +441,17 @@ impl CatalogStore for RepositoryStore {
     }
 
     async fn get(&self, name: &str) -> Result<DatabaseRecord> {
-        match self.repository.get_database(name).await {
-            Ok(database) => Ok(database),
-            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => {
-                Err(Error::CatalogDoesNotExist {
-                    name: name.to_string(),
-                })
-            }
-            Err(e) => Err(e.into()),
-        }
+        self.repository
+            .get_database(name)
+            .await
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::CatalogDoesNotExist {
+                        name: name.to_string(),
+                    }
+                }
+                e => e.into(),
+            })
     }
 
     async fn delete(&self, name: &str) -> Result<()> {
@@ -511,19 +513,17 @@ impl SchemaStore for RepositoryStore {
             return Err(Error::UsedStagingSchema);
         }
 
-        match self
-            .repository
+        self.repository
             .get_collection(catalog_name, schema_name)
             .await
-        {
-            Ok(schema) => Ok(schema),
-            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => {
-                Err(Error::SchemaDoesNotExist {
-                    name: schema_name.to_string(),
-                })
-            }
-            Err(e) => Err(e.into()),
-        }
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::SchemaDoesNotExist {
+                        name: schema_name.to_string(),
+                    }
+                }
+                e => e.into(),
+            })
     }
 
     async fn delete(&self, catalog_name: &str, schema_name: &str) -> Result<()> {
@@ -577,19 +577,17 @@ impl TableStore for RepositoryStore {
         schema_name: &str,
         table_name: &str,
     ) -> Result<TableRecord> {
-        match self
-            .repository
+        self.repository
             .get_table(catalog_name, schema_name, table_name)
             .await
-        {
-            Ok(table) => Ok(table),
-            Err(RepositoryError::SqlxError(sqlx::error::Error::RowNotFound)) => {
-                Err(Error::TableDoesNotExist {
-                    name: table_name.to_string(),
-                })
-            }
-            Err(e) => Err(e.into()),
-        }
+            .map_err(|e| match e {
+                RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
+                    Error::TableDoesNotExist {
+                        name: table_name.to_string(),
+                    }
+                }
+                e => e.into(),
+            })
     }
 
     async fn create_new_version(
@@ -635,10 +633,15 @@ impl TableStore for RepositoryStore {
         old_catalog_name: &str,
         old_schema_name: &str,
         old_table_name: &str,
-        _new_catalog_name: &str, // For now we don't support moving across catalogs
+        new_catalog_name: &str,
         new_schema_name: &str,
         new_table_name: &str,
     ) -> Result<()> {
+        assert_eq!(
+            old_catalog_name, new_catalog_name,
+            "Moving across catalogs not yet supported"
+        );
+
         let table =
             TableStore::get(self, old_catalog_name, old_schema_name, old_table_name)
                 .await?;
