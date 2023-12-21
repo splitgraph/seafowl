@@ -21,13 +21,13 @@ use deltalake::DeltaTable;
 use log::warn;
 use parking_lot::RwLock;
 
-use crate::data_types::FunctionId;
+use crate::repository::interface::FunctionId;
 use crate::system_tables::{SystemSchemaProvider, SYSTEM_SCHEMA};
 use crate::{catalog::STAGING_SCHEMA, wasm_udf::data_types::CreateFunctionDetails};
 
 pub struct SeafowlDatabase {
     pub name: Arc<str>,
-    pub collections: HashMap<Arc<str>, Arc<SeafowlCollection>>,
+    pub schemas: HashMap<Arc<str>, Arc<SeafowlSchema>>,
     pub staging_schema: Arc<MemorySchemaProvider>,
     pub system_schema: Arc<SystemSchemaProvider>,
 }
@@ -38,7 +38,7 @@ impl CatalogProvider for SeafowlDatabase {
     }
 
     fn schema_names(&self) -> Vec<String> {
-        self.collections
+        self.schemas
             .keys()
             .map(|s| s.to_string())
             .chain([STAGING_SCHEMA.to_string(), SYSTEM_SCHEMA.to_string()])
@@ -51,19 +51,19 @@ impl CatalogProvider for SeafowlDatabase {
         } else if name == SYSTEM_SCHEMA {
             Some(self.system_schema.clone())
         } else {
-            self.collections.get(name).map(|c| Arc::clone(c) as _)
+            self.schemas.get(name).map(|c| Arc::clone(c) as _)
         }
     }
 }
 
-pub struct SeafowlCollection {
+pub struct SeafowlSchema {
     pub name: Arc<str>,
     // TODO: consider using DashMap instead of RwLock<HashMap<_>>: https://github.com/xacrimon/conc-map-bench
     pub tables: RwLock<HashMap<Arc<str>, Arc<dyn TableProvider>>>,
 }
 
 #[async_trait]
-impl SchemaProvider for SeafowlCollection {
+impl SchemaProvider for SeafowlSchema {
     fn as_any(&self) -> &dyn Any {
         self
     }

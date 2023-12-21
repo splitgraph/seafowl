@@ -1,7 +1,7 @@
 //! Mechanism for creating virtual Seafowl system tables, inspired by influxdb_iox system tables
 //! and datafusion's information_schema.
 
-use crate::catalog::TableCatalog;
+use crate::catalog::TableStore;
 use crate::repository::interface::DroppedTablesResult;
 use arrow::array::{Int64Builder, StringBuilder, StructBuilder, TimestampSecondBuilder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
@@ -24,11 +24,11 @@ const DROPPED_TABLES: &str = "dropped_tables";
 
 pub struct SystemSchemaProvider {
     database: Arc<str>,
-    table_catalog: Arc<dyn TableCatalog>,
+    table_catalog: Arc<dyn TableStore>,
 }
 
 impl SystemSchemaProvider {
-    pub fn new(database: Arc<str>, table_catalog: Arc<dyn TableCatalog>) -> Self {
+    pub fn new(database: Arc<str>, table_catalog: Arc<dyn TableStore>) -> Self {
         Self {
             database,
             table_catalog,
@@ -131,13 +131,13 @@ where
 struct TableVersionsTable {
     database: Arc<str>,
     schema: SchemaRef,
-    table_catalog: Arc<dyn TableCatalog>,
+    table_catalog: Arc<dyn TableStore>,
 }
 
 impl TableVersionsTable {
-    fn new(database: Arc<str>, table_catalog: Arc<dyn TableCatalog>) -> Self {
+    fn new(database: Arc<str>, table_catalog: Arc<dyn TableStore>) -> Self {
         Self {
-            // This is dictated by the output of `get_all_table_versions`, except that we omit the
+            // This is dictated by the output of `get_all_versions`, except that we omit the
             // database_name field, since we scope down to the database at hand.
             database,
             schema: Arc::new(Schema::new(vec![
@@ -165,7 +165,7 @@ impl SeafowlSystemTable for TableVersionsTable {
     async fn load_record_batch(&self) -> Result<RecordBatch> {
         let table_versions = self
             .table_catalog
-            .get_all_table_versions(&self.database, None)
+            .get_all_versions(&self.database, None)
             .await?;
 
         let mut builder = StructBuilder::from_fields(
@@ -210,11 +210,11 @@ impl SeafowlSystemTable for TableVersionsTable {
 struct DroppedTablesTable {
     database: Arc<str>,
     schema: SchemaRef,
-    table_catalog: Arc<dyn TableCatalog>,
+    table_catalog: Arc<dyn TableStore>,
 }
 
 impl DroppedTablesTable {
-    fn new(database: Arc<str>, table_catalog: Arc<dyn TableCatalog>) -> Self {
+    fn new(database: Arc<str>, table_catalog: Arc<dyn TableStore>) -> Self {
         Self {
             // This is dictated by the output of `get_dropped_tables`, except that we omit the
             // database_name field, since we scope down to the database at hand.

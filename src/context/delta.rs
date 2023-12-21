@@ -5,7 +5,7 @@ use crate::frontend::http::tests::deterministic_uuid;
 use crate::object_store::wrapped::InternalObjectStore;
 
 use bytes::BytesMut;
-use datafusion::error::{DataFusionError as Error, Result};
+use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
 use datafusion::parquet::basic::{Compression, ZstdLevel};
 use datafusion::{
@@ -289,13 +289,11 @@ impl SeafowlContext {
         let schema_name = resolved_ref.schema.clone();
         let table_name = resolved_ref.table.clone();
 
-        let collection_id = self
-            .table_catalog
-            .get_collection_id_by_name(&self.database, &schema_name)
-            .await?
-            .ok_or_else(|| {
-                Error::Plan(format!("Schema {schema_name:?} does not exist!"))
-            })?;
+        let _ = self
+            .metastore
+            .schemas
+            .get(&self.database, &schema_name)
+            .await?;
 
         // NB: there's also a uuid generated below for table's `DeltaTableMetaData::id`, so it would
         // be nice if those two could match somehow
@@ -350,9 +348,11 @@ impl SeafowlContext {
         // tables and their schemas in bulk to satisfy information_schema queries.
         // Another is to keep track of table uuid's, which are used to construct the table uri.
         // We may look into doing this via delta-rs somehow eventually.
-        self.table_catalog
-            .create_table(
-                collection_id,
+        self.metastore
+            .tables
+            .create(
+                &self.database,
+                &schema_name,
                 &table_name,
                 TableProvider::schema(&table).as_ref(),
                 table_uuid,
@@ -407,8 +407,9 @@ impl SeafowlContext {
         // TODO: if `DeltaTable::get_version_timestamp` was globally public we could also pass the
         // exact version timestamp, instead of creating one automatically in our own catalog (which
         // could lead to minor timestamp differences).
-        self.table_catalog
-            .create_new_table_version(table_uuid, version)
+        self.metastore
+            .tables
+            .create_new_version(table_uuid, version)
             .await?;
 
         debug!("Written table version {version} for {table}");

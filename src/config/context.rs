@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    catalog::{
-        DefaultCatalog, FunctionCatalog, TableCatalog, DEFAULT_DB, DEFAULT_SCHEMA,
-    },
+    catalog::{DEFAULT_DB, DEFAULT_SCHEMA},
     context::SeafowlContext,
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
@@ -19,6 +17,7 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
 
+use crate::catalog::{Error, Metastore};
 use crate::object_store::http::add_http_object_store;
 use crate::object_store::wrapped::InternalObjectStore;
 #[cfg(feature = "remote-tables")]
@@ -26,14 +25,13 @@ use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
 use object_store::gcp::GoogleCloudStorageBuilder;
-use parking_lot::lock_api::RwLock;
 
 use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
 
-async fn build_catalog(
+async fn build_metastore(
     config: &schema::SeafowlConfig,
     object_store: Arc<InternalObjectStore>,
-) -> (Arc<dyn TableCatalog>, Arc<dyn FunctionCatalog>) {
+) -> Metastore {
     // Initialize the repository
     let repository: Arc<dyn Repository> = match &config.catalog {
         #[cfg(feature = "catalog-postgres")]
@@ -62,9 +60,7 @@ async fn build_catalog(
         ),
     };
 
-    let catalog = Arc::new(DefaultCatalog::new(repository, object_store));
-
-    (catalog.clone(), catalog)
+    Metastore::new_from_repository(repository, object_store)
 }
 
 pub fn build_object_store(
@@ -179,23 +175,20 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
     // Register the HTTP object store for external tables
     add_http_object_store(&context, &cfg.misc.ssl_cert_file);
 
-    let (tables, functions) = build_catalog(cfg, internal_object_store.clone()).await;
+    let metastore = build_metastore(cfg, internal_object_store.clone()).await;
 
     // Create default DB/collection
-    let default_db = match tables.get_database_id_by_name(DEFAULT_DB).await? {
-        Some(id) => id,
-        None => tables.create_database(DEFAULT_DB).await.unwrap(),
-    };
-
-    match tables
-        .get_collection_id_by_name(DEFAULT_DB, DEFAULT_SCHEMA)
-        .await?
+    if let Err(Error::CatalogDoesNotExist { .. }) =
+        metastore.catalogs.get(DEFAULT_DB).await
     {
-        Some(id) => id,
-        None => tables.create_collection(default_db, DEFAULT_SCHEMA).await?,
-    };
+        metastore.catalogs.create(DEFAULT_DB).await.unwrap();
+    }
 
-    let all_database_ids = tables.load_database_ids().await?;
+    if let Err(Error::SchemaDoesNotExist { .. }) =
+        metastore.schemas.get(DEFAULT_DB, DEFAULT_SCHEMA).await
+    {
+        metastore.schemas.create(DEFAULT_DB, DEFAULT_SCHEMA).await?;
+    }
 
     // Convergence doesn't support connecting to different DB names. We are supposed
     // to do one context per query (as we need to load the schema before executing every
@@ -205,12 +198,9 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
 
     Ok(SeafowlContext {
         inner: context,
-        table_catalog: tables,
-        function_catalog: functions,
+        metastore: Arc::new(metastore),
         internal_object_store,
         database: DEFAULT_DB.to_string(),
-        database_id: default_db,
-        all_database_ids: Arc::from(RwLock::new(all_database_ids)),
         max_partition_size: cfg.misc.max_partition_size,
     })
 }

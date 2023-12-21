@@ -46,7 +46,8 @@ pub async fn run_one_off_command<W>(
 // Physically delete dropped tables for a given context
 pub async fn gc_databases(context: &SeafowlContext, database_name: Option<String>) {
     let mut dropped_tables = context
-        .table_catalog
+        .metastore
+        .tables
         .get_dropped_tables(database_name)
         .await
         .unwrap_or_else(|err| {
@@ -82,7 +83,8 @@ pub async fn gc_databases(context: &SeafowlContext, database_name: Option<String
             }
 
             context
-                .table_catalog
+                .metastore
+                .tables
                 .update_dropped_table(dt.uuid, dt.deletion_status)
                 .await
                 .unwrap_or_else(|err| {
@@ -94,7 +96,8 @@ pub async fn gc_databases(context: &SeafowlContext, database_name: Option<String
         } else {
             // Successfully cleaned up the table's directory in the object store
             context
-                .table_catalog
+                .metastore
+                .tables
                 .delete_dropped_table(dt.uuid)
                 .await
                 .unwrap_or_else(|err| {

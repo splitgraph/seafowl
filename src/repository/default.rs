@@ -65,21 +65,9 @@ impl Repository for $repo {
             .expect("error running migrations");
     }
 
-    async fn get_collections_in_database(
+    async fn list_collections(
         &self,
-        database_id: DatabaseId,
-    ) -> Result<Vec<String>, Error> {
-        let names = sqlx::query("SELECT name FROM collection WHERE database_id = $1")
-            .bind(database_id)
-            .fetch(&self.executor)
-            .map_ok(|row| row.get("name"))
-            .try_collect()
-            .await.map_err($repo::interpret_error)?;
-        Ok(names)
-    }
-    async fn get_all_columns_in_database(
-        &self,
-        database_id: DatabaseId,
+        database_name: &str,
     ) -> Result<Vec<AllDatabaseColumnsResult>, Error> {
         let mut builder: QueryBuilder<_> = QueryBuilder::new($repo::QUERIES.latest_table_versions);
 
@@ -98,8 +86,8 @@ impl Repository for $repo {
         LEFT JOIN "table" ON collection.id = "table".collection_id
         LEFT JOIN desired_table_versions ON "table".id = desired_table_versions.table_id
         LEFT JOIN table_column ON table_column.table_version_id = desired_table_versions.id
-        WHERE database.id = "#);
-        builder.push_bind(database_id);
+        WHERE database.name = "#);
+        builder.push_bind(database_name);
 
         builder.push(r#"
         ORDER BY collection_name, table_name, table_version_id, column_name
@@ -125,14 +113,26 @@ impl Repository for $repo {
         Ok(id)
     }
 
-    async fn get_collection_id_by_name(
+    async fn get_database(
+        &self,
+        name: &str,
+    ) -> Result<DatabaseRecord, Error> {
+        let database = sqlx::query_as(r#"SELECT id, name FROM database WHERE database.name = $1"#)
+            .bind(name)
+            .fetch_one(&self.executor)
+            .await.map_err($repo::interpret_error)?;
+
+        Ok(database)
+    }
+
+    async fn get_collection(
         &self,
         database_name: &str,
         collection_name: &str,
-    ) -> Result<CollectionId, Error> {
-        let id = sqlx::query(
+    ) -> Result<CollectionRecord, Error> {
+        let collection = sqlx::query_as(
             r#"
-        SELECT collection.id
+        SELECT collection.id, database.id AS database_id, collection.name
         FROM collection JOIN database ON collection.database_id = database.id
         WHERE database.name = $1 AND collection.name = $2
         "#,
@@ -140,34 +140,20 @@ impl Repository for $repo {
         .bind(database_name)
         .bind(collection_name)
         .fetch_one(&self.executor)
-        .await.map_err($repo::interpret_error)?
-        .try_get("id").map_err($repo::interpret_error)?;
+        .await.map_err($repo::interpret_error)?;
 
-        Ok(id)
+        Ok(collection)
     }
 
-    async fn get_database_id_by_name(
-        &self,
-        database_name: &str,
-    ) -> Result<DatabaseId, Error> {
-        let id = sqlx::query(r#"SELECT id FROM database WHERE database.name = $1"#)
-            .bind(database_name)
-            .fetch_one(&self.executor)
-            .await.map_err($repo::interpret_error)?
-            .try_get("id").map_err($repo::interpret_error)?;
-
-        Ok(id)
-    }
-
-    async fn get_table_id_by_name(
+    async fn get_table(
         &self,
         database_name: &str,
         collection_name: &str,
         table_name: &str,
-    ) -> Result<TableId, Error> {
-        let id = sqlx::query(
+    ) -> Result<TableRecord, Error> {
+        let table = sqlx::query_as(
             r#"
-        SELECT "table".id
+        SELECT "table".id, collection.id as collection_id, "table".name
         FROM "table"
         JOIN collection ON "table".collection_id = collection.id
         JOIN database ON collection.database_id = database.id
@@ -178,21 +164,9 @@ impl Repository for $repo {
         .bind(collection_name)
         .bind(table_name)
         .fetch_one(&self.executor)
-        .await.map_err($repo::interpret_error)?
-        .try_get("id").map_err($repo::interpret_error)?;
+        .await.map_err($repo::interpret_error)?;
 
-        Ok(id)
-    }
-
-    async fn get_all_database_ids(&self) -> Result<Vec<(String, DatabaseId)>> {
-        let all_db_ids = sqlx::query(r#"SELECT name, id FROM database"#)
-            .fetch_all(&self.executor)
-            .await.map_err($repo::interpret_error)?
-            .iter()
-            .map(|row| (row.get("name"), row.get("id")))
-            .collect();
-
-        Ok(all_db_ids)
+        Ok(table)
     }
 
     async fn create_collection(
@@ -261,7 +235,7 @@ impl Repository for $repo {
         Ok((new_table_id, new_version_id))
     }
 
-    async fn delete_old_table_versions(
+    async fn delete_old_versions(
         &self,
         table_id: TableId,
     ) -> Result<u64, Error> {
@@ -277,7 +251,7 @@ impl Repository for $repo {
         Ok(delete_result.rows_affected())
     }
 
-    async fn create_new_table_version(
+    async fn create_new_version(
         &self,
         uuid: Uuid,
         version: i64,
@@ -315,7 +289,7 @@ impl Repository for $repo {
         Ok(new_version_id)
     }
 
-    async fn get_all_table_versions(
+    async fn get_all_versions(
         &self,
         database_name: &str,
         table_names: Option<Vec<String>>,
@@ -361,7 +335,7 @@ impl Repository for $repo {
         Ok(table_versions)
     }
 
-    async fn move_table(
+    async fn rename_table(
         &self,
         table_id: TableId,
         new_table_name: &str,
@@ -436,6 +410,7 @@ impl Repository for $repo {
             data,
             volatility
         FROM function
+
         WHERE database_id = $1;
         "#)
         .bind(database_id)
@@ -497,7 +472,7 @@ impl Repository for $repo {
         Ok(())
     }
 
-    async fn drop_database(&self, database_id: DatabaseId) -> Result<(), Error> {
+    async fn delete_database(&self, database_id: DatabaseId) -> Result<(), Error> {
         self.insert_dropped_tables(None, None, Some(database_id)).await?;
 
         sqlx::query("DELETE FROM database WHERE id = $1 RETURNING id")

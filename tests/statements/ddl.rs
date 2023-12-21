@@ -205,7 +205,7 @@ async fn test_create_table_move_and_drop(
         .await
         .unwrap_err()
         .to_string()
-        .contains("Schema \"new_./-~:schema\" does not exist!"));
+        .contains("Schema \"new_./-~:schema\" doesn't exist"));
 
     // Create a schema and move the table to it
     context
