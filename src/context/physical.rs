@@ -520,6 +520,10 @@ impl SeafowlContext {
                     return Ok(make_dummy_exec());
                 }
 
+                self.delete_delta_table(name)
+                    .await
+                    .unwrap_or_else(|e| info!("Failed to cleanup table {name}: {e}"));
+
                 self.metastore
                     .tables
                     .delete(
