@@ -546,7 +546,7 @@ async fn test_update_statement_errors() {
 }
 
 #[tokio::test]
-async fn test_copy_to_statement() -> Result<(), DataFusionError> {
+async fn test_copy_to_statement() -> Result<()> {
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
     create_table_and_insert(&context, "test_table").await;
 

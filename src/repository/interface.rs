@@ -189,18 +189,11 @@ pub trait Repository: Send + Sync + Debug {
         func_names: &[String],
     ) -> Result<(), Error>;
 
-    async fn drop_table(&self, table_id: TableId) -> Result<(), Error>;
+    async fn delete_table(&self, table_id: TableId) -> Result<(), Error>;
 
-    async fn drop_collection(&self, collection_id: CollectionId) -> Result<(), Error>;
+    async fn delete_collection(&self, collection_id: CollectionId) -> Result<(), Error>;
 
     async fn delete_database(&self, database_id: DatabaseId) -> Result<(), Error>;
-
-    async fn insert_dropped_tables(
-        &self,
-        maybe_table_id: Option<TableId>,
-        maybe_collection_id: Option<CollectionId>,
-        maybe_database_id: Option<DatabaseId>,
-    ) -> Result<(), Error>;
 
     async fn get_dropped_tables(
         &self,

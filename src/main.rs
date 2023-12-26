@@ -203,6 +203,9 @@ async fn main() {
 
     let context = Arc::new(build_context(&config).await.unwrap());
 
+    // Temporary, remove once migrations drop the `dropped_table` catalog table
+    gc_databases(context.as_ref(), None).await;
+
     if let Some(one_off_cmd) = args.one_off {
         run_one_off_command(context, &one_off_cmd, io::stdout()).await;
         return;
