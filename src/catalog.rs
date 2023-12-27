@@ -530,7 +530,7 @@ impl SchemaStore for RepositoryStore {
         let schema = SchemaStore::get(self, catalog_name, schema_name).await?;
 
         self.repository
-            .drop_collection(schema.id)
+            .delete_collection(schema.id)
             .await
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {
@@ -686,7 +686,7 @@ impl TableStore for RepositoryStore {
         let table = TableStore::get(self, catalog_name, schema_name, table_name).await?;
 
         self.repository
-            .drop_table(table.id)
+            .delete_table(table.id)
             .await
             .map_err(|e| match e {
                 RepositoryError::SqlxError(sqlx::error::Error::RowNotFound) => {

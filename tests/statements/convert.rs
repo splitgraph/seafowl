@@ -1,7 +1,7 @@
 use crate::statements::*;
 
 #[tokio::test]
-async fn test_convert_from_flat_parquet_table() -> Result<(), DataFusionError> {
+async fn test_convert_from_flat_parquet_table() -> Result<()> {
     let (context, maybe_test_dir) = make_context_with_pg(ObjectStoreType::Local).await;
 
     // Prepare a flat Parquet table

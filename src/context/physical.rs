@@ -7,7 +7,7 @@ use crate::context::delta::plan_to_object_store;
 use crate::context::SeafowlContext;
 use crate::delta_rs::backports::parquet_scan_from_actions;
 use crate::nodes::{
-    ConvertTable, CreateFunction, CreateTable, DropFunction, DropSchema, RenameTable,
+    ConvertTable, CreateFunction, CreateTable, DropFunction, RenameTable,
     SeafowlExtensionNode, Vacuum,
 };
 use crate::object_store::http::try_prepare_http_url;
@@ -39,11 +39,12 @@ use datafusion::{
     physical_plan::{ExecutionPlan, SendableRecordBatchStream},
     sql::TableReference,
 };
+use datafusion_common::{ResolvedTableReference, SchemaReference};
 use datafusion_expr::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     DropTable, Extension, LogicalPlan, Projection,
 };
-use datafusion_expr::{DdlStatement, DmlStatement, Filter, WriteOp};
+use datafusion_expr::{DdlStatement, DmlStatement, DropCatalogSchema, Filter, WriteOp};
 use deltalake::kernel::{Action, Add, Remove};
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
@@ -520,6 +521,10 @@ impl SeafowlContext {
                     return Ok(make_dummy_exec());
                 }
 
+                self.delete_delta_table(name)
+                    .await
+                    .unwrap_or_else(|e| info!("Failed to cleanup table {name}: {e}"));
+
                 self.metastore
                     .tables
                     .delete(
@@ -528,6 +533,61 @@ impl SeafowlContext {
                         &resolved_ref.table,
                     )
                     .await?;
+                Ok(make_dummy_exec())
+            }
+            LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(DropCatalogSchema {
+                name,
+                if_exists,
+                ..
+            })) => {
+                let schema_name = name.schema_name();
+
+                if let SchemaReference::Full { catalog, .. } = name
+                    && catalog != &self.database
+                {
+                    return Err(DataFusionError::Execution(
+                        "Cannot delete schemas in other catalogs".to_string(),
+                    ));
+                }
+
+                let schema = match self
+                    .inner
+                    .catalog(&self.database)
+                    .expect("Current catalog exists")
+                    .schema(schema_name)
+                {
+                    None => {
+                        if *if_exists {
+                            return Ok(make_dummy_exec());
+                        } else {
+                            return Err(DataFusionError::Execution(format!(
+                                "Schema {schema_name} does not exist"
+                            )));
+                        }
+                    }
+                    Some(schema) => schema,
+                };
+
+                // Delete each table sequentially
+                for table_name in schema.table_names() {
+                    let table_ref = ResolvedTableReference {
+                        catalog: Cow::from(&self.database),
+                        schema: Cow::from(schema_name),
+                        table: Cow::from(table_name),
+                    };
+                    self.delete_delta_table(table_ref.clone()).await?;
+
+                    self.metastore
+                        .tables
+                        .delete(&table_ref.catalog, &table_ref.schema, &table_ref.table)
+                        .await?;
+                }
+
+                self.metastore
+                    .schemas
+                    .delete(&self.database, schema_name)
+                    .await?;
+
                 Ok(make_dummy_exec())
             }
             LogicalPlan::Ddl(DdlStatement::CreateView(_)) => Err(Error::Plan(
@@ -625,11 +685,6 @@ impl SeafowlContext {
                                     &resolved_new_ref.table,
                                 )
                                 .await?;
-                            Ok(make_dummy_exec())
-                        }
-                        SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
-                            self.metastore.schemas.delete(&self.database, name).await?;
-
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::Vacuum(Vacuum {
@@ -827,7 +882,7 @@ impl SeafowlContext {
         let plan = source.scan(&self.inner.state(), None, &[], None).await?;
 
         let table_ref = TableReference::Full {
-            catalog: Cow::from(self.database.clone()),
+            catalog: Cow::from(&self.database),
             schema: Cow::from(schema_name),
             table: Cow::from(table_name),
         };
@@ -867,11 +922,13 @@ mod tests {
             .unwrap();
         let results = context.collect(plan).await.unwrap();
 
-        let expected = ["+--------------+------------+--------------------------------------+-----------------+",
-            "| table_schema | table_name | uuid                                 | deletion_status |",
-            "+--------------+------------+--------------------------------------+-----------------+",
-            "| public       | test_table | 01020304-0506-4708-890a-0b0c0d0e0f10 | PENDING         |",
-            "+--------------+------------+--------------------------------------+-----------------+"];
+        // We don't actually expect anything now that we're doing eager deletion.
+        let expected = [
+            "+--------------+------------+------+-----------------+",
+            "| table_schema | table_name | uuid | deletion_status |",
+            "+--------------+------------+------+-----------------+",
+            "+--------------+------------+------+-----------------+",
+        ];
         assert_batches_eq!(expected, &results);
 
         Ok(())

@@ -291,76 +291,104 @@ async fn test_create_table_drop_schema(
         ObjectStoreType::S3(Some("/path/to/folder"))
     )]
     object_store_type: ObjectStoreType,
-) {
+) -> Result<()> {
     let (context, _temp_dir) = make_context_with_pg(object_store_type).await;
 
-    for table_name in ["test_table_1", "test_table_2"] {
+    // Create a non-default schema
+    context.plan_query("CREATE SCHEMA new_schema").await?;
+
+    // Create a couple of tables in the default and the new schema
+    for table_name in ["table_1", "table_2", "table_3"] {
         create_table_and_insert(&context, table_name).await;
+        create_table_and_insert(&context, &format!("new_schema.{table_name}")).await;
     }
 
-    // Create a schema and move the table to it
-    context
-        .collect(
-            context
-                .plan_query("CREATE SCHEMA new_schema")
-                .await
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    context
-        .collect(
-            context
-                .plan_query("ALTER TABLE test_table_2 RENAME TO new_schema.test_table_2")
-                .await
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
     let results = list_tables_query(&context).await;
-
     let expected = [
-        "+--------------------+--------------+",
-        "| table_schema       | table_name   |",
-        "+--------------------+--------------+",
-        "| information_schema | columns      |",
-        "| information_schema | df_settings  |",
-        "| information_schema | tables       |",
-        "| information_schema | views        |",
-        "| new_schema         | test_table_2 |",
-        "| public             | test_table_1 |",
-        "+--------------------+--------------+",
+        "+--------------------+-------------+",
+        "| table_schema       | table_name  |",
+        "+--------------------+-------------+",
+        "| information_schema | columns     |",
+        "| information_schema | df_settings |",
+        "| information_schema | tables      |",
+        "| information_schema | views       |",
+        "| new_schema         | table_1     |",
+        "| new_schema         | table_2     |",
+        "| new_schema         | table_3     |",
+        "| public             | table_1     |",
+        "| public             | table_2     |",
+        "| public             | table_3     |",
+        "+--------------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    // Collect UUIDs of the tables in the public schema
+    let table_1_uuid = context.get_table_uuid("table_1").await?;
+    let table_2_uuid = context.get_table_uuid("table_2").await?;
+    let table_3_uuid = context.get_table_uuid("table_3").await?;
 
     // DROP the public schema for the fun of it
     context
-        .collect(context.plan_query("DROP SCHEMA public").await.unwrap())
-        .await
-        .unwrap();
+        .collect(context.plan_query("DROP SCHEMA public").await?)
+        .await?;
 
     let results = list_tables_query(&context).await;
 
     let expected = [
-        "+--------------------+--------------+",
-        "| table_schema       | table_name   |",
-        "+--------------------+--------------+",
-        "| information_schema | columns      |",
-        "| information_schema | df_settings  |",
-        "| information_schema | tables       |",
-        "| information_schema | views        |",
-        "| new_schema         | test_table_2 |",
-        "+--------------------+--------------+",
+        "+--------------------+-------------+",
+        "| table_schema       | table_name  |",
+        "+--------------------+-------------+",
+        "| information_schema | columns     |",
+        "| information_schema | df_settings |",
+        "| information_schema | tables      |",
+        "| information_schema | views       |",
+        "| new_schema         | table_1     |",
+        "| new_schema         | table_2     |",
+        "| new_schema         | table_3     |",
+        "+--------------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
 
+    // Ensure the objects are dropped as well
+    for table_uuid in [table_1_uuid, table_2_uuid, table_3_uuid] {
+        testutils::assert_uploaded_objects(
+            context
+                .internal_object_store
+                .get_log_store(table_uuid)
+                .object_store(),
+            vec![],
+        )
+        .await;
+    }
+
+    // Assert that the objects in the new schema are left intact
+    for table_name in [
+        "new_schema.table_1",
+        "new_schema.table_2",
+        "new_schema.table_3",
+    ] {
+        let mut table = context.try_get_delta_table(table_name).await?;
+        table.load().await?;
+        let table_uuid = context.get_table_uuid(table_name).await?;
+
+        testutils::assert_uploaded_objects(
+            context
+                .internal_object_store
+                .get_log_store(table_uuid)
+                .object_store(),
+            vec![
+                Path::from("_delta_log/00000000000000000000.json"),
+                Path::from("_delta_log/00000000000000000001.json"),
+                table.get_files()[0].clone(),
+            ],
+        )
+        .await;
+    }
+
     // DROP the new_schema
     context
-        .collect(context.plan_query("DROP SCHEMA new_schema").await.unwrap())
-        .await
-        .unwrap();
+        .collect(context.plan_query("DROP SCHEMA new_schema").await?)
+        .await?;
 
     let results = list_tables_query(&context).await;
 
@@ -376,56 +404,28 @@ async fn test_create_table_drop_schema(
     ];
     assert_batches_eq!(expected, &results);
 
-    // Check tables from the dropped schemas are pending for deletion
-    let plan = context
-        .plan_query(
-            "SELECT table_schema, table_name, deletion_status FROM system.dropped_tables",
-        )
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
-
-    let expected = [
-        "+--------------+--------------+-----------------+",
-        "| table_schema | table_name   | deletion_status |",
-        "+--------------+--------------+-----------------+",
-        "| public       | test_table_1 | PENDING         |",
-        "| new_schema   | test_table_2 | PENDING         |",
-        "+--------------+--------------+-----------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
     // Recreate the public schema and add a table to it
+    context.plan_query("CREATE SCHEMA public").await?;
     context
-        .collect(context.plan_query("CREATE SCHEMA public").await.unwrap())
-        .await
-        .unwrap();
-
-    context
-        .collect(
-            context
-                .plan_query("CREATE TABLE test_table_1 (\"key\" INT)")
-                .await
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+        .plan_query("CREATE TABLE table_1 (\"key\" INT)")
+        .await?;
 
     let results = list_tables_query(&context).await;
 
     let expected = [
-        "+--------------------+--------------+",
-        "| table_schema       | table_name   |",
-        "+--------------------+--------------+",
-        "| information_schema | columns      |",
-        "| information_schema | df_settings  |",
-        "| information_schema | tables       |",
-        "| information_schema | views        |",
-        "| public             | test_table_1 |",
-        "+--------------------+--------------+",
+        "+--------------------+-------------+",
+        "| table_schema       | table_name  |",
+        "+--------------------+-------------+",
+        "| information_schema | columns     |",
+        "| information_schema | df_settings |",
+        "| information_schema | tables      |",
+        "| information_schema | views       |",
+        "| public             | table_1     |",
+        "+--------------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -463,13 +463,9 @@ async fn test_create_table_schema_already_exists() {
 #[tokio::test]
 async fn test_create_table_in_staging_schema() {
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
+
     context
-        .collect(
-            context
-                .plan_query("CREATE TABLE some_table(\"key\" INT)")
-                .await
-                .unwrap(),
-        )
+        .plan_query("CREATE TABLE some_table(\"key\" INT)")
         .await
         .unwrap();
 

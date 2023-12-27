@@ -60,14 +60,6 @@ pub struct RenameTable {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct DropSchema {
-    /// The schema to drop
-    pub name: String,
-    /// Dummy result schema for the plan (empty)
-    pub output_schema: DFSchemaRef,
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Vacuum {
     /// Denotes whether to vacuum dropped tables in a particular database
     pub database: Option<String>,
@@ -84,7 +76,6 @@ pub enum SeafowlExtensionNode {
     CreateFunction(CreateFunction),
     DropFunction(DropFunction),
     RenameTable(RenameTable),
-    DropSchema(DropSchema),
     Vacuum(Vacuum),
 }
 
@@ -129,9 +120,6 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::RenameTable(RenameTable { output_schema, .. }) => {
                 output_schema
             }
-            SeafowlExtensionNode::DropSchema(DropSchema { output_schema, .. }) => {
-                output_schema
-            }
             SeafowlExtensionNode::Vacuum(Vacuum { output_schema, .. }) => output_schema,
         }
     }
@@ -164,9 +152,6 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 old_name, new_name, ..
             }) => {
                 write!(f, "RenameTable: {} to {}", old_name, new_name)
-            }
-            SeafowlExtensionNode::DropSchema(DropSchema { name, .. }) => {
-                write!(f, "DropSchema: {name}")
             }
             SeafowlExtensionNode::Vacuum(Vacuum { database, .. }) => {
                 write!(

@@ -5,7 +5,7 @@ use crate::datafusion::utils::build_schema;
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     nodes::{
-        ConvertTable, CreateFunction, CreateTable, DropFunction, DropSchema, RenameTable,
+        ConvertTable, CreateFunction, CreateTable, DropFunction, RenameTable,
         SeafowlExtensionNode, Vacuum,
     },
     version::TableVersionProcessor,
@@ -128,19 +128,7 @@ impl SeafowlContext {
                     let plan = state.statement_to_plan(stmt).await?;
                     state.optimize(&plan)
                 }
-                Statement::Drop { object_type: ObjectType::Table, .. } => self.inner.state().statement_to_plan(stmt).await,
-                Statement::Drop { object_type: ObjectType::Schema,
-                    if_exists: _,
-                    names,
-                    cascade: _,
-                    purge: _, .. } => {
-                    let name = names.first().unwrap().to_string();
-
-                    Ok(LogicalPlan::Extension(Extension {
-                        node: Arc::new(SeafowlExtensionNode::DropSchema(DropSchema { name, output_schema: Arc::new(DFSchema::empty()) }))
-                    }))
-                },
-
+                Statement::Drop { object_type: ObjectType::Table | ObjectType::Schema, .. } => self.inner.state().statement_to_plan(stmt).await,
                 // CREATE TABLE (create empty table with columns)
                 Statement::CreateTable {
                     query: None,

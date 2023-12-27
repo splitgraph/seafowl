@@ -24,7 +24,7 @@ use deltalake::operations::{
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::writer::create_add;
 use deltalake::DeltaTable;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use log::{debug, info, warn};
 use object_store::path::Path;
 use std::collections::HashMap;
@@ -414,6 +414,25 @@ impl SeafowlContext {
 
         debug!("Written table version {version} for {table}");
         Ok(table)
+    }
+
+    // Cleanup the table objects in the storage
+    pub async fn delete_delta_table<'a>(
+        &self,
+        table_name: impl Into<TableReference<'a>>,
+    ) -> Result<()> {
+        let table = self.try_get_delta_table(table_name).await?;
+        let store = table.object_store();
+
+        // List all objects with the table prefix...
+        let objects = store.list(None).await?.map_ok(|m| m.location).boxed();
+
+        // ... and delete them in bulk (if applicable).
+        let _paths = store
+            .delete_stream(objects)
+            .try_collect::<Vec<Path>>()
+            .await?;
+        Ok(())
     }
 }
 
