@@ -361,6 +361,30 @@ async fn test_create_table_drop_schema(
         .await;
     }
 
+    // Assert that the objects in the new schema are left intact
+    for table_name in [
+        "new_schema.table_1",
+        "new_schema.table_2",
+        "new_schema.table_3",
+    ] {
+        let mut table = context.try_get_delta_table(table_name).await?;
+        table.load().await?;
+        let table_uuid = context.get_table_uuid(table_name).await?;
+
+        testutils::assert_uploaded_objects(
+            context
+                .internal_object_store
+                .get_log_store(table_uuid)
+                .object_store(),
+            vec![
+                Path::from("_delta_log/00000000000000000000.json"),
+                Path::from("_delta_log/00000000000000000001.json"),
+                table.get_files()[0].clone(),
+            ],
+        )
+        .await;
+    }
+
     // DROP the new_schema
     context
         .collect(context.plan_query("DROP SCHEMA new_schema").await?)
