@@ -2248,6 +2248,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "floc"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "flume"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5221,6 +5230,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-remote-tables",
  "deltalake",
+ "floc",
  "futures",
  "hex",
  "itertools 0.11.0",
@@ -6310,6 +6320,19 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "tonic-build"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d021fc044c18582b9a2408cd0dd05b1596e3ecdb5c4df822bb0183545683889"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "prost-build",
+ "quote",
+ "syn 2.0.39",
 ]
 
 [[package]]

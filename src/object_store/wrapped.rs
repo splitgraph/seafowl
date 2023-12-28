@@ -19,7 +19,6 @@ use std::path::Path as StdPath;
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
-use uuid::Uuid;
 
 /// Wrapper around the object_store crate that holds on to the original config
 /// in order to provide a more efficient "upload" for the local object store (since it's
@@ -82,7 +81,7 @@ impl InternalObjectStore {
 
     // Get the table prefix relative to the root of the internal object store.
     // This is either just a UUID, or potentially UUID prepended by some path.
-    pub fn table_prefix(&self, table_uuid: Uuid) -> Path {
+    pub fn table_prefix(&self, table_prefix: &str) -> Path {
         match self.config.clone() {
             schema::ObjectStore::S3(S3 {
                 prefix: Some(prefix),
@@ -91,8 +90,8 @@ impl InternalObjectStore {
             | schema::ObjectStore::GCS(GCS {
                 prefix: Some(prefix),
                 ..
-            }) => Path::from(format!("{prefix}/{table_uuid}")),
-            _ => Path::from(table_uuid.to_string()),
+            }) => Path::from(format!("{prefix}/{table_prefix}")),
+            _ => Path::from(table_prefix),
         }
     }
 
@@ -103,15 +102,15 @@ impl InternalObjectStore {
     // 2. We want to override `rename_if_not_exists` for AWS S3
     // This means we have 2 layers of indirection before we hit the "real" object store:
     // (Delta `LogStore` -> `PrefixStore` -> `InternalObjectStore` -> `inner`).
-    pub fn get_log_store(&self, table_uuid: Uuid) -> Arc<DefaultLogStore> {
-        let prefix = self.table_prefix(table_uuid);
+    pub fn get_log_store(&self, table_prefix: &str) -> Arc<DefaultLogStore> {
+        let prefix = self.table_prefix(table_prefix);
         let prefixed_store: PrefixStore<InternalObjectStore> =
             PrefixStore::new(self.clone(), prefix);
 
         Arc::from(DefaultLogStore::new(
             Arc::from(prefixed_store),
             LogStoreConfig {
-                location: self.root_uri.join(&table_uuid.to_string()).unwrap(),
+                location: self.root_uri.join(table_prefix).unwrap(),
                 options: Default::default(),
             },
         ))
@@ -291,23 +290,22 @@ impl ObjectStore for InternalObjectStore {
 mod tests {
     use crate::config::context::build_object_store;
     use crate::config::schema::{ObjectStore, S3};
-    use crate::frontend::http::tests::deterministic_uuid;
     use crate::object_store::wrapped::InternalObjectStore;
     use datafusion::common::Result;
     use deltalake::logstore::LogStore;
     use rstest::rstest;
 
     #[rstest]
-    #[case::bucket_root("test-bucket", None, "01020304-0506-4708-890a-0b0c0d0e0f10")]
+    #[case::bucket_root("test-bucket", None, "6bb9913e-0341-446d-bb58-b865803ce0ff")]
     #[case::path_no_delimiter(
         "test-bucket",
         Some("some/path/no/delimiter"),
-        "some/path/no/delimiter/01020304-0506-4708-890a-0b0c0d0e0f10"
+        "some/path/no/delimiter/6bb9913e-0341-446d-bb58-b865803ce0ff"
     )]
     #[case::path_with_delimiter(
         "test-bucket",
         Some("some/path/with/delimiter/"),
-        "some/path/with/delimiter/01020304-0506-4708-890a-0b0c0d0e0f10"
+        "some/path/with/delimiter/6bb9913e-0341-446d-bb58-b865803ce0ff"
     )]
     #[test]
     fn test_table_location_s3(
@@ -333,7 +331,7 @@ mod tests {
 
         let store = InternalObjectStore::new(inner_store, config);
 
-        let uuid = deterministic_uuid();
+        let uuid = "6bb9913e-0341-446d-bb58-b865803ce0ff";
         let prefix = store.table_prefix(uuid);
         let uri = store.get_log_store(uuid).root_uri();
 

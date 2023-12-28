@@ -1,4 +1,5 @@
 [workspace]
+members = ["floc"]
 
 [package]
 name = "seafowl"
@@ -60,6 +61,7 @@ datafusion-expr = "32.0.0"
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
 deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "2b913b37e71ed96212dcec8c3fc8e865754ced82", features = ["s3-native-tls", "datafusion-ext"] }
+floc = { path = "floc" }
 
 futures = "0.3"
 hex = ">=0.4.0"

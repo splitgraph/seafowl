@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package floc.schema;
+
+import "catalog.proto";
+import "google/protobuf/empty.proto";
+
+message SchemaObject {
+  catalog.CatalogReference catalog = 1;
+  string name = 2;
+  repeated catalog.TableObject tables = 3;
+}
+
+message ListSchemaResponse {
+  repeated SchemaObject schemas = 1;
+}
+
+service SchemaStoreService {
+  // List the available schemas
+  rpc List(catalog.CatalogReference) returns (ListSchemaResponse);
+}

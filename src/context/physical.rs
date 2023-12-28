@@ -329,7 +329,8 @@ impl SeafowlContext {
                     );
 
                     // Write the new files with updated data
-                    let table_prefix = self.internal_object_store.table_prefix(uuid);
+                    let table_prefix =
+                        self.internal_object_store.table_prefix(&uuid.to_string());
                     let adds = plan_to_object_store(
                         &state,
                         &update_plan,
@@ -450,8 +451,9 @@ impl SeafowlContext {
                                 Arc::new(FilterExec::try_new(filter_expr, base_scan)?);
 
                             // Write the filtered out data
-                            let table_prefix =
-                                self.internal_object_store.table_prefix(uuid);
+                            let table_prefix = self
+                                .internal_object_store
+                                .table_prefix(&uuid.to_string());
                             let adds = plan_to_object_store(
                                 &state,
                                 &filter_plan,

@@ -59,7 +59,7 @@ async fn test_vacuum_table() -> Result<()> {
     testutils::assert_uploaded_objects(
         context
             .internal_object_store
-            .get_log_store(table_1_uuid)
+            .get_log_store(&table_1_uuid.to_string())
             .object_store(),
         vec![
             Path::from("_delta_log/00000000000000000000.json"),
@@ -99,7 +99,7 @@ async fn test_vacuum_table() -> Result<()> {
     testutils::assert_uploaded_objects(
         context
             .internal_object_store
-            .get_log_store(table_1_uuid)
+            .get_log_store(&table_1_uuid.to_string())
             .object_store(),
         vec![
             Path::from("_delta_log/00000000000000000000.json"),
@@ -148,7 +148,7 @@ async fn test_vacuum_table() -> Result<()> {
     testutils::assert_uploaded_objects(
         context
             .internal_object_store
-            .get_log_store(table_2_uuid)
+            .get_log_store(&table_2_uuid.to_string())
             .object_store(),
         vec![
             Path::from("_delta_log/00000000000000000000.json"),

@@ -11,6 +11,9 @@ use itertools::Itertools;
 use parking_lot::RwLock;
 use uuid::Uuid;
 
+use floc::catalog::{TableObject, Uuid as FlocUuid};
+use floc::schema::{ListSchemaResponse, SchemaObject};
+
 use crate::object_store::wrapped::InternalObjectStore;
 use crate::provider::SeafowlFunction;
 use crate::repository::interface::{
@@ -24,9 +27,8 @@ use crate::wasm_udf::data_types::{
 use crate::{
     provider::{SeafowlDatabase, SeafowlSchema},
     repository::interface::{
-        AllDatabaseColumnsResult, AllDatabaseFunctionsResult, CollectionId,
-        CollectionRecord, DatabaseId, Error as RepositoryError, FunctionId, Repository,
-        TableId, TableVersionId, TableVersionsResult,
+        AllDatabaseFunctionsResult, CollectionRecord, Error as RepositoryError,
+        Repository, TableId, TableVersionId, TableVersionsResult,
     },
 };
 
@@ -177,18 +179,17 @@ impl Metastore {
     }
 
     pub async fn build_catalog(&self, catalog_name: &str) -> Result<SeafowlDatabase> {
-        let all_columns = self.schemas.list(catalog_name).await?;
+        let catalog_schemas = self.schemas.list(catalog_name).await?;
 
         // NB we can't distinguish between a database without tables and a database
         // that doesn't exist at all due to our query.
 
         // Turn the list of all collections, tables and their columns into a nested map.
 
-        let schemas: HashMap<Arc<str>, Arc<SeafowlSchema>> = all_columns
-            .iter()
-            .group_by(|col| &col.collection_name)
+        let schemas: HashMap<Arc<str>, Arc<SeafowlSchema>> = catalog_schemas
+            .schemas
             .into_iter()
-            .map(|(cn, cc)| self.build_schema(cn, cc))
+            .map(|schema| self.build_schema(schema))
             .collect();
 
         let name: Arc<str> = Arc::from(catalog_name);
@@ -201,30 +202,19 @@ impl Metastore {
         })
     }
 
-    fn build_schema<'a, I>(
-        &self,
-        collection_name: &str,
-        collection_columns: I,
-    ) -> (Arc<str>, Arc<SeafowlSchema>)
-    where
-        I: Iterator<Item = &'a AllDatabaseColumnsResult>,
-    {
-        let tables = collection_columns
-            .filter_map(|col| {
-                if let Some(table_name) = &col.table_name
-                    && let Some(table_uuid) = col.table_uuid
-                {
-                    Some(self.build_table(table_name, table_uuid))
-                } else {
-                    None
-                }
-            })
+    fn build_schema(&self, schema: SchemaObject) -> (Arc<str>, Arc<SeafowlSchema>) {
+        let schema_name = schema.name;
+
+        let tables = schema
+            .tables
+            .into_iter()
+            .map(|table| self.build_table(table.name, &table.uuid.unwrap().value))
             .collect::<HashMap<_, _>>();
 
         (
-            Arc::from(collection_name.to_string()),
+            Arc::from(schema_name.clone()),
             Arc::new(SeafowlSchema {
-                name: Arc::from(collection_name.to_string()),
+                name: Arc::from(schema_name),
                 tables: RwLock::new(tables),
             }),
         )
@@ -232,8 +222,8 @@ impl Metastore {
 
     fn build_table(
         &self,
-        table_name: &str,
-        table_uuid: Uuid,
+        table_name: String,
+        table_uuid: &str,
     ) -> (Arc<str>, Arc<dyn TableProvider>) {
         // Build a delta table but don't load it yet; we'll do that only for tables that are
         // actually referenced in a statement, via the async `table` method of the schema provider.
@@ -243,7 +233,7 @@ impl Metastore {
         let table_log_store = self.object_store.get_log_store(table_uuid);
 
         let table = DeltaTable::new(table_log_store, Default::default());
-        (Arc::from(table_name.to_string()), Arc::new(table) as _)
+        (Arc::from(table_name), Arc::new(table) as _)
     }
 
     pub async fn build_functions(
@@ -299,7 +289,7 @@ impl Metastore {
 
 #[async_trait]
 pub trait CatalogStore: Sync + Send {
-    async fn create(&self, name: &str) -> Result<DatabaseId>;
+    async fn create(&self, name: &str) -> Result<()>;
 
     async fn get(&self, name: &str) -> Result<DatabaseRecord, Error>;
 
@@ -308,13 +298,9 @@ pub trait CatalogStore: Sync + Send {
 
 #[async_trait]
 pub trait SchemaStore: Sync + Send {
-    async fn create(&self, catalog_name: &str, schema_name: &str)
-        -> Result<CollectionId>;
+    async fn create(&self, catalog_name: &str, schema_name: &str) -> Result<()>;
 
-    async fn list(
-        &self,
-        catalog_name: &str,
-    ) -> Result<Vec<AllDatabaseColumnsResult>, Error>;
+    async fn list(&self, catalog_name: &str) -> Result<ListSchemaResponse, Error>;
 
     async fn get(
         &self,
@@ -401,7 +387,7 @@ pub trait FunctionStore: Sync + Send {
         function_name: &str,
         or_replace: bool,
         details: &CreateFunctionDetails,
-    ) -> Result<FunctionId>;
+    ) -> Result<()>;
 
     async fn list(&self, catalog_name: &str) -> Result<Vec<AllDatabaseFunctionsResult>>;
 
@@ -424,9 +410,8 @@ impl From<RepositoryError> for Error {
 }
 
 #[async_trait]
-
 impl CatalogStore for RepositoryStore {
-    async fn create(&self, name: &str) -> Result<DatabaseId> {
+    async fn create(&self, name: &str) -> Result<()> {
         self.repository
             .create_database(name)
             .await
@@ -437,7 +422,9 @@ impl CatalogStore for RepositoryStore {
                     }
                 }
                 e => e.into(),
-            })
+            })?;
+
+        Ok(())
     }
 
     async fn get(&self, name: &str) -> Result<DatabaseRecord> {
@@ -473,11 +460,7 @@ impl CatalogStore for RepositoryStore {
 
 #[async_trait]
 impl SchemaStore for RepositoryStore {
-    async fn create(
-        &self,
-        catalog_name: &str,
-        schema_name: &str,
-    ) -> Result<CollectionId> {
+    async fn create(&self, catalog_name: &str, schema_name: &str) -> Result<()> {
         if schema_name == STAGING_SCHEMA {
             return Err(Error::UsedStagingSchema);
         }
@@ -494,14 +477,43 @@ impl SchemaStore for RepositoryStore {
                     }
                 }
                 e => e.into(),
-            })
+            })?;
+
+        Ok(())
     }
 
-    async fn list(
-        &self,
-        catalog_name: &str,
-    ) -> Result<Vec<AllDatabaseColumnsResult>, Error> {
-        Ok(self.repository.list_collections(catalog_name).await?)
+    async fn list(&self, catalog_name: &str) -> Result<ListSchemaResponse, Error> {
+        let cols = self.repository.list_collections(catalog_name).await?;
+
+        let schemas = cols
+            .iter()
+            .group_by(|col| &col.collection_name)
+            .into_iter()
+            .map(|(cn, ct)| SchemaObject {
+                catalog: None,
+                name: cn.clone(),
+                tables: ct
+                    .into_iter()
+                    .filter_map(|t| {
+                        if let Some(name) = &t.table_name
+                            && let Some(uuid) = t.table_uuid
+                        {
+                            Some(TableObject {
+                                schema: None,
+                                name: name.clone(),
+                                uuid: Some(FlocUuid {
+                                    value: uuid.to_string(),
+                                }),
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        Ok(ListSchemaResponse { schemas })
     }
 
     async fn get(
@@ -742,7 +754,7 @@ impl FunctionStore for RepositoryStore {
         function_name: &str,
         or_replace: bool,
         details: &CreateFunctionDetails,
-    ) -> Result<FunctionId> {
+    ) -> Result<()> {
         let database = CatalogStore::get(self, catalog_name).await?;
 
         self.repository
@@ -758,7 +770,9 @@ impl FunctionStore for RepositoryStore {
                     }
                 }
                 e => e.into(),
-            })
+            })?;
+
+        Ok(())
     }
 
     async fn list(&self, catalog_name: &str) -> Result<Vec<AllDatabaseFunctionsResult>> {

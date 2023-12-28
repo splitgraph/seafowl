@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package floc.catalog;
+
+message UUID {
+  string value = 1;
+}
+
+message CatalogReference {
+  string catalog_name = 1;
+}
+
+message SchemaReference {
+  string catalog_name = 1;
+  string schema_name = 2;
+}
+
+message TableReference {
+  string catalog_name = 1;
+  string schema_name = 2;
+  string table_name = 3;
+}
+
+message TableObject {
+  SchemaReference schema = 1;
+  string name = 2;
+  UUID uuid = 3; // Will become location
+}
+
+

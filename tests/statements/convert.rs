@@ -60,7 +60,7 @@ async fn test_convert_from_flat_parquet_table() -> Result<()> {
     testutils::assert_uploaded_objects(
         context
             .internal_object_store
-            .get_log_store(table_uuid)
+            .get_log_store(&table_uuid.to_string())
             .object_store(),
         vec![
             Path::from("_delta_log/00000000000000000000.json"),
