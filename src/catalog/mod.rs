@@ -6,9 +6,12 @@ use crate::repository::interface::{
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use arrow_schema::Schema;
 use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 use floc::schema::ListSchemaResponse;
+use tonic::Status;
 use uuid::Uuid;
 
+mod external;
 pub(crate) mod metastore;
 mod repository;
 
@@ -16,21 +19,76 @@ pub const DEFAULT_DB: &str = "default";
 pub const DEFAULT_SCHEMA: &str = "public";
 pub const STAGING_SCHEMA: &str = "staging";
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
+    // Catalog errors
+    #[error("Catalog {name:?} doesn't exist")]
     CatalogDoesNotExist { name: String },
-    SchemaDoesNotExist { name: String },
-    TableDoesNotExist { name: String },
-    TableUuidDoesNotExist { uuid: Uuid },
-    TableAlreadyExists { name: String },
+
+    #[error("Catalog {name:?} already exists")]
     CatalogAlreadyExists { name: String },
+
+    // Schema errors
+    #[error("Schema {name:?} doesn't exist")]
+    SchemaDoesNotExist { name: String },
+
+    #[error("Schema {name:?} already exists")]
     SchemaAlreadyExists { name: String },
+
+    // Table errors
+    #[error("Table {name:?} doesn't exist")]
+    TableDoesNotExist { name: String },
+
+    #[error("Table with UUID {uuid} doesn't exist")]
+    TableUuidDoesNotExist { uuid: Uuid },
+
+    #[error("Table {name:?} already exists")]
+    TableAlreadyExists { name: String },
+
+    // Function errors
+    #[error("Function {name:?} already exists")]
     FunctionAlreadyExists { name: String },
+
+    #[error("Error deserializing function: {reason}")]
     FunctionDeserializationError { reason: String },
+
+    #[error("Function {names:?} not found")]
     FunctionNotFound { names: String },
+
     // Creating a table in / dropping the staging schema
+    #[error("The staging schema can only be referenced via CREATE EXTERNAL TABLE")]
     UsedStagingSchema,
+
+    #[error("Catalog method not implemented: {reason}")]
+    NotImplemented { reason: String },
+
+    // Metastore implementation errors
+    #[error("Internal SQL error: {0:?}")]
     SqlxError(sqlx::Error),
+
+    #[error(transparent)]
+    TonicStatus(#[from] Status),
+}
+
+/// Implement a global converter into a DataFusionError from the catalog error type.
+/// These might be raised from different parts of query execution and in different contexts,
+/// but we want roughly the same message in each case anyway, so we can take advantage of
+/// the ? operator and automatic error conversion.
+impl From<CatalogError> for DataFusionError {
+    fn from(val: CatalogError) -> Self {
+        match val {
+            CatalogError::NotImplemented { reason } => {
+                DataFusionError::NotImplemented(reason)
+            }
+            _ => DataFusionError::Plan(val.to_string()),
+        }
+    }
+}
+
+fn not_impl<T>() -> CatalogResult<T> {
+    Err(CatalogError::NotImplemented {
+        reason: "Metastore method not supported".to_string(),
+    })
 }
 
 // TODO janky, we want to:

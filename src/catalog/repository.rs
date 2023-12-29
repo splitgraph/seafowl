@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use arrow_schema::Schema;
 use async_trait::async_trait;
-use datafusion::error::DataFusionError;
 use itertools::Itertools;
 use uuid::Uuid;
 
@@ -22,63 +21,7 @@ use crate::repository::interface::{
 };
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 
-/// Implement a global converter into a DataFusionError from the catalog error type.
-/// These might be raised from different parts of query execution and in different contexts,
-/// but we want roughly the same message in each case anyway, so we can take advantage of
-/// the ? operator and automatic error conversion.
-impl From<CatalogError> for DataFusionError {
-    fn from(val: CatalogError) -> Self {
-        match val {
-            CatalogError::CatalogDoesNotExist { name } => {
-                DataFusionError::Plan(format!("Database {name:?} doesn't exist"))
-            }
-            CatalogError::SchemaDoesNotExist { name } => {
-                DataFusionError::Plan(format!("Schema {name:?} doesn't exist"))
-            }
-            CatalogError::TableDoesNotExist { name } => {
-                DataFusionError::Plan(format!("Table {name:?} doesn't exist"))
-            }
-            CatalogError::TableUuidDoesNotExist { uuid } => {
-                DataFusionError::Plan(format!("Table with UUID {uuid} doesn't exist"))
-            }
-            CatalogError::FunctionDeserializationError { reason } => {
-                DataFusionError::Internal(format!(
-                    "Error deserializing function: {reason:?}"
-                ))
-            }
-
-            // Errors that are the user's fault.
-
-            // Even though these are "execution" errors, we raise them from the plan stage,
-            // where we manipulate data in the catalog because that's the only chance we get at
-            // being async, so we follow DataFusion's convention and return these as Plan errors.
-            CatalogError::TableAlreadyExists { name } => {
-                DataFusionError::Plan(format!("Table {name:?} already exists"))
-            }
-            CatalogError::CatalogAlreadyExists { name } => {
-                DataFusionError::Plan(format!("Database {name:?} already exists"))
-            }
-            CatalogError::SchemaAlreadyExists { name } => {
-                DataFusionError::Plan(format!("Schema {name:?} already exists"))
-            }
-            CatalogError::FunctionAlreadyExists { name } => {
-                DataFusionError::Plan(format!("Function {name:?} already exists"))
-            }
-            CatalogError::FunctionNotFound { names } => {
-                DataFusionError::Plan(format!("Function {names:?} not found"))
-            }
-            CatalogError::UsedStagingSchema => DataFusionError::Plan(
-                "The staging schema can only be referenced via CREATE EXTERNAL TABLE"
-                    .to_string(),
-            ),
-            // Miscellaneous sqlx error. We want to log it but it's not worth showing to the user.
-            CatalogError::SqlxError(e) => {
-                DataFusionError::Plan(format!("Internal SQL error: {:?}", e.to_string()))
-            }
-        }
-    }
-}
-
+// The native, in-process catalog implementation for Seafowl.
 pub struct RepositoryStore {
     pub repository: Arc<dyn Repository>,
 }

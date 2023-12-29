@@ -5260,6 +5260,7 @@ dependencies = [
  "strum",
  "strum_macros",
  "tempfile",
+ "thiserror",
  "tokio",
  "tonic",
  "url",

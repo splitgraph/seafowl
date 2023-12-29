@@ -92,6 +92,7 @@ sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "sqlite", "any"
 strum = ">=0.24"
 strum_macros = ">=0.24"
 tempfile = "3"
+thiserror = "1"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
 tonic = { version = "0.10.0", optional = true }
 url = "2.2"
