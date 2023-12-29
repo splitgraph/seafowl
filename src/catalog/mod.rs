@@ -6,13 +6,13 @@ use crate::repository::interface::{
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use arrow_schema::Schema;
 use async_trait::async_trait;
+use clade::schema::ListSchemaResponse;
 use datafusion_common::DataFusionError;
-use floc::schema::ListSchemaResponse;
 use tonic::Status;
 use uuid::Uuid;
 
-mod external;
-pub(crate) mod metastore;
+pub mod external;
+pub mod metastore;
 mod repository;
 
 pub const DEFAULT_DB: &str = "default";

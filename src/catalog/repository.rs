@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use uuid::Uuid;
 
-use floc::catalog::{TableObject, Uuid as FlocUuid};
-use floc::schema::{ListSchemaResponse, SchemaObject};
+use clade::catalog::TableObject;
+use clade::schema::{ListSchemaResponse, SchemaObject};
 
 use crate::catalog::{
     CatalogError, CatalogResult, CatalogStore, FunctionStore, SchemaStore, TableStore,
@@ -21,7 +21,7 @@ use crate::repository::interface::{
 };
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 
-// The native, in-process catalog implementation for Seafowl.
+// The native catalog implementation for Seafowl.
 pub struct RepositoryStore {
     pub repository: Arc<dyn Repository>,
 }
@@ -128,9 +128,7 @@ impl SchemaStore for RepositoryStore {
                             Some(TableObject {
                                 schema: None,
                                 name: name.clone(),
-                                uuid: Some(FlocUuid {
-                                    value: uuid.to_string(),
-                                }),
+                                location: uuid.to_string(),
                             })
                         } else {
                             None

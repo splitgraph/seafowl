@@ -1,3 +1,4 @@
+use crate::catalog::external::ExternalStore;
 use crate::catalog::repository::RepositoryStore;
 use crate::catalog::{
     CatalogError, CatalogResult, CatalogStore, CreateFunctionError, FunctionStore,
@@ -11,10 +12,10 @@ use crate::wasm_udf::data_types::{
     CreateFunctionDataType, CreateFunctionDetails, CreateFunctionLanguage,
     CreateFunctionVolatility,
 };
+use clade::schema::SchemaObject;
 use datafusion::catalog::schema::MemorySchemaProvider;
 use datafusion::datasource::TableProvider;
 use deltalake::DeltaTable;
-use floc::schema::SchemaObject;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -46,6 +47,21 @@ impl Metastore {
             schemas: repository_store.clone(),
             tables: repository_store.clone(),
             functions: repository_store,
+            staging_schema,
+            object_store,
+        }
+    }
+
+    pub fn new_from_external(
+        external_store: Arc<ExternalStore>,
+        object_store: Arc<InternalObjectStore>,
+    ) -> Self {
+        let staging_schema = Arc::new(MemorySchemaProvider::new());
+        Self {
+            catalogs: external_store.clone(),
+            schemas: external_store.clone(),
+            tables: external_store.clone(),
+            functions: external_store,
             staging_schema,
             object_store,
         }
@@ -84,7 +100,7 @@ impl Metastore {
         let tables = schema
             .tables
             .into_iter()
-            .map(|table| self.build_table(table.name, &table.uuid.unwrap().value))
+            .map(|table| self.build_table(table.name, &table.location))
             .collect::<HashMap<_, _>>();
 
         (

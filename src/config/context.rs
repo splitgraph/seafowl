@@ -17,7 +17,7 @@ use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
 
-use crate::catalog::{metastore::Metastore, CatalogError};
+use crate::catalog::{external::ExternalStore, metastore::Metastore, CatalogError};
 use crate::object_store::http::add_http_object_store;
 use crate::object_store::wrapped::InternalObjectStore;
 #[cfg(feature = "remote-tables")]
@@ -58,6 +58,14 @@ async fn build_metastore(
                 .await
                 .expect("Error setting up the database"),
         ),
+        schema::Catalog::Clade(schema::Clade { dsn }) => {
+            let external = Arc::new(
+                ExternalStore::new(dsn.clone())
+                    .await
+                    .expect("Error setting up remote store"),
+            );
+            return Metastore::new_from_external(external, object_store);
+        }
     };
 
     Metastore::new_from_repository(repository, object_store)

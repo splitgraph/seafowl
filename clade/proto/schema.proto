@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package floc.schema;
+package clade.schema;
 
 import "catalog.proto";
 import "google/protobuf/empty.proto";

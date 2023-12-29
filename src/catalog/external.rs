@@ -8,20 +8,27 @@ use crate::repository::interface::{
 };
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use arrow_schema::Schema;
-use floc::catalog::CatalogReference;
-use floc::schema::schema_store_service_client::SchemaStoreServiceClient;
-use floc::schema::ListSchemaResponse;
-use tonic::transport::channel::Channel;
+use clade::catalog::CatalogReference;
+use clade::schema::schema_store_service_client::SchemaStoreServiceClient;
+use clade::schema::ListSchemaResponse;
+use tonic::transport::{channel::Channel, Error};
 use tonic::Request;
 use uuid::Uuid;
 
-// An external store, facilitated via a remote floc server implementation
+// An external store, facilitated via a remote clade server implementation
 #[derive(Clone)]
 pub struct ExternalStore {
     client: SchemaStoreServiceClient<Channel>,
 }
 
 impl ExternalStore {
+    // Create a new external store implementing the clade interface
+    pub async fn new(dsn: String) -> Result<Self, Error> {
+        println!("Client dsn is {dsn}");
+        let client = SchemaStoreServiceClient::connect(dsn).await?;
+        Ok(Self { client })
+    }
+
     // Tonic client implementations always end up needing mut references, and apparently the way
     // to go is cloning a client instance instead of introducing synchronization primitives:
     // https://github.com/hyperium/tonic/issues/33#issuecomment-538154015
@@ -177,7 +184,7 @@ impl FunctionStore for ExternalStore {
         &self,
         _catalog_name: &str,
     ) -> CatalogResult<Vec<AllDatabaseFunctionsResult>> {
-        not_impl()
+        Ok(vec![])
     }
 
     async fn delete(

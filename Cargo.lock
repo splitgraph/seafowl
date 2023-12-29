@@ -1035,6 +1035,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clade"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2245,15 +2254,6 @@ dependencies = [
  "crc32fast",
  "libz-sys",
  "miniz_oxide",
-]
-
-[[package]]
-name = "floc"
-version = "0.1.0"
-dependencies = [
- "prost",
- "tonic",
- "tonic-build",
 ]
 
 [[package]]
@@ -5220,6 +5220,7 @@ dependencies = [
  "base64 0.21.5",
  "bytes",
  "chrono",
+ "clade",
  "clap",
  "config",
  "convergence",
@@ -5230,7 +5231,6 @@ dependencies = [
  "datafusion-expr",
  "datafusion-remote-tables",
  "deltalake",
- "floc",
  "futures",
  "hex",
  "itertools 0.11.0",
