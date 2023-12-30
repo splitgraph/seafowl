@@ -1,6 +1,7 @@
 use clade::catalog::{CatalogReference, TableObject};
 use clade::schema::{
     schema_store_service_server::{SchemaStoreService, SchemaStoreServiceServer},
+    FILE_DESCRIPTOR_SET,
     ListSchemaResponse, SchemaObject,
 };
 use datafusion_common::assert_batches_eq;
@@ -84,8 +85,14 @@ async fn run_clade_server(addr: SocketAddr) {
 
     let svc = SchemaStoreServiceServer::new(metastore);
 
+    let reflection = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+        .build()
+        .unwrap();
+
     Server::builder()
         .add_service(svc)
+        .add_service(reflection)
         .serve(addr)
         .await
         .unwrap();
