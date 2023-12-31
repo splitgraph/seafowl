@@ -1,8 +1,7 @@
-use clade::catalog::{CatalogReference, TableObject};
 use clade::schema::{
     schema_store_service_server::{SchemaStoreService, SchemaStoreServiceServer},
+    ListSchemaRequest, ListSchemaResponse, SchemaObject, TableObject,
     FILE_DESCRIPTOR_SET,
-    ListSchemaResponse, SchemaObject,
 };
 use datafusion_common::assert_batches_eq;
 use seafowl::catalog::DEFAULT_DB;
@@ -26,9 +25,9 @@ struct TestCladeMetastore {
 
 #[tonic::async_trait]
 impl SchemaStoreService for TestCladeMetastore {
-    async fn list(
+    async fn list_schemas(
         &self,
-        request: Request<CatalogReference>,
+        request: Request<ListSchemaRequest>,
     ) -> Result<Response<ListSchemaResponse>, Status> {
         let catalog = request.into_inner().catalog_name;
         if self.catalog == catalog {
@@ -72,10 +71,8 @@ async fn run_clade_server(addr: SocketAddr) {
         catalog: DEFAULT_DB.to_string(),
         schemas: ListSchemaResponse {
             schemas: vec![SchemaObject {
-                catalog: None,
                 name: "some_schema".to_string(),
                 tables: vec![TableObject {
-                    schema: None,
                     name: "some_table".to_string(),
                     location: "delta-0.8.0-partitioned".to_string(),
                 }],

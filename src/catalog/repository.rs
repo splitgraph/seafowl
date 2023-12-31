@@ -5,8 +5,7 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use uuid::Uuid;
 
-use clade::catalog::TableObject;
-use clade::schema::{ListSchemaResponse, SchemaObject};
+use clade::schema::{ListSchemaResponse, SchemaObject, TableObject};
 
 use crate::catalog::{
     CatalogError, CatalogResult, CatalogStore, FunctionStore, SchemaStore, TableStore,
@@ -117,7 +116,6 @@ impl SchemaStore for RepositoryStore {
             .group_by(|col| &col.collection_name)
             .into_iter()
             .map(|(cn, ct)| SchemaObject {
-                catalog: None,
                 name: cn.clone(),
                 tables: ct
                     .into_iter()
@@ -126,7 +124,6 @@ impl SchemaStore for RepositoryStore {
                             && let Some(uuid) = t.table_uuid
                         {
                             Some(TableObject {
-                                schema: None,
                                 name: name.clone(),
                                 location: uuid.to_string(),
                             })

@@ -8,9 +8,8 @@ use crate::repository::interface::{
 };
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use arrow_schema::Schema;
-use clade::catalog::CatalogReference;
 use clade::schema::schema_store_service_client::SchemaStoreServiceClient;
-use clade::schema::ListSchemaResponse;
+use clade::schema::{ListSchemaRequest, ListSchemaResponse};
 use tonic::transport::{channel::Channel, Error};
 use tonic::Request;
 use uuid::Uuid;
@@ -24,7 +23,6 @@ pub struct ExternalStore {
 impl ExternalStore {
     // Create a new external store implementing the clade interface
     pub async fn new(dsn: String) -> Result<Self, Error> {
-        println!("Client dsn is {dsn}");
         let client = SchemaStoreServiceClient::connect(dsn).await?;
         Ok(Self { client })
     }
@@ -59,11 +57,11 @@ impl SchemaStore for ExternalStore {
     }
 
     async fn list(&self, catalog_name: &str) -> CatalogResult<ListSchemaResponse> {
-        let req = Request::new(CatalogReference {
+        let req = Request::new(ListSchemaRequest {
             catalog_name: catalog_name.to_string(),
         });
 
-        let response = self.client().list(req).await?;
+        let response = self.client().list_schemas(req).await?;
         Ok(response.into_inner())
     }
 

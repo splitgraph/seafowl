@@ -109,6 +109,7 @@ assert_cmd = "2"
 assert_unordered = "0.3"
 rstest = "*"
 serial_test = "2"
+tonic-reflection = "0.10"
 wiremock = "0.5"
 
 [build-dependencies]
