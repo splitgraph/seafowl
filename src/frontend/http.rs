@@ -1011,7 +1011,7 @@ pub mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
-            "Error during planning: Database \"missing_db\" doesn't exist"
+            "Error during planning: Catalog \"missing_db\" doesn't exist"
         );
     }
 

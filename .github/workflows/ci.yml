@@ -35,6 +35,8 @@ jobs:
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
+      - name: Install protoc
+        run: sudo apt install -y protobuf-compiler
 
       # Use https://github.com/marketplace/actions/rust-cache
 

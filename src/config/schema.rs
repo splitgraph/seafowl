@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use crate::catalog::DEFAULT_SCHEMA;
 use crate::object_store::cache::{
     CachingObjectStore, DEFAULT_CACHE_CAPACITY, DEFAULT_CACHE_ENTRY_TTL,
     DEFAULT_MIN_FETCH_SIZE,
@@ -221,6 +222,7 @@ pub enum Catalog {
     #[cfg(feature = "catalog-postgres")]
     Postgres(Postgres),
     Sqlite(Sqlite),
+    Clade(Clade),
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -254,8 +256,13 @@ pub struct Sqlite {
     pub read_only: bool,
 }
 
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct Clade {
+    pub dsn: String,
+}
+
 fn default_schema() -> String {
-    "public".to_string()
+    DEFAULT_SCHEMA.to_string()
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Default, Clone)]

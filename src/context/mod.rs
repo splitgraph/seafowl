@@ -2,7 +2,7 @@ pub mod delta;
 pub mod logical;
 pub mod physical;
 
-use crate::catalog::Metastore;
+use crate::catalog::metastore::Metastore;
 use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::config::context::build_state_with_table_factories;
 use crate::object_store::wrapped::InternalObjectStore;

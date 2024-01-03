@@ -65,7 +65,9 @@ pub async fn gc_databases(context: &SeafowlContext, database_name: Option<String
             dt.database_name, dt.collection_name, dt.table_name, dt.uuid,
         );
 
-        let table_prefix = context.internal_object_store.table_prefix(dt.uuid);
+        let table_prefix = context
+            .internal_object_store
+            .table_prefix(&dt.uuid.to_string());
         let result = context
             .internal_object_store
             .delete_in_prefix(&table_prefix)

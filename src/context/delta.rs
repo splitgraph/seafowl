@@ -307,8 +307,9 @@ impl SeafowlContext {
                 // with the returned uuid (and delete the catalog entry if the object store creation fails).
                 // On the other hand that would complicate etag testing logic.
                 let table_uuid = get_uuid();
-                let table_log_store =
-                    self.internal_object_store.get_log_store(table_uuid);
+                let table_log_store = self
+                    .internal_object_store
+                    .get_log_store(&table_uuid.to_string());
                 let delta_schema = DeltaSchema::try_from(&schema)?;
 
                 let table = CreateBuilder::new()
@@ -330,8 +331,9 @@ impl SeafowlContext {
                         "Unable to parse the UUID path of the table: {e}"
                     ))
                 })?;
-                let table_log_store =
-                    self.internal_object_store.get_log_store(table_uuid);
+                let table_log_store = self
+                    .internal_object_store
+                    .get_log_store(&table_uuid.to_string());
                 let table = ConvertToDeltaBuilder::new()
                     .with_log_store(table_log_store)
                     .with_table_name(&*table_name)
@@ -372,8 +374,9 @@ impl SeafowlContext {
         plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<DeltaTable> {
         let table_uuid = self.get_table_uuid(name).await?;
-        let table_log_store = self.internal_object_store.get_log_store(table_uuid);
-        let table_prefix = self.internal_object_store.table_prefix(table_uuid);
+        let prefix = table_uuid.to_string();
+        let table_log_store = self.internal_object_store.get_log_store(&prefix);
+        let table_prefix = self.internal_object_store.table_prefix(&prefix);
 
         // Upload partition files to table's root directory
         let adds = plan_to_object_store(
@@ -509,7 +512,7 @@ mod tests {
             &ctx.inner.state(),
             &execution_plan,
             object_store.clone(),
-            object_store.table_prefix(table_uuid),
+            object_store.table_prefix(&table_uuid.to_string()),
             2,
         )
         .await
@@ -596,7 +599,9 @@ mod tests {
         );
 
         assert_uploaded_objects(
-            object_store.get_log_store(table_uuid).object_store(),
+            object_store
+                .get_log_store(&table_uuid.to_string())
+                .object_store(),
             vec![
                 Path::from(PART_0_FILE_NAME.to_string()),
                 Path::from(PART_1_FILE_NAME.to_string()),

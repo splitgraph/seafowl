@@ -1,0 +1,11 @@
+[package]
+name = "clade"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+prost = "0.12"
+tonic = "0.10"
+
+[build-dependencies]
+tonic-build = "0.10"
