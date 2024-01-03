@@ -10,7 +10,7 @@ use crate::wasm_udf::data_types::CreateFunctionDetails;
 use arrow_schema::Schema;
 use clade::schema::schema_store_service_client::SchemaStoreServiceClient;
 use clade::schema::{ListSchemaRequest, ListSchemaResponse};
-use tonic::transport::{channel::Channel, Error};
+use tonic::transport::{channel::Channel, Endpoint, Error};
 use tonic::Request;
 use uuid::Uuid;
 
@@ -23,7 +23,8 @@ pub struct ExternalStore {
 impl ExternalStore {
     // Create a new external store implementing the clade interface
     pub async fn new(dsn: String) -> Result<Self, Error> {
-        let client = SchemaStoreServiceClient::connect(dsn).await?;
+        let endpoint = Endpoint::new(dsn)?.connect_lazy();
+        let client = SchemaStoreServiceClient::new(endpoint);
         Ok(Self { client })
     }
 
