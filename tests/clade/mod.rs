@@ -8,9 +8,7 @@ use seafowl::catalog::DEFAULT_DB;
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::SeafowlContext;
-use std::future::Future;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tonic::transport::Server;
@@ -40,10 +38,7 @@ impl SchemaStoreService for TestCladeMetastore {
     }
 }
 
-async fn start_clade_server() -> (
-    Arc<SeafowlContext>,
-    Pin<Box<dyn Future<Output = ()> + Send>>,
-) {
+async fn start_clade_server() -> Arc<SeafowlContext> {
     // let OS choose a a free port
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -63,7 +58,9 @@ dsn = "http://{addr}""#,
     let context = Arc::from(build_context(&config).await.unwrap());
 
     let clade = run_clade_server(addr);
-    (context, Box::pin(clade))
+    tokio::task::spawn(clade);
+
+    context
 }
 
 async fn run_clade_server(addr: SocketAddr) {

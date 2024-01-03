@@ -2,10 +2,12 @@ use crate::clade::*;
 
 #[tokio::test]
 async fn test_basic_select() -> Result<(), Box<dyn std::error::Error>> {
-    let (context, clade) = start_clade_server().await;
-    tokio::task::spawn(clade);
+    let context = start_clade_server().await;
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    // Before proceeding with the test swallow up a single initial
+    // ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" })
+    // TODO: why does this happen?
+    let _r = context.metastore.schemas.list(DEFAULT_DB).await;
 
     let plan = context
         .plan_query("SELECT * FROM some_schema.some_table ORDER BY value")
