@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes};
 use futures::stream::BoxStream;
 use log::{debug, error, warn};
-use moka::future::{Cache, CacheBuilder};
+use moka::future::{Cache, CacheBuilder, FutureExt};
 use moka::notification::RemovalCause;
 use object_store::{
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
@@ -24,7 +24,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
-use tokio::runtime::Handle;
 use tokio::{fs, sync::RwLock};
 
 pub const DEFAULT_MIN_FETCH_SIZE: u64 = 2 * 1024 * 1024;
@@ -128,9 +127,8 @@ pub struct CachingObjectStore {
 }
 
 impl CachingObjectStore {
-    fn on_evict(
-        rt_handle: Handle,
-        file_manager: &Arc<RwLock<CacheFileManager>>,
+    async fn on_evict(
+        file_manager: Arc<RwLock<CacheFileManager>>,
         key: Arc<CacheKey>,
         value: CacheValue,
         cause: RemovalCause,
@@ -140,17 +138,14 @@ impl CachingObjectStore {
             key, value, cause
         );
 
-        let _guard = rt_handle.enter();
-        rt_handle.block_on(async {
-            // Acquire the write lock of the DataFileManager.
-            let mut manager = file_manager.write().await;
+        // Acquire the write lock of the DataFileManager.
+        let mut manager = file_manager.write().await;
 
-            // Remove the data file. We must handle error cases here to
-            // prevent the listener from panicking.
-            if let Err(e) = manager.remove_file(&value.path).await {
-                error!("Failed to remove a data file at {:?}: {:?}", value.path, e);
-            }
-        });
+        // Remove the data file. We must handle error cases here to
+        // prevent the listener from panicking.
+        if let Err(e) = manager.remove_file(&value.path).await {
+            error!("Failed to remove a data file at {:?}: {:?}", value.path, e);
+        }
     }
 
     pub fn new(
@@ -166,16 +161,10 @@ impl CachingObjectStore {
         // Clone the pointer since we can't pass the whole struct to the cache
         let eviction_file_manager = file_manager.clone();
 
-        // Runtime handle needed for the eviction hook to block on cached file cleanup. We must
-        // create this outside of the eviction hook itself, otherwise moka will silently panic with
-        // "there is no reactor running, must be called from the context of a Tokio 1.x runtime",
-        // after which point no further evictions will be attempted.
-        let rt_handle = Handle::current();
-
         let cache: Cache<CacheKey, CacheValue> = CacheBuilder::new(max_cache_size)
             .weigher(|_, v: &CacheValue| v.size as u32)
-            .eviction_listener_with_queued_delivery_mode(move |k, v, cause| {
-                Self::on_evict(rt_handle.clone(), &eviction_file_manager, k, v, cause)
+            .async_eviction_listener(move |k, v, cause| {
+                Self::on_evict(eviction_file_manager.clone(), k, v, cause).boxed()
             })
             // TODO: This should be redundant once the `W-TinyLFU` policy is implemented in `moka`.
             .time_to_live(ttl)
@@ -403,7 +392,6 @@ mod tests {
         config::schema::str_to_hex_hash, object_store::cache::CachingObjectStore,
     };
     use itertools::Itertools;
-    use moka::future::ConcurrentCacheExt;
     use object_store::{path::Path, ObjectStore};
     use std::path::Path as FSPath;
     use std::sync::Arc;
@@ -498,14 +486,8 @@ mod tests {
         // Perform multiple sets of actions:
         //   - request a range
         //   - check the amount of requests that the mock received in total
-        //   - sync() the cache (doesn't look like we need to do it for normal operations,
+        //   - `run_pending_tasks()` aka sync the cache (doesn't look like we need to do it for normal operations,
         //     but we want to make sure all counts are correct and evictions have been done)
-        //     - NOTE: if an assertion fails in the main test, this can cause a cache thread to crash with
-        //          thread 'moka-notifier-2' panicked at 'there is no reactor running, must be called
-        //          from the context of a Tokio 1.x runtime'
-        //       This is a red herring (assertion failure causes the runtime to shut down and the eviction
-        //       listener can't get a Tokio handle and panics).
-        //
         //   - check the cache entry count
         //   - check the files that are on disk
 
@@ -514,7 +496,7 @@ mod tests {
             .get_range(&Path::from(url.as_str()), 25..64)
             .await
             .unwrap();
-        store.cache.sync();
+        store.cache.run_pending_tasks().await;
 
         // Mock has had 3 requests
         assert_eq!(server.received_requests().await.unwrap().len(), 3);
@@ -526,7 +508,7 @@ mod tests {
             .get_range(&Path::from(url.as_str()), 26..30)
             .await
             .unwrap();
-        store.cache.sync();
+        store.cache.run_pending_tasks().await;
 
         // No extra requests
         assert_eq!(server.received_requests().await.unwrap().len(), 3);
@@ -538,7 +520,7 @@ mod tests {
             .get_range(&Path::from(url.as_str()), 33..66)
             .await
             .unwrap();
-        store.cache.sync();
+        store.cache.run_pending_tasks().await;
 
         // One extra request to fetch chunk 4
         assert_eq!(server.received_requests().await.unwrap().len(), 4);
@@ -550,14 +532,10 @@ mod tests {
             .get_range(&Path::from(url.as_str()), 80..85)
             .await
             .unwrap();
-        store.cache.sync();
+        store.cache.run_pending_tasks().await;
 
         assert_eq!(server.received_requests().await.unwrap().len(), 5);
         assert_eq!(store.cache.entry_count(), 4);
-
-        // Give time to moka to evict one extra entry as it's done via a hook running in a separate
-        // thread.
-        let _ = tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Counter-intuitively, the evicted entry is the last one inserted (chunk 5).
         // The reason is the default eviction policy in moka (citing from https://github.com/moka-rs/moka/issues/147#issuecomment-1162899784):
@@ -576,7 +554,8 @@ mod tests {
 
         // Ensure that our TTL parameter is honored, so that we don't get a frozen cache after it
         // gets filled up once.
-        let _ = tokio::time::sleep(Duration::from_secs(1)).await;
+        let _ = tokio::time::sleep(Duration::from_millis(1100)).await;
+        store.cache.run_pending_tasks().await;
 
         assert_eq!(store.cache.entry_count(), 0);
         assert_ranges_in_cache(&store.base_path, &url, vec![]);

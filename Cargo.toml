@@ -68,7 +68,7 @@ hex = ">=0.4.0"
 itertools = ">=0.10.0"
 lazy_static = ">=1.4.0"
 log = "0.4"
-moka = { version = "0.11.0", default_features = false, features = ["future", "atomic64", "quanta"] }
+moka = { version = "0.12.2", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.7"
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
@@ -83,7 +83,7 @@ reqwest = { version = "0.11.14", features = [ "stream" ] }
 rmp = "0.8.11"
 rmp-serde = "1.1.1"
 rmpv = { version = "1.0.0", features = ["with-serde"] }
-rustyline = "12.0"
+rustyline = "13.0"
 serde = "1.0.156"
 serde_json = "1.0.93"
 sha2 = ">=0.10.1"
@@ -95,14 +95,14 @@ tempfile = "3"
 thiserror = "1"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
 tonic = { version = "0.10.0", optional = true }
-url = "2.2"
+url = "2.5"
 uuid = "1.2.1"
-warp = "0.3.5"
-wasi-common = "14.0.0"
+warp = "0.3.6"
 
 # For WASM user-defined functions
-wasmtime = "14.0.0"
-wasmtime-wasi = "14.0.0"
+wasi-common = "16.0.0"
+wasmtime = "16.0.0"
+wasmtime-wasi = "16.0.0"
 
 [dev-dependencies]
 assert_cmd = "2"
