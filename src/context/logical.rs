@@ -108,7 +108,7 @@ impl SeafowlContext {
                 | Statement::CreateSchema { .. }
                 | Statement::CreateView { .. }
                 | Statement::CreateDatabase { .. } => self.inner.state().statement_to_plan(stmt).await,
-                Statement::Insert{ ref mut source, .. } => {
+                Statement::Insert{ source: Some(ref mut source), .. } => {
                     let state = self.rewrite_time_travel_query(source).await?;
                     let plan = state.statement_to_plan(stmt).await?;
                     state.optimize(&plan)

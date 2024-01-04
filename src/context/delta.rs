@@ -428,7 +428,7 @@ impl SeafowlContext {
         let store = table.object_store();
 
         // List all objects with the table prefix...
-        let objects = store.list(None).await?.map_ok(|m| m.location).boxed();
+        let objects = store.list(None).map_ok(|m| m.location).boxed();
 
         // ... and delete them in bulk (if applicable).
         let _paths = store
@@ -449,7 +449,6 @@ mod tests {
     use arrow::{array::Int32Array, datatypes::DataType, record_batch::RecordBatch};
     use arrow_schema::{Field, Schema};
     use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
-    use deltalake::logstore::LogStore;
     use object_store::{local::LocalFileSystem, memory::InMemory, path::Path};
     use rstest::rstest;
     use serde_json::{json, Value};

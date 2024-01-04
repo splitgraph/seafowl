@@ -31,15 +31,15 @@ object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
-arrow = "47.0.0"
-arrow-buffer = "47.0.0"
-arrow-csv = "47.0.0"
-arrow-flight = { version = "47.0.0", optional = true }
+arrow = "49.0.0"
+arrow-buffer = "49.0.0"
+arrow-csv = "49.0.0"
+arrow-flight = { version = "49.0.0", optional = true }
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "47.0.0"
-arrow-schema = "47.0.0"
+arrow-integration-test = "49.0.0"
+arrow-schema = "49.0.0"
 async-trait = "0.1.64"
 base64 = "0.21.0"
 
@@ -50,18 +50,18 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-32-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-32-upgrade", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-34-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-34-upgrade", optional = true }
 
 dashmap = "5.4.0"
 
-datafusion = "32.0.0"
-datafusion-common = "32.0.0"
-datafusion-expr = "32.0.0"
+datafusion = "34.0.0"
+datafusion-common = "34.0.0"
+datafusion-expr = "34.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "2b913b37e71ed96212dcec8c3fc8e865754ced82", features = ["s3-native-tls", "datafusion-ext"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "22e6fea700bc282cfdf2cd1061268deea3983c0f", features = ["s3-native-tls", "datafusion-ext"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
@@ -69,7 +69,7 @@ itertools = ">=0.10.0"
 lazy_static = ">=1.4.0"
 log = "0.4"
 moka = { version = "0.12.2", default_features = false, features = ["future", "atomic64", "quanta"] }
-object_store = "0.7"
+object_store = "0.8"
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
 pretty_env_logger = "0.4"
@@ -87,7 +87,7 @@ rustyline = "13.0"
 serde = "1.0.156"
 serde_json = "1.0.93"
 sha2 = ">=0.10.1"
-sqlparser = "0.38"
+sqlparser = "0.40"
 sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"

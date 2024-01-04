@@ -65,7 +65,7 @@ async fn test_delete_statement(
     //
     let mut table = context.try_get_delta_table("test_table").await.unwrap();
     table.load().await.unwrap();
-    let mut all_partitions = table.get_files().clone();
+    let mut all_partitions = table.get_files_iter().collect_vec().clone();
     assert_eq!(all_partitions.len(), 4);
     let partition_1 = all_partitions.first().unwrap().clone();
     let partition_4 = all_partitions.last().unwrap().clone();
@@ -118,7 +118,7 @@ async fn test_delete_statement(
 
     // Ensure partitions 2 and 3 have been fused into a new partition, and record it.
     table.load().await.unwrap();
-    match table.get_files().as_slice() {
+    match table.get_files_iter().collect_vec().as_slice() {
         [f_1, f_2, f_3]
             if f_1 == &partition_1
                 && f_2 == &partition_4
@@ -140,7 +140,7 @@ async fn test_delete_statement(
 
     // Expect too see a new (6th) partition
     table.load().await.unwrap();
-    match table.get_files().as_slice() {
+    match table.get_files_iter().collect_vec().as_slice() {
         [f_1, f_2, f_3, f_4]
             if f_1 == &partition_1
                 && f_2 == &partition_4
@@ -185,7 +185,7 @@ async fn test_delete_statement(
     assert_batches_eq!(expected, &results);
 
     table.load().await.unwrap();
-    match table.get_files().as_slice() {
+    match table.get_files_iter().collect_vec().as_slice() {
         [f_1, f_2] if f_1 == &partition_4 && !all_partitions.contains(f_2) => {
             all_partitions.push(f_2.clone())
         }
@@ -211,7 +211,7 @@ async fn test_delete_statement(
 
     // Both partitions are inherited from the previous version
     table.load().await.unwrap();
-    match table.get_files().as_slice() {
+    match table.get_files_iter().collect_vec().as_slice() {
         [f_1, f_2] if f_1 == &partition_4 && f_2 == &partition_7 => {}
         _ => panic!("Expected same partitions as before"),
     };
@@ -246,7 +246,7 @@ async fn test_delete_statement(
 
     // Still only one partition file, but different from before
     table.load().await.unwrap();
-    match table.get_files()[..] {
+    match table.get_files_iter().collect_vec()[..] {
         [ref f_1] if !all_partitions.contains(f_1) => all_partitions.push(f_1.clone()),
         _ => panic!("Expected exactly 1 new partition different from the previous one"),
     };
@@ -266,7 +266,7 @@ async fn test_delete_statement(
     assert!(results.is_empty());
 
     table.load().await.unwrap();
-    assert!(table.get_files().is_empty())
+    assert!(table.get_files_iter().collect_vec().is_empty())
 }
 
 #[tokio::test]
@@ -358,7 +358,7 @@ async fn test_update_statement(
     //
     let mut table = context.try_get_delta_table("test_table").await.unwrap();
     table.load().await.unwrap();
-    let mut all_partitions = table.get_files().clone();
+    let mut all_partitions = table.get_files_iter().collect_vec().clone();
     assert_eq!(all_partitions.len(), 4);
     let partition_2 = all_partitions[1].clone();
     let partition_3 = all_partitions[2].clone();
@@ -376,7 +376,7 @@ async fn test_update_statement(
     assert_eq!(
         format!("{}", plan.display_indent()),
         r#"Dml: op=[Update] table=[test_table]
-  Projection: Utf8("2022-01-01 21:21:21Z") AS some_time, test_table.some_value - Float32(10) AS some_value, test_table.some_other_value AS some_other_value, test_table.some_bool_value AS some_bool_value, Int64(5555) AS some_int_value
+  Projection: TimestampMicrosecond(1641072081000000, None) AS some_time, test_table.some_value - Float32(10) AS some_value, test_table.some_other_value AS some_other_value, test_table.some_bool_value AS some_bool_value, Int64(5555) AS some_int_value
     Filter: test_table.some_value = Float32(41) OR test_table.some_value = Float32(42) OR test_table.some_value = Float32(43)
       TableScan: test_table projection=[some_value, some_other_value, some_bool_value], partial_filters=[test_table.some_value = Float32(41) OR test_table.some_value = Float32(42) OR test_table.some_value = Float32(43)]"#
     );
@@ -411,7 +411,7 @@ async fn test_update_statement(
 
     // Ensure partitions 1 and 4 have been fused into a new partition, and record it.
     table.load().await.unwrap();
-    match table.get_files().as_slice() {
+    match table.get_files_iter().collect_vec().as_slice() {
         [f_1, f_2, f_3]
             if f_1 == &partition_2
                 && f_2 == &partition_3
@@ -440,7 +440,7 @@ async fn test_update_statement(
 
     // Ensure partitions from before are still there
     table.load().await.unwrap();
-    match table.get_files().as_slice() {
+    match table.get_files_iter().collect_vec().as_slice() {
         [f_1, f_2, f_3]
             if f_1 == &partition_2 && f_2 == &partition_3 && f_3 == &partition_5 => {}
         _ => panic!("Expected 3 inherited partitions"),
@@ -498,7 +498,7 @@ async fn test_update_statement(
     assert_batches_eq!(expected, &results);
 
     table.load().await.unwrap();
-    match table.get_files().as_slice() {
+    match table.get_files_iter().collect_vec().as_slice() {
         [f_1] if !all_partitions.contains(f_1) => {}
         _ => panic!("Expected only 1 new partition"),
     };

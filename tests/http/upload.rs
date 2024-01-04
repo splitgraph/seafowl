@@ -54,7 +54,7 @@ async fn test_upload_base(
     // drop the writer early to release the borrow.
     if file_format == "csv" {
         let mut writer = WriterBuilder::new()
-            .has_headers(if let Some(has_headers) = add_headers {
+            .with_header(if let Some(has_headers) = add_headers {
                 has_headers
             } else {
                 true

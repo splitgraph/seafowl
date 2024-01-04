@@ -9,7 +9,8 @@ use log::{debug, error, warn};
 use moka::future::{Cache, CacheBuilder, FutureExt};
 use moka::notification::RemovalCause;
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions,
+    PutResult,
 };
 
 use std::fmt::Display;
@@ -255,8 +256,17 @@ impl ObjectStore for CachingObjectStore {
         &self,
         location: &object_store::path::Path,
         bytes: Bytes,
-    ) -> object_store::Result<()> {
+    ) -> object_store::Result<PutResult> {
         self.inner.put(location, bytes).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &object_store::path::Path,
+        bytes: Bytes,
+        opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put_opts(location, bytes, opts).await
     }
 
     async fn put_multipart(
@@ -354,11 +364,19 @@ impl ObjectStore for CachingObjectStore {
         self.inner.delete(location).await
     }
 
-    async fn list(
+    /// Delete all the objects at the specified locations in bulk when applicable
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, object_store::Result<object_store::path::Path>>,
+    ) -> BoxStream<'a, object_store::Result<object_store::path::Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(
         &self,
         prefix: Option<&object_store::path::Path>,
-    ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>> {
-        self.inner.list(prefix).await
+    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
     }
 
     async fn list_with_delimiter(

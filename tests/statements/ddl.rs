@@ -379,7 +379,7 @@ async fn test_create_table_drop_schema(
             vec![
                 Path::from("_delta_log/00000000000000000000.json"),
                 Path::from("_delta_log/00000000000000000001.json"),
-                table.get_files()[0].clone(),
+                table.get_files_iter().collect_vec()[0].clone(),
             ],
         )
         .await;

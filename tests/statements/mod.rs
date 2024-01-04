@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
@@ -7,7 +8,6 @@ use chrono::{TimeZone, Utc};
 use datafusion::assert_batches_eq;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{assert_contains, Result};
-use deltalake::logstore::LogStore;
 use itertools::sorted;
 use object_store::path::Path;
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
@@ -94,7 +94,7 @@ ttl = 30
             None,
         ),
         ObjectStoreType::Gcs => {
-            let creds_json = json!({"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""});
+            let creds_json = json!({"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": "", "private_key_id": ""});
             // gcs_base_url should match docker-compose.yml:fake-gcs-server
             let google_application_credentials_path =
                 std::path::Path::new(FAKE_GCS_CREDS_PATH);
