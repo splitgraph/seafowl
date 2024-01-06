@@ -30,6 +30,24 @@ object-store-gcs = ["object_store/gcp"]
 object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
+[patch.crates-io]
+# Patch to pick up https://github.com/apache/arrow-rs/pull/5282 from
+# https://github.com/splitgraph/arrow-rs/tree/47-with-date-fix
+
+arrow-arith = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-array = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-buffer = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-cast = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-csv = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-data = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-ipc = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-json = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-ord = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-row = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-schema = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-select = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+arrow-string = { git = "https://github.com/splitgraph/arrow-rs", branch = "47-with-date-fix" }
+
 [dependencies]
 arrow = "47.0.0"
 arrow-buffer = "47.0.0"
