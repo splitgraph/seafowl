@@ -5,7 +5,6 @@ use crate::config::schema;
 use crate::config::schema::{GCS, S3};
 use crate::context::delta::plan_to_object_store;
 use crate::context::SeafowlContext;
-use crate::delta_rs::backports::parquet_scan_from_actions;
 use crate::nodes::{
     ConvertTable, CreateFunction, CreateTable, DropFunction, RenameTable,
     SeafowlExtensionNode, Vacuum,
@@ -39,12 +38,15 @@ use datafusion::{
     physical_plan::{ExecutionPlan, SendableRecordBatchStream},
     sql::TableReference,
 };
-use datafusion_common::{ResolvedTableReference, SchemaReference};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{Column as ColumnExpr, ResolvedTableReference, SchemaReference};
 use datafusion_expr::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     DropTable, Extension, LogicalPlan, Projection,
 };
-use datafusion_expr::{DdlStatement, DmlStatement, DropCatalogSchema, Filter, WriteOp};
+use datafusion_expr::{
+    DdlStatement, DmlStatement, DropCatalogSchema, Expr, Filter, WriteOp,
+};
 use deltalake::kernel::{Action, Add, Remove};
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
@@ -255,9 +257,6 @@ impl SeafowlContext {
                     ));
                 };
 
-                // TODO: Once https://github.com/delta-io/delta-rs/issues/1126 is closed use the
-                // native delta-rs UPDATE op
-
                 let mut table = self.try_get_delta_table(table_name).await?;
                 table.load().await?;
 
@@ -268,9 +267,31 @@ impl SeafowlContext {
                 )?;
 
                 let state = self.inner.state();
+                let mut filter = vec![];
 
                 let (selection_expr, removes) =
                     if let LogicalPlan::Filter(Filter { predicate, .. }) = &**input {
+                        // The scan builder in delta-rs builds physical expressions for pruning
+                        // using non-qualified schemas, but the filter expressions in the UPDATE
+                        // are qualified thanks to https://github.com/apache/arrow-datafusion/pull/7316
+                        //
+                        // This leads to a panic unless we strip out the qualifier first.
+                        filter.push(predicate.clone().transform(&|expr| {
+                            Ok(
+                                if let Expr::Column(ColumnExpr {
+                                    relation: Some(_),
+                                    name,
+                                }) = &expr
+                                {
+                                    Transformed::Yes(Expr::Column(
+                                        ColumnExpr::new_unqualified(name),
+                                    ))
+                                } else {
+                                    Transformed::No(expr)
+                                },
+                            )
+                        })?);
+
                         // A WHERE clause has been used; employ it to prune the update down to only
                         // a subset of files, while inheriting the rest from the previous version
                         let filter_expr = create_physical_expr(
@@ -305,16 +326,7 @@ impl SeafowlContext {
                 let uuid = self.get_table_uuid(table_name).await?;
                 let mut actions: Vec<Action> = vec![];
                 if !removes.is_empty() {
-                    let base_scan = parquet_scan_from_actions(
-                        &table,
-                        removes.as_slice(),
-                        schema_ref.as_ref(),
-                        selection_expr.clone(),
-                        &state,
-                        None,
-                        None,
-                    )
-                    .await?;
+                    let base_scan = table.scan(&state, None, &filter, None).await?;
 
                     let projections = project_expressions(
                         expr,
@@ -388,7 +400,6 @@ impl SeafowlContext {
                 op: WriteOp::Delete,
                 input,
             }) => {
-                // TODO: Once https://github.com/delta-io/delta-rs/pull/1176 is merged use that instead
                 let uuid = self.get_table_uuid(table_name).await?;
 
                 let mut table = self.try_get_delta_table(table_name).await?;
@@ -436,16 +447,9 @@ impl SeafowlContext {
                                 &ExecutionProps::new(),
                             )?;
 
-                            let base_scan = parquet_scan_from_actions(
-                                &table,
-                                files_to_prune.as_slice(),
-                                schema_ref.as_ref(),
-                                Some(filter_expr.clone()),
-                                &state,
-                                None,
-                                None,
-                            )
-                            .await?;
+                            let base_scan = table
+                                .scan(&state, None, &[predicate.clone()], None)
+                                .await?;
 
                             let filter_plan: Arc<dyn ExecutionPlan> =
                                 Arc::new(FilterExec::try_new(filter_expr, base_scan)?);
