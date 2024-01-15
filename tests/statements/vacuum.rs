@@ -46,14 +46,14 @@ async fn test_vacuum_table() -> Result<()> {
     let mut table_2 = context.try_get_delta_table("table_2").await?;
 
     table_1.load_version(1).await?;
-    let table_1_v1_file = table_1.get_files()[0].clone();
+    let table_1_v1_file = table_1.get_files_iter().collect_vec()[0].clone();
     table_1.load_version(2).await?;
-    let table_1_v2_file = table_1.get_files()[0].clone();
+    let table_1_v2_file = table_1.get_files_iter().collect_vec()[0].clone();
 
     table_2.load().await?;
-    let table_2_v1_file = table_2.get_files()[0].clone();
+    let table_2_v1_file = table_2.get_files_iter().collect_vec()[0].clone();
     table_2.load_version(2).await?;
-    let table_2_v2_file = table_2.get_files()[1].clone();
+    let table_2_v2_file = table_2.get_files_iter().collect_vec()[1].clone();
 
     // Check initial directory state
     testutils::assert_uploaded_objects(

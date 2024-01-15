@@ -63,7 +63,7 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         SQLDataType::Char(_)
         | SQLDataType::Varchar(_)
         | SQLDataType::Text
-        | SQLDataType::String => Ok(DataType::Utf8),
+        | SQLDataType::String(_) => Ok(DataType::Utf8),
         SQLDataType::Timestamp(None, tz_info) => {
             let tz = if matches!(tz_info, TimezoneInfo::Tz)
                 || matches!(tz_info, TimezoneInfo::WithTimeZone)
@@ -134,6 +134,10 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         | SQLDataType::BigNumeric(_)
         | SQLDataType::BigDecimal(_)
         | SQLDataType::Clob(_)
+        | SQLDataType::Bytes(_)
+        | SQLDataType::Int64
+        | SQLDataType::Float64
+        | SQLDataType::Struct(_)
         => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),

@@ -13,8 +13,10 @@ use tokio::io::AsyncWrite;
 
 use tokio::fs::{copy, create_dir_all, remove_file, rename};
 
-use deltalake::logstore::{default_logstore::DefaultLogStore, LogStoreConfig};
-use object_store::prefix::PrefixStore;
+use deltalake::logstore::{default_logstore, LogStore};
+use deltalake::storage::{factories, ObjectStoreFactory, ObjectStoreRef, StorageOptions};
+use deltalake::{DeltaResult, DeltaTableError};
+use object_store::{prefix::PrefixStore, PutOptions, PutResult};
 use std::path::Path as StdPath;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -72,11 +74,14 @@ impl InternalObjectStore {
             root_uri.set_path(&format!("{}/", root_uri.path()));
         }
 
-        Self {
+        let store = Self {
             inner,
-            root_uri,
+            root_uri: root_uri.clone(),
             config,
-        }
+        };
+
+        factories().insert(root_uri, Arc::new(store.clone()));
+        store
     }
 
     // Get the table prefix relative to the root of the internal object store.
@@ -102,23 +107,21 @@ impl InternalObjectStore {
     // 2. We want to override `rename_if_not_exists` for AWS S3
     // This means we have 2 layers of indirection before we hit the "real" object store:
     // (Delta `LogStore` -> `PrefixStore` -> `InternalObjectStore` -> `inner`).
-    pub fn get_log_store(&self, table_prefix: &str) -> Arc<DefaultLogStore> {
+    pub fn get_log_store(&self, table_prefix: &str) -> Arc<dyn LogStore> {
         let prefix = self.table_prefix(table_prefix);
         let prefixed_store: PrefixStore<InternalObjectStore> =
             PrefixStore::new(self.clone(), prefix);
 
-        Arc::from(DefaultLogStore::new(
+        default_logstore(
             Arc::from(prefixed_store),
-            LogStoreConfig {
-                location: self.root_uri.join(table_prefix).unwrap(),
-                options: Default::default(),
-            },
-        ))
+            &self.root_uri.join(table_prefix).unwrap(),
+            &Default::default(),
+        )
     }
 
     /// Delete all objects under a given prefix
     pub async fn delete_in_prefix(&self, prefix: &Path) -> Result<(), Error> {
-        let mut path_stream = self.inner.list(Some(prefix)).await?;
+        let mut path_stream = self.inner.list(Some(prefix));
         while let Some(maybe_object) = path_stream.next().await {
             if let Ok(ObjectMeta { location, .. }) = maybe_object {
                 self.inner.delete(&location).await?;
@@ -189,8 +192,17 @@ impl Display for InternalObjectStore {
 #[async_trait::async_trait]
 impl ObjectStore for InternalObjectStore {
     /// Save the provided bytes to the specified location.
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
+    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
         self.inner.put(location, bytes).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &Path,
+        bytes: Bytes,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        self.inner.put_opts(location, bytes, opts).await
     }
 
     async fn put_multipart(
@@ -235,15 +247,29 @@ impl ObjectStore for InternalObjectStore {
         self.inner.delete(location).await
     }
 
+    /// Delete all the objects at the specified locations in bulk when applicable
+    fn delete_stream<'a>(
+        &'a self,
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
+        locations
+            .map(|location| async {
+                let location = location?;
+                self.delete(&location).await?;
+                Ok(location)
+            })
+            .buffered(10)
+            .boxed()
+    }
+
     /// List all the objects with the given prefix.
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`.
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        self.inner.list(prefix).await
+    ///
+    /// Note: the order of returned [`ObjectMeta`] is not guaranteed
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+        self.inner.list(prefix)
     }
 
     /// List objects with the given prefix and an implementation specific
@@ -286,13 +312,27 @@ impl ObjectStore for InternalObjectStore {
     }
 }
 
+// TODO: Implement a proper handler/factory for this at some point
+impl ObjectStoreFactory for InternalObjectStore {
+    fn parse_url_opts(
+        &self,
+        url: &Url,
+        _options: &StorageOptions,
+    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+        if self.root_uri.scheme() == url.scheme() {
+            Ok((Arc::new(self.clone()), Path::from("/")))
+        } else {
+            Err(DeltaTableError::InvalidTableLocation(url.clone().into()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::config::context::build_object_store;
     use crate::config::schema::{ObjectStore, S3};
     use crate::object_store::wrapped::InternalObjectStore;
     use datafusion::common::Result;
-    use deltalake::logstore::LogStore;
     use rstest::rstest;
 
     #[rstest]

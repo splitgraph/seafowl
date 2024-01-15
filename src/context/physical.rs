@@ -63,7 +63,7 @@ use url::Url;
 /// This is used for queries that are actually run before we produce the plan,
 /// since they have to manipulate catalog metadata or use async to write to it.
 fn make_dummy_exec() -> Arc<dyn ExecutionPlan> {
-    Arc::new(EmptyExec::new(false, SchemaRef::new(Schema::empty())))
+    Arc::new(EmptyExec::new(SchemaRef::new(Schema::empty())))
 }
 
 impl SeafowlContext {

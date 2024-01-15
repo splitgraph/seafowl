@@ -2,13 +2,13 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use futures::{stream, StreamExt};
+use futures::{stream, StreamExt, TryStreamExt};
 
 use chrono::{DateTime, TimeZone, Utc};
 use object_store::path::Path;
 use object_store::{
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
-    ObjectStore,
+    ObjectStore, PutOptions, PutResult,
 };
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use warp::hyper::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
@@ -234,13 +234,29 @@ impl HttpObjectStore {
             last_modified: Utc::now(),
             size: usize::try_from(length).expect("unsupported size on this platform"),
             e_tag: None,
+            version: None,
         })
     }
 }
 
 #[async_trait]
 impl ObjectStore for HttpObjectStore {
-    async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
+    async fn put(
+        &self,
+        _location: &Path,
+        _bytes: Bytes,
+    ) -> object_store::Result<PutResult> {
+        Err(object_store::Error::NotSupported {
+            source: Box::new(HttpObjectStoreError::WritesUnsupported),
+        })
+    }
+
+    async fn put_opts(
+        &self,
+        _location: &Path,
+        _bytes: Bytes,
+        _opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
         Err(object_store::Error::NotSupported {
             source: Box::new(HttpObjectStoreError::WritesUnsupported),
         })
@@ -366,6 +382,7 @@ impl ObjectStore for HttpObjectStore {
             last_modified: Utc::now(),
             size: usize::try_from(length).expect("unsupported size on this platform"),
             e_tag: None,
+            version: None,
         })
     }
 
@@ -375,26 +392,34 @@ impl ObjectStore for HttpObjectStore {
         })
     }
 
-    async fn list(
+    fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>> {
+    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
         // DataFusion uses the HEAD request instead of it's listing a single file
         // (path doesn't end with a slash). Since HTTP doesn't support listing anyway,
         // this makes our job easier.
 
-        match prefix {
-            None => Err(HttpObjectStoreError::ListingUnsupported.into()),
-            Some(p) => {
-                let p_str = p.to_string();
-                if p_str.ends_with('/') {
-                    Err(HttpObjectStoreError::ListingUnsupported.into())
-                } else {
-                    // Use the HEAD implementation instead
-                    Ok(Box::pin(stream::iter(vec![self.head(p).await])))
+        let prefix = prefix.cloned();
+        futures::stream::once(async move {
+            match prefix {
+                None => Err(<HttpObjectStoreError as Into<object_store::Error>>::into(
+                    HttpObjectStoreError::ListingUnsupported,
+                )),
+                Some(p) => {
+                    let p_str = p.to_string();
+
+                    if p_str.ends_with('/') {
+                        Err(HttpObjectStoreError::ListingUnsupported.into())
+                    } else {
+                        // Use the HEAD implementation instead
+                        Ok(Box::pin(stream::iter(vec![self.head(&p).await])))
+                    }
                 }
             }
-        }
+        })
+        .try_flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(
@@ -551,6 +576,7 @@ pub fn header_meta(
         last_modified,
         size,
         e_tag,
+        version: None,
     })
 }
 

@@ -134,8 +134,6 @@ pub async fn assert_uploaded_objects(
 ) {
     let actual = object_store
         .list(None)
-        .await
-        .unwrap()
         .map_ok(|meta| meta.location)
         .try_collect::<Vec<Path>>()
         .await

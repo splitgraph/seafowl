@@ -1299,7 +1299,7 @@ c40201087f230041206b2203240020032002370318200320013703102003\
 
         ctx.sql(
             "CREATE TABLE timestamp_values AS
-            SELECT CAST(v1 AS TIMESTAMP) AS v1, CAST(v2 AS INT) AS v2
+            SELECT to_timestamp_nanos(v1) AS v1, CAST(v2 AS INT) AS v2
             FROM (VALUES (1669127920543717000, 2), (1669127920543717000, 4), (0, 6)) d (v1, v2)",
         )
         .await

@@ -4,9 +4,7 @@ use chrono::{NaiveDateTime, TimeZone, Utc};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, FileScanConfig,
-};
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::execution::context::SessionState;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
@@ -43,7 +41,7 @@ pub async fn parquet_scan_from_actions(
             .push(part);
     }
 
-    let table_partition_cols = table.get_metadata()?.partition_columns.clone();
+    let table_partition_cols = table.metadata()?.partition_columns.clone();
     let file_schema = Arc::new(Schema::new(
         schema
             .fields()
@@ -66,19 +64,12 @@ pub async fn parquet_scan_from_actions(
                 object_store_url,
                 file_schema,
                 file_groups: file_groups.into_values().collect(),
-                statistics: table.state.datafusion_table_statistics(),
+                statistics: table.state.datafusion_table_statistics()?,
                 projection: projection.cloned(),
                 limit,
                 table_partition_cols: table_partition_cols
                     .iter()
-                    .map(|c| {
-                        Ok((
-                            c.to_owned(),
-                            wrap_partition_type_in_dict(
-                                schema.field_with_name(c)?.data_type().clone(),
-                            ),
-                        ))
-                    })
+                    .map(|c| Ok(schema.field_with_name(c)?.clone()))
                     .collect::<Result<Vec<_>, ArrowError>>()?,
                 output_ordering: vec![],
                 infinite_source: false,
@@ -117,6 +108,7 @@ fn partitioned_file_from_action(action: &Add, schema: &Schema) -> PartitionedFil
             last_modified,
             size: action.size as usize,
             e_tag: None,
+            version: None,
         },
         partition_values,
         range: None,
@@ -142,7 +134,7 @@ fn to_correct_scalar_value(
                 )
                 .ok()?;
                 let cast_arr = cast_with_options(
-                    &time_nanos.to_array(),
+                    &time_nanos.to_array().ok()?,
                     field_dt,
                     &CastOptions {
                         safe: false,
@@ -164,7 +156,7 @@ fn to_correct_scalar_value(
                 )
                 .ok()?;
                 let cast_arr = cast_with_options(
-                    &time_nanos.to_array(),
+                    &time_nanos.to_array().ok()?,
                     field_dt,
                     &CastOptions {
                         safe: false,
