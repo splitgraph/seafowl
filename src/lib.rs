@@ -6,7 +6,6 @@ pub mod cli;
 pub mod config;
 pub mod context;
 pub mod datafusion;
-pub mod delta_rs;
 pub mod frontend;
 pub mod nodes;
 pub mod object_store;
