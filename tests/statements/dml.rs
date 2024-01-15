@@ -378,7 +378,7 @@ async fn test_update_statement(
         r#"Dml: op=[Update] table=[test_table]
   Projection: TimestampMicrosecond(1641072081000000, None) AS some_time, test_table.some_value - Float32(10) AS some_value, test_table.some_other_value AS some_other_value, test_table.some_bool_value AS some_bool_value, Int64(5555) AS some_int_value
     Filter: test_table.some_value = Float32(41) OR test_table.some_value = Float32(42) OR test_table.some_value = Float32(43)
-      TableScan: test_table projection=[some_value, some_other_value, some_bool_value], partial_filters=[test_table.some_value = Float32(41) OR test_table.some_value = Float32(42) OR test_table.some_value = Float32(43)]"#
+      TableScan: test_table"#
     );
 
     // Now execute and check the results

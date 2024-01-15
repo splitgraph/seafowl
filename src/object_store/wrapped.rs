@@ -14,6 +14,8 @@ use tokio::io::AsyncWrite;
 use tokio::fs::{copy, create_dir_all, remove_file, rename};
 
 use deltalake::logstore::{default_logstore, LogStore};
+use deltalake::storage::{factories, ObjectStoreFactory, ObjectStoreRef, StorageOptions};
+use deltalake::{DeltaResult, DeltaTableError};
 use object_store::{prefix::PrefixStore, PutOptions, PutResult};
 use std::path::Path as StdPath;
 use std::str::FromStr;
@@ -72,11 +74,14 @@ impl InternalObjectStore {
             root_uri.set_path(&format!("{}/", root_uri.path()));
         }
 
-        Self {
+        let store = Self {
             inner,
-            root_uri,
+            root_uri: root_uri.clone(),
             config,
-        }
+        };
+
+        factories().insert(root_uri, Arc::new(store.clone()));
+        store
     }
 
     // Get the table prefix relative to the root of the internal object store.
@@ -107,11 +112,11 @@ impl InternalObjectStore {
         let prefixed_store: PrefixStore<InternalObjectStore> =
             PrefixStore::new(self.clone(), prefix);
 
-        Arc::from(default_logstore(
+        default_logstore(
             Arc::from(prefixed_store),
             &self.root_uri.join(table_prefix).unwrap(),
             &Default::default(),
-        ))
+        )
     }
 
     /// Delete all objects under a given prefix
@@ -304,6 +309,21 @@ impl ObjectStore for InternalObjectStore {
             return self.inner.rename(from, to).await;
         }
         self.inner.rename_if_not_exists(from, to).await
+    }
+}
+
+// TODO: Implement a proper handler/factory for this at some point
+impl ObjectStoreFactory for InternalObjectStore {
+    fn parse_url_opts(
+        &self,
+        url: &Url,
+        _options: &StorageOptions,
+    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+        if self.root_uri.scheme() == url.scheme() {
+            Ok((Arc::new(self.clone()), Path::from("/")))
+        } else {
+            Err(DeltaTableError::InvalidTableLocation(url.clone().into()))
+        }
     }
 }
 

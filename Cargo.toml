@@ -61,7 +61,7 @@ datafusion-expr = "34.0.0"
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "22e6fea700bc282cfdf2cd1061268deea3983c0f", features = ["s3-native-tls", "datafusion-ext"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "9264edea89a2fc1c35f4a6b9faab125748ff3651", features = ["s3-native-tls", "datafusion-ext"] }
 
 futures = "0.3"
 hex = ">=0.4.0"

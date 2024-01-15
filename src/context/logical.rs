@@ -14,6 +14,10 @@ use crate::{
 use datafusion::common::DFSchema;
 use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::execution::context::SessionState;
+use datafusion::optimizer::analyzer::Analyzer;
+use datafusion::optimizer::optimizer::Optimizer;
+use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
+use datafusion::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion::sql::parser::{CopyToSource, CopyToStatement};
 use datafusion::{prelude::SessionContext, sql::TableReference};
 use datafusion_expr::logical_plan::{Extension, LogicalPlan};
@@ -121,7 +125,31 @@ impl SeafowlContext {
                 if with_hints.is_empty() && joins.is_empty() => {
                     let state = self.inner.state();
                     let plan = state.statement_to_plan(stmt).await?;
-                    state.optimize(&plan)
+
+                    // Create a custom optimizer to avoid mangling effects of some optimizers (like
+                    // `CommonSubexprEliminate`) which can add nested Projection plans and rewrite
+                    // expressions.
+                    // We also need to do a analyze round beforehand for type coercion.
+                    let analyzer = Analyzer::new();
+                    let plan = analyzer.execute_and_check(
+                        &plan,
+                        self.inner.copied_config().options(),
+                        |_, _| {},
+                    )?;
+                    let optimizer = Optimizer::with_rules(
+                        vec![
+                            Arc::new(SimplifyExpressions::new()),
+                        ]
+                    );
+                    let config = OptimizerContext::default();
+                    optimizer.optimize(&plan, &config, |plan: &LogicalPlan, rule: &dyn OptimizerRule| {
+                        debug!(
+                                "After applying rule '{}':\n{}\n",
+                                rule.name(),
+                                plan.display_indent()
+                            )
+                    }
+                    )
                 },
                 Statement::Delete{ .. } => {
                     let state = self.inner.state();
