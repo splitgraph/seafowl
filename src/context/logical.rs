@@ -18,8 +18,9 @@ use datafusion::optimizer::analyzer::Analyzer;
 use datafusion::optimizer::optimizer::Optimizer;
 use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion::optimizer::{OptimizerContext, OptimizerRule};
+use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{CopyToSource, CopyToStatement};
-use datafusion::{prelude::SessionContext, sql::TableReference};
+use datafusion_common::TableReference;
 use datafusion_expr::logical_plan::{Extension, LogicalPlan};
 use deltalake::DeltaTable;
 use itertools::Itertools;
@@ -325,8 +326,10 @@ impl SeafowlContext {
     // Should become obsolete once `sqlparser-rs` introduces support for some form of the `AS OF`
     // clause: https://en.wikipedia.org/wiki/SQL:2011.
     async fn rewrite_time_travel_query(&self, q: &mut Query) -> Result<SessionState> {
-        let mut version_processor =
-            TableVersionProcessor::new(self.database.clone(), DEFAULT_SCHEMA.to_string());
+        let mut version_processor = TableVersionProcessor::new(
+            self.default_catalog.clone(),
+            DEFAULT_SCHEMA.to_string(),
+        );
         q.visit(&mut version_processor);
 
         if version_processor.table_versions.is_empty() {
@@ -348,7 +351,7 @@ impl SeafowlContext {
 
             let full_table_name = table.to_string();
             let mut resolved_ref = TableReference::from(full_table_name.as_str())
-                .resolve(&self.database, DEFAULT_SCHEMA);
+                .resolve(&self.default_catalog, &self.default_schema);
 
             // We only support datetime DeltaTable version specification for start
             let table_uuid = self.get_table_uuid(resolved_ref.clone()).await?;

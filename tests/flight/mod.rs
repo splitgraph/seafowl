@@ -15,9 +15,11 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
 
 mod client;
+mod search_path;
 
 async fn start_flight_server() -> (
     Arc<SeafowlContext>,
@@ -66,4 +68,29 @@ async fn create_flight_client(addr: SocketAddr) -> FlightClient {
         .expect("Channel connected");
 
     FlightClient::new(channel)
+}
+
+async fn get_flight_batches(
+    client: &mut FlightClient,
+    query: String,
+) -> Result<Vec<RecordBatch>> {
+    let cmd = CommandStatementQuery {
+        query,
+        transaction_id: None,
+    };
+    let request = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+    let response = client.get_flight_info(request).await?;
+
+    // Get the returned ticket
+    let ticket = response.endpoint[0]
+        .ticket
+        .clone()
+        .expect("expected ticket");
+
+    // Retrieve the corresponding Flight stream and collect into batches
+    let flight_stream = client.do_get(ticket).await?;
+
+    let batches = flight_stream.try_collect().await?;
+
+    Ok(batches)
 }

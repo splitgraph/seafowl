@@ -12,7 +12,7 @@ use crate::wasm_udf::wasm::create_udf_from_wasm;
 use base64::{engine::general_purpose::STANDARD, Engine};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::{error::DataFusionError, prelude::SessionContext, sql::TableReference};
-use datafusion_common::OwnedTableReference;
+use datafusion_common::{OwnedTableReference, ResolvedTableReference};
 use deltalake::DeltaTable;
 use object_store::path::Path;
 use std::sync::Arc;
@@ -24,18 +24,19 @@ pub struct SeafowlContext {
     pub inner: SessionContext,
     pub metastore: Arc<Metastore>,
     pub internal_object_store: Arc<InternalObjectStore>,
-    pub database: String,
+    pub default_catalog: String,
+    pub default_schema: String,
     pub max_partition_size: u32,
 }
 
 impl SeafowlContext {
-    // Create a new `SeafowlContext` with a new inner context scoped to a different default DB
-    pub fn scope_to_database(&self, name: String) -> Arc<SeafowlContext> {
+    // Create a new `SeafowlContext` with a new inner context scoped to a different default catalog/schema
+    pub fn scope_to(&self, catalog: String, schema: String) -> Arc<SeafowlContext> {
         // Swap the default catalog in the new internal context's session config
         let session_config = self
             .inner()
             .copied_config()
-            .with_default_catalog_and_schema(name.clone(), DEFAULT_SCHEMA);
+            .with_default_catalog_and_schema(&catalog, &schema);
 
         let state =
             build_state_with_table_factories(session_config, self.inner().runtime_env());
@@ -44,9 +45,18 @@ impl SeafowlContext {
             inner: SessionContext::new_with_state(state),
             metastore: self.metastore.clone(),
             internal_object_store: self.internal_object_store.clone(),
-            database: name,
+            default_catalog: catalog,
+            default_schema: schema,
             max_partition_size: self.max_partition_size,
         })
+    }
+
+    pub fn scope_to_catalog(&self, catalog: String) -> Arc<SeafowlContext> {
+        self.scope_to(catalog, DEFAULT_SCHEMA.to_string())
+    }
+
+    pub fn scope_to_schema(&self, schema: String) -> Arc<SeafowlContext> {
+        self.scope_to(self.default_catalog.clone(), schema)
     }
 
     pub fn inner(&self) -> &SessionContext {
@@ -67,16 +77,26 @@ impl SeafowlContext {
         // This does incur a latency cost to every query.
 
         self.inner.register_catalog(
-            &self.database,
-            Arc::new(self.metastore.build_catalog(&self.database).await?),
+            &self.default_catalog,
+            Arc::new(self.metastore.build_catalog(&self.default_catalog).await?),
         );
 
         // Register all functions in the database
         self.metastore
-            .build_functions(&self.database)
+            .build_functions(&self.default_catalog)
             .await?
             .iter()
             .try_for_each(|f| self.register_function(&f.name, &f.details))
+    }
+
+    // Taken from DF SessionState where's it's private
+    pub fn resolve_table_ref<'a>(
+        &'a self,
+        table_ref: impl Into<TableReference<'a>>,
+    ) -> ResolvedTableReference<'a> {
+        table_ref
+            .into()
+            .resolve(&self.default_catalog, &self.default_schema)
     }
 
     // Check that the TableReference doesn't have a database/schema in it.
@@ -93,15 +113,15 @@ impl SeafowlContext {
         // This means that any potential catalog/schema references get condensed into the name, so
         // we have to unravel that name here again, and then resolve it properly.
         let reference = TableReference::from(name.to_string());
-        let resolved_reference = reference.resolve(&self.database, STAGING_SCHEMA);
+        let resolved_reference = reference.resolve(&self.default_catalog, STAGING_SCHEMA);
 
-        if resolved_reference.catalog != self.database
+        if resolved_reference.catalog != self.default_catalog
             || resolved_reference.schema != STAGING_SCHEMA
         {
             return Err(DataFusionError::Plan(format!(
                 "Can only create external tables in the staging schema.
                         Omit the schema/database altogether or use {}.{}.{}",
-                &self.database, STAGING_SCHEMA, resolved_reference.table
+                &self.default_catalog, STAGING_SCHEMA, resolved_reference.table
             )));
         }
 
@@ -221,7 +241,7 @@ pub mod test_utils {
         // place on another node
         context.metastore.catalogs.create("testdb").await.unwrap();
 
-        let context = context.scope_to_database("testdb".to_string());
+        let context = context.scope_to_catalog("testdb".to_string());
 
         // Create new non-default collection
         context.plan_query("CREATE SCHEMA testcol").await.unwrap();

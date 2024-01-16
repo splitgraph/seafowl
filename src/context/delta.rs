@@ -1,4 +1,3 @@
-use crate::catalog::DEFAULT_SCHEMA;
 use crate::context::SeafowlContext;
 #[cfg(test)]
 use crate::frontend::http::tests::deterministic_uuid;
@@ -280,19 +279,18 @@ pub(super) enum CreateDeltaTableDetails {
 
 impl SeafowlContext {
     pub(super) async fn create_delta_table<'a>(
-        &self,
+        &'a self,
         name: impl Into<TableReference<'a>>,
         details: CreateDeltaTableDetails,
     ) -> Result<Arc<DeltaTable>> {
-        let table_ref: TableReference = name.into();
-        let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
+        let resolved_ref = self.resolve_table_ref(name);
         let schema_name = resolved_ref.schema.clone();
         let table_name = resolved_ref.table.clone();
 
         let _ = self
             .metastore
             .schemas
-            .get(&self.database, &schema_name)
+            .get(&self.default_catalog, &schema_name)
             .await?;
 
         // NB: there's also a uuid generated below for table's `DeltaTableMetaData::id`, so it would
@@ -353,7 +351,7 @@ impl SeafowlContext {
         self.metastore
             .tables
             .create(
-                &self.database,
+                &self.default_catalog,
                 &schema_name,
                 &table_name,
                 TableProvider::schema(&table).as_ref(),
