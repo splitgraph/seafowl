@@ -166,7 +166,7 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
         runtime_config = runtime_config.with_temp_file_path(temp_dir);
     }
 
-    let session_config = SessionConfig::new()
+    let session_config = SessionConfig::from_env()?
         .with_information_schema(true)
         .with_default_catalog_and_schema(DEFAULT_DB, DEFAULT_SCHEMA);
 
