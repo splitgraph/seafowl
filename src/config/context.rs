@@ -208,7 +208,8 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
         inner: context,
         metastore: Arc::new(metastore),
         internal_object_store,
-        database: DEFAULT_DB.to_string(),
+        default_catalog: DEFAULT_DB.to_string(),
+        default_schema: DEFAULT_SCHEMA.to_string(),
         max_partition_size: cfg.misc.max_partition_size,
     })
 }

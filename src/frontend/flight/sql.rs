@@ -81,7 +81,7 @@ impl FlightSqlService for SeafowlFlightHandler {
         let query_id = Uuid::new_v4().to_string();
 
         let schema = self
-            .query_to_stream(&query.query, query_id.clone())
+            .query_to_stream(&query.query, query_id.clone(), request.metadata())
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 

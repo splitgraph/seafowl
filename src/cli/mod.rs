@@ -30,7 +30,7 @@ impl SeafowlCli {
         rl.load_history(SEAFOWL_CLI_HISTORY).ok();
 
         loop {
-            match rl.readline(format!("{}> ", self.ctx.database).as_str()) {
+            match rl.readline(format!("{}> ", self.ctx.default_catalog).as_str()) {
                 Ok(line) if line.starts_with('\\') => {
                     rl.add_history_entry(line.trim_end())?;
                     let command = line.split_whitespace().collect::<Vec<_>>().join(" ");

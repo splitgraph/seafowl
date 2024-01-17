@@ -9,6 +9,7 @@ use datafusion_common::DataFusionError;
 use lazy_static::lazy_static;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tonic::metadata::MetadataMap;
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -44,9 +45,23 @@ impl SeafowlFlightHandler {
         &self,
         query: &str,
         query_id: String,
+        metadata: &MetadataMap,
     ) -> Result<SchemaRef> {
-        let plan = self.context.plan_query(query).await?;
-        let batch_stream = self.context.execute_stream(plan).await?;
+        let ctx = if let Some(search_path) = metadata.get("search-path") {
+            self.context.scope_to_schema(
+                search_path
+                    .to_str()
+                    .map_err(|e| DataFusionError::Execution(format!(
+                        "Couldn't parse search path from header value {search_path:?}: {e}"
+                    )))?
+                    .to_string(),
+            )
+        } else {
+            self.context.clone()
+        };
+
+        let plan = ctx.plan_query(query).await?;
+        let batch_stream = ctx.execute_stream(plan).await?;
         let schema = batch_stream.schema();
 
         self.results.insert(query_id, Mutex::new(batch_stream));

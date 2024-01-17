@@ -177,7 +177,7 @@ impl SeafowlContext {
                 // Create a schema and register it
                 self.metastore
                     .schemas
-                    .create(&self.database, schema_name)
+                    .create(&self.default_catalog, schema_name)
                     .await?;
                 Ok(make_dummy_exec())
             }
@@ -518,8 +518,7 @@ impl SeafowlContext {
                 if_exists: _,
                 schema: _,
             })) => {
-                let table_ref = TableReference::from(name);
-                let resolved_ref = table_ref.resolve(&self.database, DEFAULT_SCHEMA);
+                let resolved_ref = self.resolve_table_ref(name);
 
                 if resolved_ref.schema == STAGING_SCHEMA {
                     // Dropping a staging table is a in-memory only op
@@ -549,7 +548,7 @@ impl SeafowlContext {
                 let schema_name = name.schema_name();
 
                 if let SchemaReference::Full { catalog, .. } = name
-                    && catalog != &self.database
+                    && catalog != &self.default_catalog
                 {
                     return Err(DataFusionError::Execution(
                         "Cannot delete schemas in other catalogs".to_string(),
@@ -558,7 +557,7 @@ impl SeafowlContext {
 
                 let schema = match self
                     .inner
-                    .catalog(&self.database)
+                    .catalog(&self.default_catalog)
                     .expect("Current catalog exists")
                     .schema(schema_name)
                 {
@@ -577,7 +576,7 @@ impl SeafowlContext {
                 // Delete each table sequentially
                 for table_name in schema.table_names() {
                     let table_ref = ResolvedTableReference {
-                        catalog: Cow::from(&self.database),
+                        catalog: Cow::from(&self.default_catalog),
                         schema: Cow::from(schema_name),
                         table: Cow::from(table_name),
                     };
@@ -591,7 +590,7 @@ impl SeafowlContext {
 
                 self.metastore
                     .schemas
-                    .delete(&self.database, schema_name)
+                    .delete(&self.default_catalog, schema_name)
                     .await?;
 
                 Ok(make_dummy_exec())
@@ -642,7 +641,7 @@ impl SeafowlContext {
                             // Persist the function in the metadata storage
                             self.metastore
                                 .functions
-                                .create(&self.database, name, *or_replace, details)
+                                .create(&self.default_catalog, name, *or_replace, details)
                                 .await?;
 
                             Ok(make_dummy_exec())
@@ -654,7 +653,7 @@ impl SeafowlContext {
                         }) => {
                             self.metastore
                                 .functions
-                                .delete(&self.database, *if_exists, func_names)
+                                .delete(&self.default_catalog, *if_exists, func_names)
                                 .await?;
                             Ok(make_dummy_exec())
                         }
@@ -664,10 +663,8 @@ impl SeafowlContext {
                             ..
                         }) => {
                             // Resolve new table reference
-                            let new_table_ref = TableReference::from(new_name.as_str());
-                            let resolved_new_ref =
-                                new_table_ref.resolve(&self.database, DEFAULT_SCHEMA);
-                            if resolved_new_ref.catalog != self.database {
+                            let resolved_new_ref = self.resolve_table_ref(new_name);
+                            if resolved_new_ref.catalog != self.default_catalog {
                                 return Err(Error::Plan(
                                     "Changing the table's database is not supported!"
                                         .to_string(),
@@ -675,9 +672,7 @@ impl SeafowlContext {
                             }
 
                             // Resolve old table reference
-                            let old_table_ref = TableReference::from(old_name.as_str());
-                            let resolved_old_ref =
-                                old_table_ref.resolve(&self.database, DEFAULT_SCHEMA);
+                            let resolved_old_ref = self.resolve_table_ref(old_name);
 
                             // Finally update our catalog entry
                             self.metastore
@@ -701,9 +696,7 @@ impl SeafowlContext {
                             if database.is_some() {
                                 gc_databases(self, database.clone()).await;
                             } else if let Some(table_name) = table_name {
-                                let table_ref = TableReference::from(table_name.as_str());
-                                let resolved_ref =
-                                    table_ref.resolve(&self.database, DEFAULT_SCHEMA);
+                                let resolved_ref = self.resolve_table_ref(table_name);
 
                                 if let Ok(mut delta_table) =
                                     self.try_get_delta_table(resolved_ref.clone()).await
@@ -829,8 +822,10 @@ impl SeafowlContext {
         // Check whether table already exists and ensure that the schema exists
         let table_exists = match self
             .inner
-            .catalog(&self.database)
-            .ok_or_else(|| Error::Plan(format!("Database {} not found!", self.database)))?
+            .catalog(&self.default_catalog)
+            .ok_or_else(|| {
+                Error::Plan(format!("Database {} not found!", self.default_catalog))
+            })?
             .schema(&schema_name)
         {
             Some(_) => {
@@ -847,7 +842,7 @@ impl SeafowlContext {
                 // Schema doesn't exist; create one first, and then reload to pick it up
                 self.metastore
                     .schemas
-                    .create(&self.database, &schema_name)
+                    .create(&self.default_catalog, &schema_name)
                     .await?;
                 self.reload_schema().await?;
                 false
@@ -888,7 +883,7 @@ impl SeafowlContext {
         let plan = source.scan(&self.inner.state(), None, &[], None).await?;
 
         let table_ref = TableReference::Full {
-            catalog: Cow::from(&self.database),
+            catalog: Cow::from(&self.default_catalog),
             schema: Cow::from(schema_name),
             table: Cow::from(table_name),
         };
