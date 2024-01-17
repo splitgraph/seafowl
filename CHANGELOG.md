@@ -4,6 +4,11 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Upgrade to DataFusion 34 and Arrow 49 (<https://github.com/splitgraph/seafowl/pull/486>)
+- Enable external metastores (<https://github.com/splitgraph/seafowl/pull/483>)
+- Eager dropping of tables and schemas (<https://github.com/splitgraph/seafowl/pull/481>)
+- Add Arrow Flight SQL frontend (<https://github.com/splitgraph/seafowl/pull/478>)
+
 ## [0.5.3] - 2023-12-04
 
 - Implement CONVERT TO DELTA statement (<https://github.com/splitgraph/seafowl/pull/473>)
@@ -204,7 +209,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.3...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/splitgraph/seafowl/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/splitgraph/seafowl/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/splitgraph/seafowl/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/splitgraph/seafowl/compare/v0.5.0...v0.5.1
