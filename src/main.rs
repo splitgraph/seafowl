@@ -30,7 +30,8 @@ use tokio::sync::broadcast::{channel, Sender};
 use tokio::time::{interval, Duration};
 use tracing::level_filters::LevelFilter;
 use tracing::{error, info, subscriber, warn};
-use tracing_subscriber::{filter::EnvFilter, FmtSubscriber};
+use tracing_log::LogTracer;
+use tracing_subscriber::filter::EnvFilter;
 
 #[cfg(feature = "frontend-postgres")]
 use seafowl::frontend::postgres::run_pg_server;
@@ -66,20 +67,22 @@ struct Args {
 }
 
 fn prepare_tracing(json_logs: bool) {
+    // Redirect all `log`'s events to our subscriber, to collect the ones from our deps too
+    LogTracer::init().expect("Failed to set logger");
+
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy()
-        .add_directive("sqlx=info".parse().unwrap());
+        .from_env_lossy();
 
-    let sub = FmtSubscriber::builder()
-        .with_thread_ids(true)
+    let sub = tracing_subscriber::fmt()
         .with_thread_names(true)
+        .with_thread_ids(true)
         .with_env_filter(env_filter);
 
     if json_logs {
         subscriber::set_global_default(sub.json().finish())
     } else {
-        subscriber::set_global_default(sub.finish())
+        subscriber::set_global_default(sub.compact().finish())
     }
     .expect("Global logging config set");
 }
