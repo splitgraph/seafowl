@@ -11,7 +11,6 @@ use clap::Parser;
 
 use futures::{future::join_all, Future, FutureExt};
 
-use pretty_env_logger::env_logger;
 #[cfg(feature = "frontend-arrow-flight")]
 use seafowl::frontend::flight::run_flight_server;
 use seafowl::{
@@ -29,13 +28,12 @@ use tokio::signal::ctrl_c;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::broadcast::{channel, Sender};
 use tokio::time::{interval, Duration};
+use tracing::level_filters::LevelFilter;
+use tracing::{error, info, subscriber, warn};
+use tracing_subscriber::{filter::EnvFilter, FmtSubscriber};
 
 #[cfg(feature = "frontend-postgres")]
 use seafowl::frontend::postgres::run_pg_server;
-
-extern crate pretty_env_logger;
-#[macro_use]
-extern crate log;
 
 const DEFAULT_CONFIG_PATH: &str = "seafowl.toml";
 
@@ -62,6 +60,28 @@ struct Args {
         takes_value = false
     )]
     cli: bool,
+
+    #[clap(long, help = "Enable JSON logging", takes_value = false)]
+    json_logs: bool,
+}
+
+fn prepare_tracing(json_logs: bool) {
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy()
+        .add_directive("sqlx=info".parse().unwrap());
+
+    let sub = FmtSubscriber::builder()
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_env_filter(env_filter);
+
+    if json_logs {
+        subscriber::set_global_default(sub.json().finish())
+    } else {
+        subscriber::set_global_default(sub.finish())
+    }
+    .expect("Global logging config set");
 }
 
 fn prepare_frontends(
@@ -167,15 +187,7 @@ async fn main() {
     }
 
     if !args.cli {
-        let mut builder = pretty_env_logger::formatted_timed_builder();
-
-        builder
-            .parse_filters(
-                env::var(env_logger::DEFAULT_FILTER_ENV)
-                    .unwrap_or_else(|_| "sqlx=warn,info".to_string())
-                    .as_str(),
-            )
-            .init();
+        prepare_tracing(args.json_logs)
     }
 
     info!("Starting Seafowl {}", env!("VERGEN_BUILD_SEMVER"));

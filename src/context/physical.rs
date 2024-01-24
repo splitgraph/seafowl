@@ -52,13 +52,13 @@ use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
-use log::info;
 use object_store::path::Path;
 use std::borrow::Cow;
 use std::ops::Deref;
 use std::ops::Not;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::info;
 use url::Url;
 
 /// Create an ExecutionPlan that doesn't produce any results.

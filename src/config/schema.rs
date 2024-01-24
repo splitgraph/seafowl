@@ -13,13 +13,13 @@ use crate::object_store::cache::{
 };
 use config::{Config, ConfigError, Environment, File, FileFormat, Map};
 use hex::encode;
-use log::{info, warn};
 use object_store::DynObjectStore;
 use rand::distributions::{Alphanumeric, DistString};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqliteJournalMode;
 use tempfile::TempDir;
+use tracing::{info, warn};
 
 pub const DEFAULT_DATA_DIR: &str = "seafowl-data";
 pub const DEFAULT_SQLITE_DB: &str = "seafowl.sqlite";

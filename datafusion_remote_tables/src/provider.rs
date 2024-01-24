@@ -16,11 +16,11 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
-use log::debug;
 use std::any::Any;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task;
+use tracing::debug;
 
 // Implementation of a remote table, capable of querying Postgres, MySQL, SQLite, etc...
 pub struct RemoteTable {

@@ -5,13 +5,13 @@ use crate::config::schema::str_to_hex_hash;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes};
 use futures::stream::BoxStream;
-use log::{debug, error, warn};
 use moka::future::{Cache, CacheBuilder, FutureExt};
 use moka::notification::RemovalCause;
 use object_store::{
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions,
     PutResult,
 };
+use tracing::{debug, error, warn};
 
 use std::fmt::Display;
 use std::fmt::{Debug, Formatter};

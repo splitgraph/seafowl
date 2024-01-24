@@ -24,7 +24,6 @@ use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::writer::create_add;
 use deltalake::DeltaTable;
 use futures::{StreamExt, TryStreamExt};
-use log::{debug, info, warn};
 use object_store::path::Path;
 use std::collections::HashMap;
 use std::fs::File;
@@ -33,6 +32,7 @@ use tempfile::{NamedTempFile, TempPath};
 use tokio::fs::File as AsyncFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Semaphore;
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 // Max Parquet row group size, in rows. This is what the ArrowWriter uses to determine how many
