@@ -24,13 +24,13 @@ use datafusion_common::TableReference;
 use datafusion_expr::logical_plan::{Extension, LogicalPlan};
 use deltalake::DeltaTable;
 use itertools::Itertools;
-use log::debug;
 use sqlparser::ast::{
     AlterTableOperation, CreateFunctionBody, Expr as SqlExpr, FunctionDefinition,
     ObjectType, Query, Statement, TableFactor, TableWithJoins, VisitMut,
 };
 use std::borrow::Cow;
 use std::sync::Arc;
+use tracing::debug;
 
 pub fn is_read_only(plan: &LogicalPlan) -> bool {
     !matches!(

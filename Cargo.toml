@@ -1,6 +1,26 @@
 [workspace]
 members = ["clade"]
 
+[workspace.dependencies]
+arrow = "49.0.0"
+arrow-buffer = "49.0.0"
+arrow-csv = "49.0.0"
+arrow-flight = "49.0.0"
+# For the JSON format support
+# https://github.com/apache/arrow-rs/pull/2868
+# https://github.com/apache/arrow-rs/pull/2724
+arrow-integration-test = "49.0.0"
+arrow-schema = "49.0.0"
+async-trait = "0.1.64"
+
+datafusion = "34.0.0"
+datafusion-common = "34.0.0"
+datafusion-expr = "34.0.0"
+
+itertools = ">=0.10.0"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
+tracing = { version = "0.1", features = ["log"] }
+
 [package]
 name = "seafowl"
 build = "build.rs"
@@ -49,16 +69,16 @@ arrow-select = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-wi
 arrow-string = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
 
 [dependencies]
-arrow = "49.0.0"
-arrow-buffer = "49.0.0"
-arrow-csv = "49.0.0"
-arrow-flight = { version = "49.0.0", optional = true }
+arrow = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-csv = { workspace = true }
+arrow-flight = { workspace = true, optional = true }
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "49.0.0"
-arrow-schema = "49.0.0"
-async-trait = "0.1.64"
+arrow-integration-test = { workspace = true }
+arrow-schema = { workspace = true }
+async-trait = { workspace = true }
 base64 = "0.21.0"
 
 bytes = "1.4.0"
@@ -73,9 +93,9 @@ convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch 
 
 dashmap = "5.4.0"
 
-datafusion = "34.0.0"
-datafusion-common = "34.0.0"
-datafusion-expr = "34.0.0"
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
@@ -83,14 +103,12 @@ deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "9264edea89a2f
 
 futures = "0.3"
 hex = ">=0.4.0"
-itertools = ">=0.10.0"
+itertools = { workspace = true }
 lazy_static = ">=1.4.0"
-log = "0.4"
 moka = { version = "0.12.2", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.8"
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
-pretty_env_logger = "0.4"
 prost = "0.12.1"
 
 # Needs to be in non-dev because repository::testutils can't be
@@ -111,8 +129,11 @@ strum = ">=0.24"
 strum_macros = ">=0.24"
 tempfile = "3"
 thiserror = "1"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
+tokio = { workspace = true }
 tonic = { version = "0.10.0", optional = true }
+tracing = { workspace = true }
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 url = "2.5"
 uuid = "1.2.1"
 warp = "0.3.6"
@@ -132,7 +153,6 @@ wiremock = "0.5"
 
 [build-dependencies]
 anyhow = "1.0.63"  # for build.rs
-prost-build = "0.12.1"
 vergen = "7"
 
 [profile.release]

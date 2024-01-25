@@ -9,9 +9,9 @@ use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
 use hex::encode;
-use log::{info, warn};
 use sha2::{Digest, Sha256};
 use tokio::{fs::File, io::AsyncWrite};
+use tracing::{info, warn};
 
 use crate::context::SeafowlContext;
 use crate::repository::interface::DroppedTableDeletionStatus;

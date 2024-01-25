@@ -2,7 +2,6 @@ use crate::config::schema;
 use crate::config::schema::{Local, GCS, S3};
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryFutureExt};
-use log::debug;
 use object_store::{
     path::Path, Error, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Result,
@@ -10,6 +9,7 @@ use object_store::{
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use tokio::io::AsyncWrite;
+use tracing::debug;
 
 use tokio::fs::{copy, create_dir_all, remove_file, rename};
 

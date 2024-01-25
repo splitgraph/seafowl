@@ -20,7 +20,6 @@ use crate::object_store::cache::{
 };
 use datafusion::prelude::SessionContext;
 use lazy_static::lazy_static;
-use log::warn;
 use regex::Regex;
 use reqwest::{header, Client, ClientBuilder, RequestBuilder, Response, StatusCode};
 use std::env;
@@ -32,6 +31,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::AsyncWrite;
+use tracing::warn;
 use url::Url;
 use warp::hyper::header::{
     IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_UNMODIFIED_SINCE, RANGE,

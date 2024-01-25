@@ -18,8 +18,8 @@ use datafusion_common::DFSchema;
 use datafusion_expr::{expr::Alias, Expr};
 use deltalake::DeltaTable;
 
-use log::warn;
 use parking_lot::RwLock;
+use tracing::warn;
 
 use crate::repository::interface::FunctionId;
 use crate::system_tables::{SystemSchemaProvider, SYSTEM_SCHEMA};
