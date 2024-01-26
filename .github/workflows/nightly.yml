@@ -16,15 +16,18 @@ jobs:
 
     strategy:
       matrix:
-        build: [linux, macos, win-msvc]
+        build: [linux-x86_64, linux-aarch_64, osx-x86_64, win64]
         include:
-          - build: linux
+          - build: linux-x86_64
             os: ubuntu-20.04 # We can update to 22.04 once we're comfortable dropping libssl 1.x support
             target: x86_64-unknown-linux-gnu
-          - build: macos
+          - build: linux-aarch_64
+            os: ubuntu-20.04
+            target: aarch64-unknown-linux-gnu
+          - build: osx-x86_64
             os: macos-latest
             target: x86_64-apple-darwin
-          - build: win-msvc
+          - build: win64
             os: windows-latest
             target: x86_64-pc-windows-msvc
 
@@ -33,35 +36,19 @@ jobs:
         # Taken from https://github.com/apache/arrow-datafusion/blob/master/.github/workflows/rust.yml
         shell: bash
         run: |
-          if [ "${{ matrix.build }}" = "win-msvc" ]; then
-            mkdir -p $HOME/d/protoc
-            cd $HOME/d/protoc
-            export PROTO_ZIP="protoc-21.4-win64.zip"
-            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-            unzip $PROTO_ZIP
-            echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
-            export PATH=$PATH:$HOME/d/protoc/bin
-            protoc.exe --version
+          mkdir -p $HOME/d/protoc
+          cd $HOME/d/protoc
+          export PROTO_ZIP="protoc-21.4-${{ matrix.build }}.zip"
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
+          unzip $PROTO_ZIP
+          echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
+          export PATH=$PATH:$HOME/d/protoc/bin
 
+          if [ "${{ matrix.build }}" = "win64" ]; then
+            protoc.exe --version
             vcpkg integrate install
             vcpkg.exe install openssl:x64-windows-static-md
-          elif [ "${{ matrix.build }}" = "linux" ]; then
-            mkdir -p $HOME/d/protoc
-            cd $HOME/d/protoc
-            export PROTO_ZIP="protoc-21.4-linux-x86_64.zip"
-            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-            unzip $PROTO_ZIP
-            echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
-            export PATH=$PATH:$HOME/d/protoc/bin
-            protoc --version
           else
-            mkdir -p $HOME/d/protoc
-            cd $HOME/d/protoc
-            export PROTO_ZIP="protoc-21.4-osx-x86_64.zip"
-            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-            unzip $PROTO_ZIP
-            echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
-            export PATH=$PATH:$HOME/d/protoc/bin
             protoc --version
           fi
 
@@ -114,20 +101,20 @@ jobs:
           fi
 
       - name: Login to DockerHub (Linux only)
-        if: matrix.build == 'linux'
+        if: matrix.build == 'linux-x86_64' || matrix.build == 'linux-aarch_64'
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Test building and invoking the Docker image (Linux only)
-        if: matrix.build == 'linux'
+        if: matrix.build == 'linux-x86_64' || matrix.build == 'linux-aarch_64'
         run: |
           DOCKER_BUILDKIT=1 docker build . -t splitgraph/seafowl:test
           docker run --rm splitgraph/seafowl:test --version
 
       - name: Determine Docker tags (Linux only)
-        if: matrix.build == 'linux'
+        if: matrix.build == 'linux-x86_64' || matrix.build == 'linux-aarch_64'
         id: meta
         # https://github.com/docker/metadata-action
         uses: docker/metadata-action@v4
@@ -143,7 +130,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and push Docker image (Linux only)
-        if: matrix.build == 'linux'
+        if: matrix.build == 'linux-x86_64' || matrix.build == 'linux-aarch_64'
         uses: docker/build-push-action@v4
         with:
           context: .
@@ -186,8 +173,11 @@ jobs:
 
       - name: Package artifacts
         run: |
-          chmod +x artifacts/seafowl-nightly-x86_64-unknown-linux-gnu/seafowl artifacts/seafowl-nightly-x86_64-apple-darwin/seafowl
+          chmod +x artifacts/seafowl-nightly-x86_64-unknown-linux-gnu/seafowl \
+            artifacts/seafowl-nightly-aarch_64-unknown-linux-gnu/seafowl \
+            artifacts/seafowl-nightly-x86_64-apple-darwin/seafowl
           tar -C artifacts/seafowl-nightly-x86_64-unknown-linux-gnu -czf seafowl-${{ env.RELEASE_VERSION }}-x86_64-unknown-linux-gnu.tar.gz seafowl
+          tar -C artifacts/seafowl-nightly-aarch_64-unknown-linux-gnu -czf seafowl-${{ env.RELEASE_VERSION }}-aarch_64-unknown-linux-gnu.tar.gz seafowl
           tar -C artifacts/seafowl-nightly-x86_64-apple-darwin -czf seafowl-${{ env.RELEASE_VERSION }}-x86_64-apple-darwin.tar.gz seafowl
           cd artifacts/seafowl-nightly-x86_64-pc-windows-msvc && zip -r ../../seafowl-${{ env.RELEASE_VERSION }}-x86_64-pc-windows-msvc.zip seafowl.exe
 
@@ -196,6 +186,7 @@ jobs:
         with:
           files: |
             seafowl-${{ env.RELEASE_VERSION }}-x86_64-unknown-linux-gnu.tar.gz
+            seafowl-${{ env.RELEASE_VERSION }}-aarch_64-unknown-linux-gnu.tar.gz
             seafowl-${{ env.RELEASE_VERSION }}-x86_64-apple-darwin.tar.gz
             seafowl-${{ env.RELEASE_VERSION }}-x86_64-pc-windows-msvc.zip
           body_path: notes-${{ env.RELEASE_VERSION }}.md
