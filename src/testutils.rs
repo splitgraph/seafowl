@@ -130,14 +130,14 @@ pub async fn make_mock_parquet_server(
 
 pub async fn assert_uploaded_objects(
     object_store: Arc<dyn ObjectStore>,
-    expected: Vec<Path>,
+    expected: Vec<String>,
 ) {
     let actual = object_store
         .list(None)
         .map_ok(|meta| meta.location)
         .try_collect::<Vec<Path>>()
         .await
-        .map(|p| p.into_iter().sorted().collect_vec())
+        .map(|p| p.into_iter().sorted().map(String::from).collect_vec())
         .unwrap();
     assert_eq!(expected.into_iter().sorted().collect_vec(), actual);
 }

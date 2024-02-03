@@ -63,10 +63,10 @@ async fn test_convert_from_flat_parquet_table() -> Result<()> {
             .get_log_store(&table_uuid.to_string())
             .object_store(),
         vec![
-            Path::from("_delta_log/00000000000000000000.json"),
-            Path::from("file_1.parquet"),
-            Path::from("file_2.parquet"),
-            Path::from("file_3.parquet"),
+            String::from("_delta_log/00000000000000000000.json"),
+            String::from("file_1.parquet"),
+            String::from("file_2.parquet"),
+            String::from("file_3.parquet"),
         ],
     )
     .await;

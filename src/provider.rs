@@ -156,7 +156,7 @@ pub fn project_expressions(
             };
 
             let mut proj_expr =
-                create_physical_expr(expr, df_schema, schema, &ExecutionProps::new())?;
+                create_physical_expr(expr, df_schema, &ExecutionProps::new())?;
 
             let data_type = f.data_type().clone();
             if proj_expr.data_type(schema)? != data_type {

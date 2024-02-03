@@ -25,7 +25,6 @@ use deltalake::writer::create_add;
 use deltalake::DeltaTable;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
-use std::collections::HashMap;
 use std::fs::File;
 use std::sync::Arc;
 use tempfile::{NamedTempFile, TempPath};
@@ -258,7 +257,7 @@ pub async fn plan_to_object_store(
 
                 // Create the corresponding Add action; currently we don't support partition columns
                 // which simplifies things.
-                let add = create_add(&HashMap::default(), file_name, size, &metadata)?;
+                let add = create_add(&Default::default(), file_name, size, &metadata)?;
 
                 Ok(add)
             });
@@ -400,7 +399,7 @@ impl SeafowlContext {
             table_log_store.as_ref(),
             &actions,
             op,
-            table.get_state(),
+            table.state.as_ref(),
             None,
         )
         .await?;
@@ -522,7 +521,6 @@ mod tests {
                     adds[0].path.clone(),
                     adds[0].size,
                     adds[0].partition_values.is_empty(),
-                    adds[0].partition_values_parsed.is_none(),
                     adds[0].data_change,
                     serde_json::from_str::<Value>(
                         adds[0].stats.clone().unwrap().as_str()
@@ -533,7 +531,6 @@ mod tests {
                     adds[1].path.clone(),
                     adds[1].size,
                     adds[1].partition_values.is_empty(),
-                    adds[1].partition_values_parsed.is_none(),
                     adds[1].data_change,
                     serde_json::from_str::<Value>(
                         adds[1].stats.clone().unwrap().as_str()
@@ -544,8 +541,7 @@ mod tests {
             vec![
                 (
                     PART_0_FILE_NAME.to_string(),
-                    1269,
-                    true,
+                    1298,
                     true,
                     true,
                     json!({
@@ -569,8 +565,7 @@ mod tests {
                 ),
                 (
                     PART_1_FILE_NAME.to_string(),
-                    1284,
-                    true,
+                    1313,
                     true,
                     true,
                     json!({
@@ -599,10 +594,7 @@ mod tests {
             object_store
                 .get_log_store(&table_uuid.to_string())
                 .object_store(),
-            vec![
-                Path::from(PART_0_FILE_NAME.to_string()),
-                Path::from(PART_1_FILE_NAME.to_string()),
-            ],
+            vec![PART_0_FILE_NAME.to_string(), PART_1_FILE_NAME.to_string()],
         )
         .await;
     }

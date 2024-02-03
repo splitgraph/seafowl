@@ -138,6 +138,8 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         | SQLDataType::Int64
         | SQLDataType::Float64
         | SQLDataType::Struct(_)
+        | SQLDataType::JSONB
+        | SQLDataType::Unspecified
         => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),

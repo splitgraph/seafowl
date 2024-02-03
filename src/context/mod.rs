@@ -133,20 +133,15 @@ impl SeafowlContext {
         &self,
         table_name: impl Into<TableReference<'a>>,
     ) -> Result<DeltaTable> {
-        let table_log_store = self
-            .inner
+        self.inner
             .table_provider(table_name)
             .await?
             .as_any()
             .downcast_ref::<DeltaTable>()
             .ok_or_else(|| {
                 DataFusionError::Execution("Table {table_name} not found".to_string())
-            })?
-            .log_store();
-
-        // We can't just keep hold of the downcasted ref from above because of
-        // `temporary value dropped while borrowed`
-        Ok(DeltaTable::new(table_log_store, Default::default()))
+            })
+            .cloned()
     }
 
     // Parse the uuid from the Delta table uri if available

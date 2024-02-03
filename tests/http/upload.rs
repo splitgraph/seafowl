@@ -208,7 +208,7 @@ async fn test_upload_to_existing_table() {
 
     // Verify the newly created table contents
     let plan = context
-        .plan_query("SELECT * FROM test_table")
+        .plan_query("SELECT * FROM test_table ORDER BY col_1")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
@@ -279,7 +279,7 @@ async fn test_upload_to_existing_table() {
 
     // Verify that the rows have been appended
     let plan = context
-        .plan_query("SELECT * FROM test_table")
+        .plan_query("SELECT * FROM test_table ORDER BY col_1")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();

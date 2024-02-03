@@ -377,9 +377,9 @@ async fn test_create_table_drop_schema(
                 .get_log_store(&table_uuid.to_string())
                 .object_store(),
             vec![
-                Path::from("_delta_log/00000000000000000000.json"),
-                Path::from("_delta_log/00000000000000000001.json"),
-                table.get_files_iter().collect_vec()[0].clone(),
+                String::from("_delta_log/00000000000000000000.json"),
+                String::from("_delta_log/00000000000000000001.json"),
+                table.snapshot()?.file_actions()?[0].clone().path,
             ],
         )
         .await;

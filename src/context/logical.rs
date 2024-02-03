@@ -107,6 +107,7 @@ impl SeafowlContext {
                 // Delegate generic queries to the basic DataFusion logical planner
                 // (though note EXPLAIN [our custom query] will mean we have to implement EXPLAIN ourselves)
                 Statement::Explain { .. }
+                | Statement::ExplainTable { .. }
                 | Statement::ShowVariable { .. }
                 | Statement::ShowTables { .. }
                 | Statement::ShowColumns { .. }
@@ -309,7 +310,7 @@ impl SeafowlContext {
                     })),
                 }))
             }
-            DFStatement::DescribeTableStmt(_) | DFStatement::CreateExternalTable(_) => {
+            DFStatement::CreateExternalTable(_) => {
                 self.inner.state().statement_to_plan(stmt).await
             }
             DFStatement::CopyTo(_) | DFStatement::Explain(_) => {
@@ -487,13 +488,18 @@ mod tests {
     async fn test_plan_insert_type_mismatch() {
         let ctx = in_memory_context_with_test_db().await;
 
-        // Try inserting a timestamp into a number (note this will work fine for inserting
+        // Try inserting a string into a date (note this will work fine for inserting
         // e.g. Utf-8 into numbers at plan time but should fail at execution time if the value
         // doesn't convert)
-        let err = ctx
-            .create_logical_plan("INSERT INTO testcol.some_table SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')")
-            .await.unwrap_err();
-        assert_eq!(err.to_string(), "Error during planning: Cannot automatically convert Timestamp(Nanosecond, None) to Float64");
+        let plan = ctx
+            .create_logical_plan("INSERT INTO testcol.some_table SELECT 'abc', to_timestamp('2022-01-01T12:00:00')")
+            .await.unwrap();
+
+        let err = ctx.create_physical_plan(&plan).await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Arrow error: Cast error: Cannot cast string 'abc' to value of Date32 type"
+        );
     }
 
     #[tokio::test]

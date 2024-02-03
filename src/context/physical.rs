@@ -259,6 +259,7 @@ impl SeafowlContext {
 
                 let mut table = self.try_get_delta_table(table_name).await?;
                 table.load().await?;
+                let snapshot = table.snapshot()?;
 
                 let schema_ref = TableProvider::schema(&table);
                 let df_schema = DFSchema::try_from_qualified_schema(
@@ -297,7 +298,6 @@ impl SeafowlContext {
                         let filter_expr = create_physical_expr(
                             &predicate.clone(),
                             &df_schema,
-                            schema_ref.as_ref(),
                             &ExecutionProps::new(),
                         )?;
 
@@ -305,11 +305,10 @@ impl SeafowlContext {
                             filter_expr.clone(),
                             schema_ref.clone(),
                         )?;
-                        let prune_map = pruning_predicate.prune(&table)?;
+                        let prune_map = pruning_predicate.prune(snapshot)?;
 
-                        let files_to_prune = table
-                            .get_state()
-                            .files()
+                        let files_to_prune = snapshot
+                            .file_actions()?
                             .iter()
                             .zip(prune_map)
                             .filter_map(
@@ -320,7 +319,7 @@ impl SeafowlContext {
                         (Some(filter_expr), files_to_prune)
                     } else {
                         // If no qualifier is specified we're basically updating the whole table.
-                        (None, table.get_state().files().clone())
+                        (None, snapshot.file_actions()?)
                     };
 
                 let uuid = self.get_table_uuid(table_name).await?;
@@ -383,7 +382,7 @@ impl SeafowlContext {
                     table.log_store().as_ref(),
                     &actions,
                     op,
-                    table.get_state(),
+                    table.state.as_ref(),
                     None,
                 )
                 .await?;
@@ -404,6 +403,7 @@ impl SeafowlContext {
 
                 let mut table = self.try_get_delta_table(table_name).await?;
                 table.load().await?;
+                let snapshot = table.snapshot()?;
                 let schema_ref = SchemaRef::from(table_schema.deref().clone());
 
                 let (adds, removes) =
@@ -416,16 +416,14 @@ impl SeafowlContext {
                         let prune_expr = create_physical_expr(
                             &predicate.clone(),
                             table_schema,
-                            schema_ref.as_ref(),
                             &ExecutionProps::new(),
                         )?;
 
                         let pruning_predicate =
                             PruningPredicate::try_new(prune_expr, schema_ref.clone())?;
-                        let prune_map = pruning_predicate.prune(&table)?;
-                        let files_to_prune = table
-                            .get_state()
-                            .files()
+                        let prune_map = pruning_predicate.prune(snapshot)?;
+                        let files_to_prune = snapshot
+                            .file_actions()?
                             .iter()
                             .zip(prune_map)
                             .filter_map(
@@ -443,7 +441,6 @@ impl SeafowlContext {
                             let filter_expr = create_physical_expr(
                                 &predicate.clone().not(),
                                 table_schema,
-                                schema_ref.as_ref(),
                                 &ExecutionProps::new(),
                             )?;
 
@@ -472,7 +469,7 @@ impl SeafowlContext {
                     } else {
                         // If no qualifier is specified we're basically truncating the table.
                         // Remove all files.
-                        (vec![], table.get_state().files().clone())
+                        (vec![], snapshot.file_actions()?)
                     };
 
                 let deletion_timestamp = SystemTime::now()
@@ -502,7 +499,7 @@ impl SeafowlContext {
                     table.log_store().as_ref(),
                     &actions,
                     op,
-                    table.get_state(),
+                    table.state.as_ref(),
                     None,
                 )
                 .await?;
@@ -712,7 +709,7 @@ impl SeafowlContext {
                                     delta_table.load().await?;
                                     let plan = VacuumBuilder::new(
                                         delta_table.log_store(),
-                                        delta_table.state.clone(),
+                                        delta_table.snapshot()?.clone(),
                                     )
                                     .with_enforce_retention_duration(false)
                                     .with_retention_period(Duration::hours(0_i64));

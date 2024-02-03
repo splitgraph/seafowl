@@ -25,7 +25,7 @@ async fn test_insert_two_different_schemas(
         .unwrap();
 
     let plan = context
-        .plan_query("SELECT * FROM test_table")
+        .plan_query("SELECT * FROM test_table ORDER BY some_other_value")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
@@ -55,7 +55,7 @@ async fn test_delete_statement(
         ObjectStoreType::S3(Some("/path/to/folder"))
     )]
     object_store_type: ObjectStoreType,
-) {
+) -> Result<()> {
     let (context, _) = make_context_with_pg(object_store_type).await;
 
     create_table_and_some_partitions(&context, "test_table", None).await;
@@ -65,7 +65,7 @@ async fn test_delete_statement(
     //
     let mut table = context.try_get_delta_table("test_table").await.unwrap();
     table.load().await.unwrap();
-    let mut all_partitions = table.get_files_iter().collect_vec().clone();
+    let mut all_partitions = table.snapshot()?.file_actions()?.clone();
     assert_eq!(all_partitions.len(), 4);
     let partition_1 = all_partitions.first().unwrap().clone();
     let partition_4 = all_partitions.last().unwrap().clone();
@@ -118,13 +118,13 @@ async fn test_delete_statement(
 
     // Ensure partitions 2 and 3 have been fused into a new partition, and record it.
     table.load().await.unwrap();
-    match table.get_files_iter().collect_vec().as_slice() {
+    match table.snapshot()?.file_actions()?.as_slice() {
         [f_1, f_2, f_3]
-            if f_1 == &partition_1
-                && f_2 == &partition_4
-                && !all_partitions.contains(f_3) =>
+            if f_2 == &partition_1
+                && f_3 == &partition_4
+                && !all_partitions.contains(f_1) =>
         {
-            all_partitions.push(f_3.clone())
+            all_partitions.push(f_1.clone())
         }
         _ => panic!("Expected exactly 2 inherited and 1 new partition"),
     };
@@ -140,14 +140,14 @@ async fn test_delete_statement(
 
     // Expect too see a new (6th) partition
     table.load().await.unwrap();
-    match table.get_files_iter().collect_vec().as_slice() {
+    match table.snapshot()?.file_actions()?.as_slice() {
         [f_1, f_2, f_3, f_4]
-            if f_1 == &partition_1
-                && f_2 == &partition_4
-                && f_3 == &partition_5
-                && !all_partitions.contains(f_4) =>
+            if f_3 == &partition_1
+                && f_4 == &partition_4
+                && f_2 == &partition_5
+                && !all_partitions.contains(f_1) =>
         {
-            all_partitions.push(f_4.clone())
+            all_partitions.push(f_1.clone())
         }
         _ => panic!("Expected exactly 3 inherited and 1 new partition"),
     };
@@ -185,7 +185,7 @@ async fn test_delete_statement(
     assert_batches_eq!(expected, &results);
 
     table.load().await.unwrap();
-    match table.get_files_iter().collect_vec().as_slice() {
+    match table.snapshot()?.file_actions()?.as_slice() {
         [f_1, f_2] if f_1 == &partition_4 && !all_partitions.contains(f_2) => {
             all_partitions.push(f_2.clone())
         }
@@ -211,7 +211,7 @@ async fn test_delete_statement(
 
     // Both partitions are inherited from the previous version
     table.load().await.unwrap();
-    match table.get_files_iter().collect_vec().as_slice() {
+    match table.snapshot()?.file_actions()?.as_slice() {
         [f_1, f_2] if f_1 == &partition_4 && f_2 == &partition_7 => {}
         _ => panic!("Expected same partitions as before"),
     };
@@ -246,7 +246,7 @@ async fn test_delete_statement(
 
     // Still only one partition file, but different from before
     table.load().await.unwrap();
-    match table.get_files_iter().collect_vec()[..] {
+    match table.snapshot()?.file_actions()?[..] {
         [ref f_1] if !all_partitions.contains(f_1) => all_partitions.push(f_1.clone()),
         _ => panic!("Expected exactly 1 new partition different from the previous one"),
     };
@@ -266,7 +266,9 @@ async fn test_delete_statement(
     assert!(results.is_empty());
 
     table.load().await.unwrap();
-    assert!(table.get_files_iter().collect_vec().is_empty())
+    assert!(table.snapshot()?.file_actions()?.is_empty());
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -348,7 +350,7 @@ async fn test_update_statement(
         ObjectStoreType::S3(Some("/path/to/folder"))
     )]
     object_store_type: ObjectStoreType,
-) {
+) -> Result<()> {
     let (context, _) = make_context_with_pg(object_store_type).await;
 
     create_table_and_some_partitions(&context, "test_table", None).await;
@@ -358,7 +360,7 @@ async fn test_update_statement(
     //
     let mut table = context.try_get_delta_table("test_table").await.unwrap();
     table.load().await.unwrap();
-    let mut all_partitions = table.get_files_iter().collect_vec().clone();
+    let mut all_partitions = table.snapshot()?.file_actions()?.clone();
     assert_eq!(all_partitions.len(), 4);
     let partition_2 = all_partitions[1].clone();
     let partition_3 = all_partitions[2].clone();
@@ -385,7 +387,7 @@ async fn test_update_statement(
     context.plan_query(query).await.unwrap();
 
     let plan = context
-        .plan_query("SELECT * FROM test_table ORDER BY some_value")
+        .plan_query("SELECT * FROM test_table ORDER BY some_value, some_other_value")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
@@ -411,7 +413,7 @@ async fn test_update_statement(
 
     // Ensure partitions 1 and 4 have been fused into a new partition, and record it.
     table.load().await.unwrap();
-    match table.get_files_iter().collect_vec().as_slice() {
+    match table.snapshot()?.file_actions()?.as_slice() {
         [f_1, f_2, f_3]
             if f_1 == &partition_2
                 && f_2 == &partition_3
@@ -440,7 +442,7 @@ async fn test_update_statement(
 
     // Ensure partitions from before are still there
     table.load().await.unwrap();
-    match table.get_files_iter().collect_vec().as_slice() {
+    match table.snapshot()?.file_actions()?.as_slice() {
         [f_1, f_2, f_3]
             if f_1 == &partition_2 && f_2 == &partition_3 && f_3 == &partition_5 => {}
         _ => panic!("Expected 3 inherited partitions"),
@@ -498,10 +500,12 @@ async fn test_update_statement(
     assert_batches_eq!(expected, &results);
 
     table.load().await.unwrap();
-    match table.get_files_iter().collect_vec().as_slice() {
+    match table.snapshot()?.file_actions()?.as_slice() {
         [f_1] if !all_partitions.contains(f_1) => {}
         _ => panic!("Expected only 1 new partition"),
     };
+
+    Ok(())
 }
 
 #[tokio::test]
