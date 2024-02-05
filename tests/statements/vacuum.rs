@@ -46,14 +46,14 @@ async fn test_vacuum_table() -> Result<()> {
     let mut table_2 = context.try_get_delta_table("table_2").await?;
 
     table_1.load_version(1).await?;
-    let table_1_v1_file = table_1.get_files_iter().collect_vec()[0].clone();
+    let table_1_v1_file = table_1.snapshot()?.file_actions()?[0].clone();
     table_1.load_version(2).await?;
-    let table_1_v2_file = table_1.get_files_iter().collect_vec()[0].clone();
+    let table_1_v2_file = table_1.snapshot()?.file_actions()?[0].clone();
 
     table_2.load().await?;
-    let table_2_v1_file = table_2.get_files_iter().collect_vec()[0].clone();
+    let table_2_v1_file = table_2.snapshot()?.file_actions()?[0].clone();
     table_2.load_version(2).await?;
-    let table_2_v2_file = table_2.get_files_iter().collect_vec()[1].clone();
+    let table_2_v2_file = table_2.snapshot()?.file_actions()?[1].clone();
 
     // Check initial directory state
     testutils::assert_uploaded_objects(
@@ -62,11 +62,11 @@ async fn test_vacuum_table() -> Result<()> {
             .get_log_store(&table_1_uuid.to_string())
             .object_store(),
         vec![
-            Path::from("_delta_log/00000000000000000000.json"),
-            Path::from("_delta_log/00000000000000000001.json"),
-            Path::from("_delta_log/00000000000000000002.json"),
-            table_1_v1_file,
-            table_1_v2_file.clone(),
+            String::from("_delta_log/00000000000000000000.json"),
+            String::from("_delta_log/00000000000000000001.json"),
+            String::from("_delta_log/00000000000000000002.json"),
+            table_1_v1_file.path,
+            table_1_v2_file.clone().path,
         ],
     )
     .await;
@@ -102,12 +102,12 @@ async fn test_vacuum_table() -> Result<()> {
             .get_log_store(&table_1_uuid.to_string())
             .object_store(),
         vec![
-            Path::from("_delta_log/00000000000000000000.json"),
-            Path::from("_delta_log/00000000000000000001.json"),
-            Path::from("_delta_log/00000000000000000002.json"),
-            Path::from("_delta_log/00000000000000000003.json"),
-            Path::from("_delta_log/00000000000000000004.json"),
-            table_1_v2_file,
+            String::from("_delta_log/00000000000000000000.json"),
+            String::from("_delta_log/00000000000000000001.json"),
+            String::from("_delta_log/00000000000000000002.json"),
+            String::from("_delta_log/00000000000000000003.json"),
+            String::from("_delta_log/00000000000000000004.json"),
+            table_1_v2_file.path,
         ],
     )
     .await;
@@ -151,11 +151,11 @@ async fn test_vacuum_table() -> Result<()> {
             .get_log_store(&table_2_uuid.to_string())
             .object_store(),
         vec![
-            Path::from("_delta_log/00000000000000000000.json"),
-            Path::from("_delta_log/00000000000000000001.json"),
-            Path::from("_delta_log/00000000000000000002.json"),
-            table_2_v1_file,
-            table_2_v2_file,
+            String::from("_delta_log/00000000000000000000.json"),
+            String::from("_delta_log/00000000000000000001.json"),
+            String::from("_delta_log/00000000000000000002.json"),
+            table_2_v1_file.path,
+            table_2_v2_file.path,
         ],
     )
     .await;

@@ -12,8 +12,8 @@ use datafusion::{
     logical_expr::{ScalarFunctionImplementation, ScalarUDF, Volatility},
 };
 
+use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 
 use wasmtime::{Engine, Instance, Memory, Module, Store, TypedFunc, Val, ValType};
 
@@ -22,6 +22,8 @@ use super::data_types::{get_wasm_type, CreateFunctionDataType, CreateFunctionLan
 use wasi_common::WasiCtx;
 use wasmtime_wasi::sync::WasiCtxBuilder;
 
+use arrow::array::Array;
+use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 use std::vec;
 
@@ -536,6 +538,23 @@ fn messagepack_decode_results(
     }
 }
 
+// This is an alternative variant of `datafusion::physical_plan::functions::columnar_values_to_array`,
+// which tries to align scalars with the length of any arrays in the input.
+fn columnar_values_to_array(args: &[ColumnarValue]) -> Result<Vec<ArrayRef>> {
+    let inferred_length = args
+        .iter()
+        .map(|v| match v {
+            ColumnarValue::Array(array) => array.len(),
+            ColumnarValue::Scalar(_) => 1,
+        })
+        .max()
+        .unwrap_or(0);
+
+    args.iter()
+        .map(|arg| arg.clone().into_array(inferred_length))
+        .collect::<Result<Vec<_>>>()
+}
+
 fn make_scalar_function_wasm_messagepack(
     module_bytes: &[u8],
     function_name: &str,
@@ -553,13 +572,14 @@ fn make_scalar_function_wasm_messagepack(
                 "Error initializing WASM + MessagePack UDF {function_name:?}: {err:?}"
             ))
         })?;
-    let inner = move |args: &[ArrayRef]| {
+    let inner = move |args: &[ColumnarValue]| {
         let mut instance = WasmMessagePackUDFInstance::new(&module_bytes, &function_name)
             .map_err(|err| {
                 DataFusionError::Internal(format!(
                     "Error initializing WASM + MessagePack UDF {function_name:?}: {err:?}"
                 ))
             })?;
+
         // this is guaranteed by DataFusion based on the function's signature.
         if args.len() != input_types.len() {
             return Err(DataFusionError::Internal(format!(
@@ -567,6 +587,8 @@ fn make_scalar_function_wasm_messagepack(
                 function_name, input_types.len(), args.len()
             )));
         }
+
+        let args = columnar_values_to_array(args)?;
 
         // Length of the vectorized array
         let array_len = args.first().unwrap().len();
@@ -581,7 +603,7 @@ fn make_scalar_function_wasm_messagepack(
             for col_ix in 0..args.len() {
                 params.push(messagepack_encode_input_value(
                     input_types.get(col_ix).unwrap(),
-                    args,
+                    &args,
                     row_ix,
                     col_ix,
                 )?);
@@ -594,10 +616,11 @@ fn make_scalar_function_wasm_messagepack(
             })?);
         }
 
-        messagepack_decode_results(&return_type, &encoded_results)
+        let array = messagepack_decode_results(&return_type, &encoded_results)?;
+        Ok(ColumnarValue::from(array))
     };
 
-    Ok(make_scalar_function(inner))
+    Ok(Arc::new(inner))
 }
 
 /// Build a DataFusion scalar function from WASM module bytecode.
@@ -632,7 +655,7 @@ fn make_scalar_function_from_wasm(
     // Capture the function name and the module code
     let function_name = function_name.to_owned();
     let module_bytes = module_bytes.to_owned();
-    let inner = move |args: &[ArrayRef]| {
+    let inner = move |args: &[ColumnarValue]| {
         // Load the function again
         let mut store = Store::<()>::default();
 
@@ -655,6 +678,8 @@ fn make_scalar_function_from_wasm(
         // this is guaranteed by DataFusion based on the function's signature.
         assert_eq!(args.len(), input_types.len());
 
+        let args = columnar_values_to_array(args)?;
+
         // Length of the vectorized array
         let array_len = args.first().unwrap().len();
 
@@ -667,21 +692,25 @@ fn make_scalar_function_from_wasm(
             // Build a slice of WASM Val values to pass to the function
             for col_ix in 0..args.len() {
                 let wasm_val = match input_types.get(col_ix).unwrap() {
-                    ValType::I32 => Val::I32(get_arrow_value::<
-                        arrow::datatypes::Int32Type,
-                    >(args, row_ix, col_ix)?),
-                    ValType::I64 => Val::I64(get_arrow_value::<
-                        arrow::datatypes::Int64Type,
-                    >(args, row_ix, col_ix)?),
+                    ValType::I32 => {
+                        Val::I32(get_arrow_value::<arrow::datatypes::Int32Type>(
+                            &args, row_ix, col_ix,
+                        )?)
+                    }
+                    ValType::I64 => {
+                        Val::I64(get_arrow_value::<arrow::datatypes::Int64Type>(
+                            &args, row_ix, col_ix,
+                        )?)
+                    }
                     ValType::F32 => Val::F32(
                         get_arrow_value::<arrow::datatypes::Float32Type>(
-                            args, row_ix, col_ix,
+                            &args, row_ix, col_ix,
                         )?
                         .to_bits(),
                     ),
                     ValType::F64 => Val::F64(
                         get_arrow_value::<arrow::datatypes::Float64Type>(
-                            args, row_ix, col_ix,
+                            &args, row_ix, col_ix,
                         )?
                         .to_bits(),
                     ),
@@ -730,10 +759,10 @@ fn make_scalar_function_from_wasm(
             ) as ArrayRef,
             _ => panic!("unexpected type"),
         };
-        Ok(array)
+        Ok(ColumnarValue::from(array))
     };
 
-    Ok(make_scalar_function(inner))
+    Ok(Arc::new(inner))
 }
 
 pub fn create_udf_from_wasm(

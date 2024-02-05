@@ -133,20 +133,15 @@ impl SeafowlContext {
         &self,
         table_name: impl Into<TableReference<'a>>,
     ) -> Result<DeltaTable> {
-        let table_log_store = self
-            .inner
+        self.inner
             .table_provider(table_name)
             .await?
             .as_any()
             .downcast_ref::<DeltaTable>()
             .ok_or_else(|| {
                 DataFusionError::Execution("Table {table_name} not found".to_string())
-            })?
-            .log_store();
-
-        // We can't just keep hold of the downcasted ref from above because of
-        // `temporary value dropped while borrowed`
-        Ok(DeltaTable::new(table_log_store, Default::default()))
+            })
+            .cloned()
     }
 
     // Parse the uuid from the Delta table uri if available
@@ -263,6 +258,25 @@ mod tests {
 
     use super::test_utils::in_memory_context;
     use super::*;
+
+    #[tokio::test]
+    async fn test_timestamp_to_date_casting() -> Result<()> {
+        let ctx = in_memory_context().await;
+
+        let plan = ctx.plan_query("SELECT '1998-11-30 00:00:00'::date").await?;
+
+        let results = ctx.collect(plan).await?;
+        let expected = [
+            "+-----------------------------+",
+            "| Utf8(\"1998-11-30 00:00:00\") |",
+            "+-----------------------------+",
+            "| 1998-11-30                  |",
+            "+-----------------------------+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
 
     #[rstest]
     #[case::regular_type_names("float", "float")]

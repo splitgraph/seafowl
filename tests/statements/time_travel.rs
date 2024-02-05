@@ -295,7 +295,7 @@ async fn test_write_time_travel() {
         .unwrap();
 
     let plan = context
-        .plan_query("SELECT some_value, some_other_value FROM diff_table")
+        .plan_query("SELECT some_value, some_other_value FROM diff_table ORDER BY some_other_value, some_value")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
@@ -304,15 +304,15 @@ async fn test_write_time_travel() {
         "+------------+------------------+",
         "| some_value | some_other_value |",
         "+------------+------------------+",
+        "| 42.0       | 1.0000000000     |",
+        "| 43.0       | 1.0000000000     |",
+        "| 44.0       | 1.0000000000     |",
         "| 46.0       | 3.0000000000     |",
         "| 47.0       | 3.0000000000     |",
         "| 48.0       | 3.0000000000     |",
         "| 40.0       | 4.0000000000     |",
         "| 41.0       | 4.0000000000     |",
         "| 42.0       | 4.0000000000     |",
-        "| 42.0       | 1.0000000000     |",
-        "| 43.0       | 1.0000000000     |",
-        "| 44.0       | 1.0000000000     |",
         "+------------+------------------+",
     ];
     assert_batches_eq!(expected, &results);

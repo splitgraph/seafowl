@@ -21,6 +21,7 @@ use crate::object_store::cache::{
 use datafusion::prelude::SessionContext;
 use lazy_static::lazy_static;
 use regex::Regex;
+use reqwest::header::CONTENT_RANGE;
 use reqwest::{header, Client, ClientBuilder, RequestBuilder, Response, StatusCode};
 use std::env;
 use std::error::Error;
@@ -60,6 +61,7 @@ impl Display for HttpObjectStore {
 enum HttpObjectStoreError {
     WritesUnsupported,
     NoContentLengthResponse,
+    ContentRangeError,
     ListingUnsupported,
     HttpClientError(reqwest::Error),
     RangesUnsupported,
@@ -88,6 +90,7 @@ impl Display for HttpObjectStoreError {
             Self::NoContentLengthResponse => {
                 writeln!(f, "Server did not respond with a Content-Length header")
             }
+            Self::ContentRangeError => writeln!(f, "Error validating content range"),
             Self::ListingUnsupported => writeln!(f, "HTTP doesn't support listing"),
             Self::RangesUnsupported => {
                 writeln!(f, "This server does not support byte range fetches")
@@ -159,30 +162,29 @@ impl HttpObjectStore {
     fn request_builder_with_get_options(
         &self,
         path: &Path,
-        options: GetOptions,
+        options: &GetOptions,
     ) -> RequestBuilder {
         let mut request_builder = self.request_builder(path);
 
-        if let Some(range) = options.range {
-            let range = format!("bytes={}-{}", range.start, range.end.saturating_sub(1));
-            request_builder = request_builder.header(RANGE, range);
+        if let Some(ref range) = options.range {
+            request_builder = request_builder.header(RANGE, range.to_string());
         }
 
-        if let Some(tag) = options.if_match {
+        if let Some(ref tag) = options.if_match {
             request_builder = request_builder.header(IF_MATCH, tag);
         }
 
-        if let Some(tag) = options.if_none_match {
+        if let Some(ref tag) = options.if_none_match {
             request_builder = request_builder.header(IF_NONE_MATCH, tag);
         }
 
         const DATE_FORMAT: &str = "%a, %d %b %Y %H:%M:%S GMT";
-        if let Some(date) = options.if_unmodified_since {
+        if let Some(ref date) = options.if_unmodified_since {
             request_builder = request_builder
                 .header(IF_UNMODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
         }
 
-        if let Some(date) = options.if_modified_since {
+        if let Some(ref date) = options.if_modified_since {
             request_builder = request_builder
                 .header(IF_MODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
         }
@@ -290,11 +292,11 @@ impl ObjectStore for HttpObjectStore {
         location: &Path,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
-        let range = options.range.clone();
         let response = self
-            .send(self.request_builder_with_get_options(location, options))
+            .send(self.request_builder_with_get_options(location, &options))
             .await?;
-        let meta = header_meta(location, response.headers())?;
+        let headers = response.headers().clone();
+        let mut meta = header_meta(location, &headers)?;
 
         let body = response.bytes_stream();
 
@@ -302,8 +304,58 @@ impl ObjectStore for HttpObjectStore {
             body.map(|c| c.map_err(|e| HttpObjectStoreError::HttpClientError(e).into()))
                 .boxed(),
         );
+
+        // ensure that we receive the range we asked for
+        let range = if let Some(_expected) = options.range {
+            let val = headers
+                .get(CONTENT_RANGE)
+                .ok_or(HttpObjectStoreError::ContentRangeError)?;
+
+            // Also copied from object_store, private there
+            struct ContentRange {
+                /// The range of the object returned
+                range: Range<usize>,
+                /// The total size of the object being requested
+                size: usize,
+            }
+
+            impl ContentRange {
+                /// Parse a content range of the form `bytes <range-start>-<range-end>/<size>`
+                ///
+                /// <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range>
+                fn from_str(s: &str) -> Option<Self> {
+                    let rem = s.trim().strip_prefix("bytes ")?;
+                    let (range, size) = rem.split_once('/')?;
+                    let size = size.parse().ok()?;
+
+                    let (start_s, end_s) = range.split_once('-')?;
+
+                    let start = start_s.parse().ok()?;
+                    let end: usize = end_s.parse().ok()?;
+
+                    Some(Self {
+                        size,
+                        range: start..end + 1,
+                    })
+                }
+            }
+
+            let value = val
+                .to_str()
+                .map_err(|_| HttpObjectStoreError::ContentRangeError)?;
+            let value = ContentRange::from_str(value)
+                .ok_or(HttpObjectStoreError::ContentRangeError)?;
+            let actual = value.range;
+
+            // Update size to reflect full size of object (#5272)
+            meta.size = value.size;
+            actual
+        } else {
+            0..meta.size
+        };
+
         Ok(GetResult {
-            range: range.unwrap_or(0..meta.size),
+            range,
             payload: stream,
             meta,
         })

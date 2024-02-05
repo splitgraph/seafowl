@@ -26,9 +26,7 @@
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
 pub use datafusion::sql::parser::Statement;
-use datafusion::sql::parser::{
-    CopyToSource, CopyToStatement, CreateExternalTable, DescribeTableStmt,
-};
+use datafusion::sql::parser::{CopyToSource, CopyToStatement, CreateExternalTable};
 use datafusion_common::parsers::CompressionTypeVariant;
 use lazy_static::lazy_static;
 use sqlparser::ast::{CreateFunctionBody, Expr, ObjectName, OrderByExpr, Value};
@@ -151,10 +149,6 @@ impl<'a> DFParser<'a> {
                         self.parser.next_token();
                         self.parse_copy()
                     }
-                    Keyword::DESCRIBE => {
-                        self.parser.next_token();
-                        self.parse_describe()
-                    }
                     Keyword::VACUUM => {
                         self.parser.next_token();
                         self.parse_vacuum()
@@ -176,19 +170,12 @@ impl<'a> DFParser<'a> {
         }
     }
 
-    pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
-        let table_name = self.parser.parse_object_name()?;
-        Ok(Statement::DescribeTableStmt(DescribeTableStmt {
-            table_name,
-        }))
-    }
-
     // Parse `CONVERT location TO DELTA table_name` type statement
     pub fn parse_convert(&mut self) -> Result<Statement, ParserError> {
         let location = self.parser.parse_literal_string()?;
         self.parser
             .expect_keywords(&[Keyword::TO, Keyword::DELTA])?;
-        let table_name = self.parser.parse_object_name()?;
+        let table_name = self.parser.parse_object_name(true)?;
 
         // We'll use the CopyToStatement struct to pass the location and table name
         // as it's the closest match to what we need.
@@ -206,9 +193,9 @@ impl<'a> DFParser<'a> {
         let mut partitions = None;
 
         if self.parser.parse_keyword(Keyword::TABLE) {
-            table_name = self.parser.parse_object_name()?;
+            table_name = self.parser.parse_object_name(true)?;
         } else if self.parser.parse_keyword(Keyword::DATABASE) {
-            let database_name = self.parser.parse_object_name()?.0[0].clone();
+            let database_name = self.parser.parse_object_name(false)?.0[0].clone();
             partitions = Some(vec![Expr::Identifier(database_name)]);
         } else {
             return self.expected(
@@ -233,7 +220,7 @@ impl<'a> DFParser<'a> {
             CopyToSource::Query(query)
         } else {
             // parse as table reference
-            let table_name = self.parser.parse_object_name()?;
+            let table_name = self.parser.parse_object_name(true)?;
             CopyToSource::Relation(table_name)
         };
 
@@ -323,7 +310,7 @@ impl<'a> DFParser<'a> {
         or_replace: bool,
         temporary: bool,
     ) -> Result<Statement, ParserError> {
-        let name = self.parser.parse_object_name()?;
+        let name = self.parser.parse_object_name(false)?;
         self.parser.expect_keyword(Keyword::AS)?;
         let class_name = self.parser.parse_function_definition()?;
         let params = CreateFunctionBody {
@@ -354,7 +341,7 @@ impl<'a> DFParser<'a> {
 
         loop {
             if let Token::Word(_) = self.parser.peek_token().token {
-                let identifier = self.parser.parse_identifier()?;
+                let identifier = self.parser.parse_identifier(false)?;
                 partitions.push(identifier.to_string());
             } else {
                 return self.expected("partition name", self.parser.peek_token());
@@ -456,17 +443,17 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_column_def(&mut self) -> Result<ColumnDef, ParserError> {
-        let name = self.parser.parse_identifier()?;
+        let name = self.parser.parse_identifier(false)?;
         let data_type = self.parser.parse_data_type()?;
         let collation = if self.parser.parse_keyword(Keyword::COLLATE) {
-            Some(self.parser.parse_object_name()?)
+            Some(self.parser.parse_object_name(false)?)
         } else {
             None
         };
         let mut options = vec![];
         loop {
             if self.parser.parse_keyword(Keyword::CONSTRAINT) {
-                let name = Some(self.parser.parse_identifier()?);
+                let name = Some(self.parser.parse_identifier(false)?);
                 if let Some(option) = self.parser.parse_optional_column_option()? {
                     options.push(ColumnOptionDef { name, option });
                 } else {
@@ -497,7 +484,7 @@ impl<'a> DFParser<'a> {
         let if_not_exists =
             self.parser
                 .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
-        let table_name = self.parser.parse_object_name()?;
+        let table_name = self.parser.parse_object_name(true)?;
         let (columns, constraints) = self.parse_columns()?;
 
         #[derive(Default)]

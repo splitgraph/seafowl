@@ -1,4 +1,3 @@
-use itertools::Itertools;
 use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
@@ -9,7 +8,7 @@ use datafusion::assert_batches_eq;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{assert_contains, Result};
 use itertools::sorted;
-use object_store::path::Path;
+
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
 #[cfg(feature = "object-store-gcs")]
 use serde_json::json;

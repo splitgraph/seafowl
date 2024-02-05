@@ -2,20 +2,20 @@
 members = ["clade"]
 
 [workspace.dependencies]
-arrow = "49.0.0"
-arrow-buffer = "49.0.0"
-arrow-csv = "49.0.0"
-arrow-flight = "49.0.0"
+arrow = "50.0.0"
+arrow-buffer = "50.0.0"
+arrow-csv = "50.0.0"
+arrow-flight = "50.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "49.0.0"
-arrow-schema = "49.0.0"
+arrow-integration-test = "50.0.0"
+arrow-schema = "50.0.0"
 async-trait = "0.1.64"
 
-datafusion = "34.0.0"
-datafusion-common = "34.0.0"
-datafusion-expr = "34.0.0"
+datafusion = "35.0.0"
+datafusion-common = "35.0.0"
+datafusion-expr = "35.0.0"
 
 itertools = ">=0.10.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
@@ -51,22 +51,31 @@ object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [patch.crates-io]
-# Patch to pick up https://github.com/apache/arrow-rs/pull/5282 from
-# https://github.com/splitgraph/arrow-rs/tree/49-with-date-fix
+# Pick up https://github.com/apache/arrow-rs/pull/5282
+arrow-arith = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-array = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-csv = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-data = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-json = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-row = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-select = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-string = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
 
-arrow-arith = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-array = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-buffer = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-cast = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-csv = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-data = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-ipc = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-json = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-ord = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-row = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-schema = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-select = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
-arrow-string = { git = "https://github.com/splitgraph/arrow-rs", branch = "49-with-date-fix" }
+# Pick up https://github.com/apache/arrow-datafusion/pull/8894 and https://github.com/apache/arrow-datafusion/pull/9007
+datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
+datafusion-common = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
+datafusion-execution = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
+datafusion-expr = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
+datafusion-optimizer = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
+datafusion-physical-expr = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
+datafusion-physical-plan = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
+datafusion-proto = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
+datafusion-sql = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
 
 [dependencies]
 arrow = { workspace = true }
@@ -88,8 +97,8 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-34-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-34-upgrade", optional = true }
+convergence = { git = "https://github.com/returnString/convergence", rev = "c58ba5c9903e96fd73b65fda8c7b19192fee5cd3", optional = true }
+convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "c58ba5c9903e96fd73b65fda8c7b19192fee5cd3", optional = true }
 
 dashmap = "5.4.0"
 
@@ -99,14 +108,14 @@ datafusion-expr = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "9264edea89a2fc1c35f4a6b9faab125748ff3651", features = ["s3-native-tls", "datafusion-ext"] }
+deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "sqlparser-0.43", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
 itertools = { workspace = true }
 lazy_static = ">=1.4.0"
 moka = { version = "0.12.2", default_features = false, features = ["future", "atomic64", "quanta"] }
-object_store = "0.8"
+object_store = "0.9"
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
 prost = "0.12.1"
@@ -123,7 +132,7 @@ rustyline = "13.0"
 serde = "1.0.156"
 serde_json = "1.0.93"
 sha2 = ">=0.10.1"
-sqlparser = "0.40"
+sqlparser = { version = "0.43", features = ["visitor"] }
 sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
@@ -139,9 +148,9 @@ uuid = "1.2.1"
 warp = "0.3.6"
 
 # For WASM user-defined functions
-wasi-common = "16.0.0"
-wasmtime = "16.0.0"
-wasmtime-wasi = "16.0.0"
+wasi-common = "17.0.0"
+wasmtime = "17.0.0"
+wasmtime-wasi = "17.0.0"
 
 [dev-dependencies]
 assert_cmd = "2"
