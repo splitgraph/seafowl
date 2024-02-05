@@ -533,7 +533,7 @@ async fn test_create_external_table(
     #[case] location: Option<&str>,
     #[case] options: &str,
     #[case] object_store_type: ObjectStoreType,
-) {
+) -> Result<()> {
     let url = match location {
         None => {
             let (mock_server, _) = testutils::make_mock_parquet_server(true, true).await;
@@ -574,8 +574,7 @@ async fn test_create_external_table(
             )
             .as_str(),
         )
-        .await
-        .unwrap();
+        .await?;
 
     // Test we see the table in the information_schema
     let results = list_tables_query(&context).await;
@@ -594,11 +593,8 @@ async fn test_create_external_table(
     assert_batches_eq!(expected, &results);
 
     // Test standard query
-    let plan = context
-        .plan_query("SELECT * FROM staging.file")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
+    let plan = context.plan_query("SELECT * FROM staging.file").await?;
+    let results = context.collect(plan).await?;
     let expected = if location.is_none() {
         vec![
             "+-------+",
@@ -626,8 +622,7 @@ async fn test_create_external_table(
     // Test dropping the external table works
     context
         .collect(context.plan_query("DROP TABLE staging.file").await.unwrap())
-        .await
-        .unwrap();
+        .await?;
 
     let results = list_tables_query(&context).await;
 
@@ -642,4 +637,6 @@ async fn test_create_external_table(
         "+--------------------+-------------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    Ok(())
 }

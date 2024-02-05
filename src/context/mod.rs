@@ -259,6 +259,25 @@ mod tests {
     use super::test_utils::in_memory_context;
     use super::*;
 
+    #[tokio::test]
+    async fn test_timestamp_to_date_casting() -> Result<()> {
+        let ctx = in_memory_context().await;
+
+        let plan = ctx.plan_query("SELECT '1998-11-30 00:00:00'::date").await?;
+
+        let results = ctx.collect(plan).await?;
+        let expected = [
+            "+-----------------------------+",
+            "| Utf8(\"1998-11-30 00:00:00\") |",
+            "+-----------------------------+",
+            "| 1998-11-30                  |",
+            "+-----------------------------+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
     #[rstest]
     #[case::regular_type_names("float", "float")]
     #[case::legacy_type_names("f32", "f32")]

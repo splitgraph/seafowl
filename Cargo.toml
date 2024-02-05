@@ -51,6 +51,21 @@ object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [patch.crates-io]
+# Pick up https://github.com/apache/arrow-rs/pull/5282
+arrow-arith = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-array = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-csv = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-data = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-json = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-row = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-select = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+arrow-string = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
+
 # Pick up https://github.com/apache/arrow-datafusion/pull/8894 and https://github.com/apache/arrow-datafusion/pull/9007
 datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
 datafusion-common = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
@@ -93,7 +108,7 @@ datafusion-expr = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { path = "../delta-rs/crates/core", features = ["datafusion"], package = "deltalake-core" }
+deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "sqlparser-0.43", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"

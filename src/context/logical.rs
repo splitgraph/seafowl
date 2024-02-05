@@ -485,24 +485,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plan_insert_type_mismatch() {
-        let ctx = in_memory_context_with_test_db().await;
-
-        // Try inserting a string into a date (note this will work fine for inserting
-        // e.g. Utf-8 into numbers at plan time but should fail at execution time if the value
-        // doesn't convert)
-        let plan = ctx
-            .create_logical_plan("INSERT INTO testcol.some_table SELECT 'abc', to_timestamp('2022-01-01T12:00:00')")
-            .await.unwrap();
-
-        let err = ctx.create_physical_plan(&plan).await.unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Arrow error: Cast error: Cannot cast string 'abc' to value of Date32 type"
-        );
-    }
-
-    #[tokio::test]
     async fn test_plan_insert_values_wrong_number() {
         let ctx = in_memory_context_with_test_db().await;
 

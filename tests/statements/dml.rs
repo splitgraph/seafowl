@@ -63,20 +63,19 @@ async fn test_delete_statement(
     //
     // Ensure we have 4 partitions, and record their file names
     //
-    let mut table = context.try_get_delta_table("test_table").await.unwrap();
-    table.load().await.unwrap();
+    let mut table = context.try_get_delta_table("test_table").await?;
+    table.load().await?;
     let mut all_partitions = table.snapshot()?.file_actions()?.clone();
     assert_eq!(all_partitions.len(), 4);
-    let partition_1 = all_partitions.first().unwrap().clone();
-    let partition_4 = all_partitions.last().unwrap().clone();
+    let partition_1 = all_partitions.last().unwrap().clone();
+    let partition_4 = all_partitions.first().unwrap().clone();
 
     //
     // Check DELETE's query plan to make sure 46 (int) gets cast to a float value by the optimizer
     //
     let plan = context
         .create_logical_plan("DELETE FROM test_table WHERE some_value > 46")
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(
         format!("{}", plan.display_indent()),
         r#"Dml: op=[Delete] table=[test_table]
@@ -89,15 +88,13 @@ async fn test_delete_statement(
     //
     context
         .plan_query("DELETE FROM test_table WHERE some_value > 46")
-        .await
-        .unwrap();
+        .await?;
 
     // Verify results
     let plan = context
         .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
+        .await?;
+    let results = context.collect(plan).await?;
 
     let expected = vec![
         "+------------+",
@@ -117,55 +114,52 @@ async fn test_delete_statement(
     assert_batches_eq!(expected, &results);
 
     // Ensure partitions 2 and 3 have been fused into a new partition, and record it.
-    table.load().await.unwrap();
-    match table.snapshot()?.file_actions()?.as_slice() {
+    table.load().await?;
+    let partition_5 = match table.snapshot()?.file_actions()?.as_slice() {
         [f_1, f_2, f_3]
-            if f_2 == &partition_1
-                && f_3 == &partition_4
+            if f_3 == &partition_1
+                && f_2 == &partition_4
                 && !all_partitions.contains(f_1) =>
         {
-            all_partitions.push(f_1.clone())
+            f_1.clone()
         }
         _ => panic!("Expected exactly 2 inherited and 1 new partition"),
     };
-    let partition_5 = all_partitions.last().unwrap().clone();
+    all_partitions.push(partition_5.clone());
 
     //
     // Add another partition for a new table_version and record the new partition
     //
     context
         .plan_query("INSERT INTO test_table (some_value) VALUES (48), (49), (50)")
-        .await
-        .unwrap();
+        .await?;
 
     // Expect too see a new (6th) partition
-    table.load().await.unwrap();
-    match table.snapshot()?.file_actions()?.as_slice() {
+    table.load().await?;
+    let partition_6 = match table.snapshot()?.file_actions()?.as_slice() {
         [f_1, f_2, f_3, f_4]
-            if f_3 == &partition_1
-                && f_4 == &partition_4
+            if f_4 == &partition_1
+                && f_3 == &partition_4
                 && f_2 == &partition_5
                 && !all_partitions.contains(f_1) =>
         {
-            all_partitions.push(f_1.clone())
+            f_1.clone()
         }
         _ => panic!("Expected exactly 3 inherited and 1 new partition"),
     };
-    let _partition_6 = all_partitions.last().unwrap().clone();
+    all_partitions.push(partition_6.clone());
 
     //
     // Execute DELETE not affecting only partition with id 4, while trimming/combining the rest
     //
     context
         .plan_query("DELETE FROM test_table WHERE some_value IN (43, 45, 49)")
-        .await
-        .unwrap();
+        .await?;
 
     let plan = context
         .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
+        .await?;
+    let results = context.collect(plan).await?;
 
     let expected = vec![
         "+------------+",
@@ -184,14 +178,12 @@ async fn test_delete_statement(
     ];
     assert_batches_eq!(expected, &results);
 
-    table.load().await.unwrap();
-    match table.snapshot()?.file_actions()?.as_slice() {
-        [f_1, f_2] if f_1 == &partition_4 && !all_partitions.contains(f_2) => {
-            all_partitions.push(f_2.clone())
-        }
+    table.load().await?;
+    let partition_7 = match table.snapshot()?.file_actions()?.as_slice() {
+        [f_1, f_2] if f_2 == &partition_4 && !all_partitions.contains(f_1) => f_1.clone(),
         _ => panic!("Expected exactly 1 inherited and 1 new partition"),
     };
-    let partition_7 = all_partitions.last().unwrap().clone();
+    all_partitions.push(partition_7.clone());
 
     //
     // Execute a no-op DELETE, leaving the new table version the same as the prior one
@@ -199,20 +191,18 @@ async fn test_delete_statement(
 
     context
         .plan_query("DELETE FROM test_table WHERE some_value < 35")
-        .await
-        .unwrap();
+        .await?;
 
     let plan = context
         .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
+        .await?;
+    let results = context.collect(plan).await?;
     assert_batches_eq!(expected, &results);
 
     // Both partitions are inherited from the previous version
     table.load().await.unwrap();
     match table.snapshot()?.file_actions()?.as_slice() {
-        [f_1, f_2] if f_1 == &partition_4 && f_2 == &partition_7 => {}
+        [f_1, f_2] if f_2 == &partition_4 && f_1 == &partition_7 => {}
         _ => panic!("Expected same partitions as before"),
     };
 
@@ -221,14 +211,12 @@ async fn test_delete_statement(
     //
     context
         .plan_query("DELETE FROM test_table WHERE some_value < 41 OR some_value > 46")
-        .await
-        .unwrap();
+        .await?;
 
     let plan = context
         .plan_query("SELECT some_value FROM test_table ORDER BY some_value")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
+        .await?;
+    let results = context.collect(plan).await?;
 
     let expected = [
         "+------------+",
@@ -254,14 +242,13 @@ async fn test_delete_statement(
     //
     // Execute blank DELETE, without qualifiers
     //
-    context.plan_query("DELETE FROM test_table").await.unwrap();
+    context.plan_query("DELETE FROM test_table").await?;
 
     // Verify results
     let plan = context
         .plan_query("SELECT some_value FROM test_table")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
+        .await?;
+    let results = context.collect(plan).await?;
 
     assert!(results.is_empty());
 
@@ -358,12 +345,12 @@ async fn test_update_statement(
     //
     // Ensure we have 4 partitions, and record their file names
     //
-    let mut table = context.try_get_delta_table("test_table").await.unwrap();
-    table.load().await.unwrap();
+    let mut table = context.try_get_delta_table("test_table").await?;
+    table.load().await?;
     let mut all_partitions = table.snapshot()?.file_actions()?.clone();
     assert_eq!(all_partitions.len(), 4);
-    let partition_2 = all_partitions[1].clone();
-    let partition_3 = all_partitions[2].clone();
+    let partition_2 = all_partitions[2].clone();
+    let partition_3 = all_partitions[1].clone();
 
     //
     // Execute UPDATE with a selection, affecting only partitions 1 and 4
@@ -372,7 +359,7 @@ async fn test_update_statement(
     SET some_time = '2022-01-01 21:21:21Z', some_int_value = 5555, some_value = some_value - 10
     WHERE some_value IN (41, 42, 43)";
 
-    let plan = context.create_logical_plan(query).await.unwrap();
+    let plan = context.create_logical_plan(query).await?;
 
     // Check the UPDATE query plan to make sure IN (41, 42, 43) (int) get cast to a float value
     assert_eq!(
@@ -384,13 +371,12 @@ async fn test_update_statement(
     );
 
     // Now execute and check the results
-    context.plan_query(query).await.unwrap();
+    context.plan_query(query).await?;
 
     let plan = context
         .plan_query("SELECT * FROM test_table ORDER BY some_value, some_other_value")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
+        .await?;
+    let results = context.collect(plan).await?;
     let expected = vec![
         "+---------------------+------------+------------------+-----------------+----------------+",
         "| some_time           | some_value | some_other_value | some_bool_value | some_int_value |",
@@ -412,39 +398,37 @@ async fn test_update_statement(
     assert_batches_eq!(expected, &results);
 
     // Ensure partitions 1 and 4 have been fused into a new partition, and record it.
-    table.load().await.unwrap();
-    match table.snapshot()?.file_actions()?.as_slice() {
+    table.load().await?;
+    let partition_5 = match table.snapshot()?.file_actions()?.as_slice() {
         [f_1, f_2, f_3]
-            if f_1 == &partition_2
+            if f_3 == &partition_2
                 && f_2 == &partition_3
-                && !all_partitions.contains(f_3) =>
+                && !all_partitions.contains(f_1) =>
         {
-            all_partitions.push(f_3.clone())
+            f_1.clone()
         }
         _ => panic!("Expected exactly 2 inherited and 1 new partition"),
     };
-    let partition_5 = all_partitions.last().unwrap().clone();
+    all_partitions.push(partition_5.clone());
 
     //
     // Execute UPDATE that doesn't change anything
     //
     context
         .plan_query("UPDATE test_table SET some_bool_value = TRUE WHERE some_value = 200")
-        .await
-        .unwrap();
+        .await?;
 
     let plan = context
-        .plan_query("SELECT * FROM test_table ORDER BY some_value")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
+        .plan_query("SELECT * FROM test_table ORDER BY some_value, some_other_value")
+        .await?;
+    let results = context.collect(plan).await?;
     assert_batches_eq!(expected, &results);
 
     // Ensure partitions from before are still there
-    table.load().await.unwrap();
+    table.load().await?;
     match table.snapshot()?.file_actions()?.as_slice() {
         [f_1, f_2, f_3]
-            if f_1 == &partition_2 && f_2 == &partition_3 && f_3 == &partition_5 => {}
+            if f_3 == &partition_2 && f_2 == &partition_3 && f_1 == &partition_5 => {}
         _ => panic!("Expected 3 inherited partitions"),
     };
 
@@ -469,37 +453,33 @@ async fn test_update_statement(
             "UPDATE test_table SET some_bool_value = FALSE, some_bool_value = (some_int_value = 5555), some_value = 42, \
             some_other_value = CASE WHEN some_int_value = 5555 THEN 5.555 WHEN some_int_value = 3333 THEN 3.333 ELSE 0 END"
         )
-        .await
-        .unwrap();
+        .await?;
 
     // Verify results
-    let plan = context
-        .plan_query("SELECT * FROM test_table")
-        .await
-        .unwrap();
-    let results = context.collect(plan).await.unwrap();
+    let plan = context.plan_query("SELECT * FROM test_table").await?;
+    let results = context.collect(plan).await?;
 
     let expected = vec![
         "+---------------------+------------+------------------+-----------------+----------------+",
         "| some_time           | some_value | some_other_value | some_bool_value | some_int_value |",
         "+---------------------+------------+------------------+-----------------+----------------+",
-        "|                     | 42.0       | 0.0000000000     |                 |                |",
-        "|                     | 42.0       | 0.0000000000     |                 |                |",
-        "|                     | 42.0       | 0.0000000000     |                 |                |",
-        "|                     | 42.0       | 0.0000000000     |                 |                |",
-        "|                     | 42.0       | 0.0000000000     |                 |                |",
+        "| 2022-01-01T21:21:21 | 42.0       | 5.5550000000     | true            | 5555           |",
+        "| 2022-01-01T21:21:21 | 42.0       | 5.5550000000     | true            | 5555           |",
         "|                     | 42.0       | 0.0000000000     |                 |                |",
         "| 2022-01-01T21:21:21 | 42.0       | 5.5550000000     | true            | 5555           |",
         "| 2022-01-01T21:21:21 | 42.0       | 5.5550000000     | true            | 5555           |",
         "| 2022-01-01T20:03:03 | 42.0       | 3.3330000000     | false           | 3333           |",
-        "| 2022-01-01T21:21:21 | 42.0       | 5.5550000000     | true            | 5555           |",
-        "| 2022-01-01T21:21:21 | 42.0       | 5.5550000000     | true            | 5555           |",
+        "|                     | 42.0       | 0.0000000000     |                 |                |",
+        "|                     | 42.0       | 0.0000000000     |                 |                |",
+        "|                     | 42.0       | 0.0000000000     |                 |                |",
+        "|                     | 42.0       | 0.0000000000     |                 |                |",
+        "|                     | 42.0       | 0.0000000000     |                 |                |",
         "|                     | 42.0       | 0.0000000000     |                 |                |",
         "+---------------------+------------+------------------+-----------------+----------------+",
     ];
     assert_batches_eq!(expected, &results);
 
-    table.load().await.unwrap();
+    table.load().await?;
     match table.snapshot()?.file_actions()?.as_slice() {
         [f_1] if !all_partitions.contains(f_1) => {}
         _ => panic!("Expected only 1 new partition"),

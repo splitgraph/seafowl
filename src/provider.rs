@@ -86,7 +86,7 @@ impl SchemaProvider for SeafowlSchema {
         // Ultimately though, since the map gets re-created for each query the only point in
         // updating the existing table is to optimize potential multi-lookups during processing of
         // a single query.
-        let table_log_store = match self.tables.read().get(name) {
+        let mut delta_table = match self.tables.read().get(name) {
             None => return None,
             Some(table) => match table.as_any().downcast_ref::<DeltaTable>() {
                 // This shouldn't happen since we store only DeltaTable's in the map
@@ -98,13 +98,11 @@ impl SchemaProvider for SeafowlSchema {
                     } else {
                         // A negative table version indicates that the table was never loaded; we need
                         // to do it before returning it.
-                        delta_table.log_store()
+                        delta_table.clone()
                     }
                 }
             },
         };
-
-        let mut delta_table = DeltaTable::new(table_log_store, Default::default());
 
         if let Err(err) = delta_table.load().await {
             warn!("Failed to load table {name}: {err}");
