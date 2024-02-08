@@ -45,7 +45,7 @@ jobs:
       - name: Install minimal nightly with clippy and rustfmt
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly
+          toolchain: nightly-2024-02-01
           components: rustfmt, clippy
 
       - name: Install tool for formatting Cargo.toml files

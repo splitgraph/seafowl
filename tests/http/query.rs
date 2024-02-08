@@ -131,11 +131,10 @@ async fn test_http_server_reader_writer() {
         vec![
             "# HELP http_requests Counter tracking HTTP request information",
             "# TYPE http_requests counter",
-            "http_requests{method=\"GET\",path=\"/q/SELECT%201\",status=\"200\"} 1",
-            "http_requests{method=\"POST\",path=\"/new_db/q\",status=\"200\"} 1",
-            "http_requests{method=\"POST\",path=\"/q\",status=\"200\"} 4",
-            "http_requests{method=\"POST\",path=\"/q\",status=\"403\"} 1",
-            "http_requests{method=\"POST\",path=\"/q\",status=\"500\"} 1",
+            "http_requests{method=\"GET\",route=\"/q\",status=\"200\"} 1",
+            "http_requests{method=\"POST\",route=\"/q\",status=\"200\"} 5",
+            "http_requests{method=\"POST\",route=\"/q\",status=\"403\"} 1",
+            "http_requests{method=\"POST\",route=\"/q\",status=\"500\"} 1",
         ]
     );
 

@@ -501,21 +501,19 @@ pub fn filters(
         .max_age(CORS_MAXAGE);
 
     let log = warp::log::custom(|info: Info<'_>| {
-        let duration = format!("{:?}", info.elapsed());
-
         #[cfg(feature = "metrics")]
         counter!(
             HTTP_REQUESTS,
             "method" => info.method().as_str().to_string(),
-            "path" => info.path().to_string(),
+            // Omit a potential db prefix or url-encoded query from the path
+            "route" => if info.path().contains("/upload/") { "/upload" } else { "/q" },
             "status" => info.status().as_u16().to_string(),
-            //"duration" => duration.clone(),
         )
         .increment(1);
 
         info!(
             target: module_path!(),
-            "{} \"{} {} {:?}\" {} \"{}\" \"{}\" {duration}",
+            "{} \"{} {} {:?}\" {} \"{}\" \"{}\" {:?}",
             info.remote_addr().map(|addr| addr.to_string()).unwrap_or("-".to_string()),
             info.method(),
             info.path(),
@@ -523,6 +521,7 @@ pub fn filters(
             info.status().as_u16(),
             info.referer().unwrap_or("-"),
             info.user_agent().unwrap_or("-"),
+            info.elapsed(),
         );
     });
 
