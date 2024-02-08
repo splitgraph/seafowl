@@ -13,15 +13,19 @@ async fn test_http_server_reader_writer() {
     let client = Client::new();
     let uri = format!("http://{addr}/q");
 
-    // POST SELECT 1 as a read-only user
-    let resp = post_query(&client, &uri, "SELECT 1", None).await;
-    dbg!(&resp);
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        testutils::schema_from_header(resp.headers()),
-        Schema::new(vec![Field::new("Int64(1)", DataType::Int64, false),])
-    );
-    assert_eq!(response_text(resp).await, "{\"Int64(1)\":1}\n");
+    // Configure the metrics recorder and exporter
+    setup_metrics(&Metrics::default());
+
+    // GET & POST SELECT 1 as a read-only user
+    for method in [Method::GET, Method::POST] {
+        let resp = q(&client, method, &uri, "SELECT 1", None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            testutils::schema_from_header(resp.headers()),
+            Schema::new(vec![Field::new("Int64(1)", DataType::Int64, false),])
+        );
+        assert_eq!(response_text(resp).await, "{\"Int64(1)\":1}\n");
+    }
 
     // POST CREATE TABLE as a read-only user
     let resp = post_query(&client, &uri, "CREATE TABLE test_table (col INT)", None).await;
@@ -120,6 +124,20 @@ async fn test_http_server_reader_writer() {
         ])
     );
     assert_eq!(response_text(resp).await, "{\"some_int_value\":1111,\"some_time\":\"2022-01-01T20:01:01\",\"some_value\":42.0}\n");
+
+    // Finally test HTTP-related metrics
+    assert_eq!(
+        get_metrics().await,
+        vec![
+            "# HELP http_requests Counter tracking HTTP request information",
+            "# TYPE http_requests counter",
+            "http_requests{method=\"GET\",path=\"/q/SELECT%201\",status=\"200\"} 1",
+            "http_requests{method=\"POST\",path=\"/new_db/q\",status=\"200\"} 1",
+            "http_requests{method=\"POST\",path=\"/q\",status=\"200\"} 4",
+            "http_requests{method=\"POST\",path=\"/q\",status=\"403\"} 1",
+            "http_requests{method=\"POST\",path=\"/q\",status=\"500\"} 1",
+        ]
+    );
 
     // Stop the server
     // NB this won't run if the test fails, but at that point we're terminating the process

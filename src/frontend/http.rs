@@ -24,6 +24,7 @@ use deltalake::parquet::data_type::AsBytes;
 use deltalake::DeltaTable;
 use futures::{future, StreamExt};
 use hex::encode;
+use metrics::counter;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
 use serde_json::json;
@@ -31,6 +32,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::broadcast::Receiver;
 use tracing::{debug, info, warn};
 use warp::http::HeaderValue;
+use warp::log::Info;
 use warp::multipart::{FormData, Part};
 use warp::reply::{with_header, Response};
 use warp::{hyper::header, hyper::StatusCode, Filter, Reply};
@@ -38,6 +40,8 @@ use warp::{hyper::header, hyper::StatusCode, Filter, Reply};
 use super::http_utils::{handle_rejection, into_response, ApiError};
 use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::catalog::DEFAULT_DB;
+#[cfg(feature = "metrics")]
+use crate::config::context::HTTP_REQUESTS;
 use crate::config::schema::{AccessSettings, MEBIBYTES};
 use crate::{
     config::schema::{str_to_hex_hash, HttpFrontend},
@@ -496,7 +500,32 @@ pub fn filters(
         .allow_methods(vec!["GET", "POST"])
         .max_age(CORS_MAXAGE);
 
-    let log = warp::log(module_path!());
+    let log = warp::log::custom(|info: Info<'_>| {
+        let duration = format!("{:?}", info.elapsed());
+
+        #[cfg(feature = "metrics")]
+        counter!(
+            HTTP_REQUESTS,
+            "method" => info.method().as_str().to_string(),
+            "path" => info.path().to_string(),
+            "status" => info.status().as_u16().to_string(),
+            //"duration" => duration.clone(),
+        )
+        .increment(1);
+
+        info!(
+            target: module_path!(),
+            "{} \"{} {} {:?}\" {} \"{}\" \"{}\" {duration}",
+            info.remote_addr().map(|addr| addr.to_string()).unwrap_or("-".to_string()),
+            info.method(),
+            info.path(),
+            info.version(),
+            info.status().as_u16(),
+            info.referer().unwrap_or("-"),
+            info.user_agent().unwrap_or("-"),
+        );
+    });
+
     // Cached read query
     let ctx = context.clone();
     let cached_read_query_route = warp::path!(String / "q" / String)
