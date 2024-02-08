@@ -392,6 +392,8 @@ pub struct Misc {
     // Perhaps make this accept a cron job format and use tokio-cron-scheduler?
     pub gc_interval: u16,
     pub ssl_cert_file: Option<String>,
+    #[cfg(feature = "metrics")]
+    pub metrics: Option<Metrics>,
 }
 
 impl Default for Misc {
@@ -400,6 +402,26 @@ impl Default for Misc {
             max_partition_size: 1024 * 1024,
             gc_interval: 0,
             ssl_cert_file: None,
+            #[cfg(feature = "metrics")]
+            metrics: None,
+        }
+    }
+}
+
+#[cfg(feature = "metrics")]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(default)]
+pub struct Metrics {
+    pub host: String,
+    pub port: u16,
+}
+
+#[cfg(feature = "metrics")]
+impl Default for Metrics {
+    fn default() -> Self {
+        Self {
+            host: "127.0.0.1".to_string(),
+            port: 9090,
         }
     }
 }
@@ -652,7 +674,8 @@ cache_control = "private, max-age=86400"
                 misc: Misc {
                     max_partition_size: 1024 * 1024,
                     gc_interval: 0,
-                    ssl_cert_file: None
+                    ssl_cert_file: None,
+                    metrics: None,
                 },
             }
         )
@@ -749,7 +772,8 @@ cache_control = "private, max-age=86400"
                 misc: Misc {
                     max_partition_size: 1024 * 1024,
                     gc_interval: 0,
-                    ssl_cert_file: None
+                    ssl_cert_file: None,
+                    metrics: None,
                 },
             }
         )

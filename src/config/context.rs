@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::{
@@ -12,12 +13,17 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use deltalake::delta_datafusion::DeltaTableFactory;
+#[cfg(feature = "metrics")]
+use metrics::describe_counter;
+#[cfg(feature = "metrics")]
+use metrics_exporter_prometheus::PrometheusBuilder;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
 
 use crate::catalog::{external::ExternalStore, metastore::Metastore, CatalogError};
+
 use crate::object_store::http::add_http_object_store;
 use crate::object_store::wrapped::InternalObjectStore;
 #[cfg(feature = "remote-tables")]
@@ -27,6 +33,9 @@ use object_store::aws::AmazonS3Builder;
 use object_store::gcp::GoogleCloudStorageBuilder;
 
 use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
+
+#[cfg(feature = "metrics")]
+pub const HTTP_REQUESTS: &str = "http_requests";
 
 async fn build_metastore(
     config: &schema::SeafowlConfig,
@@ -155,6 +164,19 @@ pub fn build_state_with_table_factories(
     state
 }
 
+#[cfg(feature = "metrics")]
+pub fn setup_metrics(metrics: &schema::Metrics) {
+    let addr: SocketAddr = format!("{}:{}", metrics.host, metrics.port)
+        .parse()
+        .expect("Error parsing the Prometheus metrics export address");
+    let builder = PrometheusBuilder::new().with_http_listener(addr);
+    builder
+        .install()
+        .expect("failed to install recorder/exporter");
+
+    describe_counter!(HTTP_REQUESTS, "Counter tracking HTTP request information");
+}
+
 pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext> {
     let mut runtime_config = RuntimeConfig::new();
     if let Some(max_memory) = cfg.runtime.max_memory {
@@ -196,6 +218,11 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
         metastore.schemas.get(DEFAULT_DB, DEFAULT_SCHEMA).await
     {
         metastore.schemas.create(DEFAULT_DB, DEFAULT_SCHEMA).await?;
+    }
+
+    #[cfg(feature = "metrics")]
+    if let Some(ref metrics) = cfg.misc.metrics {
+        setup_metrics(metrics);
     }
 
     // Convergence doesn't support connecting to different DB names. We are supposed
@@ -254,6 +281,7 @@ mod tests {
                 max_partition_size: 1024 * 1024,
                 gc_interval: 0,
                 ssl_cert_file: None,
+                metrics: None,
             },
         };
 

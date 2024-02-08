@@ -8,10 +8,10 @@ use tokio::process::Command;
 
 use futures::Future;
 use futures::FutureExt;
-use seafowl::config::context::build_context;
-use seafowl::config::schema::load_config_from_string;
-
+use seafowl::config::context::{build_context, setup_metrics, HTTP_REQUESTS};
+use seafowl::config::schema::{load_config_from_string, Metrics};
 use seafowl::frontend::http::filters;
+
 use warp::hyper::body::to_bytes;
 use warp::hyper::client::HttpConnector;
 use warp::hyper::Body;
@@ -33,6 +33,7 @@ use arrow_schema::TimeUnit;
 use datafusion::assert_batches_eq;
 use datafusion::parquet::arrow::ArrowWriter;
 use itertools::Itertools;
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use rstest::rstest;
 use seafowl::context::SeafowlContext;
 use std::net::SocketAddr;
@@ -100,8 +101,24 @@ async fn post_query(
     query: &str,
     token: Option<&str>,
 ) -> Response<Body> {
+    q(client, Method::POST, uri, query, token).await
+}
+
+async fn q(
+    client: &Client<HttpConnector>,
+    method: Method,
+    uri: &str,
+    query: &str,
+    token: Option<&str>,
+) -> Response<Body> {
+    let uri = if method == Method::GET {
+        format!("{uri}/{}", utf8_percent_encode(query, NON_ALPHANUMERIC))
+    } else {
+        uri.to_string()
+    };
+
     let mut builder = Request::builder()
-        .method(Method::POST)
+        .method(method.clone())
         .uri(uri)
         .header("content-type", "application/json");
 
@@ -109,6 +126,29 @@ async fn post_query(
         builder = builder.header("Authorization", format!("Bearer {t}"));
     }
 
-    let req = builder.body(query_body(query)).unwrap();
+    let req = builder
+        .body(if method == Method::POST {
+            query_body(query)
+        } else {
+            Body::empty()
+        })
+        .unwrap();
     client.request(req).await.unwrap()
+}
+
+async fn get_metrics() -> Vec<String> {
+    let resp = Client::new()
+        .get("http://127.0.0.1:9090/metrics".try_into().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let mut lines = response_text(resp)
+        .await
+        .lines()
+        .filter(|l| l.contains(HTTP_REQUESTS) && !l.contains("/upload"))
+        .map(String::from)
+        .collect_vec();
+    lines.sort();
+    lines
 }
