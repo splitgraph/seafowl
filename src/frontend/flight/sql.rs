@@ -110,10 +110,7 @@ impl FlightSqlService for SeafowlFlightHandler {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let query_id =
             String::from_utf8_lossy(ticket.statement_handle.as_ref()).to_string();
-        let batch_stream = self
-            .fetch_stream(query_id)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+        let batch_stream = self.fetch_stream(query_id).await?;
         let schema = batch_stream.schema();
 
         // The Flight encoder below expects a stream where the error type on the item is a

@@ -21,7 +21,8 @@ impl<S> Layer<S> for MetricsLayer {
     }
 }
 
-// This service implements the Log behavior
+// This service wraps our Arrow Flight (SQL) endpoints
+// for the sole purpose of tracking metrics
 #[derive(Clone)]
 pub struct MetricsService<S> {
     inner: S,

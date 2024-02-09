@@ -36,6 +36,9 @@ async fn test_interleaving_queries() -> Result<()> {
 
     tokio::task::spawn(flight);
 
+    // Configure the metrics recorder and exporter
+    setup_metrics(&Metrics::default());
+
     let mut client = create_flight_client(addr).await;
 
     // Fire of the first query
@@ -48,7 +51,6 @@ async fn test_interleaving_queries() -> Result<()> {
 
     // Get the corresponding ticket
     let ticket_1 = response.endpoint[0]
-        // Extract the ticket
         .ticket
         .clone()
         .expect("expected ticket");
@@ -63,16 +65,30 @@ async fn test_interleaving_queries() -> Result<()> {
 
     // Get the corresponding ticket
     let ticket_2 = response.endpoint[0]
-        // Extract the ticket
         .ticket
         .clone()
         .expect("expected ticket");
 
-    // Retrieve the results for the second ticket
-    let flight_stream = client
-        .do_get(ticket_2.clone())
+    // Execute a couple of queries that errors out
+    // One during planning (GetFlightInfo) ...
+    let err = get_flight_batches(&mut client, "SELECT * FROM nonexistent".to_string())
         .await
-        .expect("error fetching data");
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("code: Internal, message: \"Error during planning: table 'default.public.nonexistent' not found\"")
+    );
+    // ...and another one during execution, so we don't really capture the status in the metrics
+    let err = get_flight_batches(&mut client, "SELECT 'notanint'::INT".to_string())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("code: Internal, message: \"Arrow error: Cast error: Cannot cast string 'notanint' to value of Int32 type\"")
+    );
+
+    // Now retrieve the results for the second ticket
+    let flight_stream = client.do_get(ticket_2.clone()).await?;
     let results: Vec<RecordBatch> = flight_stream.try_collect().await?;
 
     let expected = [
@@ -89,10 +105,10 @@ async fn test_interleaving_queries() -> Result<()> {
     let err = client.do_get(ticket_2).await.unwrap_err();
     assert!(err
         .to_string()
-        .contains("Execution error: No results found for query id"));
+        .contains("code: NotFound, message: \"No results found for query id"));
 
     // Now retrieve the results for the first ticket
-    let flight_stream = client.do_get(ticket_1).await.expect("error fetching data");
+    let flight_stream = client.do_get(ticket_1).await?;
     let results: Vec<RecordBatch> = flight_stream.try_collect().await?;
 
     let expected = [
@@ -104,6 +120,19 @@ async fn test_interleaving_queries() -> Result<()> {
     ];
 
     assert_batches_eq!(expected, &results);
+
+    // Finally test gRPC-related metrics
+    assert_eq!(
+        get_metrics(GRPC_REQUESTS).await,
+        vec![
+            "# HELP grpc_requests Counter tracking gRPC request statistics",
+            "# TYPE grpc_requests counter",
+            "grpc_requests{path=\"/arrow.flight.protocol.FlightService/DoGet\",status=\"0\"} 3",
+            "grpc_requests{path=\"/arrow.flight.protocol.FlightService/DoGet\",status=\"5\"} 1",
+            "grpc_requests{path=\"/arrow.flight.protocol.FlightService/GetFlightInfo\",status=\"0\"} 3",
+            "grpc_requests{path=\"/arrow.flight.protocol.FlightService/GetFlightInfo\",status=\"13\"} 1",
+        ]
+    );
 
     Ok(())
 }
