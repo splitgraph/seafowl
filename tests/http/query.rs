@@ -129,7 +129,7 @@ async fn test_http_server_reader_writer() {
     assert_eq!(
         get_metrics().await,
         vec![
-            "# HELP http_requests Counter tracking HTTP request information",
+            "# HELP http_requests Counter tracking HTTP request statistics",
             "# TYPE http_requests counter",
             "http_requests{method=\"GET\",route=\"/q\",status=\"200\"} 1",
             "http_requests{method=\"POST\",route=\"/q\",status=\"200\"} 5",

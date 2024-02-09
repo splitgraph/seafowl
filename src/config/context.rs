@@ -37,6 +37,9 @@ use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
 #[cfg(feature = "metrics")]
 pub const HTTP_REQUESTS: &str = "http_requests";
 
+#[cfg(feature = "metrics")]
+pub const GRPC_REQUESTS: &str = "grpc_requests";
+
 async fn build_metastore(
     config: &schema::SeafowlConfig,
     object_store: Arc<InternalObjectStore>,
@@ -174,7 +177,8 @@ pub fn setup_metrics(metrics: &schema::Metrics) {
         .install()
         .expect("failed to install recorder/exporter");
 
-    describe_counter!(HTTP_REQUESTS, "Counter tracking HTTP request information");
+    describe_counter!(HTTP_REQUESTS, "Counter tracking HTTP request statistics");
+    describe_counter!(GRPC_REQUESTS, "Counter tracking gRPC request statistics");
 }
 
 pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext> {
