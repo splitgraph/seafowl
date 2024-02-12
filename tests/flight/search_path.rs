@@ -3,13 +3,10 @@ use crate::flight::*;
 #[tokio::test]
 async fn test_default_schema_override(
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let (context, addr, flight) = start_flight_server().await;
+    let (context, mut client) = flight_server().await;
 
     context.plan_query("CREATE SCHEMA some_schema").await?;
     create_table_and_insert(context.as_ref(), "some_schema.flight_table").await;
-    tokio::task::spawn(flight);
-
-    let mut client = create_flight_client(addr).await;
 
     // Trying to run the query without the search_path set will error out
     let err = get_flight_batches(&mut client, "SELECT * FROM flight_table".to_string())
