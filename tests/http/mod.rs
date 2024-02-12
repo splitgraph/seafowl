@@ -136,7 +136,7 @@ async fn q(
     client.request(req).await.unwrap()
 }
 
-async fn get_metrics() -> Vec<String> {
+pub async fn get_metrics(metrics_type: &str) -> Vec<String> {
     let resp = Client::new()
         .get("http://127.0.0.1:9090/metrics".try_into().unwrap())
         .await
@@ -146,7 +146,7 @@ async fn get_metrics() -> Vec<String> {
     let mut lines = response_text(resp)
         .await
         .lines()
-        .filter(|l| l.contains(HTTP_REQUESTS) && !l.contains("/upload"))
+        .filter(|l| l.contains(metrics_type) && !l.contains("/upload"))
         .map(String::from)
         .collect_vec();
     lines.sort();

@@ -10,6 +10,7 @@ use lazy_static::lazy_static;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::metadata::MetadataMap;
+use tonic::Status;
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -73,11 +74,11 @@ impl SeafowlFlightHandler {
     pub async fn fetch_stream(
         &self,
         query_id: String,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> core::result::Result<SendableRecordBatchStream, Status> {
         let (_, batch_stream_mutex) =
             self.results
                 .remove(&query_id)
-                .ok_or(DataFusionError::Execution(format!(
+                .ok_or(Status::not_found(format!(
                     "No results found for query id {query_id}"
                 )))?;
 

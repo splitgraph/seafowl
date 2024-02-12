@@ -39,6 +39,6 @@ dsn = "{}"
         dsn.escape_default(),
     );
 
-    write!(conf_file, "{}", config_str)?;
+    write!(conf_file, "{config_str}")?;
     Ok(temp_dir)
 }
