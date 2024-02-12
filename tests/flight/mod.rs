@@ -1,5 +1,3 @@
-use crate::http::get_metrics;
-use crate::metrics_setup;
 use crate::statements::create_table_and_insert;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::error::Result;
@@ -8,8 +6,7 @@ use arrow_flight::{FlightClient, FlightDescriptor};
 use datafusion_common::assert_batches_eq;
 use futures::TryStreamExt;
 use prost::Message;
-use rstest::rstest;
-use seafowl::config::context::{build_context, GRPC_REQUESTS};
+use seafowl::config::context::build_context;
 use seafowl::config::schema::{load_config_from_string, SeafowlConfig};
 use seafowl::context::SeafowlContext;
 use seafowl::frontend::flight::run_flight_server;

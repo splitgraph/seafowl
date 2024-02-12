@@ -8,8 +8,8 @@ use tokio::process::Command;
 
 use futures::Future;
 use futures::FutureExt;
-use seafowl::config::context::{build_context, HTTP_REQUESTS};
-use seafowl::config::schema::load_config_from_string;
+use seafowl::config::context::{build_context, setup_metrics, HTTP_REQUESTS};
+use seafowl::config::schema::{load_config_from_string, Metrics};
 use seafowl::frontend::http::filters;
 
 use warp::hyper::body::to_bytes;
@@ -40,8 +40,6 @@ use std::net::SocketAddr;
 use tempfile::Builder;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Sender;
-
-use crate::metrics_setup;
 
 // Hack because integration tests do not set cfg(test)
 // https://users.rust-lang.org/t/sharing-helper-function-between-unit-and-integration-tests/9941/2

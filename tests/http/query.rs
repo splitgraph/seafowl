@@ -1,8 +1,7 @@
 use crate::http::*;
 
-#[rstest]
 #[tokio::test]
-async fn test_http_server_reader_writer(_metrics_setup: ()) {
+async fn test_http_server_reader_writer() {
     // It's questionable how much value this testing adds on top of the tests in http.rs, but we do:
     //   - test the code consumes the config correctly, which we don't do in HTTP tests
     //   - hit the server that's actually listening on a port instead of calling warp routines directly.
@@ -13,6 +12,9 @@ async fn test_http_server_reader_writer(_metrics_setup: ()) {
     tokio::task::spawn(server);
     let client = Client::new();
     let uri = format!("http://{addr}/q");
+
+    // Configure metrics
+    setup_metrics(&Metrics::default());
 
     // GET & POST SELECT 1 as a read-only user
     for method in [Method::GET, Method::POST] {

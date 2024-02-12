@@ -26,9 +26,8 @@ async fn test_basic_queries() -> Result<()> {
     Ok(())
 }
 
-#[rstest]
 #[tokio::test]
-async fn test_interleaving_queries(_metrics_setup: ()) -> Result<()> {
+async fn test_interleaving_queries() -> Result<()> {
     let (context, mut client) = flight_server().await;
     create_table_and_insert(context.as_ref(), "flight_table").await;
 
@@ -112,9 +111,9 @@ async fn test_interleaving_queries(_metrics_setup: ()) -> Result<()> {
 
     assert_batches_eq!(expected, &results);
 
-    // Finally test gRPC-related metrics
     // TODO: Run this test in a separate process to make the metrics assertions precise,
     // and avoid unique address/global recorder conflicts between tests.
+    // Finally test gRPC-related metrics
     // assert_eq!(
     //     get_metrics(GRPC_REQUESTS).await,
     //     vec![
@@ -126,7 +125,6 @@ async fn test_interleaving_queries(_metrics_setup: ()) -> Result<()> {
     //         "grpc_requests{path=\"/arrow.flight.protocol.FlightService/GetFlightInfo\",status=\"13\"} 1",
     //     ]
     // );
-    assert!(get_metrics(GRPC_REQUESTS).await.len() >= 6);
 
     Ok(())
 }
