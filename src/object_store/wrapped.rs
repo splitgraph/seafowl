@@ -358,8 +358,8 @@ mod tests {
     ) -> Result<()> {
         let config = ObjectStore::S3(S3 {
             region: None,
-            access_key_id: "access_key_id".to_string(),
-            secret_access_key: "secret_access_key".to_string(),
+            access_key_id: Some("access_key_id".to_string()),
+            secret_access_key: Some("secret_access_key".to_string()),
             bucket: bucket.to_string(),
             prefix: prefix.map(|p| p.to_string()),
             endpoint: endpoint.clone(),

@@ -20,7 +20,10 @@ services:
       /usr/bin/mc rm -r --force test-minio/seafowl-test-bucket;  /usr/bin/mc mb
       test-minio/seafowl-test-bucket; /usr/bin/mc cp test-data/table_with_ns_column.parquet
       test-minio/seafowl-test-bucket/table_with_ns_column.parquet; /usr/bin/mc anonymous set public
-      test-minio/seafowl-test-bucket/table_with_ns_column.parquet; exit 0; "
+      test-minio/seafowl-test-bucket/table_with_ns_column.parquet; 
+
+      /usr/bin/mc mb test-minio/seafowl-test-bucket-public; /usr/bin/mc anonymous set public
+      test-minio/seafowl-test-bucket-public; exit 0; "
 
   fake-gcs:
     image: tustvold/fake-gcs-server

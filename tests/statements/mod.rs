@@ -50,6 +50,8 @@ enum ObjectStoreType {
     InMemory,
     // S3 object store with an optional path to the actual data folder
     S3(Option<&'static str>),
+    // Publicly-accessible S3 bucket
+    S3Public,
 }
 
 /// Make a SeafowlContext that's connected to a real PostgreSQL database
@@ -90,6 +92,16 @@ ttl = 30
                     "".to_string()
                 }
             ),
+            None,
+        ),
+        ObjectStoreType::S3Public => (
+            r#"type = "s3"
+endpoint = "http://127.0.0.1:9000"
+bucket = "seafowl-test-bucket-public"
+[object_store.cache_properties]
+ttl = 30
+"#
+            .to_string(),
             None,
         ),
         ObjectStoreType::Gcs => {
