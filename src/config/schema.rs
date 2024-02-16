@@ -126,8 +126,8 @@ pub struct InMemory {}
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct S3 {
     pub region: Option<String>,
-    pub access_key_id: String,
-    pub secret_access_key: String,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
     pub endpoint: Option<String>,
     pub bucket: String,
     pub prefix: Option<String>,
@@ -141,18 +141,8 @@ impl S3 {
     ) -> Result<Self, ConfigError> {
         Ok(S3 {
             region: map.get("region").cloned(),
-            access_key_id: map
-                .remove("access_key_id")
-                .ok_or(ConfigError::Message(
-                    "'access_key_id' not found in provided options".to_string(),
-                ))?
-                .clone(),
-            secret_access_key: map
-                .remove("secret_access_key")
-                .ok_or(ConfigError::Message(
-                    "'secret_access_key' not found in provided options".to_string(),
-                ))?
-                .clone(),
+            access_key_id: map.remove("access_key_id"),
+            secret_access_key: map.remove("secret_access_key"),
             endpoint: map.remove("endpoint"),
             bucket,
             prefix: None,
@@ -536,6 +526,17 @@ type = "postgres"
 dsn = "postgresql://user:pass@localhost:5432/somedb"
 "#;
 
+    const TEST_CONFIG_S3_PUBLIC: &str = r#"
+[object_store]
+type = "s3"
+endpoint = "https://s3.amazonaws.com:9000"
+bucket = "seafowl"
+
+[catalog]
+type = "postgres"
+dsn = "postgresql://user:pass@localhost:5432/somedb"
+"#;
+
     const TEST_CONFIG_S3_WITH_CACHE: &str = r#"
 [object_store]
 type = "s3"
@@ -629,12 +630,30 @@ cache_control = "private, max-age=86400"
             config.object_store,
             ObjectStore::S3(S3 {
                 region: None,
-                access_key_id: "AKI...".to_string(),
-                secret_access_key: "ABC...".to_string(),
+                access_key_id: Some("AKI...".to_string()),
+                secret_access_key: Some("ABC...".to_string()),
                 endpoint: Some("https://s3.amazonaws.com:9000".to_string()),
                 bucket: "seafowl".to_string(),
                 prefix: None,
                 cache_properties: cache_props,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_public_config_with_s3() {
+        let config = load_config_from_string(TEST_CONFIG_S3_PUBLIC, false, None).unwrap();
+
+        assert_eq!(
+            config.object_store,
+            ObjectStore::S3(S3 {
+                region: None,
+                access_key_id: None,
+                secret_access_key: None,
+                endpoint: Some("https://s3.amazonaws.com:9000".to_string()),
+                bucket: "seafowl".to_string(),
+                prefix: None,
+                cache_properties: None,
             })
         );
     }

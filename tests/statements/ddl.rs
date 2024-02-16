@@ -3,7 +3,11 @@ use crate::statements::*;
 #[rstest]
 #[tokio::test]
 async fn test_create_table(
-    #[values(ObjectStoreType::InMemory, ObjectStoreType::Gcs)]
+    #[values(
+        ObjectStoreType::InMemory,
+        ObjectStoreType::Gcs,
+        ObjectStoreType::S3Public
+    )]
     object_store_type: ObjectStoreType,
 ) {
     let (context, _) = make_context_with_pg(object_store_type).await;

@@ -102,14 +102,22 @@ pub fn build_object_store(
             ..
         }) => {
             let mut builder = AmazonS3Builder::new()
-                .with_access_key_id(access_key_id)
-                .with_secret_access_key(secret_access_key)
                 .with_region(region.clone().unwrap_or_default())
                 .with_bucket_name(bucket)
                 .with_allow_http(true);
 
             if let Some(endpoint) = endpoint {
                 builder = builder.with_endpoint(endpoint);
+            }
+
+            if let (Some(access_key_id), Some(secret_access_key)) =
+                (&access_key_id, &secret_access_key)
+            {
+                builder = builder
+                    .with_access_key_id(access_key_id)
+                    .with_secret_access_key(secret_access_key)
+            } else {
+                builder = builder.with_skip_signature(true)
             }
 
             let store = builder.build()?;
