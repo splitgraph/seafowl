@@ -42,9 +42,9 @@ use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::catalog::DEFAULT_DB;
 #[cfg(feature = "metrics")]
 use crate::config::context::HTTP_REQUESTS;
-use crate::config::schema::{AccessSettings, MEBIBYTES};
+use crate::config::schema::{AccessSettings, HttpFrontend, MEBIBYTES};
 use crate::{
-    config::schema::{str_to_hex_hash, HttpFrontend},
+    config::schema::str_to_hex_hash,
     context::logical::{is_read_only, is_statement_read_only},
     context::SeafowlContext,
 };
@@ -482,8 +482,13 @@ async fn load_part(mut part: Part) -> Result<Vec<u8>, ApiError> {
     Ok(bytes)
 }
 
-// We need the allow to silence the compiler: it asks us to add warp::generic::Tuple to the first
-// parameter of the return type, but that struct is not exportable (generic is private).
+/// GET /healthz or /readyz
+pub async fn health_endpoint(
+    _context: Arc<SeafowlContext>,
+) -> Result<Response, ApiError> {
+    Ok(warp::reply::with_status("ready", StatusCode::OK).into_response())
+}
+
 pub fn filters(
     context: Arc<SeafowlContext>,
     config: HttpFrontend,
@@ -581,7 +586,7 @@ pub fn filters(
         .map(into_response);
 
     // Upload endpoint
-    let ctx = context;
+    let ctx = context.clone();
     let upload_route = warp::path!(String / "upload" / String / String)
         .or(warp::any()
             .map(move || DEFAULT_DB.to_string())
@@ -596,9 +601,19 @@ pub fn filters(
         .then(upload)
         .map(into_response);
 
+    // Health-check/liveness probe
+    let ctx = context;
+    let health_route = warp::path!("healthz")
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(warp::any().map(move || ctx.clone()))
+        .then(health_endpoint)
+        .map(into_response);
+
     cached_read_query_route
         .or(uncached_read_write_query_route)
         .or(upload_route)
+        .or(health_route)
         .with(cors)
         .with(log)
         .map(|r| with_header(r, header::VARY, VARY))

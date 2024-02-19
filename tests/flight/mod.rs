@@ -7,7 +7,7 @@ use datafusion_common::assert_batches_eq;
 use futures::TryStreamExt;
 use prost::Message;
 use seafowl::config::context::build_context;
-use seafowl::config::schema::{load_config_from_string, SeafowlConfig};
+use seafowl::config::schema::load_config_from_string;
 use seafowl::context::SeafowlContext;
 use seafowl::frontend::flight::run_flight_server;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use tonic::transport::Channel;
 mod client;
 mod search_path;
 
-async fn make_test_context() -> (SeafowlConfig, Arc<SeafowlContext>) {
+async fn make_test_context() -> Arc<SeafowlContext> {
     // let OS choose a free port
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -39,17 +39,20 @@ bind_port = {}"#,
     );
 
     let config = load_config_from_string(&config_text, false, None).unwrap();
-    let context = Arc::from(build_context(&config).await.unwrap());
-    (config, context)
+
+    Arc::from(build_context(config).await.unwrap())
 }
 
 async fn flight_server() -> (Arc<SeafowlContext>, FlightClient) {
-    let (config, context) = make_test_context().await;
+    let context = make_test_context().await;
 
-    let flight_cfg = config
+    let flight_cfg = context
+        .config
         .frontend
         .flight
-        .expect("Arrow Flight frontend configured");
+        .as_ref()
+        .expect("Arrow Flight frontend configured")
+        .clone();
 
     let flight = run_flight_server(context.clone(), flight_cfg.clone());
     tokio::task::spawn(flight);

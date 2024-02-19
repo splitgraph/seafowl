@@ -17,7 +17,7 @@ use seafowl::{
     cli,
     config::{
         context::build_context,
-        schema::{build_default_config, load_config, SeafowlConfig, DEFAULT_DATA_DIR},
+        schema::{build_default_config, load_config, DEFAULT_DATA_DIR},
     },
     context::SeafowlContext,
     frontend::http::run_server,
@@ -89,13 +89,12 @@ fn prepare_tracing(json_logs: bool) {
 
 fn prepare_frontends(
     context: Arc<SeafowlContext>,
-    config: &SeafowlConfig,
     shutdown: &Sender<()>,
 ) -> Vec<Pin<Box<dyn Future<Output = ()> + Send>>> {
     let mut result: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = Vec::new();
 
     #[cfg(feature = "frontend-arrow-flight")]
-    if let Some(flight) = &config.frontend.flight {
+    if let Some(flight) = &context.config.frontend.flight {
         let server = run_flight_server(context.clone(), flight.clone());
         info!(
             "Starting the Arrow Flight frontend on {}:{}",
@@ -116,7 +115,7 @@ fn prepare_frontends(
     };
 
     #[cfg(feature = "frontend-postgres")]
-    if let Some(pg) = &config.frontend.postgres {
+    if let Some(pg) = &context.config.frontend.postgres {
         let server = run_pg_server(context.clone(), pg.to_owned());
         info!(
             "Starting the PostgreSQL frontend on {}:{}",
@@ -136,9 +135,11 @@ fn prepare_frontends(
         }));
     };
 
-    if let Some(http) = &config.frontend.http {
+    if let Some(http) = &context.config.frontend.http {
+        let http = http.clone();
         let shutdown_r = shutdown.subscribe();
-        let server = run_server(context, http.to_owned(), shutdown_r);
+
+        let server = run_server(context, http.clone(), shutdown_r);
         info!(
             "Starting the HTTP frontend on {}:{}",
             http.bind_host, http.bind_port
@@ -216,7 +217,7 @@ async fn main() {
         config
     };
 
-    let context = Arc::new(build_context(&config).await.unwrap());
+    let context = Arc::new(build_context(config).await.unwrap());
 
     // Temporary, remove once migrations drop the `dropped_table` catalog table
     gc_databases(context.as_ref(), None).await;
@@ -231,7 +232,7 @@ async fn main() {
     // Ref: https://tokio.rs/tokio/topics/shutdown#waiting-for-things-to-finish-shutting-down
     let (shutdown, _) = channel(1);
 
-    let mut tasks = prepare_frontends(context.clone(), &config, &shutdown);
+    let mut tasks = prepare_frontends(context.clone(), &shutdown);
 
     if tasks.is_empty() {
         error!(
@@ -242,10 +243,11 @@ Run Seafowl with --one-off instead to run a one-off command from the CLI."
     }
 
     // Add a GC task for purging obsolete objects from the catalog and the store
-    if config.misc.gc_interval > 0 {
+    if context.config.misc.gc_interval > 0 {
         let mut shutdown_r = shutdown.subscribe();
-        let mut interval =
-            interval(Duration::from_secs((config.misc.gc_interval * 3600) as u64));
+        let mut interval = interval(Duration::from_secs(
+            (context.config.misc.gc_interval * 3600) as u64,
+        ));
         tasks.push(
             async move {
                 loop {

@@ -55,7 +55,7 @@ dsn = "http://{addr}""#,
     );
 
     let config = load_config_from_string(&config_text, false, None).unwrap();
-    let context = Arc::from(build_context(&config).await.unwrap());
+    let context = Arc::from(build_context(config).await.unwrap());
 
     let clade = run_clade_server(addr);
     tokio::task::spawn(clade);

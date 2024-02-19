@@ -70,9 +70,12 @@ dsn = ":memory:"
 write_access = "b786e07f52fc72d32b2163b6f63aa16344fd8d2d84df87b6c231ab33cd5aa125""#;
 
     let config = load_config_from_string(config_text, false, None).unwrap();
-    let context = Arc::from(build_context(&config).await.unwrap());
+    let context = Arc::from(build_context(config).await.unwrap());
 
-    let filters = filters(context.clone(), config.frontend.http.unwrap());
+    let filters = filters(
+        context.clone(),
+        context.config.frontend.http.as_ref().unwrap().clone(),
+    );
     let (tx, rx) = oneshot::channel();
     let (addr, server) = warp::serve(filters).bind_with_graceful_shutdown(
         // Pass port :0 to pick a random free port
