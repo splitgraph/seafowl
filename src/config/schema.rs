@@ -498,7 +498,7 @@ pub fn load_config_from_string(
     env_override: Option<Map<String, String>>,
 ) -> Result<SeafowlConfig, ConfigError> {
     let config = Config::builder()
-        .add_source(File::from_str(config_str, FileFormat::Toml))
+        .add_source(File::from_str(config_str, FileFormat::Toml).required(false))
         .add_source(
             Environment::with_prefix(ENV_PREFIX)
                 .separator(ENV_SEPARATOR)

@@ -5,12 +5,12 @@ use crate::flight::*;
 async fn test_interleaving_queries(
     #[future(awt)] test_seafowl: TestSeafowl,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut client = FlightClient::new_from_inner(test_seafowl.cli.inner().clone());
+    let mut client = test_seafowl.flight_client();
 
     // Verify readiness first
     let resp = Client::new()
         .get(
-            format!("http://{}/readyz", test_seafowl.http_addr)
+            format!("{}/readyz", test_seafowl.http_base())
                 .try_into()
                 .unwrap(),
         )
@@ -109,7 +109,7 @@ async fn test_interleaving_queries(
 
     // Finally test gRPC-related metrics
     assert_eq!(
-        get_metrics(GRPC_REQUESTS, test_seafowl.metrics_addr.port()).await,
+        get_metrics(GRPC_REQUESTS, test_seafowl.metrics_port()).await,
         vec![
             "# HELP grpc_requests Counter tracking gRPC request statistics",
             "# TYPE grpc_requests counter",
