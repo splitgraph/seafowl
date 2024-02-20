@@ -1,25 +1,18 @@
-# Default Seafowl config
-# For more information, see https://www.splitgraph.com/docs/seafowl/reference/seafowl-toml-configuration
+# Default config for dev
 
-# Store the data (Parquet files) on the local disk
 [object_store]
 type = "local"
-data_dir = "seafowl-data"
+data_dir = "../seafowl-data"
 
-# Store the catalog on the local disk
 [catalog]
 type = "sqlite"
-dsn = "seafowl-data/seafowl.sqlite"
+dsn = "../seafowl-data/seafowl.sqlite"
 
-# Configure the HTTP frontend
+[frontend.postgres]
+bind_port = 6432
+
 [frontend.http]
+bind_host = "0.0.0.0"
+
+[frontend.flight]
 bind_host = "127.0.0.1"
-bind_port = 8080
-
-# By default, make Seafowl readable by anyone...
-read_access = "any"
-
-# ...and writeable by users with a password.
-# We store the password's SHA hash here. See the logs from the first
-# startup of Seafowl to get the password or set this to a different hash.
-write_access = "3a56a80b4e682dfe4db66b0949dd736c44ec322a3ad0fc999dc5d8c28cd4ca4a"
