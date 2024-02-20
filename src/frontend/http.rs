@@ -9,6 +9,8 @@ use warp::{hyper, Rejection};
 
 use arrow::json::writer::record_batches_to_json_rows;
 use arrow::record_batch::RecordBatch;
+#[cfg(feature = "frontend-arrow-flight")]
+use arrow_flight::flight_service_client::FlightServiceClient;
 
 use arrow_integration_test::{schema_from_json, schema_to_json};
 use arrow_schema::SchemaRef;
@@ -482,10 +484,26 @@ async fn load_part(mut part: Part) -> Result<Vec<u8>, ApiError> {
     Ok(bytes)
 }
 
-/// GET /healthz or /readyz
-pub async fn health_endpoint(
-    _context: Arc<SeafowlContext>,
-) -> Result<Response, ApiError> {
+/// GET /readyz
+pub async fn health_endpoint(context: Arc<SeafowlContext>) -> Result<Response, ApiError> {
+    #[cfg(feature = "frontend-arrow-flight")]
+    if let Some(flight) = &context.config.frontend.flight {
+        // TODO: run SELECT 1 or something similar?
+        if let Err(err) = FlightServiceClient::connect(format!(
+            "http://{}:{}",
+            flight.bind_host, flight.bind_port
+        ))
+        .await
+        {
+            warn!(%err, "Arrow Flight client can't connect, health check failed");
+            return Ok(warp::reply::with_status(
+                "not_ready",
+                StatusCode::SERVICE_UNAVAILABLE,
+            )
+            .into_response());
+        };
+    };
+
     Ok(warp::reply::with_status("ready", StatusCode::OK).into_response())
 }
 
@@ -506,12 +524,14 @@ pub fn filters(
         .max_age(CORS_MAXAGE);
 
     let log = warp::log::custom(|info: Info<'_>| {
+        let path = info.path();
+
         #[cfg(feature = "metrics")]
         counter!(
             HTTP_REQUESTS,
             "method" => info.method().as_str().to_string(),
             // Omit a potential db prefix or url-encoded query from the path
-            "route" => if info.path().contains("/upload/") { "/upload" } else { "/q" },
+            "route" => if path.contains("/upload/") { "/upload" } else if path.contains("/readyz") { "/readyz" } else { "/q" },
             "status" => info.status().as_u16().to_string(),
         )
         .increment(1);
@@ -521,7 +541,7 @@ pub fn filters(
             "{} \"{} {} {:?}\" {} \"{}\" \"{}\" {:?}",
             info.remote_addr().map(|addr| addr.to_string()).unwrap_or("-".to_string()),
             info.method(),
-            info.path(),
+            path,
             info.version(),
             info.status().as_u16(),
             info.referer().unwrap_or("-"),
@@ -601,9 +621,9 @@ pub fn filters(
         .then(upload)
         .map(into_response);
 
-    // Health-check/liveness probe
+    // Health-check/readiness probe
     let ctx = context;
-    let health_route = warp::path!("healthz")
+    let health_route = warp::path!("readyz")
         .and(warp::path::end())
         .and(warp::get())
         .and(warp::any().map(move || ctx.clone()))

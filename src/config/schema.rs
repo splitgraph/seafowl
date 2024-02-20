@@ -483,7 +483,9 @@ If Seafowl is running on GCP a token should be fetched using the GCP metadata en
 
 pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
     let config = Config::builder()
-        .add_source(File::with_name(path.to_str().expect("Error parsing path")))
+        .add_source(
+            File::with_name(path.to_str().expect("Error parsing path")).required(false),
+        )
         .add_source(Environment::with_prefix(ENV_PREFIX).separator(ENV_SEPARATOR));
 
     config.build()?.try_deserialize().and_then(validate_config)

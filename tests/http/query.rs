@@ -16,6 +16,14 @@ async fn test_http_server_reader_writer() {
     // Configure metrics
     setup_metrics(&Metrics::default());
 
+    // Test health endpoint
+    let resp = client
+        .get(format!("http://{addr}/readyz").try_into().unwrap())
+        .await
+        .expect("Can query health endpoint");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(response_text(resp).await, "ready");
+
     // GET & POST SELECT 1 as a read-only user
     for method in [Method::GET, Method::POST] {
         let resp = q(&client, method, &uri, "SELECT 1", None).await;
@@ -127,11 +135,12 @@ async fn test_http_server_reader_writer() {
 
     // Finally test HTTP-related metrics
     assert_eq!(
-        get_metrics(HTTP_REQUESTS).await,
+        get_metrics(HTTP_REQUESTS, 9090).await,
         vec![
             "# HELP http_requests Counter tracking HTTP request statistics",
             "# TYPE http_requests counter",
             "http_requests{method=\"GET\",route=\"/q\",status=\"200\"} 1",
+            "http_requests{method=\"GET\",route=\"/readyz\",status=\"200\"} 1",
             "http_requests{method=\"POST\",route=\"/q\",status=\"200\"} 5",
             "http_requests{method=\"POST\",route=\"/q\",status=\"403\"} 1",
             "http_requests{method=\"POST\",route=\"/q\",status=\"500\"} 1",

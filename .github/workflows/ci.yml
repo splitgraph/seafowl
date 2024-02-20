@@ -57,15 +57,15 @@ jobs:
         run: |
           cargo build
 
-      - name: Spin up the test object stores
-        run: docker compose up -d --wait --wait-timeout 30
+      - name: Spin up the test object stores and postgres catalog
+        run: docker compose up -d --wait || true
 
       # TODO split tests into unit and integration (one requires postgres?)
       - name: Run tests
         run: |
           cargo test --workspace
         env:
-          DATABASE_URL: "postgres://postgres:test@localhost:5433/db_test"
+          DATABASE_URL: "postgres://postgres:test@localhost:5432/db_test"
 
       # TODO recompiles the whole thing with different flags (busting the cache?,
       #      also codecov needs a token for private repos; also this breaks in Docker

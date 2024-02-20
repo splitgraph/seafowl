@@ -89,7 +89,7 @@ write_access = "b786e07f52fc72d32b2163b6f63aa16344fd8d2d84df87b6c231ab33cd5aa125
     (addr, server.boxed(), tx, context)
 }
 
-async fn response_text(response: Response<Body>) -> String {
+pub async fn response_text(response: Response<Body>) -> String {
     let body_bytes = to_bytes(response.into_body()).await.unwrap();
     String::from_utf8(body_bytes.to_vec()).unwrap()
 }
@@ -139,9 +139,13 @@ async fn q(
     client.request(req).await.unwrap()
 }
 
-pub async fn get_metrics(metrics_type: &str) -> Vec<String> {
+pub async fn get_metrics(metrics_type: &str, port: u16) -> Vec<String> {
     let resp = Client::new()
-        .get("http://127.0.0.1:9090/metrics".try_into().unwrap())
+        .get(
+            format!("http://127.0.0.1:{port}/metrics")
+                .try_into()
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
