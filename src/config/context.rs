@@ -236,7 +236,7 @@ pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext>
     // (it will reload its schema before running the query)
 
     Ok(SeafowlContext {
-        config: Arc::new(cfg),
+        config: cfg,
         inner: context,
         metastore: Arc::new(metastore),
         internal_object_store,

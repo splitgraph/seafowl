@@ -34,9 +34,8 @@ impl TestSeafowl {
             .config
             .frontend
             .http
-            .as_ref()
-            .expect("HTTP frontend configured")
-            .clone();
+            .clone()
+            .expect("HTTP frontend configured");
         format!("http://{}:{}", http.bind_host, http.bind_port)
     }
 
@@ -44,7 +43,7 @@ impl TestSeafowl {
         self.config
             .misc
             .metrics
-            .as_ref()
+            .clone()
             .expect("Metrics configured")
             .port
     }

@@ -484,7 +484,7 @@ async fn load_part(mut part: Part) -> Result<Vec<u8>, ApiError> {
     Ok(bytes)
 }
 
-/// GET /readyz
+/// GET /healthz or /readyz
 pub async fn health_endpoint(context: Arc<SeafowlContext>) -> Result<Response, ApiError> {
     #[cfg(feature = "frontend-arrow-flight")]
     if let Some(flight) = &context.config.frontend.flight {
@@ -527,14 +527,24 @@ pub fn filters(
         let path = info.path();
 
         #[cfg(feature = "metrics")]
-        counter!(
-            HTTP_REQUESTS,
-            "method" => info.method().as_str().to_string(),
-            // Omit a potential db prefix or url-encoded query from the path
-            "route" => if path.contains("/upload/") { "/upload" } else if path.contains("/readyz") { "/readyz" } else { "/q" },
-            "status" => info.status().as_u16().to_string(),
-        )
-        .increment(1);
+        {
+            let route = if path.contains("/upload/") {
+                "/upload".to_string()
+            } else if path.contains("/q") {
+                "/q".to_string()
+            } else {
+                path.to_string()
+            };
+
+            counter!(
+                HTTP_REQUESTS,
+                "method" => info.method().as_str().to_string(),
+                // Omit a potential db prefix or url-encoded query from the path
+                "route" => route,
+                "status" => info.status().as_u16().to_string(),
+            )
+            .increment(1);
+        }
 
         info!(
             target: module_path!(),
@@ -623,9 +633,11 @@ pub fn filters(
 
     // Health-check/readiness probe
     let ctx = context;
-    let health_route = warp::path!("readyz")
+    let health_route = warp::path!("healthz")
+        .or(warp::path!("readyz"))
         .and(warp::path::end())
         .and(warp::get())
+        .unify()
         .and(warp::any().map(move || ctx.clone()))
         .then(health_endpoint)
         .map(into_response);

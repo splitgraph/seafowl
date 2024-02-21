@@ -22,7 +22,7 @@ use uuid::Uuid;
 // The core Seafowl object, responsible for parsing, logical and physical planning, as well as
 // interacting with the catalog and object store.
 pub struct SeafowlContext {
-    pub config: Arc<SeafowlConfig>,
+    pub config: SeafowlConfig,
     pub inner: SessionContext,
     pub metastore: Arc<Metastore>,
     pub internal_object_store: Arc<InternalObjectStore>,
