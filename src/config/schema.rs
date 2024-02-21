@@ -209,8 +209,8 @@ impl ObjectCacheProperties {
         Arc::new(CachingObjectStore::new(
             inner,
             &path,
-            self.capacity,
             self.min_fetch_size,
+            self.capacity,
             Duration::from_secs(self.ttl_s),
         ))
     }
