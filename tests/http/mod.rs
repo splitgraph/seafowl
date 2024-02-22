@@ -70,9 +70,12 @@ dsn = ":memory:"
 write_access = "b786e07f52fc72d32b2163b6f63aa16344fd8d2d84df87b6c231ab33cd5aa125""#;
 
     let config = load_config_from_string(config_text, false, None).unwrap();
-    let context = Arc::from(build_context(&config).await.unwrap());
+    let context = Arc::from(build_context(config).await.unwrap());
 
-    let filters = filters(context.clone(), config.frontend.http.unwrap());
+    let filters = filters(
+        context.clone(),
+        context.config.frontend.http.as_ref().unwrap().clone(),
+    );
     let (tx, rx) = oneshot::channel();
     let (addr, server) = warp::serve(filters).bind_with_graceful_shutdown(
         // Pass port :0 to pick a random free port
@@ -86,7 +89,7 @@ write_access = "b786e07f52fc72d32b2163b6f63aa16344fd8d2d84df87b6c231ab33cd5aa125
     (addr, server.boxed(), tx, context)
 }
 
-async fn response_text(response: Response<Body>) -> String {
+pub async fn response_text(response: Response<Body>) -> String {
     let body_bytes = to_bytes(response.into_body()).await.unwrap();
     String::from_utf8(body_bytes.to_vec()).unwrap()
 }
@@ -136,9 +139,13 @@ async fn q(
     client.request(req).await.unwrap()
 }
 
-pub async fn get_metrics(metrics_type: &str) -> Vec<String> {
+pub async fn get_metrics(metrics_type: &str, port: u16) -> Vec<String> {
     let resp = Client::new()
-        .get("http://127.0.0.1:9090/metrics".try_into().unwrap())
+        .get(
+            format!("http://127.0.0.1:{port}/metrics")
+                .try_into()
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);

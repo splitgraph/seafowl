@@ -116,8 +116,8 @@ hex = ">=0.4.0"
 itertools = { workspace = true }
 lazy_static = ">=1.4.0"
 # Pick up hashbrown >0.13.1 to resolve conflicts with wasm crates
-metrics = { git = "https://github.com/metrics-rs/metrics", rev = "bc29c4f984605ccadb0daede451b28523c1aff86", optional = true }
-metrics-exporter-prometheus = { git = "https://github.com/metrics-rs/metrics", rev = "bc29c4f984605ccadb0daede451b28523c1aff86", optional = true }
+metrics = { version = "0.22.1", optional = true }
+metrics-exporter-prometheus = { version = "0.13.1", optional = true }
 moka = { version = "0.12.2", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.9"
 parking_lot = "0.12.1"

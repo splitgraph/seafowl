@@ -189,7 +189,7 @@ pub fn setup_metrics(metrics: &schema::Metrics) {
     describe_counter!(GRPC_REQUESTS, "Counter tracking gRPC request statistics");
 }
 
-pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext> {
+pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext> {
     let mut runtime_config = RuntimeConfig::new();
     if let Some(max_memory) = cfg.runtime.max_memory {
         runtime_config = runtime_config
@@ -217,7 +217,7 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
     // Register the HTTP object store for external tables
     add_http_object_store(&context, &cfg.misc.ssl_cert_file);
 
-    let metastore = build_metastore(cfg, internal_object_store.clone()).await;
+    let metastore = build_metastore(&cfg, internal_object_store.clone()).await;
 
     // Create default DB/collection
     if let Err(CatalogError::CatalogDoesNotExist { .. }) =
@@ -244,12 +244,12 @@ pub async fn build_context(cfg: &schema::SeafowlConfig) -> Result<SeafowlContext
     // (it will reload its schema before running the query)
 
     Ok(SeafowlContext {
+        config: cfg,
         inner: context,
         metastore: Arc::new(metastore),
         internal_object_store,
         default_catalog: DEFAULT_DB.to_string(),
         default_schema: DEFAULT_SCHEMA.to_string(),
-        max_partition_size: cfg.misc.max_partition_size,
     })
 }
 
@@ -297,7 +297,7 @@ mod tests {
             },
         };
 
-        let context = build_context(&config).await.unwrap();
+        let context = build_context(config).await.unwrap();
 
         // Run a query against the context to test it works
         let results = context

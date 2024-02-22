@@ -199,8 +199,8 @@ impl ObjectCacheProperties {
         Arc::new(CachingObjectStore::new(
             inner,
             &path,
-            self.capacity,
             self.min_fetch_size,
+            self.capacity,
             Duration::from_secs(self.ttl_s),
         ))
     }
@@ -473,7 +473,9 @@ If Seafowl is running on GCP a token should be fetched using the GCP metadata en
 
 pub fn load_config(path: &Path) -> Result<SeafowlConfig, ConfigError> {
     let config = Config::builder()
-        .add_source(File::with_name(path.to_str().expect("Error parsing path")))
+        .add_source(
+            File::with_name(path.to_str().expect("Error parsing path")).required(false),
+        )
         .add_source(Environment::with_prefix(ENV_PREFIX).separator(ENV_SEPARATOR));
 
     config.build()?.try_deserialize().and_then(validate_config)
@@ -486,7 +488,7 @@ pub fn load_config_from_string(
     env_override: Option<Map<String, String>>,
 ) -> Result<SeafowlConfig, ConfigError> {
     let config = Config::builder()
-        .add_source(File::from_str(config_str, FileFormat::Toml))
+        .add_source(File::from_str(config_str, FileFormat::Toml).required(false))
         .add_source(
             Environment::with_prefix(ENV_PREFIX)
                 .separator(ENV_SEPARATOR)

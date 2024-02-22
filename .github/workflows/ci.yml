@@ -11,17 +11,6 @@ jobs:
       # set debuginfo to 1 (line tables only, for panic tracebacks)
       RUSTFLAGS: "-C debuginfo=1"
 
-    services:
-      postgres:
-        image: postgres:14
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: db_test
-        ports:
-          - 5432/tcp
-        options: >-
-          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
-
     steps:
       - uses: actions/checkout@v3
 
@@ -68,19 +57,15 @@ jobs:
         run: |
           cargo build
 
-      - name: Spin up the test object stores
-        run: docker compose up -d
+      - name: Spin up the test object stores and postgres catalog
+        run: docker compose up -d --wait || true
 
       # TODO split tests into unit and integration (one requires postgres?)
       - name: Run tests
         run: |
           cargo test --workspace
         env:
-          # Database URL for end-to-end + postgres repository tests; the host is `localhost` since we don't specify
-          # a child container to run the job in (and instead run everything in the root specified by `runs-on`).
-          # The port has been randomly assigned so we need to fetch it.
-          DATABASE_URL:
-            "postgres://postgres:postgres@localhost:${{ job.services.postgres.ports[5432] }}/db_test"
+          DATABASE_URL: "postgres://postgres:test@localhost:5432/db_test"
 
       # TODO recompiles the whole thing with different flags (busting the cache?,
       #      also codecov needs a token for private repos; also this breaks in Docker

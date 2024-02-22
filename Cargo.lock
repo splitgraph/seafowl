@@ -3211,8 +3211,9 @@ dependencies = [
 
 [[package]]
 name = "metrics"
-version = "0.22.0"
-source = "git+https://github.com/metrics-rs/metrics?rev=bc29c4f984605ccadb0daede451b28523c1aff86#bc29c4f984605ccadb0daede451b28523c1aff86"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd71d9db2e4287c3407fa04378b8c2ee570aebe0854431562cdd89ca091854f4"
 dependencies = [
  "ahash 0.8.8",
  "portable-atomic",
@@ -3220,13 +3221,14 @@ dependencies = [
 
 [[package]]
 name = "metrics-exporter-prometheus"
-version = "0.13.0"
-source = "git+https://github.com/metrics-rs/metrics?rev=bc29c4f984605ccadb0daede451b28523c1aff86#bc29c4f984605ccadb0daede451b28523c1aff86"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bf4e7146e30ad172c42c39b3246864bd2d3c6396780711a1baf749cfe423e21"
 dependencies = [
  "base64 0.21.7",
  "hyper",
  "hyper-tls",
- "indexmap 1.9.3",
+ "indexmap 2.2.2",
  "ipnet",
  "metrics",
  "metrics-util",
@@ -3238,8 +3240,9 @@ dependencies = [
 
 [[package]]
 name = "metrics-util"
-version = "0.16.0"
-source = "git+https://github.com/metrics-rs/metrics?rev=bc29c4f984605ccadb0daede451b28523c1aff86#bc29c4f984605ccadb0daede451b28523c1aff86"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ece71ab046dcf45604e573329966ec1db5ff4b81cfa170a924ff4c959ab5451a"
 dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",

@@ -381,7 +381,7 @@ impl SeafowlContext {
             plan,
             self.internal_object_store.clone(),
             table_prefix,
-            self.max_partition_size,
+            self.config.misc.max_partition_size,
         )
         .await?;
 

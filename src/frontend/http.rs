@@ -9,6 +9,8 @@ use warp::{hyper, Rejection};
 
 use arrow::json::writer::record_batches_to_json_rows;
 use arrow::record_batch::RecordBatch;
+#[cfg(feature = "frontend-arrow-flight")]
+use arrow_flight::flight_service_client::FlightServiceClient;
 
 use arrow_integration_test::{schema_from_json, schema_to_json};
 use arrow_schema::SchemaRef;
@@ -42,9 +44,9 @@ use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::catalog::DEFAULT_DB;
 #[cfg(feature = "metrics")]
 use crate::config::context::HTTP_REQUESTS;
-use crate::config::schema::{AccessSettings, MEBIBYTES};
+use crate::config::schema::{AccessSettings, HttpFrontend, MEBIBYTES};
 use crate::{
-    config::schema::{str_to_hex_hash, HttpFrontend},
+    config::schema::str_to_hex_hash,
     context::logical::{is_read_only, is_statement_read_only},
     context::SeafowlContext,
 };
@@ -482,8 +484,29 @@ async fn load_part(mut part: Part) -> Result<Vec<u8>, ApiError> {
     Ok(bytes)
 }
 
-// We need the allow to silence the compiler: it asks us to add warp::generic::Tuple to the first
-// parameter of the return type, but that struct is not exportable (generic is private).
+/// GET /healthz or /readyz
+pub async fn health_endpoint(context: Arc<SeafowlContext>) -> Result<Response, ApiError> {
+    #[cfg(feature = "frontend-arrow-flight")]
+    if let Some(flight) = &context.config.frontend.flight {
+        // TODO: run SELECT 1 or something similar?
+        if let Err(err) = FlightServiceClient::connect(format!(
+            "http://{}:{}",
+            flight.bind_host, flight.bind_port
+        ))
+        .await
+        {
+            warn!(%err, "Arrow Flight client can't connect, health check failed");
+            return Ok(warp::reply::with_status(
+                "not_ready",
+                StatusCode::SERVICE_UNAVAILABLE,
+            )
+            .into_response());
+        };
+    };
+
+    Ok(warp::reply::with_status("ready", StatusCode::OK).into_response())
+}
+
 pub fn filters(
     context: Arc<SeafowlContext>,
     config: HttpFrontend,
@@ -501,22 +524,34 @@ pub fn filters(
         .max_age(CORS_MAXAGE);
 
     let log = warp::log::custom(|info: Info<'_>| {
+        let path = info.path();
+
         #[cfg(feature = "metrics")]
-        counter!(
-            HTTP_REQUESTS,
-            "method" => info.method().as_str().to_string(),
-            // Omit a potential db prefix or url-encoded query from the path
-            "route" => if info.path().contains("/upload/") { "/upload" } else { "/q" },
-            "status" => info.status().as_u16().to_string(),
-        )
-        .increment(1);
+        {
+            let route = if path.contains("/upload/") {
+                "/upload".to_string()
+            } else if path.contains("/q") {
+                "/q".to_string()
+            } else {
+                path.to_string()
+            };
+
+            counter!(
+                HTTP_REQUESTS,
+                "method" => info.method().as_str().to_string(),
+                // Omit a potential db prefix or url-encoded query from the path
+                "route" => route,
+                "status" => info.status().as_u16().to_string(),
+            )
+            .increment(1);
+        }
 
         info!(
             target: module_path!(),
             "{} \"{} {} {:?}\" {} \"{}\" \"{}\" {:?}",
             info.remote_addr().map(|addr| addr.to_string()).unwrap_or("-".to_string()),
             info.method(),
-            info.path(),
+            path,
             info.version(),
             info.status().as_u16(),
             info.referer().unwrap_or("-"),
@@ -581,7 +616,7 @@ pub fn filters(
         .map(into_response);
 
     // Upload endpoint
-    let ctx = context;
+    let ctx = context.clone();
     let upload_route = warp::path!(String / "upload" / String / String)
         .or(warp::any()
             .map(move || DEFAULT_DB.to_string())
@@ -596,9 +631,21 @@ pub fn filters(
         .then(upload)
         .map(into_response);
 
+    // Health-check/readiness probe
+    let ctx = context;
+    let health_route = warp::path!("healthz")
+        .or(warp::path!("readyz"))
+        .and(warp::path::end())
+        .and(warp::get())
+        .unify()
+        .and(warp::any().map(move || ctx.clone()))
+        .then(health_endpoint)
+        .map(into_response);
+
     cached_read_query_route
         .or(uncached_read_write_query_route)
         .or(upload_route)
+        .or(health_route)
         .with(cors)
         .with(log)
         .map(|r| with_header(r, header::VARY, VARY))

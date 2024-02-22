@@ -9,6 +9,7 @@ use crate::object_store::wrapped::InternalObjectStore;
 use crate::wasm_udf::data_types::{get_volatility, CreateFunctionDetails};
 use crate::wasm_udf::wasm::create_udf_from_wasm;
 
+use crate::config::schema::SeafowlConfig;
 use base64::{engine::general_purpose::STANDARD, Engine};
 pub use datafusion::error::{DataFusionError as Error, Result};
 use datafusion::{error::DataFusionError, prelude::SessionContext, sql::TableReference};
@@ -21,12 +22,12 @@ use uuid::Uuid;
 // The core Seafowl object, responsible for parsing, logical and physical planning, as well as
 // interacting with the catalog and object store.
 pub struct SeafowlContext {
+    pub config: SeafowlConfig,
     pub inner: SessionContext,
     pub metastore: Arc<Metastore>,
     pub internal_object_store: Arc<InternalObjectStore>,
     pub default_catalog: String,
     pub default_schema: String,
-    pub max_partition_size: u32,
 }
 
 impl SeafowlContext {
@@ -42,12 +43,12 @@ impl SeafowlContext {
             build_state_with_table_factories(session_config, self.inner().runtime_env());
 
         Arc::from(SeafowlContext {
+            config: self.config.clone(),
             inner: SessionContext::new_with_state(state),
             metastore: self.metastore.clone(),
             internal_object_store: self.internal_object_store.clone(),
             default_catalog: catalog,
             default_schema: schema,
-            max_partition_size: self.max_partition_size,
         })
     }
 
@@ -226,7 +227,7 @@ pub mod test_utils {
             runtime: Default::default(),
             misc: Default::default(),
         };
-        build_context(&config).await.unwrap()
+        build_context(config).await.unwrap()
     }
 
     pub async fn in_memory_context_with_test_db() -> Arc<SeafowlContext> {
