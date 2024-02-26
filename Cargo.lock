@@ -30,9 +30,9 @@ dependencies = [
 
 [[package]]
 name = "ahash"
-version = "0.8.8"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42cd52102d3df161c77a887b608d7a4897d7cc112886a9537b738a887a03aaff"
+checksum = "77c3a9648d43b9cd48db467b3f87fdd6e146bcc88ab0180006cef2179fe11d01"
 dependencies = [
  "cfg-if",
  "const-random",
@@ -172,7 +172,7 @@ name = "arrow-array"
 version = "50.0.0"
 source = "git+https://github.com/apache/arrow-rs?rev=72d8a783176219f0864022daba70e84ceab7e221#72d8a783176219f0864022daba70e84ceab7e221"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
@@ -333,7 +333,7 @@ name = "arrow-row"
 version = "50.0.0"
 source = "git+https://github.com/apache/arrow-rs?rev=72d8a783176219f0864022daba70e84ceab7e221#72d8a783176219f0864022daba70e84ceab7e221"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "arrow-array",
  "arrow-buffer",
  "arrow-data",
@@ -356,7 +356,7 @@ name = "arrow-select"
 version = "50.0.0"
 source = "git+https://github.com/apache/arrow-rs?rev=72d8a783176219f0864022daba70e84ceab7e221#72d8a783176219f0864022daba70e84ceab7e221"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "arrow-array",
  "arrow-buffer",
  "arrow-data",
@@ -1493,7 +1493,7 @@ name = "datafusion"
 version = "35.0.0"
 source = "git+https://github.com/apache/arrow-datafusion?rev=a7a74fa522aaef07e6605f414308f3c99bd1ea06#a7a74fa522aaef07e6605f414308f3c99bd1ea06"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "arrow",
  "arrow-array",
  "arrow-ipc",
@@ -1540,7 +1540,7 @@ name = "datafusion-common"
 version = "35.0.0"
 source = "git+https://github.com/apache/arrow-datafusion?rev=a7a74fa522aaef07e6605f414308f3c99bd1ea06#a7a74fa522aaef07e6605f414308f3c99bd1ea06"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "arrow",
  "arrow-array",
  "arrow-buffer",
@@ -1579,7 +1579,7 @@ name = "datafusion-expr"
 version = "35.0.0"
 source = "git+https://github.com/apache/arrow-datafusion?rev=a7a74fa522aaef07e6605f414308f3c99bd1ea06#a7a74fa522aaef07e6605f414308f3c99bd1ea06"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "arrow",
  "arrow-array",
  "datafusion-common",
@@ -1611,7 +1611,7 @@ name = "datafusion-physical-expr"
 version = "35.0.0"
 source = "git+https://github.com/apache/arrow-datafusion?rev=a7a74fa522aaef07e6605f414308f3c99bd1ea06#a7a74fa522aaef07e6605f414308f3c99bd1ea06"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "arrow",
  "arrow-array",
  "arrow-buffer",
@@ -1644,7 +1644,7 @@ name = "datafusion-physical-plan"
 version = "35.0.0"
 source = "git+https://github.com/apache/arrow-datafusion?rev=a7a74fa522aaef07e6605f414308f3c99bd1ea06#a7a74fa522aaef07e6605f414308f3c99bd1ea06"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "arrow",
  "arrow-array",
  "arrow-buffer",
@@ -2499,7 +2499,7 @@ version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43a3c133739dddd0d2990f9a4bdf8eb4b21ef50e4851ca85ab661199821d510e"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
 ]
 
 [[package]]
@@ -2508,7 +2508,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "290f1a1d9242c78d09ce40a5e87e7554ee637af1351968159f4952f028f75604"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "allocator-api2",
 ]
 
@@ -3215,7 +3215,7 @@ version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd71d9db2e4287c3407fa04378b8c2ee570aebe0854431562cdd89ca091854f4"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "portable-atomic",
 ]
 
@@ -3228,7 +3228,7 @@ dependencies = [
  "base64 0.21.7",
  "hyper",
  "hyper-tls",
- "indexmap 2.2.2",
+ "indexmap 2.2.3",
  "ipnet",
  "metrics",
  "metrics-util",
@@ -3759,7 +3759,7 @@ version = "50.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "547b92ebf0c1177e3892f44c8f79757ee62e678d564a9834189725f2c5b7a750"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "arrow-array",
  "arrow-buffer",
  "arrow-cast",
@@ -5439,7 +5439,7 @@ version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d6753e460c998bbd4cd8c6f0ed9a64346fcca0723d6e75e52fdc351c5d2169d"
 dependencies = [
- "ahash 0.8.8",
+ "ahash 0.8.7",
  "atoi",
  "byteorder",
  "bytes",
