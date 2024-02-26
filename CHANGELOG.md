@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.5.5] - 2024-02-26
+
 - Add a http health endpoint (<https://github.com/splitgraph/seafowl/pull/502>)
 - Add support for public S3 buckets (<https://github.com/splitgraph/seafowl/pull/501>)
 - Add gRPC metrics (<https://github.com/splitgraph/seafowl/pull/500>)
@@ -220,7 +222,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.4...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/splitgraph/seafowl/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/splitgraph/seafowl/compare/v0.5.4...v0.5.4
 [0.5.4]: https://github.com/splitgraph/seafowl/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/splitgraph/seafowl/compare/v0.5.2...v0.5.3
