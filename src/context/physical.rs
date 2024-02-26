@@ -901,7 +901,6 @@ impl SeafowlContext {
 mod tests {
     use crate::context::test_utils::in_memory_context_with_test_db;
     use datafusion::assert_batches_eq;
-    use std::sync::Arc;
 
     use super::super::test_utils::in_memory_context;
     use super::*;

@@ -205,11 +205,9 @@ impl SeafowlContext {
 
 #[cfg(test)]
 pub mod test_utils {
-    use std::sync::Arc;
-
     use crate::config::context::build_context;
     use crate::config::schema;
-    use crate::config::schema::{Catalog, SeafowlConfig, Sqlite};
+    use crate::config::schema::{Catalog, Sqlite};
     use sqlx::sqlite::SqliteJournalMode;
 
     use super::*;
