@@ -27,9 +27,7 @@ use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 use std::vec;
 
-use rmp_serde;
 use rmp_serde::Serializer;
-use serde;
 
 use serde::Serialize;
 

@@ -39,7 +39,6 @@ use sqlparser::{
 };
 use std::collections::{HashMap, VecDeque};
 use std::str::FromStr;
-use std::string::ToString;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
