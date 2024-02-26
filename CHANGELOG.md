@@ -4,6 +4,15 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Add a http health endpoint (<https://github.com/splitgraph/seafowl/pull/502>)
+- Add support for public S3 buckets (<https://github.com/splitgraph/seafowl/pull/501>)
+- Add gRPC metrics (<https://github.com/splitgraph/seafowl/pull/500>)
+- Implement prometheus metrics (<https://github.com/splitgraph/seafowl/pull/499>)
+- Upgrade to DataFusion 35 and Arrow 50 (<https://github.com/splitgraph/seafowl/pull/498>)
+- Replace `log` with `tracing` (<https://github.com/splitgraph/seafowl/pull/493>)
+- Use `from_env` when creating the DataFusion session config
+  (<https://github.com/splitgraph/seafowl/pull/490>)
+
 ## [0.5.4] - 2024-01-17
 
 - Upgrade to DataFusion 34 and Arrow 49 (<https://github.com/splitgraph/seafowl/pull/486>)
