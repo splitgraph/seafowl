@@ -1,3 +1,5 @@
+#![feature(let_chains)]
+
 use clap::AppSettings::NoAutoVersion;
 use std::process::exit;
 use std::{
@@ -11,6 +13,7 @@ use clap::Parser;
 
 use futures::{future::join_all, Future, FutureExt};
 
+use seafowl::config::context::setup_metrics;
 #[cfg(feature = "frontend-arrow-flight")]
 use seafowl::frontend::flight::run_flight_server;
 use seafowl::{
@@ -216,6 +219,13 @@ async fn main() {
 
         config
     };
+
+    #[cfg(feature = "metrics")]
+    if !args.cli
+        && let Some(ref metrics) = config.misc.metrics
+    {
+        setup_metrics(metrics);
+    }
 
     let context = Arc::new(build_context(config).await.unwrap());
 

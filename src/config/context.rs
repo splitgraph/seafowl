@@ -232,11 +232,6 @@ pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext>
         metastore.schemas.create(DEFAULT_DB, DEFAULT_SCHEMA).await?;
     }
 
-    #[cfg(feature = "metrics")]
-    if let Some(ref metrics) = cfg.misc.metrics {
-        setup_metrics(metrics);
-    }
-
     // Convergence doesn't support connecting to different DB names. We are supposed
     // to do one context per query (as we need to load the schema before executing every
     // query) and per database (since the context is supposed to be limited to the database
