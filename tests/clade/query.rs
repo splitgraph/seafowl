@@ -3,7 +3,7 @@ use crate::clade::*;
 #[rstest]
 #[tokio::test]
 async fn test_basic_select(
-    #[values("local.file", "s3.minio")] table: &str,
+    #[values("local.file", "s3.minio", "gcs.fake")] table: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let context = start_clade_server().await;
 
