@@ -67,13 +67,14 @@ dsn = "http://{addr}""#,
 }
 
 async fn run_clade_server(addr: SocketAddr) {
+    // Setup a test metastore with some tables and object stores.
     let metastore = TestCladeMetastore {
         catalog: DEFAULT_DB.to_string(),
         schemas: ListSchemaResponse {
             schemas: vec![
                 SchemaObject {
                     name: "local".to_string(),
-                    stores: vec![],
+
                     tables: vec![TableObject {
                         name: "file".to_string(),
                         path: "delta-0.8.0-partitioned".to_string(),
@@ -82,29 +83,6 @@ async fn run_clade_server(addr: SocketAddr) {
                 },
                 SchemaObject {
                     name: "s3".to_string(),
-                    stores: vec![StorageLocation {
-                        location: "s3://seafowl-test-bucket".to_string(),
-                        options: HashMap::from([
-                            (
-                                AmazonS3ConfigKey::Endpoint.as_ref().to_string(),
-                                "http://127.0.0.1:9000".to_string(),
-                            ),
-                            (
-                                AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
-                                "minioadmin".to_string(),
-                            ),
-                            (
-                                AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
-                                "minioadmin".to_string(),
-                            ),
-                            (
-                                // This has been removed from the config enum, but it can
-                                // still be picked up via `AmazonS3ConfigKey::from_str`
-                                "aws_allow_http".to_string(),
-                                "true".to_string(),
-                            ),
-                        ]),
-                    }],
                     tables: vec![TableObject {
                         name: "minio".to_string(),
                         path: "test-data/delta-0.8.0-partitioned".to_string(),
@@ -112,6 +90,29 @@ async fn run_clade_server(addr: SocketAddr) {
                     }],
                 },
             ],
+            stores: vec![StorageLocation {
+                location: "s3://seafowl-test-bucket".to_string(),
+                options: HashMap::from([
+                    (
+                        AmazonS3ConfigKey::Endpoint.as_ref().to_string(),
+                        "http://127.0.0.1:9000".to_string(),
+                    ),
+                    (
+                        AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
+                        "minioadmin".to_string(),
+                    ),
+                    (
+                        AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
+                        "minioadmin".to_string(),
+                    ),
+                    (
+                        // This has been removed from the config enum, but it can
+                        // still be picked up via `AmazonS3ConfigKey::from_str`
+                        "aws_allow_http".to_string(),
+                        "true".to_string(),
+                    ),
+                ]),
+            }],
         },
     };
 

@@ -119,7 +119,6 @@ impl SchemaStore for RepositoryStore {
             .into_iter()
             .map(|(cn, ct)| SchemaObject {
                 name: cn.clone(),
-                stores: vec![],
                 tables: ct
                     .into_iter()
                     .filter_map(|t| {
@@ -139,7 +138,10 @@ impl SchemaStore for RepositoryStore {
             })
             .collect();
 
-        Ok(ListSchemaResponse { schemas })
+        Ok(ListSchemaResponse {
+            schemas,
+            stores: vec![],
+        })
     }
 
     async fn get(

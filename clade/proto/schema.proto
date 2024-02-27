@@ -4,13 +4,12 @@ package clade.schema;
 
 message SchemaObject {
   string name = 1;
-  repeated StorageLocation stores = 2;
-  repeated TableObject tables = 3;
+  repeated TableObject tables = 2;
 }
 
 message TableObject {
   string name = 1;
-  // path within the provided storage location, if any
+  // Path within the provided storage location, if any
   string path = 2;
   // URL of the root storage location
   optional string location = 3;
@@ -30,6 +29,7 @@ message ListSchemaRequest {
 
 message ListSchemaResponse {
   repeated SchemaObject schemas = 1;
+  repeated StorageLocation stores = 2;
 }
 
 service SchemaStoreService {

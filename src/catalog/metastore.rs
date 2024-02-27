@@ -79,11 +79,26 @@ impl Metastore {
     ) -> CatalogResult<SeafowlDatabase> {
         let catalog_schemas = self.schemas.list(catalog_name).await?;
 
+        // Collect all provided object store locations into corresponding clients
+        // TODO: cache this using location (+ options?) as key, potentially with
+        // a TTL, and re-use when building table log stores below.
+        let stores = catalog_schemas
+            .stores
+            .into_iter()
+            .map(|store| {
+                let url = Url::parse(&store.location)?;
+                Ok((
+                    store.location.clone(),
+                    parse_url_opts(&url, store.options)?.0.into(),
+                ))
+            })
+            .collect::<CatalogResult<_>>()?;
+
         // Turn the list of all collections, tables and their columns into a nested map.
         let schemas = catalog_schemas
             .schemas
             .into_iter()
-            .map(|schema| self.build_schema(schema))
+            .map(|schema| self.build_schema(schema, &stores))
             .collect::<CatalogResult<HashMap<_, _>>>()?;
 
         let name: Arc<str> = Arc::from(catalog_name);
@@ -99,28 +114,14 @@ impl Metastore {
     fn build_schema(
         &self,
         schema: SchemaObject,
+        stores: &HashMap<String, Arc<dyn ObjectStore>>,
     ) -> CatalogResult<(Arc<str>, Arc<SeafowlSchema>)> {
         let schema_name = schema.name;
-
-        // Collect all provided object store locations into corresponding clients
-        // TODO: cache this using location (+ options?) as key, potentially with
-        // a TTL, and re-use when building table log stores below.
-        let stores = schema
-            .stores
-            .into_iter()
-            .map(|store| {
-                let url = Url::parse(&store.location)?;
-                Ok((
-                    store.location.clone(),
-                    parse_url_opts(&url, store.options)?.0.into(),
-                ))
-            })
-            .collect::<CatalogResult<_>>()?;
 
         let tables = schema
             .tables
             .into_iter()
-            .map(|table| self.build_table(table, &stores))
+            .map(|table| self.build_table(table, stores))
             .collect::<CatalogResult<HashMap<_, _>>>()?;
 
         Ok((
