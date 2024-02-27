@@ -109,6 +109,8 @@ impl SchemaStore for RepositoryStore {
     }
 
     async fn list(&self, catalog_name: &str) -> CatalogResult<ListSchemaResponse> {
+        // NB we can't distinguish between a database without tables and a database
+        // that doesn't exist at all due to our query.
         let cols = self.repository.list_collections(catalog_name).await?;
 
         let schemas = cols
@@ -117,6 +119,7 @@ impl SchemaStore for RepositoryStore {
             .into_iter()
             .map(|(cn, ct)| SchemaObject {
                 name: cn.clone(),
+                stores: vec![],
                 tables: ct
                     .into_iter()
                     .filter_map(|t| {
@@ -125,7 +128,8 @@ impl SchemaStore for RepositoryStore {
                         {
                             Some(TableObject {
                                 name: name.clone(),
-                                location: uuid.to_string(),
+                                path: uuid.to_string(),
+                                location: None,
                             })
                         } else {
                             None

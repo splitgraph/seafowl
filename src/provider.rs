@@ -106,6 +106,7 @@ impl SchemaProvider for SeafowlSchema {
 
         if let Err(err) = delta_table.load().await {
             warn!("Failed to load table {name}: {err}");
+            println!("{err}");
             return None;
         }
 

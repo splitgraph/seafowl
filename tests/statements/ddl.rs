@@ -499,14 +499,14 @@ async fn test_create_table_in_staging_schema() {
 #[rstest]
 #[case::in_mem_from_mock_http(None, "", ObjectStoreType::InMemory)]
 #[case::in_mem_from_minio_http(
-    Some("http://localhost:9000/seafowl-test-bucket/table_with_ns_column.parquet"),
+    Some("http://localhost:9000/seafowl-test-bucket/test-data/table_with_ns_column.parquet"),
     "",
     ObjectStoreType::InMemory
 )]
 // Tests the case of inheriting the credentials from the native object store, since none are
 // provided via the `OPTIONS` clause.
 #[case::in_minio_s3_from_minio_s3(
-    Some("s3://seafowl-test-bucket/table_with_ns_column.parquet"),
+    Some("s3://seafowl-test-bucket/test-data/table_with_ns_column.parquet"),
     "",
     ObjectStoreType::S3(None)
 )]
@@ -518,12 +518,12 @@ async fn test_create_table_in_staging_schema() {
 // Tests the case of explicitly specifying the `OPTIONS` clause to construct a dynamic object store.
 // so we can use anything other than the native object store.
 #[case::in_mem_from_minio_s3_with_options(
-    Some("s3://seafowl-test-bucket/table_with_ns_column.parquet"),
+    Some("s3://seafowl-test-bucket/test-data/table_with_ns_column.parquet"),
     " OPTIONS ('access_key_id' 'minioadmin', 'secret_access_key' 'minioadmin', 'endpoint' 'http://127.0.0.1:9000') ",
     ObjectStoreType::InMemory,
 )]
 #[case::in_gcs_from_minio_s3_with_options(
-    Some("s3://seafowl-test-bucket/table_with_ns_column.parquet"),
+    Some("s3://seafowl-test-bucket/test-data/table_with_ns_column.parquet"),
     " OPTIONS ('access_key_id' 'minioadmin', 'secret_access_key' 'minioadmin', 'endpoint' 'http://127.0.0.1:9000') ",
     ObjectStoreType::Gcs,
 )]
