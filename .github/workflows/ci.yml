@@ -15,15 +15,25 @@ jobs:
       - uses: actions/checkout@v3
 
       # Setup pre-commit
-      - name: Install pre-commit and protoc
+      - name: Install pre-commit
         run: |
           sudo apt-get update
-          sudo apt-get install -y pre-commit protobuf-compiler
+          sudo apt-get install -y pre-commit
       - name: Configure pre-commit cache
         uses: actions/cache@v3
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
+      - name: Install protoc
+        run: |
+          mkdir -p $HOME/d/protoc
+          cd $HOME/d/protoc
+          export PROTO_ZIP="protoc-21.4-linux-x86_64.zip"
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
+          unzip $PROTO_ZIP
+          echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
+          export PATH=$PATH:$HOME/d/protoc/bin
+          protoc --version
 
       # Use https://github.com/marketplace/actions/rust-cache
 
