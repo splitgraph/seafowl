@@ -12,7 +12,7 @@ jobs:
       RUSTFLAGS: "-C debuginfo=1"
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # Setup pre-commit
       - name: Install pre-commit
@@ -20,12 +20,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pre-commit
       - name: Configure pre-commit cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
       - name: Install protoc
-        run: sudo apt install -y protobuf-compiler
+        run: |
+          mkdir -p $HOME/d/protoc
+          cd $HOME/d/protoc
+          export PROTO_ZIP="protoc-21.4-linux-x86_64.zip"
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
+          unzip $PROTO_ZIP
+          echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
+          export PATH=$PATH:$HOME/d/protoc/bin
+          protoc --version
 
       # Use https://github.com/marketplace/actions/rust-cache
 

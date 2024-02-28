@@ -10,8 +10,6 @@ use datafusion_common::{assert_contains, Result};
 use itertools::sorted;
 
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
-#[cfg(feature = "object-store-gcs")]
-use serde_json::json;
 #[cfg(feature = "remote-tables")]
 use sqlx::{any::install_default_drivers, AnyPool, Executor};
 #[cfg(feature = "remote-tables")]
@@ -23,6 +21,8 @@ use uuid::Uuid;
 use rstest::rstest;
 use tempfile::TempDir;
 
+#[cfg(feature = "object-store-gcs")]
+use crate::fixtures::{fake_gcs_creds, FAKE_GCS_CREDS_PATH};
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::SeafowlContext;
@@ -41,8 +41,6 @@ mod convert;
 mod testutils;
 mod time_travel;
 mod vacuum;
-
-const FAKE_GCS_CREDS_PATH: &str = "/tmp/fake-gcs-server.json";
 
 enum ObjectStoreType {
     Gcs, // TODO: GCS bucket tests with multipart uploads await github.com/fsouza/fake-gcs-server/issues/852
@@ -104,27 +102,16 @@ ttl = 30
             .to_string(),
             None,
         ),
-        ObjectStoreType::Gcs => {
-            let creds_json = json!({"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": "", "private_key_id": ""});
-            // gcs_base_url should match docker-compose.yml:fake-gcs-server
-            let google_application_credentials_path =
-                std::path::Path::new(FAKE_GCS_CREDS_PATH);
-            std::fs::write(
-                google_application_credentials_path,
-                serde_json::to_vec(&creds_json).expect("Unable to serialize creds JSON"),
-            )
-            .expect("Unable to write application credentials JSON file");
-            (
-                format!(
-                    r#"type = "gcs"
+        ObjectStoreType::Gcs => (
+            format!(
+                r#"type = "gcs"
 bucket = "seafowl-test-bucket"
 google_application_credentials = "{}"
 "#,
-                    google_application_credentials_path.display()
-                ),
-                None,
-            )
-        }
+                fake_gcs_creds()
+            ),
+            None,
+        ),
     };
 
     let config_text = format!(

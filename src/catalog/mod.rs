@@ -21,6 +21,9 @@ pub const STAGING_SCHEMA: &str = "staging";
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
+    #[error("{reason}")]
+    Generic { reason: String },
+
     // Catalog errors
     #[error("Catalog {name:?} doesn't exist")]
     CatalogDoesNotExist { name: String },
@@ -63,11 +66,17 @@ pub enum CatalogError {
     NotImplemented { reason: String },
 
     // Metastore implementation errors
+    #[error(transparent)]
+    ObjectStoreError(#[from] object_store::Error),
+
     #[error("Internal SQL error: {0:?}")]
     SqlxError(sqlx::Error),
 
     #[error(transparent)]
     TonicStatus(#[from] Status),
+
+    #[error("Failed parsing URL: {0}")]
+    UrlParseError(#[from] url::ParseError),
 }
 
 /// Implement a global converter into a DataFusionError from the catalog error type.

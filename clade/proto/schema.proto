@@ -9,7 +9,18 @@ message SchemaObject {
 
 message TableObject {
   string name = 1;
-  string location = 2;
+  // Path within the provided storage location, if any
+  string path = 2;
+  // URL of the root storage location
+  optional string location = 3;
+}
+
+// A single root storage location, hosting many individual tables
+message StorageLocation {
+  // URL of the root storage location
+  string location = 1;
+  // Connection options for the object store client
+  map<string, string> options = 2;
 }
 
 message ListSchemaRequest {
@@ -18,6 +29,7 @@ message ListSchemaRequest {
 
 message ListSchemaResponse {
   repeated SchemaObject schemas = 1;
+  repeated StorageLocation stores = 2;
 }
 
 service SchemaStoreService {

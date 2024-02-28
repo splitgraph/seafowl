@@ -12,14 +12,20 @@ use crate::wasm_udf::data_types::{
     CreateFunctionDataType, CreateFunctionDetails, CreateFunctionLanguage,
     CreateFunctionVolatility,
 };
-use clade::schema::SchemaObject;
+use clade::schema::{SchemaObject, TableObject};
 use datafusion::catalog::schema::MemorySchemaProvider;
 use datafusion::datasource::TableProvider;
-use deltalake::DeltaTable;
+use deltalake::logstore::default_logstore;
+use deltalake::storage::{ObjectStoreFactory, ObjectStoreRef, StorageOptions};
+use deltalake::{DeltaResult, DeltaTable, DeltaTableError};
+use object_store::path::Path;
+use object_store::prefix::PrefixStore;
+use object_store::{parse_url_opts, ObjectStore};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use url::Url;
 
 // This is the main entrypoint to all individual catalogs for various objects types.
 // The intention is to make it extensible and de-coupled from the underlying metastore
@@ -31,13 +37,13 @@ pub struct Metastore {
     pub tables: Arc<dyn TableStore>,
     pub functions: Arc<dyn FunctionStore>,
     staging_schema: Arc<MemorySchemaProvider>,
-    object_store: Arc<InternalObjectStore>,
+    default_store: Arc<InternalObjectStore>,
 }
 
 impl Metastore {
     pub fn new_from_repository(
         repository: Arc<dyn Repository>,
-        object_store: Arc<InternalObjectStore>,
+        default_store: Arc<InternalObjectStore>,
     ) -> Self {
         let repository_store = Arc::new(RepositoryStore { repository });
 
@@ -48,13 +54,13 @@ impl Metastore {
             tables: repository_store.clone(),
             functions: repository_store,
             staging_schema,
-            object_store,
+            default_store,
         }
     }
 
     pub fn new_from_external(
         external_store: Arc<ExternalStore>,
-        object_store: Arc<InternalObjectStore>,
+        default_store: Arc<InternalObjectStore>,
     ) -> Self {
         let staging_schema = Arc::new(MemorySchemaProvider::new());
         Self {
@@ -63,7 +69,7 @@ impl Metastore {
             tables: external_store.clone(),
             functions: external_store,
             staging_schema,
-            object_store,
+            default_store,
         }
     }
 
@@ -73,16 +79,27 @@ impl Metastore {
     ) -> CatalogResult<SeafowlDatabase> {
         let catalog_schemas = self.schemas.list(catalog_name).await?;
 
-        // NB we can't distinguish between a database without tables and a database
-        // that doesn't exist at all due to our query.
+        // Collect all provided object store locations into corresponding clients
+        // TODO: cache this using location (+ options?) as key, potentially with
+        // a TTL, and re-use when building table log stores below.
+        let stores = catalog_schemas
+            .stores
+            .into_iter()
+            .map(|store| {
+                let url = Url::parse(&store.location)?;
+                Ok((
+                    store.location.clone(),
+                    parse_url_opts(&url, store.options)?.0.into(),
+                ))
+            })
+            .collect::<CatalogResult<_>>()?;
 
         // Turn the list of all collections, tables and their columns into a nested map.
-
-        let schemas: HashMap<Arc<str>, Arc<SeafowlSchema>> = catalog_schemas
+        let schemas = catalog_schemas
             .schemas
             .into_iter()
-            .map(|schema| self.build_schema(schema))
-            .collect();
+            .map(|schema| self.build_schema(schema, &stores))
+            .collect::<CatalogResult<HashMap<_, _>>>()?;
 
         let name: Arc<str> = Arc::from(catalog_name);
 
@@ -94,38 +111,58 @@ impl Metastore {
         })
     }
 
-    fn build_schema(&self, schema: SchemaObject) -> (Arc<str>, Arc<SeafowlSchema>) {
+    fn build_schema(
+        &self,
+        schema: SchemaObject,
+        stores: &HashMap<String, Arc<dyn ObjectStore>>,
+    ) -> CatalogResult<(Arc<str>, Arc<SeafowlSchema>)> {
         let schema_name = schema.name;
 
         let tables = schema
             .tables
             .into_iter()
-            .map(|table| self.build_table(table.name, &table.location))
-            .collect::<HashMap<_, _>>();
+            .map(|table| self.build_table(table, stores))
+            .collect::<CatalogResult<HashMap<_, _>>>()?;
 
-        (
+        Ok((
             Arc::from(schema_name.clone()),
             Arc::new(SeafowlSchema {
                 name: Arc::from(schema_name),
                 tables: RwLock::new(tables),
             }),
-        )
+        ))
     }
 
     fn build_table(
         &self,
-        table_name: String,
-        table_uuid: &str,
-    ) -> (Arc<str>, Arc<dyn TableProvider>) {
+        table: TableObject,
+        stores: &HashMap<String, Arc<dyn ObjectStore>>,
+    ) -> CatalogResult<(Arc<str>, Arc<dyn TableProvider>)> {
         // Build a delta table but don't load it yet; we'll do that only for tables that are
         // actually referenced in a statement, via the async `table` method of the schema provider.
         // TODO: this means that any `information_schema.columns` query will serially load all
         // delta tables present in the database. The real fix for this is to make DF use `TableSource`
         // for the information schema, and then implement `TableSource` for `DeltaTable` in delta-rs.
-        let table_log_store = self.object_store.get_log_store(table_uuid);
 
-        let table = DeltaTable::new(table_log_store, Default::default());
-        (Arc::from(table_name), Arc::new(table) as _)
+        let table_log_store = match table.location {
+            // Use the provided customized location
+            Some(location) => {
+                let store = stores.get(&location).ok_or(CatalogError::Generic {
+                    reason: format!("Object store for location {location} not found"),
+                })?;
+                let prefixed_store: PrefixStore<Arc<dyn ObjectStore>> =
+                    PrefixStore::new(store.clone(), &*table.path);
+
+                let url = Url::parse(&format!("{location}/{}", table.path))?;
+
+                default_logstore(Arc::from(prefixed_store), &url, &Default::default())
+            }
+            // Use the configured, default, object store
+            None => self.default_store.get_log_store(&table.path),
+        };
+
+        let delta_table = DeltaTable::new(table_log_store, Default::default());
+        Ok((Arc::from(table.name), Arc::new(delta_table) as _))
     }
 
     pub async fn build_functions(
@@ -176,5 +213,15 @@ impl Metastore {
             data: data.to_string(),
             volatility: CreateFunctionVolatility::from_str(volatility.as_str())?,
         })
+    }
+}
+
+impl ObjectStoreFactory for Metastore {
+    fn parse_url_opts(
+        &self,
+        url: &Url,
+        _options: &StorageOptions,
+    ) -> DeltaResult<(ObjectStoreRef, Path)> {
+        Err(DeltaTableError::InvalidTableLocation(url.clone().into()))
     }
 }

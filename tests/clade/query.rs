@@ -1,7 +1,10 @@
 use crate::clade::*;
 
+#[rstest]
 #[tokio::test]
-async fn test_basic_select() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_basic_select(
+    #[values("local.file", "s3.minio", "gcs.fake")] table: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let context = start_clade_server().await;
 
     // Before proceeding with the test swallow up a single initial
@@ -10,7 +13,7 @@ async fn test_basic_select() -> Result<(), Box<dyn std::error::Error>> {
     let _r = context.metastore.schemas.list(DEFAULT_DB).await;
 
     let plan = context
-        .plan_query("SELECT * FROM some_schema.some_table ORDER BY value")
+        .plan_query(&format!("SELECT * FROM {table} ORDER BY value"))
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();

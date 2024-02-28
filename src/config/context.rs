@@ -13,6 +13,7 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use deltalake::delta_datafusion::DeltaTableFactory;
+use deltalake::storage::factories;
 #[cfg(feature = "metrics")]
 use metrics::describe_counter;
 #[cfg(feature = "metrics")]
@@ -31,6 +32,7 @@ use datafusion_remote_tables::factory::RemoteTableFactory;
 #[cfg(feature = "object-store-s3")]
 use object_store::aws::AmazonS3Builder;
 use object_store::gcp::GoogleCloudStorageBuilder;
+use url::Url;
 
 use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
 
@@ -219,6 +221,18 @@ pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext>
 
     let metastore = build_metastore(&cfg, internal_object_store.clone()).await;
 
+    // Register the metastore as an object store factory for all relevant schemes/urls
+    // NB: this never actually gets used, it serves only to fetch the known schemes
+    // inside delta-rs in `resolve_uri_type`
+    factories().insert(
+        internal_object_store.root_uri.clone(),
+        Arc::new(metastore.clone()),
+    );
+    for url in ["s3://", "gs://"] {
+        let url = Url::parse(url).unwrap();
+        factories().insert(url, Arc::new(metastore.clone()));
+    }
+
     // Create default DB/collection
     if let Err(CatalogError::CatalogDoesNotExist { .. }) =
         metastore.catalogs.get(DEFAULT_DB).await
@@ -230,11 +244,6 @@ pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext>
         metastore.schemas.get(DEFAULT_DB, DEFAULT_SCHEMA).await
     {
         metastore.schemas.create(DEFAULT_DB, DEFAULT_SCHEMA).await?;
-    }
-
-    #[cfg(feature = "metrics")]
-    if let Some(ref metrics) = cfg.misc.metrics {
-        setup_metrics(metrics);
     }
 
     // Convergence doesn't support connecting to different DB names. We are supposed

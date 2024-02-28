@@ -14,6 +14,7 @@ use tonic::transport::Channel;
 
 mod clade;
 mod cli;
+mod fixtures;
 mod flight;
 mod http;
 mod statements;
