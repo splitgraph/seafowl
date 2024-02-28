@@ -147,7 +147,9 @@ impl Metastore {
         let table_log_store = match table.location {
             // Use the provided customized location
             Some(location) => {
-                let store = stores.get(&location).expect("store for location exists");
+                let store = stores.get(&location).ok_or(CatalogError::Generic {
+                    reason: format!("Object store for location {location} not found"),
+                })?;
                 let prefixed_store: PrefixStore<Arc<dyn ObjectStore>> =
                     PrefixStore::new(store.clone(), &*table.path);
 
@@ -220,14 +222,6 @@ impl ObjectStoreFactory for Metastore {
         url: &Url,
         _options: &StorageOptions,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        if self.default_store.root_uri.scheme() == url.scheme() {
-            Ok((
-                Arc::new(self.default_store.as_ref().clone()),
-                Path::from("/"),
-            ))
-        } else {
-            // TODO: this won't work if the default store has the same scheme as the queried one
-            Err(DeltaTableError::InvalidTableLocation(url.clone().into()))
-        }
+        Err(DeltaTableError::InvalidTableLocation(url.clone().into()))
     }
 }

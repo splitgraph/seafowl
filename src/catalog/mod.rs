@@ -21,6 +21,9 @@ pub const STAGING_SCHEMA: &str = "staging";
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
+    #[error("{reason}")]
+    Generic { reason: String },
+
     // Catalog errors
     #[error("Catalog {name:?} doesn't exist")]
     CatalogDoesNotExist { name: String },
