@@ -121,9 +121,11 @@ impl SchemaStore for RepositoryStore {
                 name: cn.clone(),
                 tables: ct
                     .into_iter()
-                    .filter_map(|t| {
-                        if let Some(name) = &t.table_name
-                            && let Some(uuid) = t.table_uuid
+                    .group_by(|t| (&t.table_name, &t.table_uuid))
+                    .into_iter()
+                    .filter_map(|((name, uuid), _)| {
+                        if let Some(name) = &name
+                            && let Some(uuid) = uuid
                         {
                             Some(TableObject {
                                 name: name.clone(),
