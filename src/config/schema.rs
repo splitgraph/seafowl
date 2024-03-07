@@ -43,7 +43,7 @@ pub const MEBIBYTES: u64 = 1024 * 1024;
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct SeafowlConfig {
-    pub object_store: ObjectStore,
+    pub object_store: Option<ObjectStore>,
     pub catalog: Catalog,
     #[serde(default)]
     pub frontend: Frontend,
@@ -423,10 +423,10 @@ pub struct Runtime {
     pub temp_dir: Option<PathBuf>,
 }
 
-pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigError> {
+pub fn validate_config(mut config: SeafowlConfig) -> Result<SeafowlConfig, ConfigError> {
     let in_memory_catalog = matches!(config.catalog, Catalog::Sqlite(Sqlite { ref dsn, journal_mode: _, read_only: _ }) if dsn.contains(":memory:"));
-
-    let in_memory_object_store = matches!(config.object_store, ObjectStore::InMemory(_));
+    let in_memory_object_store =
+        matches!(config.object_store, Some(ObjectStore::InMemory(_)));
 
     if in_memory_catalog ^ in_memory_object_store {
         return Err(ConfigError::Message(
@@ -435,30 +435,32 @@ pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigErr
         if the process is restarted."
                 .to_string(),
         ));
-    };
+    }
 
-    if let ObjectStore::S3(S3 {
-        region: None,
-        endpoint: None,
-        ..
-    }) = config.object_store
-    {
-        return Err(ConfigError::Message(
+    match config.object_store {
+        Some(ObjectStore::S3(S3 {
+             region: None,
+             endpoint: None,
+             ..
+         })) => return Err(ConfigError::Message(
             "You need to supply either the region or the endpoint of the S3 object store."
                 .to_string(),
-        ));
-    }
-
-    if let ObjectStore::GCS(GCS {
-        google_application_credentials: None,
-        ..
-    }) = config.object_store
-    {
-        warn!(
+        )),
+        Some(ObjectStore::GCS(GCS {
+          google_application_credentials: None,
+          ..
+      })) => warn!(
             "You are trying to connect to a GCS bucket without providing credentials.
 If Seafowl is running on GCP a token should be fetched using the GCP metadata endpoint."
-        )
-    }
+        ),
+        None if !matches!(config.catalog, Catalog::Clade(Clade { dsn: _ })) =>  return Err(ConfigError::Message(
+            "Cannot omit the object_store section unless Clade catalog is configured"
+                .to_string(),
+        )),
+        // When no object_store section present, default to using in-memory one internally
+        None if matches!(config.catalog, Catalog::Clade(Clade { dsn: _ })) => config.object_store = Some(ObjectStore::InMemory(InMemory {})),
+        _ => {}
+    };
 
     if let Some(max_memory) = config.runtime.max_memory {
         if max_memory < MIN_MEMORY {
@@ -506,7 +508,7 @@ pub fn load_config_from_string(
 mod tests {
     use super::{
         build_default_config, load_config_from_string, AccessSettings, Catalog, Frontend,
-        HttpFrontend, Local, ObjectStore, Postgres, Runtime, SeafowlConfig, S3,
+        HttpFrontend, InMemory, Local, ObjectStore, Postgres, Runtime, SeafowlConfig, S3,
     };
     use crate::config::schema::{Misc, ObjectCacheProperties, Sqlite};
     use crate::object_store::cache::DEFAULT_CACHE_CAPACITY;
@@ -615,6 +617,12 @@ cache_control = "private, max-age=86400"
     type = "postgres"
     dsn = "postgresql://user:pass@localhost:5432/somedb""#;
 
+    // Valid config: no object store with a Clade catalog
+    const TEST_CONFIG_VALID_CLADE: &str = r#"
+    [catalog]
+    type = "clade"
+    dsn = "http://localhost:54321""#;
+
     #[cfg(feature = "object-store-s3")]
     #[rstest]
     #[case::basic_s3(TEST_CONFIG_S3, None)]
@@ -630,7 +638,7 @@ cache_control = "private, max-age=86400"
 
         assert_eq!(
             config.object_store,
-            ObjectStore::S3(S3 {
+            Some(ObjectStore::S3(S3 {
                 region: None,
                 access_key_id: Some("AKI...".to_string()),
                 secret_access_key: Some("ABC...".to_string()),
@@ -638,7 +646,7 @@ cache_control = "private, max-age=86400"
                 bucket: "seafowl".to_string(),
                 prefix: None,
                 cache_properties: cache_props,
-            })
+            }))
         );
     }
 
@@ -648,7 +656,7 @@ cache_control = "private, max-age=86400"
 
         assert_eq!(
             config.object_store,
-            ObjectStore::S3(S3 {
+            Some(ObjectStore::S3(S3 {
                 region: None,
                 access_key_id: None,
                 secret_access_key: None,
@@ -656,7 +664,18 @@ cache_control = "private, max-age=86400"
                 bucket: "seafowl".to_string(),
                 prefix: None,
                 cache_properties: None,
-            })
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_no_object_store_clade() {
+        let config =
+            load_config_from_string(TEST_CONFIG_VALID_CLADE, false, None).unwrap();
+
+        assert_eq!(
+            config.object_store,
+            Some(ObjectStore::InMemory(InMemory {}))
         );
     }
 
@@ -667,9 +686,9 @@ cache_control = "private, max-age=86400"
         assert_eq!(
             config,
             SeafowlConfig {
-                object_store: ObjectStore::Local(Local {
+                object_store: Some(ObjectStore::Local(Local {
                     data_dir: "./seafowl-data".to_string(),
-                }),
+                })),
                 catalog: Catalog::Postgres(Postgres {
                     dsn: "postgresql://user:pass@localhost:5432/somedb".to_string(),
                     schema: "public".to_string()
@@ -760,9 +779,9 @@ cache_control = "private, max-age=86400"
         assert_eq!(
             config,
             SeafowlConfig {
-                object_store: ObjectStore::Local(Local {
+                object_store: Some(ObjectStore::Local(Local {
                     data_dir: "some_other_path".to_string(),
-                }),
+                })),
                 catalog: Catalog::Sqlite(Sqlite {
                     dsn: "sqlite://file.sqlite".to_string(),
                     journal_mode: SqliteJournalMode::Wal,

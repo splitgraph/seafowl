@@ -210,10 +210,12 @@ pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext>
     let state = build_state_with_table_factories(session_config, Arc::new(runtime_env));
     let context = SessionContext::new_with_state(state);
 
-    let object_store = build_object_store(&cfg.object_store)?;
+    // We're guaranteed by config validation that this is Some
+    let object_store_cfg = cfg.object_store.clone().unwrap();
+    let object_store = build_object_store(&object_store_cfg)?;
     let internal_object_store = Arc::new(InternalObjectStore::new(
         object_store.clone(),
-        cfg.object_store.clone(),
+        object_store_cfg,
     ));
 
     // Register the HTTP object store for external tables
@@ -271,7 +273,7 @@ mod tests {
     #[tokio::test]
     async fn test_config_to_context() {
         let config = schema::SeafowlConfig {
-            object_store: schema::ObjectStore::InMemory(schema::InMemory {}),
+            object_store: Some(schema::ObjectStore::InMemory(schema::InMemory {})),
             catalog: schema::Catalog::Sqlite(schema::Sqlite {
                 dsn: "sqlite::memory:".to_string(),
                 journal_mode: SqliteJournalMode::Wal,

@@ -1,11 +1,14 @@
 use crate::clade::*;
 
 #[rstest]
+#[should_panic(expected = "table 'default.local.file' not found")]
+#[case("local.file", false)]
+#[case("local.file", true)]
+#[case("s3.minio", true)]
+#[case("gcs.fake", true)]
 #[tokio::test]
-async fn test_basic_select(
-    #[values("local.file", "s3.minio", "gcs.fake")] table: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let context = start_clade_server().await;
+async fn test_basic_select(#[case] table: &str, #[case] object_store: bool) -> () {
+    let context = start_clade_server(object_store).await;
 
     // Before proceeding with the test swallow up a single initial
     // ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" })
@@ -32,6 +35,4 @@ async fn test_basic_select(
         "+-------+------+-------+-----+",
     ];
     assert_batches_eq!(expected, &results);
-
-    Ok(())
 }

@@ -43,16 +43,22 @@ impl SchemaStoreService for TestCladeMetastore {
     }
 }
 
-async fn start_clade_server() -> Arc<SeafowlContext> {
-    // let OS choose a a free port
+async fn start_clade_server(object_store: bool) -> Arc<SeafowlContext> {
+    // let OS choose a free port
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
+    let object_store_section = if object_store {
+        r#"[object_store]
+type = "local"
+data_dir = "tests/data""#
+    } else {
+        ""
+    };
+
     let config_text = format!(
         r#"
-[object_store]
-type = "local"
-data_dir = "tests/data"
+{object_store_section}
 
 [catalog]
 type = "clade"

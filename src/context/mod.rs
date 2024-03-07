@@ -215,7 +215,7 @@ pub mod test_utils {
     /// Build a real (not mocked) in-memory context that uses SQLite
     pub async fn in_memory_context() -> SeafowlContext {
         let config = SeafowlConfig {
-            object_store: schema::ObjectStore::InMemory(schema::InMemory {}),
+            object_store: Some(schema::ObjectStore::InMemory(schema::InMemory {})),
             catalog: Catalog::Sqlite(Sqlite {
                 dsn: "sqlite://:memory:".to_string(),
                 journal_mode: SqliteJournalMode::Wal,
