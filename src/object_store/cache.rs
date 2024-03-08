@@ -27,8 +27,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
 
-pub const DEFAULT_MIN_FETCH_SIZE: u64 = 2 * 1024 * 1024;
-pub const DEFAULT_CACHE_CAPACITY: u64 = 512 * 1024 * 1024;
+pub const DEFAULT_MIN_FETCH_SIZE: u64 = 1024 * 1024; // 1 MiB
+pub const DEFAULT_CACHE_CAPACITY: u64 = 1024 * 1024 * 1024; // 1 GiB
 pub const DEFAULT_CACHE_ENTRY_TTL: Duration = Duration::from_secs(3 * 60);
 
 #[derive(Debug)]
