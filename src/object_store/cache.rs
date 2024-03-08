@@ -59,7 +59,7 @@ impl CacheFileManager {
 
         tokio::fs::write(&path, data.as_ref()).await?;
 
-        debug!("Cached the data for {:?} at {:?}", cache_key, path);
+        debug!("Written data for {:?} to {:?}", cache_key, path);
         Ok(path)
     }
 
@@ -105,7 +105,7 @@ impl CacheKey {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum CacheValue {
     File(PathBuf, usize),
     Memory(Arc<Bytes>),
@@ -116,6 +116,16 @@ impl CacheValue {
         match self {
             CacheValue::File(_, size) => *size,
             CacheValue::Memory(data) => data.len(),
+        }
+    }
+}
+
+// Override the debug output to avoid printing out the entire raw byte content of `CacheValue::Memory`
+impl Debug for CacheValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CacheValue::File(path, size) => write!(f, "File({path:?}, size: {size})"),
+            CacheValue::Memory(data) => write!(f, "Memory(size: {})", data.len()),
         }
     }
 }
