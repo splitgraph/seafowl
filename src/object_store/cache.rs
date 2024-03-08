@@ -472,8 +472,9 @@ mod tests {
     use std::path::Path as FSPath;
     use std::sync::Arc;
 
-    use crate::object_store::cache::DEFAULT_CACHE_ENTRY_TTL;
+    use crate::object_store::cache::{CacheKey, CacheValue, DEFAULT_CACHE_ENTRY_TTL};
     use rstest::rstest;
+    use std::collections::HashSet;
     use std::time::Duration;
     use std::{cmp::min, fs, ops::Range};
     use tempfile::TempDir;
@@ -504,6 +505,44 @@ mod tests {
             4 * 16, // Max capacity 4 chunks
             Duration::from_secs(1),
         )
+    }
+
+    // Util function to wait until all keys are persisted to disk or it times out
+    async fn wait_all_ranges_on_disk(
+        on_disk_keys: HashSet<CacheKey>,
+        store: &CachingObjectStore,
+    ) -> HashSet<CacheKey> {
+        let mut i = 1;
+        loop {
+            // Get all the keys for which the values are already on disk
+            let new_on_disk_keys: HashSet<CacheKey> = store
+                .cache
+                .into_iter()
+                .filter_map(|(k, v)| {
+                    if matches!(v, CacheValue::File(_, _)) {
+                        Some(k.as_ref().clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Ensure that this is strictly monotonic, i.e. a given cache value can
+            // only go from memory to disk, and not vice-versa
+            assert!(new_on_disk_keys.is_superset(&on_disk_keys));
+            let on_disk_keys = new_on_disk_keys;
+
+            // If all values are on disk exit
+            if on_disk_keys.len() == store.cache.entry_count() as usize {
+                return on_disk_keys;
+            }
+
+            if i >= 5 {
+                panic!("Failed to ensure cache value is on disk in 5 iterations")
+            }
+            i += 1;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     #[rstest]
@@ -579,8 +618,7 @@ mod tests {
         assert_eq!(server.received_requests().await.unwrap().len(), 3);
         assert_eq!(store.cache.entry_count(), 3);
 
-        // Give it a bit of time to persist all the values to disk
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let on_disk_keys = wait_all_ranges_on_disk(HashSet::new(), &store).await;
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3]);
 
         // Request 26..30 (chunk 1)
@@ -608,8 +646,7 @@ mod tests {
         assert_eq!(server.received_requests().await.unwrap().len(), 4);
         assert_eq!(store.cache.entry_count(), 4);
 
-        // Give it a bit of time to persist all the values to disk
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut on_disk_keys = wait_all_ranges_on_disk(on_disk_keys, &store).await;
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3, 4]);
 
         // Request 80..85 (chunk 5)
@@ -622,6 +659,9 @@ mod tests {
 
         assert_eq!(server.received_requests().await.unwrap().len(), 5);
         assert_eq!(store.cache.entry_count(), 4);
+
+        on_disk_keys.retain(|k| k.range.start >= 32); // The first chunk got LRU-evicted
+        wait_all_ranges_on_disk(on_disk_keys, &store).await;
         assert_ranges_in_cache(&store.base_path, &url, vec![2, 3, 4, 5]);
 
         // Ensure that our TTL parameter is honored, so that we don't get a frozen cache after it
