@@ -14,7 +14,7 @@ use crate::provider::project_expressions;
 use crate::utils::gc_databases;
 
 use arrow_schema::{DataType, Schema, TimeUnit};
-use chrono::Duration;
+use chrono::TimeDelta;
 use datafusion::common::{DFSchema, FileType};
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::listing::{
@@ -712,7 +712,7 @@ impl SeafowlContext {
                                         delta_table.snapshot()?.clone(),
                                     )
                                     .with_enforce_retention_duration(false)
-                                    .with_retention_period(Duration::hours(0_i64));
+                                    .with_retention_period(TimeDelta::zero());
 
                                     let (_, metrics) = plan.await?;
                                     let deleted_files = metrics.files_deleted;

@@ -118,7 +118,7 @@ lazy_static = ">=1.4.0"
 # Pick up hashbrown >0.13.1 to resolve conflicts with wasm crates
 metrics = { version = "0.22.1", optional = true }
 metrics-exporter-prometheus = { version = "0.13.1", optional = true }
-moka = { version = "0.12.2", default_features = false, features = ["future", "atomic64", "quanta"] }
+moka = { version = "0.12.5", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.9"
 parking_lot = "0.12.1"
 percent-encoding = "2.2.0"
