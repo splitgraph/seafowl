@@ -153,7 +153,10 @@ impl SeafowlContext {
                         schema::ObjectStore::GCS(gcs)
                     };
 
-                    let object_store = build_object_store(&config)?;
+                    let object_store = build_object_store(
+                        &config,
+                        &self.config.misc.object_store_cache,
+                    )?;
                     self.inner
                         .runtime_env()
                         .register_object_store(url, object_store);

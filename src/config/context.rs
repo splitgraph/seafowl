@@ -34,7 +34,7 @@ use object_store::aws::AmazonS3Builder;
 use object_store::gcp::GoogleCloudStorageBuilder;
 use url::Url;
 
-use super::schema::{self, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
+use super::schema::{self, ObjectCacheProperties, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
 
 #[cfg(feature = "metrics")]
 pub const HTTP_REQUESTS: &str = "http_requests";
@@ -78,7 +78,9 @@ async fn build_metastore(
                     .await
                     .expect("Error setting up remote store"),
             );
-            return Metastore::new_from_external(external, object_store);
+
+            return Metastore::new_from_external(external, object_store)
+                .with_object_store_cache(config.misc.object_store_cache.clone());
         }
     };
 
@@ -87,6 +89,7 @@ async fn build_metastore(
 
 pub fn build_object_store(
     object_store_cfg: &schema::ObjectStore,
+    cache_properties: &Option<ObjectCacheProperties>,
 ) -> Result<Arc<dyn ObjectStore>> {
     Ok(match &object_store_cfg {
         schema::ObjectStore::Local(schema::Local { data_dir }) => {
@@ -100,7 +103,6 @@ pub fn build_object_store(
             secret_access_key,
             endpoint,
             bucket,
-            cache_properties,
             ..
         }) => {
             let mut builder = AmazonS3Builder::new()
@@ -134,7 +136,6 @@ pub fn build_object_store(
         schema::ObjectStore::GCS(GCS {
             bucket,
             google_application_credentials,
-            cache_properties,
             ..
         }) => {
             let gcs_builder: GoogleCloudStorageBuilder =
@@ -212,7 +213,8 @@ pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext>
 
     // We're guaranteed by config validation that this is Some
     let object_store_cfg = cfg.object_store.clone().unwrap();
-    let object_store = build_object_store(&object_store_cfg)?;
+    let object_store =
+        build_object_store(&object_store_cfg, &cfg.misc.object_store_cache)?;
     let internal_object_store = Arc::new(InternalObjectStore::new(
         object_store.clone(),
         object_store_cfg,
@@ -305,6 +307,7 @@ mod tests {
                 gc_interval: 0,
                 ssl_cert_file: None,
                 metrics: None,
+                object_store_cache: None,
             },
         };
 

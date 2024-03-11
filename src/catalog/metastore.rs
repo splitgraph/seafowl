@@ -4,6 +4,7 @@ use crate::catalog::{
     CatalogError, CatalogResult, CatalogStore, CreateFunctionError, FunctionStore,
     SchemaStore, TableStore,
 };
+use crate::config::schema::ObjectCacheProperties;
 use crate::object_store::wrapped::InternalObjectStore;
 use crate::provider::{SeafowlDatabase, SeafowlFunction, SeafowlSchema};
 use crate::repository::interface::{AllDatabaseFunctionsResult, Repository};
@@ -38,6 +39,7 @@ pub struct Metastore {
     pub functions: Arc<dyn FunctionStore>,
     staging_schema: Arc<MemorySchemaProvider>,
     default_store: Arc<InternalObjectStore>,
+    object_store_cache: Option<ObjectCacheProperties>,
 }
 
 impl Metastore {
@@ -55,6 +57,7 @@ impl Metastore {
             functions: repository_store,
             staging_schema,
             default_store,
+            object_store_cache: None,
         }
     }
 
@@ -70,7 +73,16 @@ impl Metastore {
             functions: external_store,
             staging_schema,
             default_store,
+            object_store_cache: None,
         }
+    }
+
+    pub fn with_object_store_cache(
+        mut self,
+        object_store_cache: Option<ObjectCacheProperties>,
+    ) -> Self {
+        self.object_store_cache = object_store_cache;
+        self
     }
 
     pub async fn build_catalog(
@@ -147,11 +159,19 @@ impl Metastore {
         let table_log_store = match table.location {
             // Use the provided customized location
             Some(location) => {
-                let store = stores.get(&location).ok_or(CatalogError::Generic {
-                    reason: format!("Object store for location {location} not found"),
-                })?;
+                let mut store = stores
+                    .get(&location)
+                    .ok_or(CatalogError::Generic {
+                        reason: format!("Object store for location {location} not found"),
+                    })?
+                    .clone();
+
+                if let Some(ref cache) = self.object_store_cache {
+                    store = cache.wrap_store(store);
+                }
+
                 let prefixed_store: PrefixStore<Arc<dyn ObjectStore>> =
-                    PrefixStore::new(store.clone(), &*table.path);
+                    PrefixStore::new(store, &*table.path);
 
                 let url = Url::parse(&format!("{location}/{}", table.path))?;
 

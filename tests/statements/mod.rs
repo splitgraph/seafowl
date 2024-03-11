@@ -81,8 +81,6 @@ secret_access_key = "minioadmin"
 endpoint = "http://127.0.0.1:9000"
 bucket = "seafowl-test-bucket"
 {}
-[object_store.cache_properties]
-ttl = 30
 "#,
                 if let Some(path) = path {
                     format!("prefix = \"{path}\"")
@@ -122,7 +120,10 @@ google_application_credentials = "{}"
 [catalog]
 type = "postgres"
 dsn = "{dsn}"
-schema = "{schema}""#
+schema = "{schema}"
+
+[misc.object_store_cache]
+ttl = 30"#
     );
 
     // Ignore the "in-memory object store / persistent catalog" error in e2e tests (we'll discard
