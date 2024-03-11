@@ -386,7 +386,7 @@ impl Default for Metrics {
 pub struct ObjectCacheProperties {
     pub capacity: u64,
     pub min_fetch_size: u64,
-    pub ttl_s: u64,
+    pub ttl: u64,
 }
 
 impl Default for ObjectCacheProperties {
@@ -394,7 +394,7 @@ impl Default for ObjectCacheProperties {
         Self {
             capacity: DEFAULT_CACHE_CAPACITY,
             min_fetch_size: DEFAULT_MIN_FETCH_SIZE,
-            ttl_s: DEFAULT_CACHE_ENTRY_TTL.as_secs(),
+            ttl: DEFAULT_CACHE_ENTRY_TTL.as_secs(),
         }
     }
 }
@@ -409,7 +409,7 @@ impl ObjectCacheProperties {
             &path,
             self.min_fetch_size,
             self.capacity,
-            Duration::from_secs(self.ttl_s),
+            Duration::from_secs(self.ttl),
         ))
     }
 }
@@ -557,7 +557,7 @@ dsn = "postgresql://user:pass@localhost:5432/somedb"
 
 [misc.object_store_cache]
 min_fetch_size = 4096
-ttl_s = 10
+ttl = 10
 "#;
 
     const TEST_CONFIG_BASIC: &str = r#"
@@ -630,7 +630,7 @@ cache_control = "private, max-age=86400"
     #[case::basic_s3(TEST_CONFIG_S3, None)]
     #[case::basic_s3_with_cache(
         TEST_CONFIG_S3_WITH_CACHE,
-        Some(ObjectCacheProperties{ capacity: DEFAULT_CACHE_CAPACITY, min_fetch_size: 4096, ttl_s: 10 }))
+        Some(ObjectCacheProperties{ capacity: DEFAULT_CACHE_CAPACITY, min_fetch_size: 4096, ttl: 10 }))
     ]
     fn test_parse_config_with_s3(
         #[case] config_str: &str,
