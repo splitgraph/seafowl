@@ -22,13 +22,13 @@ use std::io::ErrorKind;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use moka::policy::EvictionPolicy;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
-use tokio::{fs, sync::RwLock};
 
-pub const DEFAULT_MIN_FETCH_SIZE: u64 = 2 * 1024 * 1024;
-pub const DEFAULT_CACHE_CAPACITY: u64 = 512 * 1024 * 1024;
+pub const DEFAULT_MIN_FETCH_SIZE: u64 = 1024 * 1024; // 1 MiB
+pub const DEFAULT_CACHE_CAPACITY: u64 = 1024 * 1024 * 1024; // 1 GiB
 pub const DEFAULT_CACHE_ENTRY_TTL: Duration = Duration::from_secs(3 * 60);
 
 #[derive(Debug)]
@@ -42,12 +42,13 @@ impl CacheFileManager {
     }
 
     async fn write_file(
-        &mut self,
-        cache_key: CacheKey,
-        data: &Bytes,
+        &self,
+        cache_key: &CacheKey,
+        data: Arc<Bytes>,
     ) -> io::Result<PathBuf> {
         let mut path = self.base_path.to_path_buf();
         path.push(cache_key.as_filename());
+
         // Should this happen normally?
         if path.exists() {
             return Err(io::Error::new(
@@ -56,18 +57,18 @@ impl CacheFileManager {
             ));
         }
 
-        fs::write(&path, data).await?;
+        tokio::fs::write(&path, data.as_ref()).await?;
 
-        debug!("Cached the data for {:?} at {:?}", cache_key, path);
+        debug!("Written data for {:?} to {:?}", cache_key, path);
         Ok(path)
     }
 
     async fn read_file(&self, path: impl AsRef<Path>) -> io::Result<Bytes> {
-        fs::read(path).await.map(Bytes::from)
+        tokio::fs::read(path).await.map(Bytes::from)
     }
 
-    async fn remove_file(&mut self, path: impl AsRef<Path> + Debug) -> io::Result<()> {
-        fs::remove_file(path.as_ref()).await?;
+    async fn remove_file(&self, path: impl AsRef<Path> + Debug) -> io::Result<()> {
+        tokio::fs::remove_file(path.as_ref()).await?;
         debug!("Removed cached data at {:?}", path);
 
         Ok(())
@@ -104,16 +105,35 @@ impl CacheKey {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct CacheValue {
-    path: PathBuf,
-    size: u64,
+#[derive(Clone)]
+pub enum CacheValue {
+    File(PathBuf, usize),
+    Memory(Arc<Bytes>),
+}
+
+impl CacheValue {
+    fn size(&self) -> usize {
+        match self {
+            CacheValue::File(_, size) => *size,
+            CacheValue::Memory(data) => data.len(),
+        }
+    }
+}
+
+// Override the debug output to avoid printing out the entire raw byte content of `CacheValue::Memory`
+impl Debug for CacheValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CacheValue::File(path, size) => write!(f, "File({path:?}, size: {size})"),
+            CacheValue::Memory(data) => write!(f, "Memory(size: {})", data.len()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct CachingObjectStore {
     // File manager, responsible for storing/retrieving files
-    file_manager: Arc<RwLock<CacheFileManager>>,
+    file_manager: Arc<CacheFileManager>,
     // Path to store data in
     base_path: PathBuf,
     // Minimum range fetch size, in bytes.
@@ -129,7 +149,7 @@ pub struct CachingObjectStore {
 
 impl CachingObjectStore {
     async fn on_evict(
-        file_manager: Arc<RwLock<CacheFileManager>>,
+        file_manager: Arc<CacheFileManager>,
         key: Arc<CacheKey>,
         value: CacheValue,
         cause: RemovalCause,
@@ -139,13 +159,12 @@ impl CachingObjectStore {
             key, value, cause
         );
 
-        // Acquire the write lock of the DataFileManager.
-        let mut manager = file_manager.write().await;
-
-        // Remove the data file. We must handle error cases here to
-        // prevent the listener from panicking.
-        if let Err(e) = manager.remove_file(&value.path).await {
-            error!("Failed to remove a data file at {:?}: {:?}", value.path, e);
+        if let CacheValue::File(path, _) = value {
+            // Remove the data file. We must handle error cases here to
+            // prevent the listener from panicking.
+            if let Err(e) = file_manager.remove_file(&path).await {
+                error!("Failed to remove a data file at {path:?}: {:?}", e);
+            }
         }
     }
 
@@ -156,18 +175,18 @@ impl CachingObjectStore {
         max_cache_size: u64,
         ttl: Duration,
     ) -> Self {
-        let file_manager =
-            Arc::new(RwLock::new(CacheFileManager::new(base_path.to_owned())));
+        let file_manager = Arc::new(CacheFileManager::new(base_path.to_owned()));
 
         // Clone the pointer since we can't pass the whole struct to the cache
         let eviction_file_manager = file_manager.clone();
 
+        // TODO: experiment with time-to-idle
         let cache: Cache<CacheKey, CacheValue> = CacheBuilder::new(max_cache_size)
-            .weigher(|_, v: &CacheValue| v.size as u32)
+            .weigher(|_, v: &CacheValue| v.size() as u32)
             .async_eviction_listener(move |k, v, cause| {
                 Self::on_evict(eviction_file_manager.clone(), k, v, cause).boxed()
             })
-            // TODO: This should be redundant once the `W-TinyLFU` policy is implemented in `moka`.
+            .eviction_policy(EvictionPolicy::lru())
             .time_to_live(ttl)
             .build();
 
@@ -200,6 +219,19 @@ impl CachingObjectStore {
 
     /// Get a certain range chunk, delineated in units of self.min_fetch_size. If the chunk
     /// is cached, return it directly. Otherwise, fetch and return it.
+    ///
+    /// There is some nuance in the fetching process worth elaborating on. Namely, when there is a
+    /// cache miss:
+    /// - All concurrent calls for the same missing chunk are coalesced, thanks to `Cache::try_get_with`,
+    ///   and so there is only one outbound request for the data.
+    /// - As soon as the data is fetched we:
+    ///     a) spawn a task to persist the data to the disk
+    ///     b) add a cache entry with the in-memory data (which is shared by the write task)
+    /// - Subsequently, all waiting calls are unblocked and will get the new cache value that is
+    ///   either read from disk (if the write task finished quickly enough), or from memory (if the
+    ///   write task is still running).
+    /// - Once the write task completes it will either replace the cache value with a file pointer,
+    ///   (if it completed successfully), or invalidate the memory entry (if it didn't).
     async fn get_chunk(
         &self,
         path: &object_store::path::Path,
@@ -216,19 +248,39 @@ impl CachingObjectStore {
         let value = self
             .cache
             .try_get_with::<_, object_store::Error>(key.clone(), async move {
-                let mut manager = self.file_manager.write().await;
-                let data = self.inner.get_range(path, range).await?;
-                let path = manager.write_file(key, &data).await.map_err(|e| {
-                    object_store::Error::Generic {
-                        store: "cache_store",
-                        source: Box::new(e),
-                    }
-                })?;
+                // The Arc here is solely to avoid copying the data into the closure below, as the
+                // writing can be done through a reference as well.
+                debug!("Fetching data for {key:?}");
+                let data = Arc::new(self.inner.get_range(path, range).await?);
 
-                Ok(CacheValue {
-                    path,
-                    size: data.len() as u64,
-                })
+                // Run the blocking write + cache value insert in a separate task
+                let cache = self.cache.clone();
+                let file_manager = self.file_manager.clone();
+                let size = data.len();
+                let data_to_write = data.clone();
+                tokio::task::spawn(async move {
+                    match file_manager.write_file(&key, data_to_write).await {
+                        Ok(path) => {
+                            // Write task completed successfully, replace the in-memory cache entry
+                            // with the file-pointer one.
+                            debug!("Upserting file pointer for {key:?} into the cache");
+                            let value = CacheValue::File(path, size);
+                            cache.insert(key, value).await;
+                        }
+                        Err(err) => {
+                            // Write task failed, remove the cache entry; we could also defer that to
+                            // TTL/LRU eviction, but then we risk ballooning the memory usage.
+                            warn!("Failed writing value for {key:?} to a file: {err}");
+                            warn!("Removing cache entry");
+                            cache.invalidate(&key).await;
+                        }
+                    }
+                });
+
+                // While the write task runs cache the in-memory bytes and serve that to all calls
+                // prior to the write task completing.
+                debug!("Caching value for ({path:?}, {chunk}) in memory");
+                Ok(CacheValue::Memory(data))
             })
             .await
             .map_err(|e| object_store::Error::Generic {
@@ -236,10 +288,16 @@ impl CachingObjectStore {
                 source: Box::new(e),
             })?;
 
-        {
-            let manager = self.file_manager.read().await;
-            let data = manager.read_file(value.path).await.unwrap();
-            Ok(data)
+        match value {
+            CacheValue::File(path, _) => {
+                debug!("Cache value for ({path:?}, {chunk}) fetched from the file");
+                let data = self.file_manager.read_file(path).await.unwrap();
+                Ok(data)
+            }
+            CacheValue::Memory(data) => {
+                debug!("Cache value for ({path:?}, {chunk}) fetched from memory");
+                Ok(data.as_ref().clone())
+            }
         }
     }
 }
@@ -414,8 +472,9 @@ mod tests {
     use std::path::Path as FSPath;
     use std::sync::Arc;
 
-    use crate::object_store::cache::DEFAULT_CACHE_ENTRY_TTL;
+    use crate::object_store::cache::{CacheKey, CacheValue, DEFAULT_CACHE_ENTRY_TTL};
     use rstest::rstest;
+    use std::collections::HashSet;
     use std::time::Duration;
     use std::{cmp::min, fs, ops::Range};
     use tempfile::TempDir;
@@ -446,6 +505,44 @@ mod tests {
             4 * 16, // Max capacity 4 chunks
             Duration::from_secs(1),
         )
+    }
+
+    // Util function to wait until all keys are persisted to disk or it times out
+    async fn wait_all_ranges_on_disk(
+        on_disk_keys: HashSet<CacheKey>,
+        store: &CachingObjectStore,
+    ) -> HashSet<CacheKey> {
+        let mut i = 1;
+        loop {
+            // Get all the keys for which the values are already on disk
+            let new_on_disk_keys: HashSet<CacheKey> = store
+                .cache
+                .into_iter()
+                .filter_map(|(k, v)| {
+                    if matches!(v, CacheValue::File(_, _)) {
+                        Some(k.as_ref().clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Ensure that this is strictly monotonic, i.e. a given cache value can
+            // only go from memory to disk, and not vice-versa
+            assert!(new_on_disk_keys.is_superset(&on_disk_keys));
+            let on_disk_keys = new_on_disk_keys;
+
+            // If all values are on disk exit
+            if on_disk_keys.len() == store.cache.entry_count() as usize {
+                return on_disk_keys;
+            }
+
+            if i >= 5 {
+                panic!("Failed to ensure cache value is on disk in 5 iterations")
+            }
+            i += 1;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     #[rstest]
@@ -493,7 +590,7 @@ mod tests {
     #[tokio::test]
     async fn test_cache_caching_eviction() {
         let store = make_cached_object_store_small_disk_size();
-        let (server, _body) = make_mock_parquet_server(true, true).await;
+        let (server, body) = make_mock_parquet_server(true, true).await;
         let server_uri = server.uri();
         let server_uri = server_uri.strip_prefix("http://").unwrap();
         let url = format!("{}/some/file.parquet", &server_uri);
@@ -503,29 +600,33 @@ mod tests {
 
         // Perform multiple sets of actions:
         //   - request a range
+        //   - check raw bytes fetched correspond to the source
         //   - check the amount of requests that the mock received in total
-        //   - `run_pending_tasks()` aka sync the cache (doesn't look like we need to do it for normal operations,
-        //     but we want to make sure all counts are correct and evictions have been done)
+        //   - `run_pending_tasks()` aka sync the cache
         //   - check the cache entry count
         //   - check the files that are on disk
 
         // Request 25..64 (chunks 1, 2, 3)
-        store
+        let bytes = store
             .get_range(&Path::from(url.as_str()), 25..64)
             .await
             .unwrap();
+        assert_eq!(bytes, body[25..64]);
         store.cache.run_pending_tasks().await;
 
         // Mock has had 3 requests
         assert_eq!(server.received_requests().await.unwrap().len(), 3);
         assert_eq!(store.cache.entry_count(), 3);
+
+        let on_disk_keys = wait_all_ranges_on_disk(HashSet::new(), &store).await;
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3]);
 
         // Request 26..30 (chunk 1)
-        store
+        let bytes = store
             .get_range(&Path::from(url.as_str()), 26..30)
             .await
             .unwrap();
+        assert_eq!(bytes, body[26..30]);
         store.cache.run_pending_tasks().await;
 
         // No extra requests
@@ -534,45 +635,38 @@ mod tests {
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3]);
 
         // Request 33..66 (chunks 2, 3, 4)
-        store
+        let bytes = store
             .get_range(&Path::from(url.as_str()), 33..66)
             .await
             .unwrap();
+        assert_eq!(bytes, body[33..66]);
         store.cache.run_pending_tasks().await;
 
         // One extra request to fetch chunk 4
         assert_eq!(server.received_requests().await.unwrap().len(), 4);
         assert_eq!(store.cache.entry_count(), 4);
+
+        let mut on_disk_keys = wait_all_ranges_on_disk(on_disk_keys, &store).await;
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3, 4]);
 
         // Request 80..85 (chunk 5)
-        store
+        let bytes = store
             .get_range(&Path::from(url.as_str()), 80..85)
             .await
             .unwrap();
+        assert_eq!(bytes, body[80..85]);
         store.cache.run_pending_tasks().await;
 
         assert_eq!(server.received_requests().await.unwrap().len(), 5);
         assert_eq!(store.cache.entry_count(), 4);
 
-        // Counter-intuitively, the evicted entry is the last one inserted (chunk 5).
-        // The reason is the default eviction policy in moka (citing from https://github.com/moka-rs/moka/issues/147#issuecomment-1162899784):
-        // "TinyLFU policy may not work very well for certain access patterns. I wonder if you are hitting this problem.
-        // The access pattern is like the followings:
-        //
-        //     Inserting an entry whose key has never been accessed before.
-        //     But once inserted, the key will be accessed often for a while.
-        //
-        // While the cache has enough capacity, everything will be okay because new entries will be admitted anyway.
-        // After the admission, they will be accessed so they will build up popularity. However, once the cache
-        // becomes full, this will become a problem. New entries will not be admitted because their keys were
-        // never accessed before; they are less popular than the old ones. They will be evicted immediately after
-        // the insertion."
-        assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3, 4]);
+        on_disk_keys.retain(|k| k.range.start >= 32); // The first chunk got LRU-evicted
+        wait_all_ranges_on_disk(on_disk_keys, &store).await;
+        assert_ranges_in_cache(&store.base_path, &url, vec![2, 3, 4, 5]);
 
         // Ensure that our TTL parameter is honored, so that we don't get a frozen cache after it
         // gets filled up once.
-        let _ = tokio::time::sleep(Duration::from_millis(1100)).await;
+        let _ = tokio::time::sleep(Duration::from_secs(1)).await;
         store.cache.run_pending_tasks().await;
 
         assert_eq!(store.cache.entry_count(), 0);
