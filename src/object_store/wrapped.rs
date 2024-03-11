@@ -343,11 +343,10 @@ mod tests {
             bucket: bucket.to_string(),
             prefix: prefix.map(|p| p.to_string()),
             endpoint: endpoint.clone(),
-            cache_properties: None,
         });
         // In principle for this test we could use any object store since we only exercise the
         // prefix/log store uri logic
-        let inner_store = build_object_store(&config)?;
+        let inner_store = build_object_store(&config, &None)?;
 
         let store = InternalObjectStore::new(inner_store, config);
 

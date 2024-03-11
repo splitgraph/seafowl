@@ -131,7 +131,6 @@ pub struct S3 {
     pub endpoint: Option<String>,
     pub bucket: String,
     pub prefix: Option<String>,
-    pub cache_properties: Option<ObjectCacheProperties>,
 }
 
 impl S3 {
@@ -146,7 +145,6 @@ impl S3 {
             endpoint: map.remove("endpoint"),
             bucket,
             prefix: None,
-            cache_properties: Some(ObjectCacheProperties::default()),
         })
     }
 }
@@ -156,7 +154,6 @@ pub struct GCS {
     pub bucket: String,
     pub prefix: Option<String>,
     pub google_application_credentials: Option<String>,
-    pub cache_properties: Option<ObjectCacheProperties>,
 }
 
 impl GCS {
@@ -168,41 +165,7 @@ impl GCS {
             bucket,
             prefix: None,
             google_application_credentials: map.remove("google_application_credentials"),
-            cache_properties: Some(ObjectCacheProperties::default()),
         }
-    }
-}
-
-#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(default)]
-pub struct ObjectCacheProperties {
-    pub capacity: u64,
-    pub min_fetch_size: u64,
-    pub ttl_s: u64, // We could use humantime_serde crate to parse directly into `std::time::Duration`
-}
-
-impl Default for ObjectCacheProperties {
-    fn default() -> Self {
-        Self {
-            capacity: DEFAULT_CACHE_CAPACITY,
-            min_fetch_size: DEFAULT_MIN_FETCH_SIZE,
-            ttl_s: DEFAULT_CACHE_ENTRY_TTL.as_secs(),
-        }
-    }
-}
-
-impl ObjectCacheProperties {
-    pub fn wrap_store(&self, inner: Arc<DynObjectStore>) -> Arc<DynObjectStore> {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.into_path();
-
-        Arc::new(CachingObjectStore::new(
-            inner,
-            &path,
-            self.min_fetch_size,
-            self.capacity,
-            Duration::from_secs(self.ttl_s),
-        ))
     }
 }
 
@@ -384,6 +347,7 @@ pub struct Misc {
     pub ssl_cert_file: Option<String>,
     #[cfg(feature = "metrics")]
     pub metrics: Option<Metrics>,
+    pub object_store_cache: Option<ObjectCacheProperties>,
 }
 
 impl Default for Misc {
@@ -394,6 +358,7 @@ impl Default for Misc {
             ssl_cert_file: None,
             #[cfg(feature = "metrics")]
             metrics: None,
+            object_store_cache: None,
         }
     }
 }
@@ -413,6 +378,39 @@ impl Default for Metrics {
             host: "127.0.0.1".to_string(),
             port: 9090,
         }
+    }
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(default)]
+pub struct ObjectCacheProperties {
+    pub capacity: u64,
+    pub min_fetch_size: u64,
+    pub ttl: u64,
+}
+
+impl Default for ObjectCacheProperties {
+    fn default() -> Self {
+        Self {
+            capacity: DEFAULT_CACHE_CAPACITY,
+            min_fetch_size: DEFAULT_MIN_FETCH_SIZE,
+            ttl: DEFAULT_CACHE_ENTRY_TTL.as_secs(),
+        }
+    }
+}
+
+impl ObjectCacheProperties {
+    pub fn wrap_store(&self, inner: Arc<DynObjectStore>) -> Arc<DynObjectStore> {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.into_path();
+
+        Arc::new(CachingObjectStore::new(
+            inner,
+            &path,
+            self.min_fetch_size,
+            self.capacity,
+            Duration::from_secs(self.ttl),
+        ))
     }
 }
 
@@ -452,6 +450,10 @@ pub fn validate_config(mut config: SeafowlConfig) -> Result<SeafowlConfig, Confi
       })) => warn!(
             "You are trying to connect to a GCS bucket without providing credentials.
 If Seafowl is running on GCP a token should be fetched using the GCP metadata endpoint."
+        ),
+        Some(ObjectStore::Local(_))
+        | Some(ObjectStore::InMemory(_)) if config.misc.object_store_cache.is_some() => warn!(
+            "The provided caching properties take no effect on local and in-memory object stores"
         ),
         None if !matches!(config.catalog, Catalog::Clade(Clade { dsn: _ })) =>  return Err(ConfigError::Message(
             "Cannot omit the object_store section unless Clade catalog is configured"
@@ -549,13 +551,13 @@ secret_access_key = "ABC..."
 endpoint = "https://s3.amazonaws.com:9000"
 bucket = "seafowl"
 
-[object_store.cache_properties]
-min_fetch_size = 4096
-ttl_s = 10
-
 [catalog]
 type = "postgres"
 dsn = "postgresql://user:pass@localhost:5432/somedb"
+
+[misc.object_store_cache]
+min_fetch_size = 4096
+ttl = 10
 "#;
 
     const TEST_CONFIG_BASIC: &str = r#"
@@ -628,7 +630,7 @@ cache_control = "private, max-age=86400"
     #[case::basic_s3(TEST_CONFIG_S3, None)]
     #[case::basic_s3_with_cache(
         TEST_CONFIG_S3_WITH_CACHE,
-        Some(ObjectCacheProperties{ capacity: DEFAULT_CACHE_CAPACITY, min_fetch_size: 4096, ttl_s: 10 }))
+        Some(ObjectCacheProperties{ capacity: DEFAULT_CACHE_CAPACITY, min_fetch_size: 4096, ttl: 10 }))
     ]
     fn test_parse_config_with_s3(
         #[case] config_str: &str,
@@ -636,18 +638,7 @@ cache_control = "private, max-age=86400"
     ) {
         let config = load_config_from_string(config_str, false, None).unwrap();
 
-        assert_eq!(
-            config.object_store,
-            Some(ObjectStore::S3(S3 {
-                region: None,
-                access_key_id: Some("AKI...".to_string()),
-                secret_access_key: Some("ABC...".to_string()),
-                endpoint: Some("https://s3.amazonaws.com:9000".to_string()),
-                bucket: "seafowl".to_string(),
-                prefix: None,
-                cache_properties: cache_props,
-            }))
-        );
+        assert_eq!(config.misc.object_store_cache, cache_props);
     }
 
     #[test]
@@ -663,7 +654,6 @@ cache_control = "private, max-age=86400"
                 endpoint: Some("https://s3.amazonaws.com:9000".to_string()),
                 bucket: "seafowl".to_string(),
                 prefix: None,
-                cache_properties: None,
             }))
         );
     }
@@ -716,6 +706,7 @@ cache_control = "private, max-age=86400"
                     gc_interval: 0,
                     ssl_cert_file: None,
                     metrics: None,
+                    object_store_cache: None,
                 },
             }
         )
@@ -814,6 +805,7 @@ cache_control = "private, max-age=86400"
                     gc_interval: 0,
                     ssl_cert_file: None,
                     metrics: None,
+                    object_store_cache: None,
                 },
             }
         )
