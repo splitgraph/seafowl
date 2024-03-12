@@ -166,7 +166,7 @@ impl Metastore {
                     })?
                     .clone();
 
-                if (location.starts_with("file://") || location.starts_with("memory://"))
+                if !(location.starts_with("file://") || location.starts_with("memory://"))
                     && let Some(ref cache) = self.object_store_cache
                 {
                     // Wrap the non-local store with the caching layer
