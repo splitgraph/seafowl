@@ -3,7 +3,7 @@
 /// with some additions to weigh it by the file size.
 use crate::config::schema::str_to_hex_hash;
 use async_trait::async_trait;
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{BufMut, Bytes};
 use futures::stream::BoxStream;
 use moka::future::{Cache, CacheBuilder, FutureExt};
 use moka::notification::RemovalCause;
@@ -11,7 +11,7 @@ use object_store::{
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions,
     PutResult,
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use std::fmt::Display;
 use std::fmt::{Debug, Formatter};
@@ -41,11 +41,7 @@ impl CacheFileManager {
         Self { base_path }
     }
 
-    async fn write_file(
-        &self,
-        cache_key: &CacheKey,
-        data: Arc<Bytes>,
-    ) -> io::Result<PathBuf> {
+    async fn write_file(&self, cache_key: &CacheKey, data: Bytes) -> io::Result<PathBuf> {
         let mut path = self.base_path.to_path_buf();
         path.push(cache_key.as_filename());
 
@@ -107,15 +103,17 @@ impl CacheKey {
 
 #[derive(Clone)]
 pub enum CacheValue {
+    Pending(tokio::sync::watch::Receiver<Bytes>),
+    Memory(Bytes),
     File(PathBuf, usize),
-    Memory(Arc<Bytes>),
 }
 
 impl CacheValue {
     fn size(&self) -> usize {
         match self {
-            CacheValue::File(_, size) => *size,
+            CacheValue::Pending(_) => 0,
             CacheValue::Memory(data) => data.len(),
+            CacheValue::File(_, size) => *size,
         }
     }
 }
@@ -124,8 +122,9 @@ impl CacheValue {
 impl Debug for CacheValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            CacheValue::File(path, size) => write!(f, "File({path:?}, size: {size})"),
+            CacheValue::Pending(_) => write!(f, "Pending"),
             CacheValue::Memory(data) => write!(f, "Memory(size: {})", data.len()),
+            CacheValue::File(path, size) => write!(f, "File({path:?}, size: {size})"),
         }
     }
 }
@@ -217,88 +216,157 @@ impl CachingObjectStore {
         }
     }
 
-    /// Get a certain range chunk, delineated in units of self.min_fetch_size. If the chunk
-    /// is cached, return it directly. Otherwise, fetch and return it.
+    /// Get a continuous range of chunks, each delineated in units of self.min_fetch_size. The main
+    /// goal is to coalesce fetching of any missing chunks in batches of maximum range to minimize
+    //  the outgoing calls needed to satisfy the incoming call.
     ///
-    /// There is some nuance in the fetching process worth elaborating on. Namely, when there is a
-    /// cache miss:
-    /// - All concurrent calls for the same missing chunk are coalesced, thanks to `Cache::try_get_with`,
-    ///   and so there is only one outbound request for the data.
-    /// - As soon as the data is fetched we:
-    ///     a) spawn a task to persist the data to the disk
-    ///     b) add a cache entry with the in-memory data (which is shared by the write task)
-    /// - Subsequently, all waiting calls are unblocked and will get the new cache value that is
-    ///   either read from disk (if the write task finished quickly enough), or from memory (if the
-    ///   write task is still running).
+    /// The algorithm works as follows:
+    /// - If a chunk is missing from the cache add an awaitable entry that other threads can poll
+    ///     asynchronously, queue it up in the pending batch and move on
+    /// - If the chunk is present in the cache fetch the entire pending chunk batch (if any) and
+    ///     a) add a cache entry with the in-memory data (which is shared by the write task)
+    ///     b) send the data over the channel to any awaiting threads that run into the pending entry
+    ///         in the meantime
+    ///     b) spawn a task to persist the data to the disk
+    /// - All subsequent calls will get the new cache value that is either read from disk (if the
+    ///     write task finished quickly enough), or from memory (if the write task is still running).
     /// - Once the write task completes it will either replace the cache value with a file pointer,
     ///   (if it completed successfully), or invalidate the memory entry (if it didn't).
-    async fn get_chunk(
+    async fn get_chunk_range(
         &self,
         path: &object_store::path::Path,
-        chunk: u32,
-    ) -> Result<Bytes, object_store::Error> {
-        let range = (chunk as usize * self.min_fetch_size as usize)
-            ..((chunk + 1) as usize * self.min_fetch_size as usize);
+        start_chunk: usize,
+        end_chunk: usize,
+    ) -> object_store::Result<Vec<u8>> {
+        let mut result = Vec::with_capacity(
+            (end_chunk - start_chunk + 1) * self.min_fetch_size as usize,
+        );
 
-        let key = CacheKey {
-            path: path.to_owned(),
-            range: range.clone(),
-        };
+        //
+        let (mut tx, mut rx) = tokio::sync::watch::channel(Bytes::new());
+        let mut chunk_batches = vec![];
+        for chunk in start_chunk..=end_chunk {
+            // If there's no entry for this chunk yet insert a result placeholder that will get
+            // evaluated below.
+            // Each key in the batch shares the same receiver, and will share the same raw `Bytes`
+            // value.
+            let chunk_range = (chunk * self.min_fetch_size as usize)
+                ..((chunk + 1) * self.min_fetch_size as usize);
 
-        let value = self
-            .cache
-            .try_get_with::<_, object_store::Error>(key.clone(), async move {
-                // The Arc here is solely to avoid copying the data into the closure below, as the
-                // writing can be done through a reference as well.
-                debug!("Fetching data for {key:?}");
-                let data = Arc::new(self.inner.get_range(path, range).await?);
+            let key = CacheKey {
+                path: path.to_owned(),
+                range: chunk_range.clone(),
+            };
 
-                // Run the blocking write + cache value insert in a separate task
-                let cache = self.cache.clone();
-                let file_manager = self.file_manager.clone();
-                let size = data.len();
-                let data_to_write = data.clone();
-                tokio::task::spawn(async move {
-                    match file_manager.write_file(&key, data_to_write).await {
-                        Ok(path) => {
-                            // Write task completed successfully, replace the in-memory cache entry
-                            // with the file-pointer one.
-                            debug!("Upserting file pointer for {key:?} into the cache");
-                            let value = CacheValue::File(path, size);
-                            cache.insert(key, value).await;
-                        }
-                        Err(err) => {
-                            // Write task failed, remove the cache entry; we could also defer that to
-                            // TTL/LRU eviction, but then we risk ballooning the memory usage.
-                            warn!("Failed writing value for {key:?} to a file: {err}");
-                            warn!("Removing cache entry");
-                            cache.invalidate(&key).await;
-                        }
+            let entry = self
+                .cache
+                .entry_by_ref(&key)
+                .or_insert(CacheValue::Pending(rx.clone()))
+                .await;
+
+            let is_fresh = entry.is_fresh();
+            let mut chunk_data = None;
+            if !is_fresh {
+                chunk_data = Some(match entry.into_value() {
+                    CacheValue::Pending(mut rx) => {
+                        // Since the entry is not fresh another thread is evaluating this future,
+                        // so wait on it
+                        // TODO: add timeout and fallback here
+                        rx.changed()
+                            .await
+                            .map_err(|e| object_store::Error::Generic {
+                                store: "cache_store",
+                                source: Box::new(e),
+                            })?;
+                        debug!("Cache value for {key:?} fetched from future");
+                        rx.borrow().clone()
+                    }
+                    CacheValue::Memory(data) => {
+                        debug!("Cache value for {key:?} fetched from memory");
+                        data.clone()
+                    }
+                    CacheValue::File(path, _) => {
+                        debug!("Cache value for {key:?} fetched from file");
+                        self.file_manager.read_file(path).await.unwrap()
                     }
                 });
-
-                // While the write task runs cache the in-memory bytes and serve that to all calls
-                // prior to the write task completing.
-                debug!("Caching value for ({path:?}, {chunk}) in memory");
-                Ok(CacheValue::Memory(data))
-            })
-            .await
-            .map_err(|e| object_store::Error::Generic {
-                store: "cache_store",
-                source: Box::new(e),
-            })?;
-
-        match value {
-            CacheValue::File(path, _) => {
-                debug!("Cache value for ({path:?}, {chunk}) fetched from the file");
-                let data = self.file_manager.read_file(path).await.unwrap();
-                Ok(data)
+            } else {
+                // Entry is fresh; we need to evaluate it in the upcoming batch...
+                chunk_batches.push((key.clone(), tx));
+                // ... and also create a new sender/receiver for the next pending entry
+                (tx, rx) = tokio::sync::watch::channel(Bytes::new());
             }
-            CacheValue::Memory(data) => {
-                debug!("Cache value for ({path:?}, {chunk}) fetched from memory");
-                Ok(data.as_ref().clone())
+
+            if !chunk_batches.is_empty() && (!is_fresh || chunk == end_chunk) {
+                // Evaluate the accumulated chunk batch if either the current entry is not fresh
+                // (meaning we can not extend the batch anymore and keep it continuous), or
+                // we've reached the last chunk (meaning there are not more chunks to be batched).
+                let first = &chunk_batches.first().unwrap().0;
+                let last = &chunk_batches.last().unwrap().0;
+
+                let batch_range = first.range.start..last.range.end;
+                let mut batch_data = self.inner.get_range(path, batch_range).await?;
+
+                // `Bytes` are `cheaply cloneable and sliceable chunk of contiguous memory`, so
+                // there should be no need to wrap them in an `Arc`.
+                result.put(batch_data.clone());
+
+                // TODO: execute this in a separate task
+                for (key, tx) in chunk_batches {
+                    // Split the next chunk from the batch
+                    let data = if batch_data.len() < self.min_fetch_size as usize {
+                        batch_data.clone()
+                    } else {
+                        batch_data.split_to(self.min_fetch_size as usize)
+                    };
+
+                    // Cache the memory value
+                    self.cache
+                        .insert(key.clone(), CacheValue::Memory(data.clone()))
+                        .await;
+                    // Send out to any threads awaiting on this entry
+                    if let Err(err) = tx.send(data.clone()) {
+                        // This is ok, it just means there weren't any concurrent threads trying to
+                        // access this key in-between this thread putting the `CacheValue::Pending`
+                        // in and evaluating it and replacing it with the `CacheValue::Memory`
+                        // TODO: formalize this by catching `channel closed` error message?
+                        info!("Failed to send chunk batch data for {key:?} {err}");
+                    };
+
+                    // Finally trigger persisting to disk
+                    let cache = self.cache.clone();
+                    let file_manager = self.file_manager.clone();
+                    tokio::task::spawn(async move {
+                        let size = data.len();
+                        match file_manager.write_file(&key, data).await {
+                            Ok(path) => {
+                                // Write task completed successfully, replace the in-memory cache entry
+                                // with the file-pointer one.
+                                debug!(
+                                    "Upserting file pointer for {key:?} into the cache"
+                                );
+                                let value = CacheValue::File(path, size);
+                                cache.insert(key, value).await;
+                            }
+                            Err(err) => {
+                                // Write task failed, remove the cache entry; we could also defer that to
+                                // TTL/LRU eviction, but then we risk ballooning the memory usage.
+                                warn!("Invalidating cache entry for {key:?}; failed writing to a file: {err}");
+                                cache.invalidate(&key).await;
+                            }
+                        }
+                    });
+                }
+
+                chunk_batches = vec![];
+            }
+
+            if let Some(chunk_data) = chunk_data {
+                result.put(chunk_data);
             }
         }
+
+        Ok(result)
     }
 }
 
@@ -369,43 +437,16 @@ impl ObjectStore for CachingObjectStore {
         //  - range.end == 65 (get bytes 0..64 exclusive) -> final chunk is 64 / 16 = 4 (64..72 exclusive)
         let end_chunk = (range.end - 1) / self.min_fetch_size as usize;
 
-        let mut result = Vec::with_capacity(range.end - range.start);
+        let result = self
+            .get_chunk_range(location, start_chunk, end_chunk)
+            .await?;
 
-        for chunk_num in start_chunk..(end_chunk + 1) {
-            let mut data = self.get_chunk(location, chunk_num as u32).await?;
-            let data_len = data.len();
-
-            let buf_start = if chunk_num == start_chunk {
-                let buf_start = range.start % self.min_fetch_size as usize;
-                data.advance(buf_start);
-                buf_start
-            } else {
-                0usize
-            };
-
-            let buf_end = if chunk_num == end_chunk {
-                let buf_end = range.end % self.min_fetch_size as usize;
-
-                // if min_fetch_size = 16 and buf_end = 64, we want to load everything
-                // from the final buffer, instead of 0.
-                if buf_end != 0 {
-                    buf_end
-                } else {
-                    self.min_fetch_size as usize
-                }
-            } else {
-                data_len
-            };
-
-            debug!(
-                "Read {} bytes from the buffer for chunk {}, slicing out {}..{}",
-                data_len, chunk_num, buf_start, buf_end
-            );
-
-            result.put(data.take(buf_end - buf_start));
-        }
-
-        Ok(result.into())
+        // Finally trim away the expanded range from the chunks that are outside the requested range
+        let offset = start_chunk * self.min_fetch_size as usize;
+        let buf_start = range.start - offset;
+        let buf_end = result.len().min(range.end - offset);
+        let data = Bytes::copy_from_slice(&result[buf_start..buf_end]);
+        Ok(data)
     }
 
     async fn head(
