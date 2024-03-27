@@ -340,6 +340,7 @@ mod tests {
             region: None,
             access_key_id: Some("access_key_id".to_string()),
             secret_access_key: Some("secret_access_key".to_string()),
+            session_token: None,
             bucket: bucket.to_string(),
             prefix: prefix.map(|p| p.to_string()),
             endpoint: endpoint.clone(),
