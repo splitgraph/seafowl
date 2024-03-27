@@ -3,6 +3,8 @@
 
 use arrow_flight::FlightClient;
 use assert_cmd::prelude::*;
+use aws_credential_types::Credentials;
+use aws_sdk_sts::config::ProvideCredentials;
 use rstest::fixture;
 use seafowl::config::schema::{load_config_from_string, SeafowlConfig};
 use std::collections::HashMap;
@@ -141,4 +143,32 @@ async fn get_addr() -> SocketAddr {
         .unwrap()
         .local_addr()
         .unwrap()
+}
+
+// Get temporary creds for a specific role in MinIO
+async fn get_sts_creds() -> (String, String, String) {
+    let root_creds = Credentials::from_keys("minioadmin", "minioadmin", None);
+
+    let config = aws_config::SdkConfig::builder()
+        .region(aws_config::Region::new("us-east-1"))
+        .endpoint_url("http://localhost:9000")
+        .time_source(aws_smithy_async::time::SystemTimeSource::new())
+        .build();
+
+    let provider = aws_config::sts::AssumeRoleProvider::builder("test-user")
+        .session_name("test-session")
+        .configure(&config)
+        .build_from_provider(root_creds)
+        .await;
+
+    let creds = provider
+        .provide_credentials()
+        .await
+        .expect("MinIO STS credentials provided");
+
+    (
+        creds.access_key_id().to_string(),
+        creds.secret_access_key().to_string(),
+        creds.session_token().expect("Token present").to_string(),
+    )
 }

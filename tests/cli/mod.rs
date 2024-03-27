@@ -6,7 +6,10 @@ use std::path::Path;
 use std::process::{Command, Stdio}; // Run programs
 use tempfile::{Builder, TempDir};
 
+use crate::get_sts_creds;
+
 mod basic;
+mod one_off;
 
 const TEST_CONFIG_FILE: &str = "seafowl-test.toml";
 

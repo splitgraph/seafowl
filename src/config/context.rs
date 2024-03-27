@@ -101,6 +101,7 @@ pub fn build_object_store(
             region,
             access_key_id,
             secret_access_key,
+            session_token,
             endpoint,
             bucket,
             ..
@@ -119,7 +120,11 @@ pub fn build_object_store(
             {
                 builder = builder
                     .with_access_key_id(access_key_id)
-                    .with_secret_access_key(secret_access_key)
+                    .with_secret_access_key(secret_access_key);
+
+                if let Some(token) = session_token {
+                    builder = builder.with_token(token)
+                }
             } else {
                 builder = builder.with_skip_signature(true)
             }
