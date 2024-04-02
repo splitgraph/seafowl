@@ -1,0 +1,55 @@
+# Mock Dex OIDC config, appropriated from the example config:
+# https://github.com/dexidp/dex/blob/master/examples/config-dev.yaml
+
+# The base path of dex and the external name of the OpenID Connect service.
+# This is the canonical URL that all clients MUST use to refer to dex. If a
+# path is provided, dex's HTTP service will listen at a non-root URL.
+issuer: http://dex:5556/dex
+
+# The storage configuration determines where dex stores its state. Supported
+# options include SQL flavors and Kubernetes third party resources.
+#
+# See the documentation (https://dexidp.io/docs/storage/) for further information.
+storage:
+  type: sqlite3
+  config:
+    file: ":memory:"
+
+# Configuration for the HTTP endpoints.
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  # Uncomment the passwordConnector to use a specific connector for password grants
+  passwordConnector: local
+
+# Instead of reading from an external storage, use this list of clients.
+#
+# If this option isn't chosen clients may be added through the gRPC API.
+staticClients:
+  - id: example-app
+    redirectURIs:
+      - "http://dex:5555/callback"
+    name: "Example App"
+    secret: ZXhhbXBsZS1hcHAtc2VjcmV0
+
+connectors:
+  - type: mockCallback
+    id: mock
+    name: Example
+
+# Let dex keep a list of passwords which can be used to login to dex.
+enablePasswordDB: true
+
+# A static list of passwords to login the end user. By identifying here, dex
+# won't look in its underlying storage for passwords.
+#
+# If this option isn't chosen users may be added through the gRPC API.
+staticPasswords:
+  - email: "admin@example.com"
+    # bcrypt hash of the string "password": $(echo password | htpasswd -BinC 10 admin | cut -d: -f2)
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    # Important bit here, the test pass because this username equals a pre-set MinIO policy (and claim name
+    # is set to name above).
+    username: "readwrite"
+    userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
