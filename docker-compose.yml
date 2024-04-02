@@ -9,6 +9,14 @@ services:
       - "5432:5432"
     restart: unless-stopped
 
+  dex:
+    image: ghcr.io/dexidp/dex
+    ports:
+      - "5556:5556"
+    volumes:
+      - ./tests/dex.yaml:/config-dev.yaml
+    command: dex serve /config-dev.yaml
+
   minio:
     image: minio/minio:latest
     ports:
@@ -16,6 +24,12 @@ services:
       - 9001:9001
     environment:
       MINIO_CONSOLE_ADDRESS: ":9001"
+      DEX_HOST: "localhost"
+      DEX_PORT: "5556"
+      MINIO_IDENTITY_OPENID_CONFIG_URL: "http://dex:5556/dex/.well-known/openid-configuration"
+      MINIO_IDENTITY_OPENID_CLIENT_ID: "example-app"
+      MINIO_IDENTITY_OPENID_CLIENT_SECRET: "ZXhhbXBsZS1hcHAtc2VjcmV0"
+      MINIO_IDENTITY_OPENID_CLAIM_NAME: "name"
     command: minio server /data
 
   createbuckets:

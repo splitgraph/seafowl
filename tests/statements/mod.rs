@@ -94,8 +94,6 @@ bucket = "seafowl-test-bucket"
             r#"type = "s3"
 endpoint = "http://127.0.0.1:9000"
 bucket = "seafowl-test-bucket-public"
-[object_store.cache_properties]
-ttl = 30
 "#
             .to_string(),
             None,
