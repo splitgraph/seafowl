@@ -7,6 +7,7 @@ use aws_credential_types::Credentials;
 use aws_sdk_sts::config::ProvideCredentials;
 use rstest::fixture;
 use seafowl::config::schema::{load_config_from_string, SeafowlConfig};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::process::{Child, Command};
@@ -145,30 +146,107 @@ async fn get_addr() -> SocketAddr {
         .unwrap()
 }
 
+pub enum AssumeRoleTarget {
+    MinioUser,
+    DexOIDC,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct AssumeRoleResponse {
+    assume_role_with_web_identity_result: AssumeRoleResult,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct AssumeRoleResult {
+    credentials: WebIdentityCreds,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+struct WebIdentityCreds {
+    access_key_id: String,
+    secret_access_key: String,
+    session_token: String,
+}
+
 // Get temporary creds for a specific role in MinIO
-async fn get_sts_creds() -> (String, String, String) {
-    let root_creds = Credentials::from_keys("minioadmin", "minioadmin", None);
+async fn get_sts_creds(role: AssumeRoleTarget) -> (String, String, String) {
+    match role {
+        AssumeRoleTarget::MinioUser => {
+            let root_creds = Credentials::from_keys("minioadmin", "minioadmin", None);
 
-    let config = aws_config::SdkConfig::builder()
-        .region(aws_config::Region::new("us-east-1"))
-        .endpoint_url("http://localhost:9000")
-        .time_source(aws_smithy_async::time::SystemTimeSource::new())
-        .build();
+            let config = aws_config::SdkConfig::builder()
+                .region(aws_config::Region::new("us-east-1"))
+                .endpoint_url("http://localhost:9000")
+                .time_source(aws_smithy_async::time::SystemTimeSource::new())
+                .build();
 
-    let provider = aws_config::sts::AssumeRoleProvider::builder("test-user")
-        .session_name("test-session")
-        .configure(&config)
-        .build_from_provider(root_creds)
-        .await;
+            let provider = aws_config::sts::AssumeRoleProvider::builder("test-user")
+                .session_name("test-session")
+                .configure(&config)
+                .build_from_provider(root_creds)
+                .await;
 
-    let creds = provider
-        .provide_credentials()
-        .await
-        .expect("MinIO STS credentials provided");
+            let creds = provider
+                .provide_credentials()
+                .await
+                .expect("MinIO STS credentials provided");
 
-    (
-        creds.access_key_id().to_string(),
-        creds.secret_access_key().to_string(),
-        creds.session_token().expect("Token present").to_string(),
-    )
+            (
+                creds.access_key_id().to_string(),
+                creds.secret_access_key().to_string(),
+                creds.session_token().expect("Token present").to_string(),
+            )
+        }
+        AssumeRoleTarget::DexOIDC => {
+            let client = reqwest::Client::new();
+
+            // Get a token from Dex
+            let url = "http://localhost:5556/dex/token";
+            let params = [
+                ("grant_type", "password"),
+                ("client_id", "example-app"),
+                ("client_secret", "ZXhhbXBsZS1hcHAtc2VjcmV0"),
+                ("username", "admin@example.com"),
+                ("password", "password"),
+                ("scope", "groups openid profile email offline_access"),
+            ];
+            let response = client.post(url).form(&params).send().await.unwrap();
+
+            let status = response.status();
+            let body = response.text().await.unwrap();
+            assert_eq!(status, 200, "Dex token request failed: {body}");
+            let res: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let dex_token = res.get("access_token").expect("token present");
+
+            // Exchange Dex token for a valid MinIO STS credentials
+            let url = "http://localhost:9000";
+            let params = [
+                ("Action", "AssumeRoleWithWebIdentity"),
+                ("Version", "2011-06-15"),
+                ("DurationSeconds", "86000"),
+                ("WebIdentityToken", dex_token.as_str().unwrap()),
+            ];
+            let response = client.post(url).form(&params).send().await.unwrap();
+
+            let status = response.status();
+            let body = response.text().await.unwrap();
+            assert_eq!(
+                status, 200,
+                "MinIO AssumeRoleWithWebIdentity request failed: {body}"
+            );
+
+            let resp: AssumeRoleResponse =
+                quick_xml::de::from_str(&body).expect("Valid XML STS response");
+
+            let creds = resp.assume_role_with_web_identity_result.credentials;
+            (
+                creds.access_key_id,
+                creds.secret_access_key,
+                creds.session_token,
+            )
+        }
+    }
 }

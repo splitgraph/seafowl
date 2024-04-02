@@ -5412,6 +5412,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "prost",
+ "quick-xml",
  "rand 0.8.5",
  "regex",
  "reqwest",
