@@ -48,7 +48,6 @@ use datafusion_expr::{
     DdlStatement, DmlStatement, DropCatalogSchema, Expr, Filter, WriteOp,
 };
 use deltalake::kernel::{Action, Add, Remove};
-use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
@@ -381,14 +380,9 @@ impl SeafowlContext {
                     partition_by: None,
                     predicate: None,
                 };
-                let version = commit(
-                    table.log_store().as_ref(),
-                    &actions,
-                    op,
-                    table.state.as_ref(),
-                    None,
-                )
-                .await?;
+
+                let version = self.commit(actions, &table, op).await?;
+
                 self.metastore
                     .tables
                     .create_new_version(uuid, version)
@@ -498,14 +492,9 @@ impl SeafowlContext {
                 }
 
                 let op = DeltaOperation::Delete { predicate: None };
-                let version = commit(
-                    table.log_store().as_ref(),
-                    &actions,
-                    op,
-                    table.state.as_ref(),
-                    None,
-                )
-                .await?;
+
+                let version = self.commit(actions, &table, op).await?;
+
                 self.metastore
                     .tables
                     .create_new_version(uuid, version)
