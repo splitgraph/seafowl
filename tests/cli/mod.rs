@@ -1,12 +1,18 @@
 use assert_cmd::prelude::*; // Add methods on commands
+use rstest::rstest;
 use seafowl::config::schema::DEFAULT_SQLITE_DB;
+use seafowl::repository::postgres::testutils::get_random_schema;
+use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio}; // Run programs
 use tempfile::{Builder, TempDir};
 
+use crate::{get_sts_creds, AssumeRoleTarget};
+
 mod basic;
+mod one_off;
 
 const TEST_CONFIG_FILE: &str = "seafowl-test.toml";
 

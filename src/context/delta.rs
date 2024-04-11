@@ -18,7 +18,8 @@ use datafusion::{
 };
 use deltalake::kernel::{Action, Add, Schema as DeltaSchema};
 use deltalake::operations::{
-    convert_to_delta::ConvertToDeltaBuilder, create::CreateBuilder, transaction::commit,
+    convert_to_delta::ConvertToDeltaBuilder, create::CreateBuilder,
+    transaction::CommitBuilder,
 };
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::writer::create_add;
@@ -395,14 +396,8 @@ impl SeafowlContext {
             partition_by: None,
             predicate: None,
         };
-        let version = commit(
-            table_log_store.as_ref(),
-            &actions,
-            op,
-            table.state.as_ref(),
-            None,
-        )
-        .await?;
+
+        let version = self.commit(actions, &table, op).await?;
 
         // TODO: if `DeltaTable::get_version_timestamp` was globally public we could also pass the
         // exact version timestamp, instead of creating one automatically in our own catalog (which
@@ -412,8 +407,24 @@ impl SeafowlContext {
             .create_new_version(table_uuid, version)
             .await?;
 
-        debug!("Written table version {version} for {table}");
+        debug!("Written table version {} for {table}", version);
         Ok(table)
+    }
+
+    pub(super) async fn commit(
+        &self,
+        actions: Vec<Action>,
+        table: &DeltaTable,
+        op: DeltaOperation,
+    ) -> Result<i64> {
+        Ok(CommitBuilder::default()
+            .with_actions(actions)
+            .build(Some(table.snapshot()?), table.log_store(), op)
+            .map_err(|e| {
+                DataFusionError::Execution(format!("Transaction commit failed: {e}"))
+            })?
+            .await?
+            .version)
     }
 
     // Cleanup the table objects in the storage

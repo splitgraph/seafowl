@@ -3,6 +3,9 @@
 
 use arrow_flight::FlightClient;
 use assert_cmd::prelude::*;
+use aws_credential_types::provider::SharedCredentialsProvider;
+use aws_credential_types::Credentials;
+use aws_sdk_sts::Client;
 use rstest::fixture;
 use seafowl::config::schema::{load_config_from_string, SeafowlConfig};
 use std::collections::HashMap;
@@ -141,4 +144,83 @@ async fn get_addr() -> SocketAddr {
         .unwrap()
         .local_addr()
         .unwrap()
+}
+
+enum AssumeRoleTarget {
+    MinioUser,
+    DexOIDC,
+}
+
+// Get temporary creds for a specific role in MinIO. The hard-coded configs stem from the
+// values used in the `docker-compose.yml` file.
+async fn get_sts_creds(role: AssumeRoleTarget) -> (String, String, String) {
+    match role {
+        AssumeRoleTarget::MinioUser => {
+            let root_creds = Credentials::from_keys("minioadmin", "minioadmin", None);
+
+            let config = aws_config::SdkConfig::builder()
+                .credentials_provider(SharedCredentialsProvider::new(root_creds))
+                .region(aws_config::Region::new("us-east-1"))
+                .endpoint_url("http://localhost:9000")
+                .build();
+
+            let creds = Client::new(&config)
+                .assume_role()
+                .role_arn("test-user")
+                .send()
+                .await
+                .unwrap()
+                .credentials
+                .expect("MinIO STS credentials provided");
+
+            (
+                creds.access_key_id,
+                creds.secret_access_key,
+                creds.session_token,
+            )
+        }
+        AssumeRoleTarget::DexOIDC => {
+            let client = reqwest::Client::new();
+
+            // Get a token from Dex
+            let url = "http://localhost:5556/dex/token";
+            let params = [
+                ("grant_type", "password"),
+                ("client_id", "example-app"),
+                ("client_secret", "ZXhhbXBsZS1hcHAtc2VjcmV0"),
+                ("username", "admin@example.com"),
+                ("password", "password"),
+                ("scope", "groups openid profile email offline_access"),
+            ];
+            let response = client.post(url).form(&params).send().await.unwrap();
+
+            let status = response.status();
+            let body = response.text().await.unwrap();
+            assert_eq!(status, 200, "Dex token request failed: {body}");
+            let res: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let dex_token = res.get("access_token").expect("token present");
+
+            // Exchange Dex token for valid MinIO STS credentials using the AssumeRoleWithWebIdentity
+            // action.
+            let config = aws_config::SdkConfig::builder()
+                .region(aws_config::Region::new("us-east-1"))
+                .endpoint_url("http://localhost:9000")
+                .build();
+
+            let creds = Client::new(&config)
+                .assume_role_with_web_identity()
+                .web_identity_token(dex_token.as_str().unwrap())
+                .send()
+                .await
+                .unwrap()
+                .credentials
+                .expect("MinIO STS credentials provided");
+
+            (
+                creds.access_key_id,
+                creds.secret_access_key,
+                creds.session_token,
+            )
+        }
+    }
 }

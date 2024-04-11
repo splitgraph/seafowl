@@ -13,9 +13,9 @@ arrow-integration-test = "50.0.0"
 arrow-schema = "50.0.0"
 async-trait = "0.1.64"
 
-datafusion = "35.0.0"
-datafusion-common = "35.0.0"
-datafusion-expr = "35.0.0"
+datafusion = "36.0.0"
+datafusion-common = "36.0.0"
+datafusion-expr = "36.0.0"
 
 itertools = ">=0.10.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
@@ -67,17 +67,6 @@ arrow-schema = { git = "https://github.com/apache/arrow-rs", rev = "72d8a7831762
 arrow-select = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
 arrow-string = { git = "https://github.com/apache/arrow-rs", rev = "72d8a783176219f0864022daba70e84ceab7e221" }
 
-# Pick up https://github.com/apache/arrow-datafusion/pull/8894 and https://github.com/apache/arrow-datafusion/pull/9007
-datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
-datafusion-common = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
-datafusion-execution = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
-datafusion-expr = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
-datafusion-optimizer = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
-datafusion-physical-expr = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
-datafusion-physical-plan = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
-datafusion-proto = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
-datafusion-sql = { git = "https://github.com/apache/arrow-datafusion", rev = "a7a74fa522aaef07e6605f414308f3c99bd1ea06" }
-
 [dependencies]
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
@@ -98,8 +87,8 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/returnString/convergence", rev = "c58ba5c9903e96fd73b65fda8c7b19192fee5cd3", optional = true }
-convergence-arrow = { git = "https://github.com/returnString/convergence", rev = "c58ba5c9903e96fd73b65fda8c7b19192fee5cd3", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-36-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-36-upgrade", optional = true }
 
 dashmap = "5.4.0"
 
@@ -109,7 +98,7 @@ datafusion-expr = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "sqlparser-0.43", features = ["datafusion"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "c223bb66dd518fe2f7a6d5ba29e67267aaf95876", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
@@ -160,6 +149,9 @@ wasmtime-wasi = "17.0.0"
 [dev-dependencies]
 assert_cmd = "2"
 assert_unordered = "0.3"
+aws-config = { version = "1.0.1", features = ["behavior-version-latest"] }
+aws-credential-types = { version = "1.1.5", features = ["hardcoded-credentials"] }
+aws-sdk-sts = { version = "1.3.1", features = ["behavior-version-latest"] }
 rstest = "*"
 serial_test = "2"
 tonic-reflection = "0.10"

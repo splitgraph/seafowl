@@ -19,6 +19,7 @@ async fn test_information_schema() {
         "| default       | information_schema | columns        | VIEW       |",
         "| default       | information_schema | df_settings    | VIEW       |",
         "| default       | system             | dropped_tables | VIEW       |",
+        "| default       | information_schema | schemata       | VIEW       |",
         "| default       | system             | table_versions | VIEW       |",
         "| default       | information_schema | tables         | VIEW       |",
         "| default       | information_schema | views          | VIEW       |",
