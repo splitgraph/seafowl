@@ -1,6 +1,5 @@
 use arrow::error::ArrowError;
 use datafusion::error::DataFusionError;
-
 use std::fmt::Debug;
 use std::io::Write;
 use std::time::Instant;
@@ -24,14 +23,14 @@ use datafusion_common::FileType;
 use datafusion_expr::logical_plan::{LogicalPlan, TableScan};
 use deltalake::parquet::data_type::AsBytes;
 use deltalake::DeltaTable;
-use futures::{future, StreamExt};
+use futures::{future, Future, StreamExt};
 use hex::encode;
 use metrics::counter;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio::sync::broadcast::Receiver;
+
 use tracing::{debug, info, warn};
 use warp::http::HeaderValue;
 use warp::log::Info;
@@ -655,7 +654,7 @@ pub fn filters(
 pub async fn run_server(
     context: Arc<SeafowlContext>,
     config: HttpFrontend,
-    mut shutdown: Receiver<()>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
 ) {
     let filters = filters(context, config.clone());
 
@@ -663,10 +662,7 @@ pub async fn run_server(
         .parse()
         .expect("Error parsing the listen address");
     let (_, future) =
-        warp::serve(filters).bind_with_graceful_shutdown(socket_addr, async move {
-            shutdown.recv().await.unwrap();
-            info!("Shutting down Warp...");
-        });
+        warp::serve(filters).bind_with_graceful_shutdown(socket_addr, shutdown);
     future.await
 }
 

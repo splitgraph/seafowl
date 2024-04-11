@@ -7,6 +7,7 @@ use futures::TryStreamExt;
 use prost::Message;
 use reqwest::StatusCode;
 use rstest::rstest;
+use std::future;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tonic::metadata::MetadataValue;
@@ -62,7 +63,8 @@ async fn flight_server() -> (Arc<SeafowlContext>, FlightClient) {
         .expect("Arrow Flight frontend configured")
         .clone();
 
-    let flight = run_flight_server(context.clone(), flight_cfg.clone());
+    let flight =
+        run_flight_server(context.clone(), flight_cfg.clone(), future::pending());
     tokio::task::spawn(flight);
 
     // Create the channel for the client
