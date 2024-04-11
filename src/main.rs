@@ -171,7 +171,6 @@ async fn main() {
 
     Toplevel::new(|s: SubsystemHandle<Infallible>| async move {
         let mut any_frontends: bool = false;
-
         #[cfg(feature = "frontend-arrow-flight")]
         if let Some(flight) = &context.config.frontend.flight {
             let context = context.clone();
@@ -189,7 +188,6 @@ async fn main() {
                 Ok::<(), Infallible>(())
             }));
         };
-    
         #[cfg(feature = "frontend-postgres")]
         if let Some(pg) = &context.config.frontend.postgres {
             let context = context.clone();
@@ -207,11 +205,9 @@ async fn main() {
                     e = run_pg_server(context, pg) => e,
                     _ = h.on_shutdown_requested() => (),
                 };
-                
                 Ok::<(), Infallible>(())
             }));
         };
-    
         if let Some(http) = &context.config.frontend.http {
             let context = context.clone();
             let http = http.clone();
@@ -256,8 +252,10 @@ async fn main() {
                 };
             }));
         };
-    }).catch_signals()
+    })
+    .catch_signals()
     .handle_shutdown_requests(Duration::from_secs(5))
-    .await.unwrap();
+    .await
+    .unwrap();
     info!("Exiting cleanly.");
 }
