@@ -11,7 +11,7 @@ use object_store::{
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions,
     PutResult,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use std::fmt::Display;
 use std::fmt::{Debug, Formatter};
@@ -26,6 +26,7 @@ use moka::policy::EvictionPolicy;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
+use tokio::sync::watch::{channel, Receiver};
 
 pub const DEFAULT_MIN_FETCH_SIZE: u64 = 1024 * 1024; // 1 MiB
 pub const DEFAULT_CACHE_CAPACITY: u64 = 1024 * 1024 * 1024; // 1 GiB
@@ -84,10 +85,16 @@ impl Drop for CacheFileManager {
     }
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq)]
 pub struct CacheKey {
     path: object_store::path::Path,
     range: Range<usize>,
+}
+
+impl Debug for CacheKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{:?}", self.path, self.range)
+    }
 }
 
 impl CacheKey {
@@ -103,7 +110,7 @@ impl CacheKey {
 
 #[derive(Clone)]
 pub enum CacheValue {
-    Pending(tokio::sync::watch::Receiver<Bytes>),
+    Pending(Receiver<Result<Bytes, super::ObjectStoreError>>),
     Memory(Bytes),
     File(PathBuf, usize),
 }
@@ -242,8 +249,7 @@ impl CachingObjectStore {
             (end_chunk - start_chunk + 1) * self.min_fetch_size as usize,
         );
 
-        //
-        let (mut tx, mut rx) = tokio::sync::watch::channel(Bytes::new());
+        let (mut tx, mut rx) = channel(Ok(Bytes::new()));
         let mut chunk_batches = vec![];
         for chunk in start_chunk..=end_chunk {
             // If there's no entry for this chunk yet insert a result placeholder that will get
@@ -268,18 +274,41 @@ impl CachingObjectStore {
             let mut chunk_data = None;
             if !is_fresh {
                 chunk_data = Some(match entry.into_value() {
-                    CacheValue::Pending(mut rx) => {
-                        // Since the entry is not fresh another thread is evaluating this future,
-                        // so wait on it
-                        // TODO: add timeout and fallback here
-                        rx.changed()
+                    CacheValue::Pending(mut rx) =>
+                    // Since the entry is not fresh another task is evaluating this future,
+                    // so wait on it.
+                    // Also use a timeout to break from the source task potentially hanging/deadlocking.
+                    {
+                        match tokio::time::timeout(Duration::from_secs(5), rx.changed())
                             .await
-                            .map_err(|e| object_store::Error::Generic {
-                                store: "cache_store",
-                                source: Box::new(e),
-                            })?;
-                        debug!("Cache value for {key:?} fetched from future");
-                        rx.borrow().clone()
+                        {
+                            Ok(maybe_receive) => {
+                                maybe_receive.map_err(|e| {
+                                    object_store::Error::Generic {
+                                        store: "cache_store",
+                                        source: Box::new(e),
+                                    }
+                                })?;
+                                debug!("{key:?} awaited");
+                                rx.borrow().clone().map_err(|e| {
+                                    object_store::Error::Generic {
+                                        store: "cache_store",
+                                        source: Box::new(e),
+                                    }
+                                })?
+                            }
+                            Err(_) => {
+                                debug!("{key:?} refetching");
+                                // TODO: maybe check that value is not in cache now,
+                                // and if not insert + trigger persisting to file
+                                let data = self
+                                    .inner
+                                    .get_range(path, chunk_range.clone())
+                                    .await?;
+                                debug!("{key:?} refetched");
+                                data
+                            }
+                        }
                     }
                     CacheValue::Memory(data) => {
                         debug!("Cache value for {key:?} fetched from memory");
@@ -294,7 +323,7 @@ impl CachingObjectStore {
                 // Entry is fresh; we need to evaluate it in the upcoming batch...
                 chunk_batches.push((key.clone(), tx));
                 // ... and also create a new sender/receiver for the next pending entry
-                (tx, rx) = tokio::sync::watch::channel(Bytes::new());
+                (tx, rx) = channel(Ok(Bytes::new()));
             }
 
             if !chunk_batches.is_empty() && (!is_fresh || chunk == end_chunk) {
@@ -305,7 +334,28 @@ impl CachingObjectStore {
                 let last = &chunk_batches.last().unwrap().0;
 
                 let batch_range = first.range.start..last.range.end;
-                let mut batch_data = self.inner.get_range(path, batch_range).await?;
+                debug!("{path} {chunk_range:?} starting");
+                let mut batch_data = match self.inner.get_range(path, batch_range).await {
+                    Ok(data) => data,
+                    Err(err) => {
+                        debug!("{path} {chunk_range:?} error: {err}");
+                        // object store error is not `Clone`, so we need to do this
+                        let message = format!("{err}");
+                        // Propagate error to all awaiting tasks.
+                        for (_, tx) in chunk_batches {
+                            let _ = tx.send(Err(super::ObjectStoreError::Generic {
+                                reason: message.clone(),
+                            }));
+                        }
+                        return Err(object_store::Error::Generic {
+                            store: "cache_store",
+                            source: Box::new(super::ObjectStoreError::Generic {
+                                reason: message,
+                            }),
+                        });
+                    }
+                };
+                debug!("{path} {chunk_range:?} completed");
 
                 // `Bytes` are `cheaply cloneable and sliceable chunk of contiguous memory`, so
                 // there should be no need to wrap them in an `Arc`.
@@ -325,18 +375,19 @@ impl CachingObjectStore {
                         .insert(key.clone(), CacheValue::Memory(data.clone()))
                         .await;
                     // Send out to any threads awaiting on this entry
-                    if let Err(err) = tx.send(data.clone()) {
+                    if let Err(err) = tx.send(Ok(data.clone())) {
                         // This is ok, it just means there weren't any concurrent threads trying to
                         // access this key in-between this thread putting the `CacheValue::Pending`
-                        // in and evaluating it and replacing it with the `CacheValue::Memory`
-                        // TODO: formalize this by catching `channel closed` error message?
-                        info!("Failed to send chunk batch data for {key:?} {err}");
+                        // in, and evaluating it and replacing it with the `CacheValue::Memory`
+                        debug!("Failed to send chunk batch data for {key:?}: {err}");
                     };
 
                     // Finally trigger persisting to disk
                     let cache = self.cache.clone();
                     let file_manager = self.file_manager.clone();
                     tokio::task::spawn(async move {
+                        // Run pending tasks to avert eviction races.
+                        cache.run_pending_tasks().await;
                         let size = data.len();
                         match file_manager.write_file(&key, data).await {
                             Ok(path) => {
@@ -430,6 +481,7 @@ impl ObjectStore for CachingObjectStore {
         location: &object_store::path::Path,
         range: Range<usize>,
     ) -> object_store::Result<Bytes> {
+        debug!("{location} {range:?} get_range");
         // Expand the range to the next max_fetch_size (+ alignment)
         let start_chunk = range.start / self.min_fetch_size as usize;
         // The final chunk to fetch (inclusively). E.g. with min_fetch_size = 16:
@@ -446,6 +498,7 @@ impl ObjectStore for CachingObjectStore {
         let buf_start = range.start - offset;
         let buf_end = result.len().min(range.end - offset);
         let data = Bytes::copy_from_slice(&result[buf_start..buf_end]);
+        debug!("{location} {range:?} return");
         Ok(data)
     }
 
