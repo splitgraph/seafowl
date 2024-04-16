@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::{
     catalog::{DEFAULT_DB, DEFAULT_SCHEMA},
     context::SeafowlContext,
+    object_store::factory::ObjectStoreFactory,
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
 use datafusion::execution::context::SessionState;
@@ -18,7 +19,6 @@ use deltalake::storage::factories;
 use metrics::describe_counter;
 #[cfg(feature = "metrics")]
 use metrics_exporter_prometheus::PrometheusBuilder;
-use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
 #[cfg(feature = "catalog-postgres")]
 use crate::repository::postgres::PostgresRepository;
@@ -26,15 +26,11 @@ use crate::repository::postgres::PostgresRepository;
 use crate::catalog::{external::ExternalStore, metastore::Metastore, CatalogError};
 
 use crate::object_store::http::add_http_object_store;
-use crate::object_store::wrapped::InternalObjectStore;
+
 #[cfg(feature = "remote-tables")]
 use datafusion_remote_tables::factory::RemoteTableFactory;
-#[cfg(feature = "object-store-s3")]
-use object_store::aws::AmazonS3Builder;
-use object_store::gcp::GoogleCloudStorageBuilder;
-use url::Url;
 
-use super::schema::{self, ObjectCacheProperties, GCS, MEBIBYTES, MEMORY_FRACTION, S3};
+use super::schema::{self, MEBIBYTES, MEMORY_FRACTION};
 
 #[cfg(feature = "metrics")]
 pub const HTTP_REQUESTS: &str = "http_requests";
@@ -44,7 +40,7 @@ pub const GRPC_REQUESTS: &str = "grpc_requests";
 
 async fn build_metastore(
     config: &schema::SeafowlConfig,
-    object_store: Arc<InternalObjectStore>,
+    object_stores: Arc<ObjectStoreFactory>,
 ) -> Metastore {
     // Initialize the repository
     let repository: Arc<dyn Repository> = match &config.catalog {
@@ -79,88 +75,11 @@ async fn build_metastore(
                     .expect("Error setting up remote store"),
             );
 
-            return Metastore::new_from_external(external, object_store)
-                .with_object_store_cache(config.misc.object_store_cache.clone());
+            return Metastore::new_from_external(external, object_stores);
         }
     };
 
-    Metastore::new_from_repository(repository, object_store)
-}
-
-pub fn build_object_store(
-    object_store_cfg: &schema::ObjectStore,
-    cache_properties: &Option<ObjectCacheProperties>,
-) -> Result<Arc<dyn ObjectStore>> {
-    Ok(match &object_store_cfg {
-        schema::ObjectStore::Local(schema::Local { data_dir }) => {
-            Arc::new(LocalFileSystem::new_with_prefix(data_dir)?)
-        }
-        schema::ObjectStore::InMemory(_) => Arc::new(InMemory::new()),
-        #[cfg(feature = "object-store-s3")]
-        schema::ObjectStore::S3(S3 {
-            region,
-            access_key_id,
-            secret_access_key,
-            session_token,
-            endpoint,
-            bucket,
-            ..
-        }) => {
-            let mut builder = AmazonS3Builder::new()
-                .with_region(region.clone().unwrap_or_default())
-                .with_bucket_name(bucket)
-                .with_allow_http(true);
-
-            if let Some(endpoint) = endpoint {
-                builder = builder.with_endpoint(endpoint);
-            }
-
-            if let (Some(access_key_id), Some(secret_access_key)) =
-                (&access_key_id, &secret_access_key)
-            {
-                builder = builder
-                    .with_access_key_id(access_key_id)
-                    .with_secret_access_key(secret_access_key);
-
-                if let Some(token) = session_token {
-                    builder = builder.with_token(token)
-                }
-            } else {
-                builder = builder.with_skip_signature(true)
-            }
-
-            let store = builder.build()?;
-
-            if let Some(props) = cache_properties {
-                props.wrap_store(Arc::new(store))
-            } else {
-                Arc::new(store)
-            }
-        }
-        #[cfg(feature = "object-store-gcs")]
-        schema::ObjectStore::GCS(GCS {
-            bucket,
-            google_application_credentials,
-            ..
-        }) => {
-            let gcs_builder: GoogleCloudStorageBuilder =
-                GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
-
-            let gcs_builder = if let Some(path) = google_application_credentials {
-                gcs_builder.with_service_account_path(path)
-            } else {
-                gcs_builder
-            };
-
-            let store = gcs_builder.build()?;
-
-            if let Some(props) = cache_properties {
-                props.wrap_store(Arc::new(store))
-            } else {
-                Arc::new(store)
-            }
-        }
-    })
+    Metastore::new_from_repository(repository, object_stores)
 }
 
 // Construct the session state and register additional table factories besides the default ones for
@@ -216,31 +135,15 @@ pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext>
     let state = build_state_with_table_factories(session_config, Arc::new(runtime_env));
     let context = SessionContext::new_with_state(state);
 
-    // We're guaranteed by config validation that this is Some
-    let object_store_cfg = cfg.object_store.clone().unwrap();
-    let object_store =
-        build_object_store(&object_store_cfg, &cfg.misc.object_store_cache)?;
-    let internal_object_store = Arc::new(InternalObjectStore::new(
-        object_store.clone(),
-        object_store_cfg,
-    ));
+    let object_stores = Arc::new(ObjectStoreFactory::new_from_config(&cfg)?);
 
     // Register the HTTP object store for external tables
     add_http_object_store(&context, &cfg.misc.ssl_cert_file);
 
-    let metastore = build_metastore(&cfg, internal_object_store.clone()).await;
+    let metastore = build_metastore(&cfg, object_stores.clone()).await;
 
-    // Register the metastore as an object store factory for all relevant schemes/urls
-    // NB: this never actually gets used, it serves only to fetch the known schemes
-    // inside delta-rs in `resolve_uri_type`
-    factories().insert(
-        internal_object_store.root_uri.clone(),
-        Arc::new(metastore.clone()),
-    );
-    for url in ["s3://", "gs://"] {
-        let url = Url::parse(url).unwrap();
-        factories().insert(url, Arc::new(metastore.clone()));
-    }
+    // Register the object store factory for all relevant schemes/urls
+    object_stores.register(factories());
 
     // Create default DB/collection
     if let Err(CatalogError::CatalogDoesNotExist { .. }) =
@@ -265,7 +168,7 @@ pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext>
         config: cfg,
         inner: context,
         metastore: Arc::new(metastore),
-        internal_object_store,
+        internal_object_store: object_stores.get_internal_store(),
         default_catalog: DEFAULT_DB.to_string(),
         default_schema: DEFAULT_SCHEMA.to_string(),
     })
