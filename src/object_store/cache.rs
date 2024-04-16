@@ -3,7 +3,7 @@
 /// with some additions to weigh it by the file size.
 use crate::config::schema::str_to_hex_hash;
 use async_trait::async_trait;
-use bytes::{BufMut, Bytes};
+use bytes::{Buf, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use moka::future::{Cache, CacheBuilder, FutureExt};
 use moka::notification::RemovalCause;
@@ -239,8 +239,8 @@ impl CachingObjectStore {
         path: &object_store::path::Path,
         start_chunk: usize,
         end_chunk: usize,
-    ) -> object_store::Result<Vec<u8>> {
-        let mut result = Vec::with_capacity(
+    ) -> object_store::Result<Bytes> {
+        let mut result = BytesMut::with_capacity(
             (end_chunk.saturating_sub(start_chunk) + 1) * self.min_fetch_size as usize,
         );
 
@@ -287,7 +287,7 @@ impl CachingObjectStore {
                 let mut batch_data =
                     self.inner.get_range(path, batch_range.clone()).await?;
                 debug!("{path} {batch_range:?} fetched");
-                result.put(batch_data.clone());
+                result.extend_from_slice(&batch_data);
 
                 for key in &chunk_batch {
                     // Split the next chunk from the batch
@@ -305,11 +305,11 @@ impl CachingObjectStore {
 
             // Finally append the current chunk data (if not included in the batch above).
             if let Some(data) = chunk_data {
-                result.put(data);
+                result.extend_from_slice(&data);
             }
         }
 
-        Ok(result)
+        Ok(result.into())
     }
 
     async fn cache_chunk_data(&self, key: CacheKey, data: Bytes) {
@@ -416,15 +416,14 @@ impl ObjectStore for CachingObjectStore {
         //  - range.end == 65 (get bytes 0..64 exclusive) -> final chunk is 64 / 16 = 4 (64..72 exclusive)
         let end_chunk = (range.end - 1) / self.min_fetch_size as usize;
 
-        let result = self
+        let mut data = self
             .get_chunk_range(location, start_chunk, end_chunk)
             .await?;
 
         // Finally trim away the expanded range from the chunks that are outside the requested range
-        let offset = start_chunk * self.min_fetch_size as usize;
-        let buf_start = range.start - offset;
-        let buf_end = result.len().min(range.end - offset);
-        let data = Bytes::copy_from_slice(&result[buf_start..buf_end]);
+        let offset = range.start - start_chunk * self.min_fetch_size as usize;
+        data.advance(offset);
+        data.truncate(range.end - range.start);
         debug!("{location} {range:?} return");
         Ok(data)
     }
