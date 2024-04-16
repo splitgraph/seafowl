@@ -18,7 +18,6 @@ use std::fmt::{Debug, Formatter};
 
 use std::fs::remove_dir_all;
 use std::io;
-use std::io::ErrorKind;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -45,12 +44,10 @@ impl CacheFileManager {
         let mut path = self.base_path.to_path_buf();
         path.push(cache_key.as_filename());
 
-        // Should this happen normally?
+        // TODO: when does this happen?
         if path.exists() {
-            return Err(io::Error::new(
-                ErrorKind::Other,
-                "Internal error: cached file path already exists",
-            ));
+            debug!("{cache_key:?} file already exists, skipping write");
+            return Ok(path.clone());
         }
 
         tokio::fs::write(&path, data.as_ref()).await?;
@@ -236,7 +233,7 @@ impl CachingObjectStore {
     /// so there is no guarantee that another thread won't duplicate some of the requests.
     async fn get_chunk_range(
         &self,
-        path: &object_store::path::Path,
+        location: &object_store::path::Path,
         start_chunk: usize,
         end_chunk: usize,
     ) -> object_store::Result<Bytes> {
@@ -250,7 +247,7 @@ impl CachingObjectStore {
                 ..((chunk + 1) * self.min_fetch_size as usize);
 
             let key = CacheKey {
-                path: path.to_owned(),
+                path: location.to_owned(),
                 range: chunk_range.clone(),
             };
 
@@ -262,17 +259,29 @@ impl CachingObjectStore {
                 }
                 Some(value) => {
                     // Now get the cache value for the current chunk
-                    let chunk_data = match value {
+                    match value {
                         CacheValue::Memory(data) => {
                             debug!("Cache value for {key:?} fetched from memory");
-                            data.clone()
+                            Some(data.clone())
                         }
                         CacheValue::File(path, _) => {
-                            debug!("Cache value for {key:?} fetched from the file");
-                            self.file_manager.read_file(path).await.unwrap()
+                            debug!("Cache value for {key:?} fetching from the file");
+                            match self.file_manager.read_file(path).await {
+                                Ok(data) => Some(data),
+                                Err(err) => {
+                                    warn!(
+                                        "Re-downloading cache value for {key:?}: {err}"
+                                    );
+                                    let data = self
+                                        .inner
+                                        .get_range(location, chunk_range.clone())
+                                        .await?;
+                                    self.cache_chunk_data(key, data.clone()).await;
+                                    Some(data)
+                                }
+                            }
                         }
-                    };
-                    Some(chunk_data)
+                    }
                 }
             };
 
@@ -283,10 +292,10 @@ impl CachingObjectStore {
                 let last = chunk_batch.last().unwrap();
 
                 let batch_range = first.range.start..last.range.end;
-                debug!("{path} {batch_range:?} fetching");
+                debug!("{location}-{batch_range:?} fetching");
                 let mut batch_data =
-                    self.inner.get_range(path, batch_range.clone()).await?;
-                debug!("{path} {batch_range:?} fetched");
+                    self.inner.get_range(location, batch_range.clone()).await?;
+                debug!("{location}-{batch_range:?} fetched");
                 result.extend_from_slice(&batch_data);
 
                 for key in &chunk_batch {
@@ -408,7 +417,7 @@ impl ObjectStore for CachingObjectStore {
         location: &object_store::path::Path,
         range: Range<usize>,
     ) -> object_store::Result<Bytes> {
-        debug!("{location} {range:?} get_range");
+        debug!("{location}-{range:?} get_range");
         // Expand the range to the next max_fetch_size (+ alignment)
         let start_chunk = range.start / self.min_fetch_size as usize;
         // The final chunk to fetch (inclusively). E.g. with min_fetch_size = 16:
@@ -424,7 +433,7 @@ impl ObjectStore for CachingObjectStore {
         let offset = range.start - start_chunk * self.min_fetch_size as usize;
         data.advance(offset);
         data.truncate(range.end - range.start);
-        debug!("{location} {range:?} return");
+        debug!("{location}-{range:?} return");
         Ok(data)
     }
 
