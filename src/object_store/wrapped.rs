@@ -309,8 +309,8 @@ impl ObjectStore for InternalObjectStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::context::build_object_store;
     use crate::config::schema::{ObjectStore, S3};
+    use crate::object_store::factory::build_object_store;
     use crate::object_store::wrapped::InternalObjectStore;
     use datafusion::common::Result;
     use rstest::rstest;

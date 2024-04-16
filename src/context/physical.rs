@@ -1,6 +1,5 @@
 use super::delta::CreateDeltaTableDetails;
 use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
-use crate::config::context::build_object_store;
 use crate::config::schema;
 use crate::config::schema::{GCS, S3};
 use crate::context::delta::plan_to_object_store;
@@ -9,6 +8,7 @@ use crate::nodes::{
     ConvertTable, CreateFunction, CreateTable, DropFunction, RenameTable,
     SeafowlExtensionNode, Vacuum,
 };
+use crate::object_store::factory::build_object_store;
 use crate::object_store::http::try_prepare_http_url;
 use crate::provider::project_expressions;
 use crate::utils::gc_databases;
