@@ -5454,7 +5454,6 @@ dependencies = [
  "metrics-exporter-prometheus",
  "moka",
  "object_store",
- "parking_lot",
  "percent-encoding",
  "prost",
  "rand 0.8.5",

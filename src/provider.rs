@@ -2,6 +2,7 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 
+use dashmap::DashMap;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::physical_expr::expressions::{case, cast, col};
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
@@ -18,7 +19,6 @@ use datafusion_common::DFSchema;
 use datafusion_expr::{expr::Alias, Expr};
 use deltalake::DeltaTable;
 
-use parking_lot::RwLock;
 use tracing::warn;
 
 use crate::repository::interface::FunctionId;
@@ -58,8 +58,7 @@ impl CatalogProvider for SeafowlDatabase {
 
 pub struct SeafowlSchema {
     pub name: Arc<str>,
-    // TODO: consider using DashMap instead of RwLock<HashMap<_>>: https://github.com/xacrimon/conc-map-bench
-    pub tables: RwLock<HashMap<Arc<str>, Arc<dyn TableProvider>>>,
+    pub tables: DashMap<Arc<str>, Arc<dyn TableProvider>>,
 }
 
 #[async_trait]
@@ -70,9 +69,8 @@ impl SchemaProvider for SeafowlSchema {
 
     fn table_names(&self) -> Vec<String> {
         self.tables
-            .read()
-            .keys()
-            .map(|s| s.to_string())
+            .iter()
+            .map(|s| s.key().to_string())
             .collect::<Vec<_>>()
     }
 
@@ -86,7 +84,7 @@ impl SchemaProvider for SeafowlSchema {
         // Ultimately though, since the map gets re-created for each query the only point in
         // updating the existing table is to optimize potential multi-lookups during processing of
         // a single query.
-        let mut delta_table = match self.tables.read().get(name) {
+        let mut delta_table = match self.tables.get(name) {
             None => return None,
             Some(table) => match table.as_any().downcast_ref::<DeltaTable>() {
                 // This shouldn't happen since we store only DeltaTable's in the map
@@ -110,7 +108,7 @@ impl SchemaProvider for SeafowlSchema {
         }
 
         let table = Arc::from(delta_table) as Arc<dyn TableProvider>;
-        self.tables.write().insert(Arc::from(name), table.clone());
+        self.tables.insert(Arc::from(name), table.clone());
         Some(table)
     }
 
@@ -126,11 +124,11 @@ impl SchemaProvider for SeafowlSchema {
             )));
         }
 
-        Ok(self.tables.write().insert(Arc::from(name), table))
+        Ok(self.tables.insert(Arc::from(name), table))
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        self.tables.read().contains_key(name)
+        self.tables.contains_key(name)
     }
 }
 
