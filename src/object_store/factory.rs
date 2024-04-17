@@ -1,12 +1,9 @@
 /// Contains logic for constructing and caching object stores for various
 /// purposes, including wrapping them in a bunch of layers for Delta Lake,
 /// HTTP object stores, caching etc
-use std::{
-    collections::HashMap,
-    hash::Hash,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, hash::Hash, sync::Arc};
 
+use dashmap::DashMap;
 use deltalake::{
     logstore::{default_logstore, LogStore},
     storage::{FactoryRegistry, ObjectStoreRef, StorageOptions},
@@ -117,7 +114,7 @@ impl Hash for StoreCacheKey {
 
 pub struct ObjectStoreFactory {
     default_store: Arc<InternalObjectStore>,
-    custom_stores: RwLock<HashMap<StoreCacheKey, Arc<dyn ObjectStore>>>,
+    custom_stores: DashMap<StoreCacheKey, Arc<dyn ObjectStore>>,
     object_store_cache: Option<ObjectCacheProperties>,
 }
 
@@ -137,7 +134,7 @@ impl ObjectStoreFactory {
 
         Ok(Self {
             default_store: internal_object_store,
-            custom_stores: RwLock::new(HashMap::new()),
+            custom_stores: DashMap::new(),
             object_store_cache: config.misc.object_store_cache.clone(),
         })
     }
@@ -164,8 +161,8 @@ impl ObjectStoreFactory {
                 url: url.clone(),
                 options,
             };
-            let mut guard = self.custom_stores.write().unwrap();
-            match guard.get(&key) {
+
+            match self.custom_stores.get_mut(&key) {
                 Some(store) => store.clone(),
                 None => {
                     let mut store = parse_url_opts(&key.url, &key.options)?.0.into();
@@ -177,7 +174,7 @@ impl ObjectStoreFactory {
                         // TODO: share the same cache across all stores
                         store = cache.wrap_store(store);
                     }
-                    guard.insert(key, store.clone());
+                    self.custom_stores.insert(key, store.clone());
                     store
                 }
             }
