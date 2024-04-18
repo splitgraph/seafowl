@@ -1,11 +1,13 @@
 use std::{any::Any, collections::HashMap, sync::Arc};
 
+use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 
 use dashmap::DashMap;
-use datafusion::execution::context::ExecutionProps;
+use datafusion::execution::context::{ExecutionProps, SessionState};
 use datafusion::physical_expr::expressions::{case, cast, col};
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::{
     arrow::datatypes::Schema as ArrowSchema,
     catalog::{
@@ -15,8 +17,9 @@ use datafusion::{
     common::{DataFusionError, Result},
     datasource::TableProvider,
 };
-use datafusion_common::DFSchema;
+use datafusion_common::{DFSchema, Statistics};
 use datafusion_expr::{expr::Alias, Expr};
+use datafusion_expr::{LogicalPlan, TableProviderFilterPushDown, TableType};
 use deltalake::DeltaTable;
 
 use tracing::warn;
@@ -129,6 +132,69 @@ impl SchemaProvider for SeafowlSchema {
 
     fn table_exist(&self, name: &str) -> bool {
         self.tables.contains_key(name)
+    }
+}
+
+pub struct InstrumentingDeltaTable {
+    inner: DeltaTable,
+}
+
+#[async_trait]
+impl TableProvider for InstrumentingDeltaTable {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        TableProvider::schema(&self.inner)
+    }
+
+    fn table_type(&self) -> TableType {
+        self.inner.table_type()
+    }
+
+    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        self.inner.get_logical_plan()
+    }
+
+    async fn scan(
+        &self,
+        state: &SessionState,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // i think we need to make a brand new DeltaTable here because we
+        // don't have access to the DeltaScanBuilder and can't inject a different LogStore
+        // with a separate metrics collector
+
+        // but in that case, schema and statistics already expect the table to be loaded
+        // and we don't want to load it all the time
+
+        // so uuh we have a get_loaded_table in this struct that loads it once
+        // and another one that has to load it every scan because we can't get at the
+        // DeltaScanBuilder otherwise
+
+        // here's another reason why this won't work: the object stores are registered
+        // inside of DF's global object store registry and DeltaTable just makes a ParquetScan
+        // that references that object store "hostname", i.e. "delta-rs://{}-{}{}", with the
+        // full path to the table root - all our attempts to inject a custom object store for each
+        // instance of a scan don't actually do anything (it's hashed to the same table name)
+
+        // so uu FUCK
+
+        self.inner.scan(state, projection, filters, limit).await
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        self.inner.supports_filters_pushdown(filters)
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        self.inner.statistics()
     }
 }
 
