@@ -17,7 +17,7 @@ use url::Url;
 
 use crate::config::schema::{self, ObjectCacheProperties, SeafowlConfig, GCS, S3};
 
-use super::wrapped::InternalObjectStore;
+use super::{cache::CachingObjectStore, wrapped::InternalObjectStore};
 
 pub fn build_object_store(
     object_store_cfg: &schema::ObjectStore,
@@ -64,7 +64,7 @@ pub fn build_object_store(
             let store = builder.build()?;
 
             if let Some(props) = cache_properties {
-                props.wrap_store(Arc::new(store))
+                Arc::new(CachingObjectStore::new_from_config(props, Arc::new(store)))
             } else {
                 Arc::new(store)
             }
@@ -87,7 +87,7 @@ pub fn build_object_store(
             let store = gcs_builder.build()?;
 
             if let Some(props) = cache_properties {
-                props.wrap_store(Arc::new(store))
+                Arc::new(CachingObjectStore::new_from_config(props, Arc::new(store)))
             } else {
                 Arc::new(store)
             }
@@ -172,7 +172,8 @@ impl ObjectStoreFactory {
                     {
                         // Wrap the non-local store with the caching layer
                         // TODO: share the same cache across all stores
-                        store = cache.wrap_store(store);
+                        store =
+                            Arc::new(CachingObjectStore::new_from_config(cache, store))
                     }
                     self.custom_stores.insert(key, store.clone());
                     store

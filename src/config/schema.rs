@@ -1,24 +1,22 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+
 use std::{
     fmt::{self, Display},
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use crate::catalog::DEFAULT_SCHEMA;
 use crate::object_store::cache::{
-    CachingObjectStore, DEFAULT_CACHE_CAPACITY, DEFAULT_CACHE_ENTRY_TTL,
-    DEFAULT_MIN_FETCH_SIZE,
+    DEFAULT_CACHE_CAPACITY, DEFAULT_CACHE_ENTRY_TTL, DEFAULT_MIN_FETCH_SIZE,
 };
 use config::{Config, ConfigError, Environment, File, FileFormat, Map};
 use hex::encode;
-use object_store::DynObjectStore;
+
 use rand::distributions::{Alphanumeric, DistString};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqliteJournalMode;
-use tempfile::TempDir;
+
 use tracing::{info, warn};
 
 pub const DEFAULT_DATA_DIR: &str = "seafowl-data";
@@ -394,21 +392,6 @@ impl Default for ObjectCacheProperties {
             min_fetch_size: DEFAULT_MIN_FETCH_SIZE,
             ttl: DEFAULT_CACHE_ENTRY_TTL.as_secs(),
         }
-    }
-}
-
-impl ObjectCacheProperties {
-    pub fn wrap_store(&self, inner: Arc<DynObjectStore>) -> Arc<DynObjectStore> {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.into_path();
-
-        Arc::new(CachingObjectStore::new(
-            inner,
-            &path,
-            self.min_fetch_size,
-            self.capacity,
-            Duration::from_secs(self.ttl),
-        ))
     }
 }
 
