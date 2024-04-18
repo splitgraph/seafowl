@@ -5,6 +5,7 @@ use crate::config::schema::{str_to_hex_hash, ObjectCacheProperties};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
 use futures::stream::BoxStream;
+use metrics::{counter, describe_counter, Counter};
 use moka::future::{Cache, CacheBuilder, FutureExt};
 use moka::notification::RemovalCause;
 use object_store::{
@@ -130,6 +131,35 @@ impl Debug for CacheValue {
     }
 }
 
+#[derive(Clone)]
+pub struct CachingObjectStoreMetrics {
+    get_range_calls: Counter,
+}
+
+impl Default for CachingObjectStoreMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CachingObjectStoreMetrics {
+    pub fn new() -> Self {
+        describe_counter!(
+            "seafowl_object_store_cache_requests_total",
+            "Total get_range requests to object store before caching"
+        );
+        let get_range_calls = counter!("seafowl_object_store_cache_requests_total");
+
+        Self { get_range_calls }
+    }
+}
+
+impl Debug for CachingObjectStoreMetrics {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachingObjectStoreMetrics").finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CachingObjectStore {
     // File manager, responsible for storing/retrieving files
@@ -145,6 +175,7 @@ pub struct CachingObjectStore {
     cache: Cache<CacheKey, CacheValue>,
 
     inner: Arc<dyn ObjectStore>,
+    metrics: CachingObjectStoreMetrics,
 }
 
 impl CachingObjectStore {
@@ -212,6 +243,7 @@ impl CachingObjectStore {
             max_cache_size,
             cache,
             inner,
+            metrics: CachingObjectStoreMetrics::new(),
         }
     }
 
@@ -229,6 +261,9 @@ impl CachingObjectStore {
             max_cache_size: other.max_cache_size,
             cache: other.cache.clone(),
             inner,
+            // Each metric is an Arc and we accumulate them across
+            // all object stores, so it's fine to just clone them
+            metrics: other.metrics.clone(),
         }
     }
 
@@ -434,6 +469,8 @@ impl ObjectStore for CachingObjectStore {
         location: &object_store::path::Path,
         range: Range<usize>,
     ) -> object_store::Result<Bytes> {
+        self.metrics.get_range_calls.increment(1);
+
         debug!("{location}-{range:?} get_range");
         // Expand the range to the next max_fetch_size (+ alignment)
         let start_chunk = range.start / self.min_fetch_size as usize;
@@ -514,6 +551,8 @@ mod tests {
         config::schema::str_to_hex_hash, object_store::cache::CachingObjectStore,
     };
     use itertools::Itertools;
+    use metrics::with_local_recorder;
+    use metrics_exporter_prometheus::PrometheusBuilder;
     use object_store::{path::Path, ObjectStore};
     use std::path::Path as FSPath;
     use std::sync::Arc;
@@ -604,7 +643,9 @@ mod tests {
     // but we don't know that since we don't get Content-Length on this code path.
     #[tokio::test]
     async fn test_range_coalescing(#[case] range: Range<usize>) {
-        let store = make_cached_object_store_small_fetch();
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let store = with_local_recorder(&recorder, make_cached_object_store_small_fetch);
+
         let (server, body) = make_mock_parquet_server(true, true).await;
         let server_uri = server.uri();
         let server_uri = server_uri.strip_prefix("http://").unwrap();
@@ -615,6 +656,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, body[range.start..min(body.len(), range.end)]);
+
+        let expected_metrics = "# HELP seafowl_object_store_cache_requests_total Total get_range requests to object store before caching
+# TYPE seafowl_object_store_cache_requests_total counter
+seafowl_object_store_cache_requests_total 1
+
+";
+
+        assert_eq!(recorder.handle().render(), expected_metrics);
     }
 
     fn assert_ranges_in_cache(basedir: &FSPath, url: &str, chunks: Vec<u32>) {
