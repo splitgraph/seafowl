@@ -697,18 +697,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::skip_0_partial_1_full_2_3(25..64)]
-    #[case::part_of_chunk_0(1..2)]
-    #[case::fetch_nothing_at_the_chunk_boundary(16..16)]
-    #[case::fetch_one_byte_at_the_chunk_boundary(16..17)]
-    #[case::part_of_chunk_0_part_of_chunk_1(10..20)]
-    #[case::reaches_the_end_of_the_body(10..484)]
-    #[case::goes_beyond_the_end_of_the_body(400..490)]
+    #[case::skip_0_partial_1_full_2_3(25..64, 48)]
+    #[case::part_of_chunk_0(1..2, 16)]
+    #[case::fetch_nothing_at_the_chunk_boundary(16..16, 0)]
+    #[case::fetch_one_byte_at_the_chunk_boundary(16..17, 16)]
+    #[case::part_of_chunk_0_part_of_chunk_1(10..20, 32)]
+    #[case::reaches_the_end_of_the_body(10..484, 496)]
+    #[case::goes_beyond_the_end_of_the_body(400..490, 96)]
     // NB: going more than one chunk beyond the end of the body still makes it make
     // a Range request for e.g. 512 -- 527, which breaks the mock and also is a waste,
     // but we don't know that since we don't get Content-Length on this code path.
     #[tokio::test]
-    async fn test_range_coalescing(#[case] range: Range<usize>) {
+    async fn test_range_coalescing(#[case] range: Range<usize>, #[case] total_fetched: u64) {
         let recorder = PrometheusBuilder::new().build_recorder();
         let store = with_local_recorder(&recorder, make_cached_object_store_small_fetch);
 
@@ -736,7 +736,7 @@ mod tests {
         assert_metric(
             &recorder,
             GET_RANGE_CACHE_MISSES_BYTES,
-            (range.end - range.start).try_into().unwrap(),
+            total_fetched,
         );
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 0);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
