@@ -708,7 +708,10 @@ mod tests {
     // a Range request for e.g. 512 -- 527, which breaks the mock and also is a waste,
     // but we don't know that since we don't get Content-Length on this code path.
     #[tokio::test]
-    async fn test_range_coalescing(#[case] range: Range<usize>, #[case] total_fetched: u64) {
+    async fn test_range_coalescing(
+        #[case] range: Range<usize>,
+        #[case] total_fetched: u64,
+    ) {
         let recorder = PrometheusBuilder::new().build_recorder();
         let store = with_local_recorder(&recorder, make_cached_object_store_small_fetch);
 
@@ -733,11 +736,7 @@ mod tests {
         // These are all going to be cache misses since we create the store
         // from scratch every time
         // print!("{}", recorder.handle().render());
-        assert_metric(
-            &recorder,
-            GET_RANGE_CACHE_MISSES_BYTES,
-            total_fetched,
-        );
+        assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, total_fetched);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 0);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
     }
@@ -760,7 +759,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_caching_eviction() {
-        let store = make_cached_object_store_small_disk_size();
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let store =
+            with_local_recorder(&recorder, make_cached_object_store_small_disk_size);
+
         let (server, body) = make_mock_parquet_server(true, true).await;
         let server_uri = server.uri();
         let server_uri = server_uri.strip_prefix("http://").unwrap();
@@ -785,6 +787,10 @@ mod tests {
         assert_eq!(bytes, body[25..64]);
         store.cache.run_pending_tasks().await;
 
+        assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 48);
+        assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 0);
+        assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
+
         // Mock has had 1 request that coalesced 3 chunks
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         assert_eq!(store.cache.entry_count(), 3);
@@ -805,6 +811,11 @@ mod tests {
         assert_eq!(store.cache.entry_count(), 3);
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3]);
 
+        // NB: disk/memory hits round to the chunk size
+        assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 48);
+        assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 16);
+        assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
+
         // Request 33..66 (chunks 2, 3, 4)
         let bytes = store
             .get_range(&Path::from(url.as_str()), 33..66)
@@ -816,6 +827,10 @@ mod tests {
         // One extra request to fetch chunk 4
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
         assert_eq!(store.cache.entry_count(), 4);
+
+        assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 64);
+        assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 48);
+        assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
 
         let mut on_disk_keys = wait_all_ranges_on_disk(on_disk_keys, &store).await;
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3, 4]);
@@ -830,6 +845,10 @@ mod tests {
 
         assert_eq!(server.received_requests().await.unwrap().len(), 3);
         assert_eq!(store.cache.entry_count(), 4);
+
+        assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 80);
+        assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 48);
+        assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
 
         on_disk_keys.retain(|k| k.range.start >= 32); // The first chunk got LRU-evicted
         wait_all_ranges_on_disk(on_disk_keys, &store).await;
