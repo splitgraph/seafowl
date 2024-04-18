@@ -1,7 +1,7 @@
 /// On-disk byte-range-aware cache for HTTP requests
 /// Partially inspired by https://docs.rs/moka/latest/moka/future/struct.Cache.html#example-eviction-listener,
 /// with some additions to weigh it by the file size.
-use crate::config::schema::str_to_hex_hash;
+use crate::config::schema::{str_to_hex_hash, ObjectCacheProperties};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
 use futures::stream::BoxStream;
@@ -11,6 +11,7 @@ use object_store::{
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions,
     PutResult,
 };
+use tempfile::TempDir;
 use tracing::{debug, error, warn};
 
 use std::fmt::Display;
@@ -165,6 +166,22 @@ impl CachingObjectStore {
                 error!("Failed to remove a data file at {path:?}: {:?}", e);
             }
         }
+    }
+
+    pub fn new_from_config(
+        config: &ObjectCacheProperties,
+        inner: Arc<dyn ObjectStore>,
+    ) -> Self {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.into_path();
+
+        Self::new(
+            inner,
+            &path,
+            config.min_fetch_size,
+            config.capacity,
+            Duration::from_secs(config.ttl),
+        )
     }
 
     pub fn new(
