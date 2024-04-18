@@ -131,9 +131,20 @@ impl Debug for CacheValue {
     }
 }
 
+const GET_RANGE_CALLS: &str = "seafowl_object_store_cache_requests_total";
+const GET_RANGE_BYTES: &str = "seafowl_object_store_cache_requested_bytes";
+const GET_RANGE_CACHE_HITS_DISK_BYTES: &str = "seafowl_object_store_cache_hit_disk_bytes";
+const GET_RANGE_CACHE_HITS_MEMORY_BYTES: &str =
+    "seafowl_object_store_cache_hit_memory_bytes";
+const GET_RANGE_CACHE_MISSES_BYTES: &str = "seafowl_object_store_cache_cache_miss_bytes";
+
 #[derive(Clone)]
 pub struct CachingObjectStoreMetrics {
     get_range_calls: Counter,
+    get_range_bytes: Counter,
+    get_range_cache_hits_disk_bytes: Counter,
+    get_range_cache_hits_memory_bytes: Counter,
+    get_range_cache_misses_bytes: Counter,
 }
 
 impl Default for CachingObjectStoreMetrics {
@@ -145,12 +156,35 @@ impl Default for CachingObjectStoreMetrics {
 impl CachingObjectStoreMetrics {
     pub fn new() -> Self {
         describe_counter!(
-            "seafowl_object_store_cache_requests_total",
+            GET_RANGE_CALLS,
             "Total get_range requests to object store before caching"
         );
-        let get_range_calls = counter!("seafowl_object_store_cache_requests_total");
+        describe_counter!(
+            GET_RANGE_BYTES,
+            "Total bytes requested from the object store before caching"
+        );
+        describe_counter!(
+            GET_RANGE_CACHE_HITS_DISK_BYTES,
+            "Total bytes read from disk (cache hit)"
+        );
+        describe_counter!(
+            GET_RANGE_CACHE_HITS_MEMORY_BYTES,
+            "Total bytes read from memory (cache hit)"
+        );
+        describe_counter!(
+            GET_RANGE_CACHE_MISSES_BYTES,
+            "Total bytes read from object store (cache misses)"
+        );
 
-        Self { get_range_calls }
+        Self {
+            get_range_calls: counter!(GET_RANGE_CALLS),
+            get_range_bytes: counter!(GET_RANGE_BYTES),
+            get_range_cache_hits_disk_bytes: counter!(GET_RANGE_CACHE_HITS_DISK_BYTES),
+            get_range_cache_hits_memory_bytes: counter!(
+                GET_RANGE_CACHE_HITS_MEMORY_BYTES
+            ),
+            get_range_cache_misses_bytes: counter!(GET_RANGE_CACHE_MISSES_BYTES),
+        }
     }
 }
 
@@ -314,12 +348,20 @@ impl CachingObjectStore {
                     match value {
                         CacheValue::Memory(data) => {
                             debug!("Cache value for {key:?} fetched from memory");
+                            self.metrics
+                                .get_range_cache_hits_memory_bytes
+                                .increment(data.len().try_into().unwrap());
                             Some(data.clone())
                         }
                         CacheValue::File(path, _) => {
                             debug!("Cache value for {key:?} fetching from the file");
                             match self.file_manager.read_file(path).await {
-                                Ok(data) => Some(data),
+                                Ok(data) => {
+                                    self.metrics
+                                        .get_range_cache_hits_disk_bytes
+                                        .increment(data.len().try_into().unwrap());
+                                    Some(data)
+                                }
                                 Err(err) => {
                                     warn!(
                                         "Re-downloading cache value for {key:?}: {err}"
@@ -328,6 +370,10 @@ impl CachingObjectStore {
                                         .inner
                                         .get_range(location, chunk_range.clone())
                                         .await?;
+
+                                    self.metrics
+                                        .get_range_cache_misses_bytes
+                                        .increment(data.len().try_into().unwrap());
                                     self.cache_chunk_data(key, data.clone()).await;
                                     Some(data)
                                 }
@@ -347,6 +393,10 @@ impl CachingObjectStore {
                 debug!("{location}-{batch_range:?} fetching");
                 let mut batch_data =
                     self.inner.get_range(location, batch_range.clone()).await?;
+
+                self.metrics
+                    .get_range_cache_misses_bytes
+                    .increment(batch_data.len().try_into().unwrap());
                 debug!("{location}-{batch_range:?} fetched");
                 result.extend_from_slice(&batch_data);
 
@@ -470,6 +520,9 @@ impl ObjectStore for CachingObjectStore {
         range: Range<usize>,
     ) -> object_store::Result<Bytes> {
         self.metrics.get_range_calls.increment(1);
+        self.metrics
+            .get_range_bytes
+            .increment((range.end - range.start).try_into().unwrap());
 
         debug!("{location}-{range:?} get_range");
         // Expand the range to the next max_fetch_size (+ alignment)
@@ -552,7 +605,7 @@ mod tests {
     };
     use itertools::Itertools;
     use metrics::with_local_recorder;
-    use metrics_exporter_prometheus::PrometheusBuilder;
+    use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
     use object_store::{path::Path, ObjectStore};
     use std::path::Path as FSPath;
     use std::sync::Arc;
@@ -564,6 +617,10 @@ mod tests {
     use std::{cmp::min, fs, ops::Range};
     use tempfile::TempDir;
 
+    use super::{
+        GET_RANGE_BYTES, GET_RANGE_CACHE_HITS_DISK_BYTES,
+        GET_RANGE_CACHE_HITS_MEMORY_BYTES, GET_RANGE_CACHE_MISSES_BYTES, GET_RANGE_CALLS,
+    };
     use crate::testutils::make_mock_parquet_server;
 
     fn make_cached_object_store_small_fetch() -> CachingObjectStore {
@@ -630,6 +687,15 @@ mod tests {
         }
     }
 
+    fn assert_metric(recorder: &PrometheusRecorder, key: &str, value: u64) {
+        let rendered = recorder.handle().render();
+        let metric_line = rendered
+            .lines()
+            .find(|l| l.starts_with(&format!("{key} ")))
+            .unwrap_or_else(|| panic!("no metric {key} found"));
+        assert_eq!(metric_line, format!("{key} {value}"))
+    }
+
     #[rstest]
     #[case::skip_0_partial_1_full_2_3(25..64)]
     #[case::part_of_chunk_0(1..2)]
@@ -657,13 +723,23 @@ mod tests {
             .unwrap();
         assert_eq!(result, body[range.start..min(body.len(), range.end)]);
 
-        let expected_metrics = "# HELP seafowl_object_store_cache_requests_total Total get_range requests to object store before caching
-# TYPE seafowl_object_store_cache_requests_total counter
-seafowl_object_store_cache_requests_total 1
+        assert_metric(&recorder, GET_RANGE_CALLS, 1);
+        assert_metric(
+            &recorder,
+            GET_RANGE_BYTES,
+            (range.end - range.start).try_into().unwrap(),
+        );
 
-";
-
-        assert_eq!(recorder.handle().render(), expected_metrics);
+        // These are all going to be cache misses since we create the store
+        // from scratch every time
+        // print!("{}", recorder.handle().render());
+        assert_metric(
+            &recorder,
+            GET_RANGE_CACHE_MISSES_BYTES,
+            (range.end - range.start).try_into().unwrap(),
+        );
+        assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 0);
+        assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
     }
 
     fn assert_ranges_in_cache(basedir: &FSPath, url: &str, chunks: Vec<u32>) {
