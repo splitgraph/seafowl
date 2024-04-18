@@ -19,6 +19,8 @@ services:
 
   minio:
     image: minio/minio:latest
+    depends_on:
+      - dex
     ports:
       - 9000:9000
       - 9001:9001

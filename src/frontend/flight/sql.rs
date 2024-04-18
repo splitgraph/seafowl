@@ -19,6 +19,7 @@ use prost::Message;
 use std::pin::Pin;
 use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
+use tracing::debug;
 use uuid::Uuid;
 
 #[async_trait]
@@ -28,11 +29,12 @@ impl FlightSqlService for SeafowlFlightHandler {
     // Perform authentication; for now just pass-through everything
     async fn do_handshake(
         &self,
-        _request: Request<Streaming<HandshakeRequest>>,
+        request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<
         Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
         Status,
     > {
+        debug!("Handshake request: {:?}", request.metadata());
         let result = HandshakeResponse {
             protocol_version: 0,
             payload: vec![].into(),
@@ -56,6 +58,10 @@ impl FlightSqlService for SeafowlFlightHandler {
         query: CommandGetSqlInfo,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
+        debug!(
+            "Flight SQL server metadata request: {:?}",
+            request.metadata()
+        );
         let flight_descriptor = request.into_inner();
         let ticket = Ticket::new(query.encode_to_vec());
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
@@ -80,13 +86,18 @@ impl FlightSqlService for SeafowlFlightHandler {
         // TODO: Should we use something else here (and keep that in the results map)?
         let query_id = Uuid::new_v4().to_string();
 
+        debug!(
+            "Executing query with id {query_id} for request {:?}:\n {}",
+            request.metadata(),
+            query.query,
+        );
         let schema = self
             .query_to_stream(&query.query, query_id.clone(), request.metadata())
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let ticket = TicketStatementQuery {
-            statement_handle: query_id.into(),
+            statement_handle: query_id.clone().into(),
         };
 
         let endpoint = FlightEndpoint::new()
@@ -99,6 +110,7 @@ impl FlightSqlService for SeafowlFlightHandler {
             .with_descriptor(request.into_inner());
 
         let resp = Response::new(flight_info);
+        debug!("Results for query id {query_id} ready for streaming");
         Ok(resp)
     }
 
@@ -106,11 +118,15 @@ impl FlightSqlService for SeafowlFlightHandler {
     async fn do_get_statement(
         &self,
         ticket: TicketStatementQuery,
-        _request: Request<Ticket>,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let query_id =
             String::from_utf8_lossy(ticket.statement_handle.as_ref()).to_string();
-        let batch_stream = self.fetch_stream(query_id).await?;
+        debug!(
+            "Fetching stream for query id {query_id}, request: {:?}",
+            request.metadata()
+        );
+        let batch_stream = self.fetch_stream(&query_id).await?;
         let schema = batch_stream.schema();
 
         // The Flight encoder below expects a stream where the error type on the item is a
@@ -124,6 +140,7 @@ impl FlightSqlService for SeafowlFlightHandler {
             .build(mapped_stream)
             .map_err(Status::from);
 
+        debug!("Returning stream for query id {query_id}");
         Ok(Response::new(Box::pin(stream)))
     }
 

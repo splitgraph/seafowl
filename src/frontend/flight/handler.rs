@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::metadata::MetadataMap;
 use tonic::Status;
+use tracing::debug;
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -61,8 +62,14 @@ impl SeafowlFlightHandler {
             self.context.clone()
         };
 
-        let plan = ctx.plan_query(query).await?;
-        let batch_stream = ctx.execute_stream(plan).await?;
+        let plan = ctx
+            .plan_query(query)
+            .await
+            .inspect_err(|err| debug!("Error planning query id {query_id}: {err}"))?;
+        let batch_stream = ctx
+            .execute_stream(plan)
+            .await
+            .inspect_err(|err| debug!("Error executing query id {query_id}: {err}"))?;
         let schema = batch_stream.schema();
 
         self.results.insert(query_id, Mutex::new(batch_stream));
@@ -73,14 +80,12 @@ impl SeafowlFlightHandler {
     // Get a specific stream from the map
     pub async fn fetch_stream(
         &self,
-        query_id: String,
+        query_id: &str,
     ) -> core::result::Result<SendableRecordBatchStream, Status> {
-        let (_, batch_stream_mutex) =
-            self.results
-                .remove(&query_id)
-                .ok_or(Status::not_found(format!(
-                    "No results found for query id {query_id}"
-                )))?;
+        let (_, batch_stream_mutex) = self.results.remove(query_id).ok_or_else(|| {
+            debug!("No results found for query id {query_id}");
+            Status::not_found(format!("No results found for query id {query_id}"))
+        })?;
 
         Ok(batch_stream_mutex.into_inner())
     }
