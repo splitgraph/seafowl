@@ -14,11 +14,11 @@ use crate::wasm_udf::data_types::{
     CreateFunctionVolatility,
 };
 use clade::schema::{SchemaObject, TableObject};
+use dashmap::DashMap;
 use datafusion::catalog::schema::MemorySchemaProvider;
 use datafusion::datasource::TableProvider;
 
 use deltalake::DeltaTable;
-use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -111,13 +111,13 @@ impl Metastore {
             .tables
             .into_iter()
             .map(|table| self.build_table(table, store_options))
-            .collect::<CatalogResult<HashMap<_, _>>>()?;
+            .collect::<CatalogResult<DashMap<_, _>>>()?;
 
         Ok((
             Arc::from(schema_name.clone()),
             Arc::new(SeafowlSchema {
                 name: Arc::from(schema_name),
-                tables: RwLock::new(tables),
+                tables,
             }),
         ))
     }
