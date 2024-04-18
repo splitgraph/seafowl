@@ -1,9 +1,10 @@
 /// On-disk byte-range-aware cache for HTTP requests
 /// Partially inspired by https://docs.rs/moka/latest/moka/future/struct.Cache.html#example-eviction-listener,
 /// with some additions to weigh it by the file size.
-use crate::config::schema::str_to_hex_hash;
+use crate::config::schema::{str_to_hex_hash, ObjectCacheProperties};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
+use datafusion::physical_plan::metrics::MetricsSet;
 use futures::stream::BoxStream;
 use moka::future::{Cache, CacheBuilder, FutureExt};
 use moka::notification::RemovalCause;
@@ -11,6 +12,7 @@ use object_store::{
     GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions,
     PutResult,
 };
+use tempfile::TempDir;
 use tracing::{debug, error, warn};
 
 use std::fmt::Display;
@@ -144,6 +146,8 @@ pub struct CachingObjectStore {
     cache: Cache<CacheKey, CacheValue>,
 
     inner: Arc<dyn ObjectStore>,
+
+    metrics: MetricsSet,
 }
 
 impl CachingObjectStore {
@@ -167,6 +171,22 @@ impl CachingObjectStore {
         }
     }
 
+    pub fn new_from_config(
+        config: &ObjectCacheProperties,
+        inner: Arc<dyn ObjectStore>,
+    ) -> Self {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.into_path();
+
+        Self::new(
+            inner,
+            &path,
+            config.min_fetch_size,
+            config.capacity,
+            Duration::from_secs(config.ttl),
+        )
+    }
+
     pub fn new(
         inner: Arc<dyn ObjectStore>,
         base_path: &Path,
@@ -188,6 +208,10 @@ impl CachingObjectStore {
             .time_to_live(ttl)
             .build();
 
+        let metrics = MetricsSet::new();
+
+        // TODO: register metrics here
+
         Self {
             file_manager,
             base_path: base_path.to_owned(),
@@ -195,7 +219,12 @@ impl CachingObjectStore {
             max_cache_size,
             cache,
             inner,
+            metrics,
         }
+    }
+
+    pub fn metrics(&self) -> MetricsSet {
+        self.metrics.clone()
     }
 
     /// Clone another `CachingObjectStore` instance with the same filesystem cache instance
@@ -212,6 +241,19 @@ impl CachingObjectStore {
             max_cache_size: other.max_cache_size,
             cache: other.cache.clone(),
             inner,
+            metrics: MetricsSet::new(),
+        }
+    }
+
+    pub fn clone_with_empty_metrics(&self) -> Self {
+        Self {
+            file_manager: self.file_manager.clone(),
+            base_path: self.base_path.clone(),
+            min_fetch_size: self.min_fetch_size,
+            max_cache_size: self.max_cache_size,
+            cache: self.cache.clone(),
+            inner: self.inner.clone(),
+            metrics: MetricsSet::new(),
         }
     }
 

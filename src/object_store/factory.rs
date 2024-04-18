@@ -4,6 +4,7 @@
 use std::{collections::HashMap, hash::Hash, sync::Arc};
 
 use dashmap::DashMap;
+use datafusion::physical_plan::metrics::MetricsSet;
 use deltalake::{
     logstore::{default_logstore, LogStore},
     storage::{FactoryRegistry, ObjectStoreRef, StorageOptions},
@@ -17,7 +18,7 @@ use url::Url;
 
 use crate::config::schema::{self, ObjectCacheProperties, SeafowlConfig, GCS, S3};
 
-use super::wrapped::InternalObjectStore;
+use super::{cache::CachingObjectStore, wrapped::InternalObjectStore};
 
 pub fn build_object_store(
     object_store_cfg: &schema::ObjectStore,
@@ -64,7 +65,7 @@ pub fn build_object_store(
             let store = builder.build()?;
 
             if let Some(props) = cache_properties {
-                props.wrap_store(Arc::new(store))
+                Arc::new(CachingObjectStore::new_from_config(props, Arc::new(store)))
             } else {
                 Arc::new(store)
             }
@@ -87,12 +88,65 @@ pub fn build_object_store(
             let store = gcs_builder.build()?;
 
             if let Some(props) = cache_properties {
-                props.wrap_store(Arc::new(store))
+                Arc::new(CachingObjectStore::new_from_config(props, Arc::new(store)))
             } else {
                 Arc::new(store)
             }
         }
     })
+}
+
+fn wrap_object_store(
+    store: Arc<dyn ObjectStore>,
+    table_path: &str,
+    full_location: &Url,
+) -> Arc<dyn LogStore> {
+    let prefixed_store: PrefixStore<Arc<dyn ObjectStore>> =
+        PrefixStore::new(store, table_path);
+
+    default_logstore(
+        Arc::from(prefixed_store),
+        full_location,
+        &Default::default(),
+    )
+}
+
+pub trait ScanScopedLogStoreCallback: Sync + Send {
+    /// Create a LogStore that gathers metrics for a single scan
+    /// Returns the store and a populated MetricsSet that the store will use
+    fn build(&self) -> (Arc<dyn LogStore>, MetricsSet);
+}
+
+struct CachingObjectStoreCallback {
+    template: CachingObjectStore,
+    full_location: Url,
+    table_path: String,
+}
+
+impl ScanScopedLogStoreCallback for CachingObjectStoreCallback {
+    fn build(&self) -> (Arc<dyn LogStore>, MetricsSet) {
+        // We use the same cache and the file manager across all caching object stores
+        // that wrap a certain object store, but reinitialize it with new metrics
+        // when a new scan starts.
+        let store = self.template.clone_with_empty_metrics();
+        let metrics = store.metrics();
+        (
+            wrap_object_store(Arc::new(store), &self.table_path, &self.full_location),
+            metrics,
+        )
+    }
+}
+
+struct GenericObjectStoreCallback {
+    store: Arc<dyn LogStore>,
+}
+
+impl ScanScopedLogStoreCallback for GenericObjectStoreCallback {
+    fn build(&self) -> (Arc<dyn LogStore>, MetricsSet) {
+        // For object stores that don't support instrumentation, we return
+        // an empty metrics set without anything.
+        (self.store.clone(), MetricsSet::new())
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -114,7 +168,7 @@ impl Hash for StoreCacheKey {
 
 pub struct ObjectStoreFactory {
     default_store: Arc<InternalObjectStore>,
-    custom_stores: DashMap<StoreCacheKey, Arc<dyn ObjectStore>>,
+    custom_store_callbacks: DashMap<StoreCacheKey, Arc<dyn ScanScopedLogStoreCallback>>,
     object_store_cache: Option<ObjectCacheProperties>,
 }
 
@@ -134,7 +188,7 @@ impl ObjectStoreFactory {
 
         Ok(Self {
             default_store: internal_object_store,
-            custom_stores: DashMap::new(),
+            custom_store_callbacks: DashMap::new(),
             object_store_cache: config.misc.object_store_cache.clone(),
         })
     }
@@ -150,48 +204,59 @@ impl ObjectStoreFactory {
             factories.insert(url, self.clone());
         }
     }
-    pub fn get_log_store_for_table(
+    pub fn get_log_store_callback_for_table(
         &self,
         url: Url,
         options: HashMap<String, String>,
         table_path: String,
-    ) -> Result<Arc<dyn LogStore>, object_store::Error> {
-        let store = {
+    ) -> Result<Arc<dyn ScanScopedLogStoreCallback>, object_store::Error> {
+        let full_location =
+            url.join(&table_path)
+                .map_err(|e| object_store::Error::Generic {
+                    store: "object_store_factory",
+                    source: Box::new(e),
+                })?;
+
+        let callback = {
             let key = StoreCacheKey {
                 url: url.clone(),
                 options,
             };
 
-            match self.custom_stores.get_mut(&key) {
-                Some(store) => store.clone(),
+            match self.custom_store_callbacks.get_mut(&key) {
+                Some(callback) => callback.clone(),
                 None => {
-                    let mut store = parse_url_opts(&key.url, &key.options)?.0.into();
+                    let store = parse_url_opts(&key.url, &key.options)?.0.into();
 
-                    if !(key.url.scheme() == "file" || key.url.scheme() == "memory")
+                    let callback: Arc<dyn ScanScopedLogStoreCallback> = if !(key
+                        .url
+                        .scheme()
+                        == "file"
+                        || key.url.scheme() == "memory")
                         && let Some(ref cache) = self.object_store_cache
                     {
                         // Wrap the non-local store with the caching layer
                         // TODO: share the same cache across all stores
-                        store = cache.wrap_store(store);
-                    }
-                    self.custom_stores.insert(key, store.clone());
-                    store
+                        Arc::new(CachingObjectStoreCallback {
+                            template: CachingObjectStore::new_from_config(
+                                cache,
+                                Arc::new(store),
+                            ),
+                            full_location,
+                            table_path,
+                        })
+                    } else {
+                        Arc::new(GenericObjectStoreCallback {
+                            store: wrap_object_store(store, &table_path, &full_location),
+                        })
+                    };
+
+                    self.custom_store_callbacks.insert(key, callback.clone());
+                    callback
                 }
             }
         };
-
-        let prefixed_store: PrefixStore<Arc<dyn ObjectStore>> =
-            PrefixStore::new(store, table_path.clone());
-
-        Ok(default_logstore(
-            Arc::from(prefixed_store),
-            &url.join(&table_path)
-                .map_err(|e| object_store::Error::Generic {
-                    store: "object_store_factory",
-                    source: Box::new(e),
-                })?,
-            &Default::default(),
-        ))
+        Ok(callback)
     }
 
     pub fn get_default_log_store(&self, path: &str) -> Arc<dyn LogStore> {

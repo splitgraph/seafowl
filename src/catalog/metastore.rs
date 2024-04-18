@@ -143,11 +143,12 @@ impl Metastore {
                     })?
                     .clone();
 
-                self.object_stores.get_log_store_for_table(
+                let builder = self.object_stores.get_log_store_callback_for_table(
                     Url::parse(&location)?,
                     this_store_options,
                     table.path,
-                )?
+                )?;
+                builder.build().0
             }
             // Use the configured, default, object store
             None => self.object_stores.get_default_log_store(&table.path),
