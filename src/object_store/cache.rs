@@ -5,7 +5,7 @@ use crate::config::schema::{str_to_hex_hash, ObjectCacheProperties};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
 use futures::stream::BoxStream;
-use metrics::{counter, describe_counter, Counter};
+use metrics::{counter, describe_counter, gauge, Counter, Gauge};
 use moka::future::{Cache, CacheBuilder, FutureExt};
 use moka::notification::RemovalCause;
 use object_store::{
@@ -35,11 +35,12 @@ pub const DEFAULT_CACHE_ENTRY_TTL: Duration = Duration::from_secs(3 * 60);
 #[derive(Debug)]
 struct CacheFileManager {
     base_path: PathBuf,
+    metrics: CachingObjectStoreMetrics,
 }
 
 impl CacheFileManager {
-    pub fn new(base_path: PathBuf) -> Self {
-        Self { base_path }
+    pub fn new(base_path: PathBuf, metrics: CachingObjectStoreMetrics) -> Self {
+        Self { base_path, metrics }
     }
 
     async fn write_file(&self, cache_key: &CacheKey, data: Bytes) -> io::Result<PathBuf> {
@@ -49,17 +50,26 @@ impl CacheFileManager {
         // TODO: when does this happen?
         if path.exists() {
             debug!("{cache_key:?} file already exists, skipping write");
+            self.metrics.double_write_errors.increment(1);
             return Ok(path.clone());
         }
 
         tokio::fs::write(&path, data.as_ref()).await?;
 
         debug!("Written data for {:?} to {:?}", cache_key, path);
+        self.metrics
+            .disk_written
+            .increment(data.len().try_into().unwrap());
         Ok(path)
     }
 
     async fn read_file(&self, path: impl AsRef<Path>) -> io::Result<Bytes> {
-        tokio::fs::read(path).await.map(Bytes::from)
+        tokio::fs::read(path).await.map(|v| {
+            self.metrics
+                .disk_read
+                .increment(v.len().try_into().unwrap());
+            Bytes::from(v)
+        })
     }
 
     async fn remove_file(&self, path: impl AsRef<Path> + Debug) -> io::Result<()> {
@@ -131,12 +141,22 @@ impl Debug for CacheValue {
     }
 }
 
-const GET_RANGE_CALLS: &str = "seafowl_object_store_cache_requests_total";
-const GET_RANGE_BYTES: &str = "seafowl_object_store_cache_requested_bytes";
-const GET_RANGE_CACHE_HITS_DISK_BYTES: &str = "seafowl_object_store_cache_hit_disk_bytes";
+const GET_RANGE_CALLS: &str = "seafowl_object_store_get_requests_inbound_total";
+const GET_RANGE_BYTES: &str = "seafowl_object_store_get_requested_bytes";
+const GET_RANGE_CACHE_HITS_DISK_BYTES: &str =
+    "seafowl_object_store_get_cache_hit_disk_bytes";
 const GET_RANGE_CACHE_HITS_MEMORY_BYTES: &str =
-    "seafowl_object_store_cache_hit_memory_bytes";
-const GET_RANGE_CACHE_MISSES_BYTES: &str = "seafowl_object_store_cache_cache_miss_bytes";
+    "seafowl_object_store_get_cache_hit_memory_bytes";
+const GET_RANGE_CACHE_MISSES_BYTES: &str = "seafowl_object_store_get_cache_miss_bytes";
+const GET_RANGE_OUTBOUND_CALLS: &str = "seafowl_object_store_get_requests_outbound_total";
+const REDOWNLOAD_ERRORS: &str = "seafowl_object_store_read_after_evict_errors_total";
+const DOUBLE_WRITE_ERRORS: &str = "seafowl_object_store_cache_double_write_errors_total";
+const DELETION_ERRORS: &str = "seafowl_object_store_evict_deletion_errors_total";
+const CACHE_USAGE: &str = "seafowl_object_store_cache_usage_bytes";
+const CACHE_CAPACITY: &str = "seafowl_object_store_cache_capacity_bytes";
+const CACHE_EVICTED: &str = "seafowl_object_store_cache_evicted_bytes";
+const DISK_WRITTEN: &str = "seafowl_object_store_cache_disk_written_bytes";
+const DISK_READ: &str = "seafowl_object_store_cache_disk_read_bytes";
 
 #[derive(Clone)]
 pub struct CachingObjectStoreMetrics {
@@ -145,6 +165,15 @@ pub struct CachingObjectStoreMetrics {
     get_range_cache_hits_disk_bytes: Counter,
     get_range_cache_hits_memory_bytes: Counter,
     get_range_cache_misses_bytes: Counter,
+    get_range_outbound_calls: Counter,
+    redownload_errors: Counter,
+    double_write_errors: Counter,
+    deletion_errors: Counter,
+    cache_usage: Gauge,
+    cache_capacity: Gauge,
+    cache_evicted: Counter,
+    disk_read: Counter,
+    disk_written: Counter,
 }
 
 impl Default for CachingObjectStoreMetrics {
@@ -157,11 +186,11 @@ impl CachingObjectStoreMetrics {
     pub fn new() -> Self {
         describe_counter!(
             GET_RANGE_CALLS,
-            "Total get_range requests to object store before caching"
+            "Total get_range requests to object store by DataFusion before caching"
         );
         describe_counter!(
             GET_RANGE_BYTES,
-            "Total bytes requested from the object store before caching"
+            "Total bytes requested from the object store by DataFusion before caching"
         );
         describe_counter!(
             GET_RANGE_CACHE_HITS_DISK_BYTES,
@@ -175,6 +204,27 @@ impl CachingObjectStoreMetrics {
             GET_RANGE_CACHE_MISSES_BYTES,
             "Total bytes read from object store (cache misses)"
         );
+        describe_counter!(
+            GET_RANGE_OUTBOUND_CALLS,
+            "Outbound get requests to the remote object store"
+        );
+        describe_counter!(
+            REDOWNLOAD_ERRORS,
+            "Number of times the cache redownloaded a chunk that was marked as being in-cache but didn't exist on disk"
+        );
+        describe_counter!(
+            DOUBLE_WRITE_ERRORS,
+            "Number of times the cache redownloaded a chunk that was marked as not being in-cache but then was on disk"
+        );
+        describe_counter!(
+            DELETION_ERRORS,
+            "Number of times the file manager failed to delete a chunk while evicting a cache entry"
+        );
+        describe_counter!(CACHE_USAGE, "Approximate current occupation of the cache");
+        describe_counter!(CACHE_CAPACITY, "Total cache capacity");
+        describe_counter!(CACHE_EVICTED, "Bytes evicted from cache");
+        describe_counter!(DISK_READ, "Bytes read from on-disk cache");
+        describe_counter!(DISK_WRITTEN, "Bytes written to on-disk cache");
 
         Self {
             get_range_calls: counter!(GET_RANGE_CALLS),
@@ -184,6 +234,15 @@ impl CachingObjectStoreMetrics {
                 GET_RANGE_CACHE_HITS_MEMORY_BYTES
             ),
             get_range_cache_misses_bytes: counter!(GET_RANGE_CACHE_MISSES_BYTES),
+            get_range_outbound_calls: counter!(GET_RANGE_OUTBOUND_CALLS),
+            redownload_errors: counter!(REDOWNLOAD_ERRORS),
+            double_write_errors: counter!(DOUBLE_WRITE_ERRORS),
+            deletion_errors: counter!(DELETION_ERRORS),
+            cache_usage: gauge!(CACHE_USAGE),
+            cache_capacity: gauge!(CACHE_CAPACITY),
+            cache_evicted: counter!(CACHE_EVICTED),
+            disk_read: counter!(DISK_READ),
+            disk_written: counter!(DISK_WRITTEN),
         }
     }
 }
@@ -223,11 +282,20 @@ impl CachingObjectStore {
             "An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
             key, value, cause
         );
+        file_manager
+            .metrics
+            .cache_evicted
+            .increment(value.size().try_into().unwrap());
+        file_manager
+            .metrics
+            .cache_usage
+            .decrement(value.size() as f64);
 
         if let CacheValue::File(path, _) = value {
             // Remove the data file. We must handle error cases here to
             // prevent the listener from panicking.
             if let Err(e) = file_manager.remove_file(&path).await {
+                file_manager.metrics.deletion_errors.increment(1);
                 error!("Failed to remove a data file at {path:?}: {:?}", e);
             }
         }
@@ -256,7 +324,12 @@ impl CachingObjectStore {
         max_cache_size: u64,
         ttl: Duration,
     ) -> Self {
-        let file_manager = Arc::new(CacheFileManager::new(base_path.to_owned()));
+        let metrics = CachingObjectStoreMetrics::new();
+        metrics.cache_capacity.set(max_cache_size as f64);
+        metrics.cache_usage.set(0.0);
+
+        let file_manager =
+            Arc::new(CacheFileManager::new(base_path.to_owned(), metrics.clone()));
 
         // Clone the pointer since we can't pass the whole struct to the cache
         let eviction_file_manager = file_manager.clone();
@@ -277,7 +350,7 @@ impl CachingObjectStore {
             max_cache_size,
             cache,
             inner,
-            metrics: CachingObjectStoreMetrics::new(),
+            metrics,
         }
     }
 
@@ -374,6 +447,9 @@ impl CachingObjectStore {
                                     self.metrics
                                         .get_range_cache_misses_bytes
                                         .increment(data.len().try_into().unwrap());
+                                    self.metrics.get_range_outbound_calls.increment(1);
+                                    self.metrics.redownload_errors.increment(1);
+
                                     self.cache_chunk_data(key, data.clone()).await;
                                     Some(data)
                                 }
@@ -397,6 +473,7 @@ impl CachingObjectStore {
                 self.metrics
                     .get_range_cache_misses_bytes
                     .increment(batch_data.len().try_into().unwrap());
+                self.metrics.get_range_outbound_calls.increment(1);
                 debug!("{location}-{batch_range:?} fetched");
                 result.extend_from_slice(&batch_data);
 
@@ -431,6 +508,13 @@ impl CachingObjectStore {
             .or_insert(CacheValue::Memory(data.clone()))
             .await;
 
+        // Record the cache capacity here (weighted_size reads a variable and
+        // doesn't scan the cache, so this is a lightweight operation)
+        // Also clone the metric pointer so that we can update it once again once we
+        // wrote it to disk / invalidated for maximum precision.
+        let cache_usage = self.metrics.cache_usage.clone();
+        cache_usage.set(self.cache.weighted_size() as f64);
+
         // Finally trigger persisting to disk
         if entry.is_fresh() {
             let cache = self.cache.clone();
@@ -453,7 +537,8 @@ impl CachingObjectStore {
                         warn!("Invalidating cache entry for {key:?}; failed writing to a file: {err}");
                         cache.invalidate(&key).await;
                     }
-                }
+                };
+                cache_usage.set(cache.weighted_size() as f64);
             });
         }
     }
@@ -618,8 +703,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        GET_RANGE_BYTES, GET_RANGE_CACHE_HITS_DISK_BYTES,
-        GET_RANGE_CACHE_HITS_MEMORY_BYTES, GET_RANGE_CACHE_MISSES_BYTES, GET_RANGE_CALLS,
+        CACHE_EVICTED, CACHE_USAGE, DISK_READ, DISK_WRITTEN, GET_RANGE_BYTES,
+        GET_RANGE_CACHE_HITS_DISK_BYTES, GET_RANGE_CACHE_HITS_MEMORY_BYTES,
+        GET_RANGE_CACHE_MISSES_BYTES, GET_RANGE_CALLS,
     };
     use crate::testutils::make_mock_parquet_server;
 
@@ -790,6 +876,7 @@ mod tests {
         assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 48);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 0);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
+        assert_metric(&recorder, CACHE_EVICTED, 0);
 
         // Mock has had 1 request that coalesced 3 chunks
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
@@ -815,6 +902,10 @@ mod tests {
         assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 48);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 16);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
+        assert_metric(&recorder, CACHE_USAGE, 48);
+        // TODO: for some reason here the eviction listener has already fired
+        // even though above we have evicted=0
+        assert_metric(&recorder, CACHE_EVICTED, 48);
 
         // Request 33..66 (chunks 2, 3, 4)
         let bytes = store
@@ -831,6 +922,8 @@ mod tests {
         assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 64);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 48);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
+        assert_metric(&recorder, CACHE_USAGE, 48);
+        // assert_metric(&recorder, CACHE_EVICTED, 0);
 
         let mut on_disk_keys = wait_all_ranges_on_disk(on_disk_keys, &store).await;
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3, 4]);
@@ -849,6 +942,10 @@ mod tests {
         assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 80);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 48);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
+        assert_metric(&recorder, DISK_WRITTEN, 64);
+        assert_metric(&recorder, DISK_READ, 48);
+        assert_metric(&recorder, CACHE_USAGE, 48);
+        // assert_metric(&recorder, CACHE_EVICTED, 16);
 
         on_disk_keys.retain(|k| k.range.start >= 32); // The first chunk got LRU-evicted
         wait_all_ranges_on_disk(on_disk_keys, &store).await;
@@ -861,5 +958,7 @@ mod tests {
 
         assert_eq!(store.cache.entry_count(), 0);
         assert_ranges_in_cache(&store.base_path, &url, vec![]);
+        // TODO: why so many???
+        assert_metric(&recorder, CACHE_EVICTED, 160);
     }
 }
