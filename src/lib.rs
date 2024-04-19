@@ -7,6 +7,7 @@ pub mod config;
 pub mod context;
 pub mod datafusion;
 pub mod frontend;
+pub mod memory_pool;
 pub mod nodes;
 pub mod object_store;
 pub mod provider;

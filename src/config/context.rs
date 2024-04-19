@@ -4,10 +4,14 @@ use std::sync::Arc;
 use crate::{
     catalog::{DEFAULT_DB, DEFAULT_SCHEMA},
     context::SeafowlContext,
+    memory_pool::MemoryPoolMetrics,
     object_store::factory::ObjectStoreFactory,
     repository::{interface::Repository, sqlite::SqliteRepository},
 };
-use datafusion::execution::context::SessionState;
+use datafusion::execution::{
+    context::SessionState,
+    memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool},
+};
 use datafusion::{
     common::Result,
     execution::runtime_env::{RuntimeConfig, RuntimeEnv},
@@ -112,10 +116,18 @@ pub fn setup_metrics(metrics: &schema::Metrics) {
 
 pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext> {
     let mut runtime_config = RuntimeConfig::new();
-    if let Some(max_memory) = cfg.runtime.max_memory {
-        runtime_config = runtime_config
-            .with_memory_limit((max_memory * MEBIBYTES) as usize, MEMORY_FRACTION);
-    }
+
+    let memory_pool: Arc<dyn MemoryPool> =
+        if let Some(max_memory) = cfg.runtime.max_memory {
+            Arc::new(GreedyMemoryPool::new(
+                ((max_memory * MEBIBYTES) as f64 * MEMORY_FRACTION) as usize,
+            ))
+        } else {
+            Arc::new(UnboundedMemoryPool::default())
+        };
+
+    runtime_config =
+        runtime_config.with_memory_pool(Arc::new(MemoryPoolMetrics::new(memory_pool)));
 
     if let Some(temp_dir) = &cfg.runtime.temp_dir {
         runtime_config = runtime_config.with_temp_file_path(temp_dir);
