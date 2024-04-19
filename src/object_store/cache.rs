@@ -906,9 +906,7 @@ mod tests {
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 16);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
         assert_metric(&recorder, CACHE_USAGE, 48);
-        // TODO: for some reason here the eviction listener has already fired
-        // even though above we have evicted=0
-        assert_metric(&recorder, CACHE_EVICTED, 48);
+        assert_metric(&recorder, CACHE_EVICTED, 0);
 
         // Request 33..66 (chunks 2, 3, 4)
         let bytes = store
@@ -926,7 +924,7 @@ mod tests {
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 48);
         assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
         assert_metric(&recorder, CACHE_USAGE, 48);
-        // assert_metric(&recorder, CACHE_EVICTED, 0);
+        assert_metric(&recorder, CACHE_EVICTED, 0);
 
         let mut on_disk_keys = wait_all_ranges_on_disk(on_disk_keys, &store).await;
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3, 4]);
@@ -948,7 +946,7 @@ mod tests {
         assert_metric(&recorder, DISK_WRITTEN, 64);
         assert_metric(&recorder, DISK_READ, 48);
         assert_metric(&recorder, CACHE_USAGE, 48);
-        // assert_metric(&recorder, CACHE_EVICTED, 16);
+        assert_metric(&recorder, CACHE_EVICTED, 16);
 
         on_disk_keys.retain(|k| k.range.start >= 32); // The first chunk got LRU-evicted
         wait_all_ranges_on_disk(on_disk_keys, &store).await;
@@ -961,7 +959,6 @@ mod tests {
 
         assert_eq!(store.cache.entry_count(), 0);
         assert_ranges_in_cache(&store.base_path, &url, vec![]);
-        // TODO: why so many???
-        assert_metric(&recorder, CACHE_EVICTED, 160);
+        assert_metric(&recorder, CACHE_EVICTED, 80);
     }
 }
