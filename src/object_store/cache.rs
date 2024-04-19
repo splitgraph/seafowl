@@ -282,14 +282,17 @@ impl CachingObjectStore {
             "An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
             key, value, cause
         );
-        file_manager
-            .metrics
-            .cache_evicted
-            .increment(value.size().try_into().unwrap());
-        file_manager
-            .metrics
-            .cache_usage
-            .decrement(value.size() as f64);
+
+        if cause != RemovalCause::Replaced {
+            file_manager
+                .metrics
+                .cache_evicted
+                .increment(value.size().try_into().unwrap());
+            file_manager
+                .metrics
+                .cache_usage
+                .decrement(value.size() as f64);
+        };
 
         if let CacheValue::File(path, _) = value {
             // Remove the data file. We must handle error cases here to
