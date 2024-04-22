@@ -4,6 +4,22 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Improve Arrow Flight SQL interface logging (<https://github.com/splitgraph/seafowl/pull/517>)
+- Move Delta store creation into a separate ObjectStoreFactory
+  (<https://github.com/splitgraph/seafowl/pull/516>)
+- Best effort chunk coalescing implementation (<https://github.com/splitgraph/seafowl/pull/515>)
+- Use tokio-graceful-shutdown for SIGINT / SIGTERM
+  (<https://github.com/splitgraph/seafowl/pull/513>)
+- Upgrade to DataFusion 36 (<https://github.com/splitgraph/seafowl/pull/511>)
+- Enable using session tokens for the S3 client (<https://github.com/splitgraph/seafowl/pull/510>)
+- Fix condition for caching clade object stores (<https://github.com/splitgraph/seafowl/pull/509>)
+- Add caching on top of clade-provided object stores too
+  (<https://github.com/splitgraph/seafowl/pull/508>)
+- Improve caching object store performance (<https://github.com/splitgraph/seafowl/pull/507>)
+- Make object_store confgi section optional (<https://github.com/splitgraph/seafowl/pull/506>)
+- Add support for dynamic object store usage via clade
+  (<https://github.com/splitgraph/seafowl/pull/504>)
+
 ## [0.5.5] - 2024-02-26
 
 - Add a http health endpoint (<https://github.com/splitgraph/seafowl/pull/502>)
