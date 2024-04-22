@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::metadata::MetadataMap;
 use tonic::Status;
-use tracing::debug;
+use tracing::{error, info};
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -65,11 +65,11 @@ impl SeafowlFlightHandler {
         let plan = ctx
             .plan_query(query)
             .await
-            .inspect_err(|err| debug!("Error planning query id {query_id}: {err}"))?;
+            .inspect_err(|err| info!("Error planning query id {query_id}: {err}"))?;
         let batch_stream = ctx
             .execute_stream(plan)
             .await
-            .inspect_err(|err| debug!("Error executing query id {query_id}: {err}"))?;
+            .inspect_err(|err| info!("Error executing query id {query_id}: {err}"))?;
         let schema = batch_stream.schema();
 
         self.results.insert(query_id, Mutex::new(batch_stream));
@@ -83,7 +83,7 @@ impl SeafowlFlightHandler {
         query_id: &str,
     ) -> core::result::Result<SendableRecordBatchStream, Status> {
         let (_, batch_stream_mutex) = self.results.remove(query_id).ok_or_else(|| {
-            debug!("No results found for query id {query_id}");
+            error!("No results found for query id {query_id}");
             Status::not_found(format!("No results found for query id {query_id}"))
         })?;
 
