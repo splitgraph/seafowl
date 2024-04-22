@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.5.6] - 2024-04-22
+
 - Improve Arrow Flight SQL interface logging (<https://github.com/splitgraph/seafowl/pull/517>)
 - Move Delta store creation into a separate ObjectStoreFactory
   (<https://github.com/splitgraph/seafowl/pull/516>)
@@ -238,7 +240,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.5...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/splitgraph/seafowl/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/splitgraph/seafowl/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/splitgraph/seafowl/compare/v0.5.4...v0.5.4
 [0.5.4]: https://github.com/splitgraph/seafowl/compare/v0.5.3...v0.5.4

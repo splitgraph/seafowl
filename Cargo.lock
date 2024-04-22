@@ -5417,7 +5417,7 @@ dependencies = [
 
 [[package]]
 name = "seafowl"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "arrow",
@@ -5448,7 +5448,7 @@ dependencies = [
  "deltalake",
  "futures",
  "hex",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "lazy_static",
  "metrics",
  "metrics-exporter-prometheus",
@@ -5471,8 +5471,8 @@ dependencies = [
  "sha2",
  "sqlparser 0.43.1",
  "sqlx",
- "strum 0.26.1",
- "strum_macros 0.26.1",
+ "strum 0.25.0",
+ "strum_macros 0.25.3",
  "tempfile",
  "thiserror",
  "tokio",
