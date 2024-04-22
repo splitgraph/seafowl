@@ -1,11 +1,13 @@
-/// On-disk byte-range-aware cache for HTTP requests
+/// On-disk byte-range-aware cache for object stores
 /// Partially inspired by https://docs.rs/moka/latest/moka/future/struct.Cache.html#example-eviction-listener,
 /// with some additions to weigh it by the file size.
 use crate::config::schema::{str_to_hex_hash, ObjectCacheProperties};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
 use futures::stream::BoxStream;
-use metrics::{counter, describe_counter, gauge, Counter, Gauge};
+use metrics::{
+    counter, describe_counter, describe_histogram, gauge, histogram, Counter, Gauge,
+};
 use moka::future::{Cache, CacheBuilder, FutureExt};
 use moka::notification::RemovalCause;
 use object_store::{
@@ -13,6 +15,7 @@ use object_store::{
     PutResult,
 };
 use tempfile::TempDir;
+use tokio::time::Instant;
 use tracing::{debug, error, warn};
 
 use std::fmt::Display;
@@ -54,20 +57,18 @@ impl CacheFileManager {
             return Ok(path.clone());
         }
 
+        let start = Instant::now();
         tokio::fs::write(&path, data.as_ref()).await?;
 
         debug!("Written data for {:?} to {:?}", cache_key, path);
-        self.metrics
-            .disk_written
-            .increment(data.len().try_into().unwrap());
+        self.metrics.log_cache_disk_write(start, data.len());
         Ok(path)
     }
 
     async fn read_file(&self, path: impl AsRef<Path>) -> io::Result<Bytes> {
+        let start = Instant::now();
         tokio::fs::read(path).await.map(|v| {
-            self.metrics
-                .disk_read
-                .increment(v.len().try_into().unwrap());
+            self.metrics.log_cache_disk_read(start, v.len());
             Bytes::from(v)
         })
     }
@@ -141,39 +142,36 @@ impl Debug for CacheValue {
     }
 }
 
-const GET_RANGE_CALLS: &str = "seafowl_object_store_get_requests_inbound_total";
-const GET_RANGE_BYTES: &str = "seafowl_object_store_get_requested_bytes";
-const GET_RANGE_CACHE_HITS_DISK_BYTES: &str =
-    "seafowl_object_store_get_cache_hit_disk_bytes";
-const GET_RANGE_CACHE_HITS_MEMORY_BYTES: &str =
-    "seafowl_object_store_get_cache_hit_memory_bytes";
-const GET_RANGE_CACHE_MISSES_BYTES: &str = "seafowl_object_store_get_cache_miss_bytes";
-const GET_RANGE_OUTBOUND_CALLS: &str = "seafowl_object_store_get_requests_outbound_total";
-const REDOWNLOAD_ERRORS: &str = "seafowl_object_store_read_after_evict_errors_total";
-const DOUBLE_WRITE_ERRORS: &str = "seafowl_object_store_cache_double_write_errors_total";
-const DELETION_ERRORS: &str = "seafowl_object_store_evict_deletion_errors_total";
+const REQUESTS: &str = "seafowl_object_store_requests_total";
+const REQUEST_LATENCY: &str = "seafowl_object_store_request_latency_seconds";
+
+const REQUESTED_BYTES: &str =
+    "seafowl_object_store_cache_get_range_requested_bytes_total";
+const INBOUND_REQUESTS: &str = "seafowl_object_store_cache_get_range_requests_total";
+const CACHE_HIT_READS: &str = "seafowl_object_store_cache_hit_read_bytes_total";
+const CACHE_WRITES: &str = "seafowl_object_store_cache_disk_written_bytes_total";
+const CACHE_DISK_TIME: &str = "seafowl_object_store_cache_disk_latency_seconds";
+const CACHE_WARNINGS: &str = "seafowl_object_store_cache_warnings_total";
+const CACHE_MISS_BYTES: &str = "seafowl_object_store_cache_get_range_read_bytes_total";
+
 const CACHE_USAGE: &str = "seafowl_object_store_cache_usage_bytes";
 const CACHE_CAPACITY: &str = "seafowl_object_store_cache_capacity_bytes";
 const CACHE_EVICTED: &str = "seafowl_object_store_cache_evicted_bytes";
-const DISK_WRITTEN: &str = "seafowl_object_store_cache_disk_written_bytes";
-const DISK_READ: &str = "seafowl_object_store_cache_disk_read_bytes";
 
 #[derive(Clone)]
 pub struct CachingObjectStoreMetrics {
     get_range_calls: Counter,
     get_range_bytes: Counter,
-    get_range_cache_hits_disk_bytes: Counter,
-    get_range_cache_hits_memory_bytes: Counter,
-    get_range_cache_misses_bytes: Counter,
-    get_range_outbound_calls: Counter,
+    cache_miss_bytes: Counter,
     redownload_errors: Counter,
     double_write_errors: Counter,
     deletion_errors: Counter,
+    cache_disk_read: Counter,
+    cache_disk_write: Counter,
+    cache_memory_read: Counter,
     cache_usage: Gauge,
     cache_capacity: Gauge,
     cache_evicted: Counter,
-    disk_read: Counter,
-    disk_written: Counter,
 }
 
 impl Default for CachingObjectStoreMetrics {
@@ -184,66 +182,100 @@ impl Default for CachingObjectStoreMetrics {
 
 impl CachingObjectStoreMetrics {
     pub fn new() -> Self {
-        describe_counter!(
-            GET_RANGE_CALLS,
-            "Total get_range requests to object store by DataFusion before caching"
+        describe_counter!(REQUESTS, "Number of calls to the actual object store");
+        describe_histogram!(
+            REQUEST_LATENCY,
+            "Time-to-first-byte of various requests to the actual object store"
         );
         describe_counter!(
-            GET_RANGE_BYTES,
-            "Total bytes requested from the object store by DataFusion before caching"
+            REQUESTED_BYTES,
+            "Bytes requested in get_range calls by DataFusion before caching"
         );
         describe_counter!(
-            GET_RANGE_CACHE_HITS_DISK_BYTES,
-            "Total bytes read from disk (cache hit)"
+            INBOUND_REQUESTS,
+            "Number of get_range requests from DataFusion before caching"
         );
         describe_counter!(
-            GET_RANGE_CACHE_HITS_MEMORY_BYTES,
-            "Total bytes read from memory (cache hit)"
+            CACHE_HIT_READS,
+            "Bytes read from the object store cache (hit)"
         );
         describe_counter!(
-            GET_RANGE_CACHE_MISSES_BYTES,
-            "Total bytes read from object store (cache misses)"
+            CACHE_DISK_TIME,
+            "Time spent waiting for disk cache read / write"
+        );
+        describe_counter!(CACHE_WRITES, "Bytes written to on-disk cache");
+        describe_counter!(
+            CACHE_MISS_BYTES,
+            "Bytes downloaded from the upstream object store for get_range cache misses"
         );
         describe_counter!(
-            GET_RANGE_OUTBOUND_CALLS,
-            "Outbound get requests to the remote object store"
-        );
-        describe_counter!(
-            REDOWNLOAD_ERRORS,
-            "Number of times the cache redownloaded a chunk that was marked as being in-cache but didn't exist on disk"
-        );
-        describe_counter!(
-            DOUBLE_WRITE_ERRORS,
-            "Number of times the cache redownloaded a chunk that was marked as not being in-cache but then was on disk"
-        );
-        describe_counter!(
-            DELETION_ERRORS,
-            "Number of times the file manager failed to delete a chunk while evicting a cache entry"
+            CACHE_WARNINGS,
+            "Number of times various cache race conditions were discovered (read-after-evict, double-write, double-delete)"
         );
         describe_counter!(CACHE_USAGE, "Approximate current occupation of the cache");
         describe_counter!(CACHE_CAPACITY, "Total cache capacity");
         describe_counter!(CACHE_EVICTED, "Bytes evicted from cache");
-        describe_counter!(DISK_READ, "Bytes read from on-disk cache");
-        describe_counter!(DISK_WRITTEN, "Bytes written to on-disk cache");
 
         Self {
-            get_range_calls: counter!(GET_RANGE_CALLS),
-            get_range_bytes: counter!(GET_RANGE_BYTES),
-            get_range_cache_hits_disk_bytes: counter!(GET_RANGE_CACHE_HITS_DISK_BYTES),
-            get_range_cache_hits_memory_bytes: counter!(
-                GET_RANGE_CACHE_HITS_MEMORY_BYTES
-            ),
-            get_range_cache_misses_bytes: counter!(GET_RANGE_CACHE_MISSES_BYTES),
-            get_range_outbound_calls: counter!(GET_RANGE_OUTBOUND_CALLS),
-            redownload_errors: counter!(REDOWNLOAD_ERRORS),
-            double_write_errors: counter!(DOUBLE_WRITE_ERRORS),
-            deletion_errors: counter!(DELETION_ERRORS),
+            get_range_calls: counter!(INBOUND_REQUESTS),
+            get_range_bytes: counter!(REQUESTED_BYTES),
+            cache_miss_bytes: counter!(CACHE_MISS_BYTES),
+            redownload_errors: counter!(CACHE_WARNINGS, "error" => "redownload"),
+            double_write_errors: counter!(CACHE_WARNINGS, "error" => "double_write"),
+            deletion_errors: counter!(CACHE_WARNINGS, "error" => "deletion"),
+            cache_memory_read: counter!(CACHE_HIT_READS, "location" => "memory"),
+            cache_disk_read: counter!(CACHE_HIT_READS, "location" => "disk"),
+            cache_disk_write: counter!(CACHE_WRITES),
             cache_usage: gauge!(CACHE_USAGE),
             cache_capacity: gauge!(CACHE_CAPACITY),
             cache_evicted: counter!(CACHE_EVICTED),
-            disk_read: counter!(DISK_READ),
-            disk_written: counter!(DISK_WRITTEN),
         }
+    }
+
+    pub fn log_object_store_outbound_request(
+        &self,
+        start: Instant,
+        operation: &'static str,
+        success: bool,
+    ) {
+        // TODO: start using this function by wrapping all other object store requests
+        let count = counter!(REQUESTS, "operation" => operation, "status" => if success { "true" } else { "false" });
+        let latency = histogram!(REQUEST_LATENCY, "operation" => operation, "status" => if success { "true" } else { "false" });
+
+        count.increment(1);
+        latency.record(start.elapsed().as_secs_f64());
+    }
+
+    pub fn log_get_range_outbound_request(
+        &self,
+        start: Instant,
+        result: &object_store::Result<Bytes>,
+    ) {
+        self.log_object_store_outbound_request(start, "get_range", result.is_ok());
+        if let Ok(data) = result {
+            self.cache_miss_bytes
+                .increment(data.len().try_into().unwrap())
+        }
+    }
+
+    pub fn log_get_range_request(&self, length: usize) {
+        self.get_range_calls.increment(1);
+        self.get_range_bytes.increment(length.try_into().unwrap());
+    }
+
+    pub fn log_cache_memory_read(&self, length: usize) {
+        self.cache_memory_read.increment(length.try_into().unwrap());
+    }
+
+    pub fn log_cache_disk_read(&self, start: Instant, length: usize) {
+        self.cache_disk_read.increment(length.try_into().unwrap());
+        histogram!(CACHE_DISK_TIME, "operation" => "read")
+            .record(start.elapsed().as_secs_f64());
+    }
+    pub fn log_cache_disk_write(&self, start: Instant, length: usize) {
+        self.cache_disk_write.increment(length.try_into().unwrap());
+        histogram!(CACHE_DISK_TIME, "operation" => "write")
+            .record(start.elapsed().as_secs_f64());
     }
 }
 
@@ -377,6 +409,17 @@ impl CachingObjectStore {
         }
     }
 
+    async fn get_range_inner(
+        &self,
+        location: &object_store::path::Path,
+        range: Range<usize>,
+    ) -> object_store::Result<Bytes> {
+        let start = Instant::now();
+        let result = self.inner.get_range(location, range).await;
+        self.metrics.log_get_range_outbound_request(start, &result);
+        result
+    }
+
     /// Get a continuous range of chunks, each delineated in units of self.min_fetch_size. The main
     /// goal is to coalesce fetching of any missing chunks in batches of maximum range to minimize
     //  the outgoing calls needed to satisfy the incoming call.
@@ -424,34 +467,22 @@ impl CachingObjectStore {
                     match value {
                         CacheValue::Memory(data) => {
                             debug!("Cache value for {key:?} fetched from memory");
-                            self.metrics
-                                .get_range_cache_hits_memory_bytes
-                                .increment(data.len().try_into().unwrap());
+                            self.metrics.log_cache_memory_read(data.len());
                             Some(data.clone())
                         }
                         CacheValue::File(path, _) => {
                             debug!("Cache value for {key:?} fetching from the file");
                             match self.file_manager.read_file(path).await {
-                                Ok(data) => {
-                                    self.metrics
-                                        .get_range_cache_hits_disk_bytes
-                                        .increment(data.len().try_into().unwrap());
-                                    Some(data)
-                                }
+                                Ok(data) => Some(data),
                                 Err(err) => {
                                     warn!(
                                         "Re-downloading cache value for {key:?}: {err}"
                                     );
-                                    let data = self
-                                        .inner
-                                        .get_range(location, chunk_range.clone())
-                                        .await?;
 
-                                    self.metrics
-                                        .get_range_cache_misses_bytes
-                                        .increment(data.len().try_into().unwrap());
-                                    self.metrics.get_range_outbound_calls.increment(1);
                                     self.metrics.redownload_errors.increment(1);
+                                    let data = self
+                                        .get_range_inner(location, chunk_range.clone())
+                                        .await?;
 
                                     self.cache_chunk_data(key, data.clone()).await;
                                     Some(data)
@@ -471,12 +502,8 @@ impl CachingObjectStore {
                 let batch_range = first.range.start..last.range.end;
                 debug!("{location}-{batch_range:?} fetching");
                 let mut batch_data =
-                    self.inner.get_range(location, batch_range.clone()).await?;
+                    self.get_range_inner(location, batch_range.clone()).await?;
 
-                self.metrics
-                    .get_range_cache_misses_bytes
-                    .increment(batch_data.len().try_into().unwrap());
-                self.metrics.get_range_outbound_calls.increment(1);
                 debug!("{location}-{batch_range:?} fetched");
                 result.extend_from_slice(&batch_data);
 
@@ -691,11 +718,13 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        CACHE_EVICTED, CACHE_USAGE, DISK_READ, DISK_WRITTEN, GET_RANGE_BYTES,
-        GET_RANGE_CACHE_HITS_DISK_BYTES, GET_RANGE_CACHE_HITS_MEMORY_BYTES,
-        GET_RANGE_CACHE_MISSES_BYTES, GET_RANGE_CALLS,
+        CACHE_EVICTED, CACHE_MISS_BYTES, CACHE_USAGE, CACHE_WRITES, INBOUND_REQUESTS,
+        REQUESTED_BYTES,
     };
     use crate::testutils::make_mock_parquet_server;
+
+    const CACHE_DISK_READ: &str =
+        "seafowl_object_store_cache_hit_read_bytes_total{location=\"disk\"}";
 
     fn make_cached_object_store_small_fetch() -> CachingObjectStore {
         let tmp_dir = TempDir::new().unwrap();
@@ -800,19 +829,18 @@ mod tests {
             .unwrap();
         assert_eq!(result, body[range.start..min(body.len(), range.end)]);
 
-        assert_metric(&recorder, GET_RANGE_CALLS, 1);
+        assert_metric(&recorder, INBOUND_REQUESTS, 1);
         assert_metric(
             &recorder,
-            GET_RANGE_BYTES,
+            REQUESTED_BYTES,
             (range.end - range.start).try_into().unwrap(),
         );
 
         // These are all going to be cache misses since we create the store
         // from scratch every time
-        // print!("{}", recorder.handle().render());
-        assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, total_fetched);
-        assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 0);
-        assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
+        print!("{}", recorder.handle().render());
+        assert_metric(&recorder, CACHE_MISS_BYTES, total_fetched);
+        assert_metric(&recorder, CACHE_DISK_READ, 0);
     }
 
     fn assert_ranges_in_cache(basedir: &FSPath, url: &str, chunks: Vec<u32>) {
@@ -861,9 +889,8 @@ mod tests {
         assert_eq!(bytes, body[25..64]);
         store.cache.run_pending_tasks().await;
 
-        assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 48);
-        assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 0);
-        assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
+        assert_metric(&recorder, CACHE_MISS_BYTES, 48);
+        assert_metric(&recorder, CACHE_DISK_READ, 0);
         assert_metric(&recorder, CACHE_EVICTED, 0);
 
         // Mock has had 1 request that coalesced 3 chunks
@@ -887,9 +914,8 @@ mod tests {
         assert_ranges_in_cache(&store.base_path, &url, vec![1, 2, 3]);
 
         // NB: disk/memory hits round to the chunk size
-        assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 48);
-        assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 16);
-        assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
+        assert_metric(&recorder, CACHE_MISS_BYTES, 48);
+        assert_metric(&recorder, CACHE_DISK_READ, 16);
         assert_metric(&recorder, CACHE_USAGE, 48);
         assert_metric(&recorder, CACHE_EVICTED, 0);
 
@@ -905,9 +931,9 @@ mod tests {
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
         assert_eq!(store.cache.entry_count(), 4);
 
-        assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 64);
-        assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 48);
-        assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
+        assert_metric(&recorder, CACHE_MISS_BYTES, 64);
+        assert_metric(&recorder, CACHE_DISK_READ, 48);
+
         assert_metric(&recorder, CACHE_USAGE, 48);
         assert_metric(&recorder, CACHE_EVICTED, 0);
 
@@ -925,11 +951,9 @@ mod tests {
         assert_eq!(server.received_requests().await.unwrap().len(), 3);
         assert_eq!(store.cache.entry_count(), 4);
 
-        assert_metric(&recorder, GET_RANGE_CACHE_MISSES_BYTES, 80);
-        assert_metric(&recorder, GET_RANGE_CACHE_HITS_DISK_BYTES, 48);
-        assert_metric(&recorder, GET_RANGE_CACHE_HITS_MEMORY_BYTES, 0);
-        assert_metric(&recorder, DISK_WRITTEN, 64);
-        assert_metric(&recorder, DISK_READ, 48);
+        assert_metric(&recorder, CACHE_MISS_BYTES, 80);
+        assert_metric(&recorder, CACHE_DISK_READ, 48);
+        assert_metric(&recorder, CACHE_WRITES, 64);
         assert_metric(&recorder, CACHE_USAGE, 48);
         assert_metric(&recorder, CACHE_EVICTED, 16);
 
