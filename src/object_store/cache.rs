@@ -640,11 +640,20 @@ impl ObjectStore for CachingObjectStore {
     ) -> object_store::Result<GetResult> {
         let start = Instant::now();
         let result = self.inner.get_opts(location, options).await;
-        self.metrics.log_object_store_outbound_request(
-            start,
-            "get",
-            Some(result.is_ok()),
-        );
+
+        let success = match &result {
+            Ok(_) => true,
+            // Delta Lake makes GET requests to /table/_delta_log/_last_checkpoint as part of normal
+            // operation and handles the error gracefully, so don't spam the metrics in this case.
+            Err(object_store::Error::NotFound { path, source: _ })
+                if path.ends_with("_last_checkpoint") =>
+            {
+                true
+            }
+            Err(_) => false,
+        };
+        self.metrics
+            .log_object_store_outbound_request(start, "get", Some(success));
         result
     }
 
