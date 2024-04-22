@@ -63,7 +63,7 @@ where
                 Ok(ref r) => {
                     // Tonic converts any `Err`s into veritable `http::Response`s,
                     // by simply dumping the `Status` info into some headers inside
-                    // of `Grpc::map_response`.
+                    // `Grpc::map_response`.
                     if let Some(header_value) = r.headers().get("grpc-status") {
                         Code::from_bytes(header_value.as_bytes())
                     } else {
