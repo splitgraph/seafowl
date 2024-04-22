@@ -236,11 +236,16 @@ impl CachingObjectStoreMetrics {
         &self,
         start: Instant,
         operation: &'static str,
-        success: bool,
+        success: Option<bool>,
     ) {
-        // TODO: start using this function by wrapping all other object store requests
-        let count = counter!(REQUESTS, "operation" => operation, "status" => if success { "true" } else { "false" });
-        let latency = histogram!(REQUEST_LATENCY, "operation" => operation, "status" => if success { "true" } else { "false" });
+        let status_str = match success {
+            Some(true) => "success",
+            Some(false) => "error",
+            None => "unknown",
+        };
+        let count = counter!(REQUESTS, "operation" => operation, "status" => status_str);
+        let latency =
+            histogram!(REQUEST_LATENCY, "operation" => operation, "status" => status_str);
 
         count.increment(1);
         latency.record(start.elapsed().as_secs_f64());
@@ -251,7 +256,7 @@ impl CachingObjectStoreMetrics {
         start: Instant,
         result: &object_store::Result<Bytes>,
     ) {
-        self.log_object_store_outbound_request(start, "get_range", result.is_ok());
+        self.log_object_store_outbound_request(start, "get_range", Some(result.is_ok()));
         if let Ok(data) = result {
             self.cache_miss_bytes
                 .increment(data.len().try_into().unwrap())
@@ -272,6 +277,7 @@ impl CachingObjectStoreMetrics {
         histogram!(CACHE_DISK_TIME, "operation" => "read")
             .record(start.elapsed().as_secs_f64());
     }
+
     pub fn log_cache_disk_write(&self, start: Instant, length: usize) {
         self.cache_disk_write.increment(length.try_into().unwrap());
         histogram!(CACHE_DISK_TIME, "operation" => "write")
@@ -588,14 +594,28 @@ impl ObjectStore for CachingObjectStore {
         bytes: Bytes,
         opts: PutOptions,
     ) -> object_store::Result<PutResult> {
-        self.inner.put_opts(location, bytes, opts).await
+        let start = Instant::now();
+        let result = self.inner.put_opts(location, bytes, opts).await;
+        self.metrics.log_object_store_outbound_request(
+            start,
+            "put",
+            Some(result.is_ok()),
+        );
+        result
     }
 
     async fn put_multipart(
         &self,
         location: &object_store::path::Path,
     ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        self.inner.put_multipart(location).await
+        let start = Instant::now();
+        let result = self.inner.put_multipart(location).await;
+        self.metrics.log_object_store_outbound_request(
+            start,
+            "put_multipart",
+            Some(result.is_ok()),
+        );
+        result
     }
 
     async fn abort_multipart(
@@ -603,7 +623,14 @@ impl ObjectStore for CachingObjectStore {
         location: &object_store::path::Path,
         multipart_id: &MultipartId,
     ) -> object_store::Result<()> {
-        self.inner.abort_multipart(location, multipart_id).await
+        let start = Instant::now();
+        let result = self.inner.abort_multipart(location, multipart_id).await;
+        self.metrics.log_object_store_outbound_request(
+            start,
+            "abort_multipart",
+            Some(result.is_ok()),
+        );
+        result
     }
 
     async fn get_opts(
@@ -611,7 +638,14 @@ impl ObjectStore for CachingObjectStore {
         location: &object_store::path::Path,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
-        self.inner.get_opts(location, options).await
+        let start = Instant::now();
+        let result = self.inner.get_opts(location, options).await;
+        self.metrics.log_object_store_outbound_request(
+            start,
+            "get",
+            Some(result.is_ok()),
+        );
+        result
     }
 
     async fn get_range(
@@ -648,14 +682,28 @@ impl ObjectStore for CachingObjectStore {
         &self,
         location: &object_store::path::Path,
     ) -> object_store::Result<ObjectMeta> {
-        self.inner.head(location).await
+        let start = Instant::now();
+        let result = self.inner.head(location).await;
+        self.metrics.log_object_store_outbound_request(
+            start,
+            "head",
+            Some(result.is_ok()),
+        );
+        result
     }
 
     async fn delete(
         &self,
         location: &object_store::path::Path,
     ) -> object_store::Result<()> {
-        self.inner.delete(location).await
+        let start = Instant::now();
+        let result = self.inner.delete(location).await;
+        self.metrics.log_object_store_outbound_request(
+            start,
+            "delete",
+            Some(result.is_ok()),
+        );
+        result
     }
 
     /// Delete all the objects at the specified locations in bulk when applicable
@@ -663,21 +711,36 @@ impl ObjectStore for CachingObjectStore {
         &'a self,
         locations: BoxStream<'a, object_store::Result<object_store::path::Path>>,
     ) -> BoxStream<'a, object_store::Result<object_store::path::Path>> {
-        self.inner.delete_stream(locations)
+        let start = Instant::now();
+        let result = self.inner.delete_stream(locations);
+        self.metrics
+            .log_object_store_outbound_request(start, "delete_stream", None);
+        result
     }
 
     fn list(
         &self,
         prefix: Option<&object_store::path::Path>,
     ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
-        self.inner.list(prefix)
+        let start = Instant::now();
+        let result = self.inner.list(prefix);
+        self.metrics
+            .log_object_store_outbound_request(start, "list", None);
+        result
     }
 
     async fn list_with_delimiter(
         &self,
         prefix: Option<&object_store::path::Path>,
     ) -> object_store::Result<ListResult> {
-        self.inner.list_with_delimiter(prefix).await
+        let start = Instant::now();
+        let result = self.inner.list_with_delimiter(prefix).await;
+        self.metrics.log_object_store_outbound_request(
+            start,
+            "list_with_delimiter",
+            Some(result.is_ok()),
+        );
+        result
     }
 
     async fn copy(
@@ -685,7 +748,14 @@ impl ObjectStore for CachingObjectStore {
         from: &object_store::path::Path,
         to: &object_store::path::Path,
     ) -> object_store::Result<()> {
-        self.inner.copy(from, to).await
+        let start = Instant::now();
+        let result = self.inner.copy(from, to).await;
+        self.metrics.log_object_store_outbound_request(
+            start,
+            "copy",
+            Some(result.is_ok()),
+        );
+        result
     }
 
     async fn copy_if_not_exists(
@@ -693,7 +763,14 @@ impl ObjectStore for CachingObjectStore {
         from: &object_store::path::Path,
         to: &object_store::path::Path,
     ) -> object_store::Result<()> {
-        self.inner.copy_if_not_exists(from, to).await
+        let start = Instant::now();
+        let result = self.inner.copy_if_not_exists(from, to).await;
+        self.metrics.log_object_store_outbound_request(
+            start,
+            "copy_if_not_exists",
+            Some(result.is_ok()),
+        );
+        result
     }
 }
 
