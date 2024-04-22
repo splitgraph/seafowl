@@ -139,7 +139,7 @@ jobs:
           cat notes-${{ env.RELEASE_VERSION }}.md
 
       - name: Get artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
 
