@@ -555,14 +555,6 @@ impl Display for CachingObjectStore {
 
 #[async_trait]
 impl ObjectStore for CachingObjectStore {
-    async fn put(
-        &self,
-        location: &object_store::path::Path,
-        bytes: Bytes,
-    ) -> object_store::Result<PutResult> {
-        self.inner.put(location, bytes).await
-    }
-
     async fn put_opts(
         &self,
         location: &object_store::path::Path,
@@ -585,13 +577,6 @@ impl ObjectStore for CachingObjectStore {
         multipart_id: &MultipartId,
     ) -> object_store::Result<()> {
         self.inner.abort_multipart(location, multipart_id).await
-    }
-
-    async fn get(
-        &self,
-        location: &object_store::path::Path,
-    ) -> object_store::Result<GetResult> {
-        self.inner.get(location).await
     }
 
     async fn get_opts(
