@@ -1,5 +1,4 @@
 mod handler;
-#[cfg(feature = "metrics")]
 mod metrics;
 mod sql;
 
@@ -8,7 +7,6 @@ use crate::context::SeafowlContext;
 use crate::frontend::flight::handler::SeafowlFlightHandler;
 use arrow_flight::flight_service_server::FlightServiceServer;
 use futures::Future;
-#[cfg(feature = "metrics")]
 use metrics::MetricsLayer;
 
 use std::net::SocketAddr;
@@ -29,8 +27,6 @@ pub async fn run_flight_server(
     let svc = FlightServiceServer::new(handler);
 
     let server = Server::builder();
-
-    #[cfg(feature = "metrics")]
     let mut server = server.layer(MetricsLayer {});
 
     server
