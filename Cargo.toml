@@ -43,10 +43,9 @@ include = [
 
 [features]
 catalog-postgres = ["sqlx/postgres"]
-default = ["catalog-postgres", "frontend-arrow-flight", "frontend-postgres", "metrics", "object-store-s3", "object-store-gcs", "remote-tables"]
+default = ["catalog-postgres", "frontend-arrow-flight", "frontend-postgres", "object-store-s3", "object-store-gcs", "remote-tables"]
 frontend-arrow-flight = ["dep:tonic", "dep:arrow-flight", "arrow-flight/flight-sql-experimental"]
 frontend-postgres = ["convergence", "convergence-arrow"]
-metrics = ["dep:metrics", "dep:metrics-exporter-prometheus", "dep:tower"]
 object-store-gcs = ["object_store/gcp"]
 object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
@@ -104,9 +103,8 @@ futures = "0.3"
 hex = ">=0.4.0"
 itertools = { workspace = true }
 lazy_static = ">=1.4.0"
-# Pick up hashbrown >0.13.1 to resolve conflicts with wasm crates
-metrics = { version = "0.22.1", optional = true }
-metrics-exporter-prometheus = { version = "0.13.1", optional = true }
+metrics = { version = "0.22.1" }
+metrics-exporter-prometheus = { version = "0.13.1" }
 moka = { version = "0.12.5", default_features = false, features = ["future", "atomic64", "quanta"] }
 object_store = "0.9"
 parking_lot = "0.12.1"
@@ -134,7 +132,7 @@ thiserror = "1"
 tokio = { workspace = true }
 tokio-graceful-shutdown = { version = "0.14" }
 tonic = { version = "0.10.0", optional = true }
-tower = { version = "0.4", optional = true }
+tower = "0.4"
 tracing = { workspace = true }
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }

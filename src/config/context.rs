@@ -15,9 +15,7 @@ use datafusion::{
 };
 use deltalake::delta_datafusion::DeltaTableFactory;
 use deltalake::storage::factories;
-#[cfg(feature = "metrics")]
 use metrics::describe_counter;
-#[cfg(feature = "metrics")]
 use metrics_exporter_prometheus::PrometheusBuilder;
 
 #[cfg(feature = "catalog-postgres")]
@@ -32,10 +30,7 @@ use datafusion_remote_tables::factory::RemoteTableFactory;
 
 use super::schema::{self, MEBIBYTES, MEMORY_FRACTION};
 
-#[cfg(feature = "metrics")]
 pub const HTTP_REQUESTS: &str = "http_requests";
-
-#[cfg(feature = "metrics")]
 pub const GRPC_REQUESTS: &str = "grpc_requests";
 
 async fn build_metastore(
@@ -102,7 +97,6 @@ pub fn build_state_with_table_factories(
     state
 }
 
-#[cfg(feature = "metrics")]
 pub fn setup_metrics(metrics: &schema::Metrics) {
     let addr: SocketAddr = format!("{}:{}", metrics.host, metrics.port)
         .parse()

@@ -1,6 +1,7 @@
 #![feature(let_chains)]
 
 use clap::AppSettings::NoAutoVersion;
+use seafowl::config::context::setup_metrics;
 use tokio::select;
 
 use std::convert::Infallible;
@@ -14,7 +15,6 @@ use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 
 use clap::Parser;
 
-use seafowl::config::context::setup_metrics;
 #[cfg(feature = "frontend-arrow-flight")]
 use seafowl::frontend::flight::run_flight_server;
 use seafowl::{
@@ -150,7 +150,6 @@ async fn main() {
         config
     };
 
-    #[cfg(feature = "metrics")]
     if !args.cli
         && let Some(ref metrics) = config.misc.metrics
     {

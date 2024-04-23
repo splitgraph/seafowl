@@ -347,7 +347,6 @@ pub struct Misc {
     // Perhaps make this accept a cron job format and use tokio-cron-scheduler?
     pub gc_interval: u16,
     pub ssl_cert_file: Option<String>,
-    #[cfg(feature = "metrics")]
     pub metrics: Option<Metrics>,
     pub object_store_cache: Option<ObjectCacheProperties>,
 }
@@ -358,14 +357,12 @@ impl Default for Misc {
             max_partition_size: 1024 * 1024,
             gc_interval: 0,
             ssl_cert_file: None,
-            #[cfg(feature = "metrics")]
             metrics: None,
             object_store_cache: None,
         }
     }
 }
 
-#[cfg(feature = "metrics")]
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(default)]
 pub struct Metrics {
@@ -373,7 +370,6 @@ pub struct Metrics {
     pub port: u16,
 }
 
-#[cfg(feature = "metrics")]
 impl Default for Metrics {
     fn default() -> Self {
         Self {
@@ -439,30 +435,39 @@ pub fn validate_config(mut config: SeafowlConfig) -> Result<SeafowlConfig, Confi
 
     match config.object_store {
         Some(ObjectStore::S3(S3 {
-             region: None,
-             endpoint: None,
-             ..
-         })) => return Err(ConfigError::Message(
-            "You need to supply either the region or the endpoint of the S3 object store."
-                .to_string(),
-        )),
+            region: None,
+            endpoint: None,
+            ..
+        })) => {
+            return Err(ConfigError::Message(
+                "You need to supply either the region or the endpoint of the S3 object store."
+                    .to_string(),
+            ))
+        }
         Some(ObjectStore::GCS(GCS {
-          google_application_credentials: None,
-          ..
-      })) => warn!(
+            google_application_credentials: None,
+            ..
+        })) => warn!(
             "You are trying to connect to a GCS bucket without providing credentials.
 If Seafowl is running on GCP a token should be fetched using the GCP metadata endpoint."
         ),
-        Some(ObjectStore::Local(_))
-        | Some(ObjectStore::InMemory(_)) if config.misc.object_store_cache.is_some() => warn!(
+        Some(ObjectStore::Local(_)) | Some(ObjectStore::InMemory(_))
+            if config.misc.object_store_cache.is_some() =>
+        {
+            warn!(
             "The provided caching properties take no effect on local and in-memory object stores"
-        ),
-        None if !matches!(config.catalog, Catalog::Clade(Clade { dsn: _ })) =>  return Err(ConfigError::Message(
-            "Cannot omit the object_store section unless Clade catalog is configured"
-                .to_string(),
-        )),
+        )
+        }
+        None if !matches!(config.catalog, Catalog::Clade(Clade { dsn: _ })) => {
+            return Err(ConfigError::Message(
+                "Cannot omit the object_store section unless Clade catalog is configured"
+                    .to_string(),
+            ))
+        }
         // When no object_store section present, default to using in-memory one internally
-        None if matches!(config.catalog, Catalog::Clade(Clade { dsn: _ })) => config.object_store = Some(ObjectStore::InMemory(InMemory {})),
+        None if matches!(config.catalog, Catalog::Clade(Clade { dsn: _ })) => {
+            config.object_store = Some(ObjectStore::InMemory(InMemory {}))
+        }
         _ => {}
     };
 
@@ -792,14 +797,14 @@ cache_control = "private, max-age=86400"
                         read_access: AccessSettings::Any,
                         write_access: AccessSettings::Password {
                             sha256_hash:
-                            "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
-                                .to_string()
+                                "4364aacb2f4609e22d758981474dd82622ad53fc14716f190a5a8a557082612c"
+                                    .to_string()
                         },
                         upload_data_max_length: 256,
                         cache_control: "max-age=43200, public".to_string(),
                     })
                 },
-                                 runtime: Runtime {
+                runtime: Runtime {
                     max_memory: Some(512),
                     temp_dir: Some(PathBuf::from("/tmp/seafowl")),
                 },

@@ -41,7 +41,6 @@ use warp::{hyper::header, hyper::StatusCode, Filter, Reply};
 use super::http_utils::{handle_rejection, into_response, ApiError};
 use crate::auth::{token_to_principal, AccessPolicy, Action, UserContext};
 use crate::catalog::DEFAULT_DB;
-#[cfg(feature = "metrics")]
 use crate::config::context::HTTP_REQUESTS;
 use crate::config::schema::{AccessSettings, HttpFrontend, MEBIBYTES};
 use crate::{
@@ -525,7 +524,6 @@ pub fn filters(
     let log = warp::log::custom(|info: Info<'_>| {
         let path = info.path();
 
-        #[cfg(feature = "metrics")]
         {
             let route = if path.contains("/upload/") {
                 "/upload".to_string()
