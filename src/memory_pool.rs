@@ -40,7 +40,6 @@ impl Metrics {
         size: usize,
         success: bool,
     ) {
-        print!("register allocation");
         let name = extract_consumer_name(reservation.consumer().name()).to_string();
         let result = if success { "success" } else { "error" };
         counter!(ALLOCATIONS, "consumer" => name, "result" => result)
