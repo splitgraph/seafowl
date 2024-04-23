@@ -40,6 +40,7 @@ impl Metrics {
         size: usize,
         success: bool,
     ) {
+        print!("register allocation");
         let name = extract_consumer_name(reservation.consumer().name()).to_string();
         let result = if success { "success" } else { "error" };
         counter!(ALLOCATIONS, "consumer" => name, "result" => result)
@@ -121,5 +122,61 @@ impl MemoryPool for MemoryPoolMetrics {
 
     fn reserved(&self) -> usize {
         self.inner.reserved()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::execution::memory_pool::{
+        GreedyMemoryPool, MemoryConsumer, MemoryPool,
+    };
+    use metrics::with_local_recorder;
+    use metrics_exporter_prometheus::PrometheusBuilder;
+
+    use crate::utils::assert_metric;
+
+    use super::{MemoryPoolMetrics, ALLOCATIONS, DEALLOCATIONS, RESERVED};
+
+    #[test]
+    fn metrics() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        // Make a 16-byte memory pool
+        with_local_recorder(&recorder, || {
+            let pool: Arc<dyn MemoryPool> =
+                Arc::new(MemoryPoolMetrics::new(Arc::new(GreedyMemoryPool::new(16))));
+
+            let mut reservation = MemoryConsumer::new("SomeConsumer[20]").register(&pool);
+            reservation.grow(8);
+            reservation.try_grow(8).unwrap();
+            reservation.try_grow(1).unwrap_err();
+            reservation.free();
+        });
+
+        assert_metric(
+            &recorder,
+            format!(
+                "{}{{consumer=\"SomeConsumer\",result=\"success\"}}",
+                ALLOCATIONS
+            )
+            .as_str(),
+            16,
+        );
+        assert_metric(
+            &recorder,
+            format!(
+                "{}{{consumer=\"SomeConsumer\",result=\"error\"}}",
+                ALLOCATIONS
+            )
+            .as_str(),
+            1,
+        );
+        assert_metric(
+            &recorder,
+            format!("{}{{consumer=\"SomeConsumer\"}}", DEALLOCATIONS).as_str(),
+            16,
+        );
+        assert_metric(&recorder, RESERVED, 0);
     }
 }
