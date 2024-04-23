@@ -13,6 +13,9 @@ use sha2::{Digest, Sha256};
 use tokio::{fs::File, io::AsyncWrite};
 use tracing::{info, warn};
 
+#[cfg(test)]
+use metrics_exporter_prometheus::PrometheusRecorder;
+
 use crate::context::SeafowlContext;
 use crate::repository::interface::DroppedTableDeletionStatus;
 
@@ -186,6 +189,16 @@ pub async fn hash_file(path: &std::path::Path) -> Result<String> {
     let mut file = File::open(path).await?;
     tokio::io::copy(&mut file, &mut hasher).await?;
     Ok(encode(hasher.hasher.finalize()))
+}
+
+#[cfg(test)]
+pub fn assert_metric(recorder: &PrometheusRecorder, key: &str, value: u64) {
+    let rendered = recorder.handle().render();
+    let metric_line = rendered
+        .lines()
+        .find(|l| l.starts_with(&format!("{key} ")))
+        .unwrap_or_else(|| panic!("no metric {key} found, available {rendered}"));
+    assert_eq!(metric_line, format!("{key} {value}"))
 }
 
 #[cfg(test)]
