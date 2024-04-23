@@ -788,10 +788,11 @@ mod tests {
     use crate::object_store::http::HttpObjectStore;
     use crate::{
         config::schema::str_to_hex_hash, object_store::cache::CachingObjectStore,
+        utils::assert_metric,
     };
     use itertools::Itertools;
     use metrics::with_local_recorder;
-    use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
+    use metrics_exporter_prometheus::PrometheusBuilder;
     use object_store::{path::Path, ObjectStore};
     use std::path::Path as FSPath;
     use std::sync::Arc;
@@ -874,15 +875,6 @@ mod tests {
             i += 1;
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-    }
-
-    fn assert_metric(recorder: &PrometheusRecorder, key: &str, value: u64) {
-        let rendered = recorder.handle().render();
-        let metric_line = rendered
-            .lines()
-            .find(|l| l.starts_with(&format!("{key} ")))
-            .unwrap_or_else(|| panic!("no metric {key} found"));
-        assert_eq!(metric_line, format!("{key} {value}"))
     }
 
     #[rstest]
