@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
-use metrics::{counter, describe_gauge, gauge, Gauge};
+use metrics::{counter, describe_counter, describe_gauge, gauge, Gauge};
 
 const ALLOCATIONS: &str = "seafowl_datafusion_memory_pool_allocated_bytes_total";
 const DEALLOCATIONS: &str = "seafowl_datafusion_memory_pool_freed_bytes_total";
@@ -17,11 +17,11 @@ struct Metrics {
 
 impl Metrics {
     pub fn new() -> Self {
-        describe_gauge!(
+        describe_counter!(
             ALLOCATIONS,
             "Memory allocated in DataFusion's managed memory pool"
         );
-        describe_gauge!(
+        describe_counter!(
             DEALLOCATIONS,
             "Memory freed in DataFusion's managed memory pool"
         );
