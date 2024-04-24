@@ -163,7 +163,8 @@ pub struct CachingObjectStoreMetrics {
     get_range_calls: Counter,
     get_range_bytes: Counter,
     cache_miss_bytes: Counter,
-    redownload_errors: Counter,
+    cache_file_missing_errors: Counter,
+    cache_file_write_errors: Counter,
     double_write_errors: Counter,
     deletion_errors: Counter,
     cache_disk_read: Counter,
@@ -220,7 +221,8 @@ impl CachingObjectStoreMetrics {
             get_range_calls: counter!(INBOUND_REQUESTS),
             get_range_bytes: counter!(REQUESTED_BYTES),
             cache_miss_bytes: counter!(CACHE_MISS_BYTES),
-            redownload_errors: counter!(CACHE_WARNINGS, "error" => "redownload"),
+            cache_file_missing_errors: counter!(CACHE_WARNINGS, "error" => "cache_file_missing"),
+            cache_file_write_errors: counter!(CACHE_WARNINGS, "error" => "cache_file_write"),
             double_write_errors: counter!(CACHE_WARNINGS, "error" => "double_write"),
             deletion_errors: counter!(CACHE_WARNINGS, "error" => "deletion"),
             cache_memory_read: counter!(CACHE_HIT_READS, "location" => "memory"),
@@ -485,7 +487,7 @@ impl CachingObjectStore {
                                         "Re-downloading cache value for {key:?}: {err}"
                                     );
 
-                                    self.metrics.redownload_errors.increment(1);
+                                    self.metrics.cache_file_missing_errors.increment(1);
                                     let data = self
                                         .get_range_inner(location, chunk_range.clone())
                                         .await?;
@@ -571,6 +573,7 @@ impl CachingObjectStore {
                         // Write task failed, remove the cache entry; we could also defer that to
                         // TTL/LRU eviction, but then we risk ballooning the memory usage.
                         warn!("Invalidating cache entry for {key:?}; failed writing to a file: {err}");
+                        file_manager.metrics.cache_file_write_errors.increment(1);
                         cache.invalidate(&key).await;
                     }
                 };
