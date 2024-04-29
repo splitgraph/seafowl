@@ -38,7 +38,7 @@ use datafusion::{
     physical_plan::{ExecutionPlan, SendableRecordBatchStream},
     sql::TableReference,
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column as ColumnExpr, ResolvedTableReference, SchemaReference};
 use datafusion_expr::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
@@ -279,21 +279,26 @@ impl SeafowlContext {
                         // are qualified thanks to https://github.com/apache/arrow-datafusion/pull/7316
                         //
                         // This leads to a panic unless we strip out the qualifier first.
-                        filter.push(predicate.clone().transform(&|expr| {
-                            Ok(
-                                if let Expr::Column(ColumnExpr {
-                                    relation: Some(_),
-                                    name,
-                                }) = &expr
-                                {
-                                    Transformed::Yes(Expr::Column(
-                                        ColumnExpr::new_unqualified(name),
-                                    ))
-                                } else {
-                                    Transformed::No(expr)
-                                },
-                            )
-                        })?);
+                        filter.push(
+                            predicate
+                                .clone()
+                                .transform(&|expr| {
+                                    Ok(
+                                        if let Expr::Column(ColumnExpr {
+                                            relation: Some(_),
+                                            name,
+                                        }) = &expr
+                                        {
+                                            Transformed::yes(Expr::Column(
+                                                ColumnExpr::new_unqualified(name),
+                                            ))
+                                        } else {
+                                            Transformed::no(expr)
+                                        },
+                                    )
+                                })
+                                .data()?,
+                        );
 
                         // A WHERE clause has been used; employ it to prune the update down to only
                         // a subset of files, while inheriting the rest from the previous version

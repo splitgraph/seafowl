@@ -13,7 +13,7 @@ use datafusion::{
     error::DataFusionError,
     execution::context::TaskContext,
     parquet::{arrow::ArrowWriter, file::properties::WriterProperties},
-    physical_plan::ExecutionPlan,
+    physical_plan::{ExecutionPlan, ExecutionPlanProperties},
     sql::TableReference,
 };
 use deltalake::kernel::{Action, Add, Schema as DeltaSchema};
@@ -29,6 +29,7 @@ use object_store::path::Path;
 use std::fs::File;
 use std::sync::Arc;
 use tempfile::{NamedTempFile, TempPath};
+
 use tokio::fs::File as AsyncFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Semaphore;

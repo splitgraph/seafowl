@@ -182,6 +182,10 @@ impl<'a> DFParser<'a> {
             source: CopyToSource::Relation(table_name),
             target: location,
             options: vec![CONVERT_TO_DELTA.clone()],
+            partitioned_by: vec![],
+            has_header: false,
+
+            stored_as: None,
         }))
     }
 
@@ -238,6 +242,9 @@ impl<'a> DFParser<'a> {
             source,
             target,
             options,
+            partitioned_by: vec![],
+            has_header: false,
+            stored_as: None,
         }))
     }
 

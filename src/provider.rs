@@ -19,8 +19,6 @@ use datafusion_common::DFSchema;
 use datafusion_expr::{expr::Alias, Expr};
 use deltalake::DeltaTable;
 
-use tracing::warn;
-
 use crate::repository::interface::FunctionId;
 use crate::system_tables::{SystemSchemaProvider, SYSTEM_SCHEMA};
 use crate::{catalog::STAGING_SCHEMA, wasm_udf::data_types::CreateFunctionDetails};
@@ -74,7 +72,7 @@ impl SchemaProvider for SeafowlSchema {
             .collect::<Vec<_>>()
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         // TODO: This is kind of meh: rebuilding the table from scratch and over-writing the existing entry, instead of just `load`-ing
         // the existing one (which we can't because it's behind of an Arc, and `load` needs `mut`).
         // We may be able get away with it by:
@@ -85,14 +83,14 @@ impl SchemaProvider for SeafowlSchema {
         // updating the existing table is to optimize potential multi-lookups during processing of
         // a single query.
         let mut delta_table = match self.tables.get(name) {
-            None => return None,
+            None => return Ok(None),
             Some(table) => match table.as_any().downcast_ref::<DeltaTable>() {
                 // This shouldn't happen since we store only DeltaTable's in the map
-                None => return Some(table.clone()),
+                None => return Ok(Some(table.clone())),
                 Some(delta_table) => {
                     if delta_table.version() != -1 {
                         // Table was already loaded.
-                        return Some(table.clone());
+                        return Ok(Some(table.clone()));
                     } else {
                         // A negative table version indicates that the table was never loaded; we need
                         // to do it before returning it.
@@ -102,14 +100,11 @@ impl SchemaProvider for SeafowlSchema {
             },
         };
 
-        if let Err(err) = delta_table.load().await {
-            warn!("Failed to load table {name}: {err}");
-            return None;
-        }
+        delta_table.load().await?;
 
         let table = Arc::from(delta_table) as Arc<dyn TableProvider>;
         self.tables.insert(Arc::from(name), table.clone());
-        Some(table)
+        Ok(Some(table))
     }
 
     // Used for registering versioned tables via `SessionContext::register_table`.

@@ -46,8 +46,8 @@ impl SchemaProvider for SystemSchemaProvider {
         vec![TABLE_VERSIONS.to_string(), DROPPED_TABLES.to_string()]
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        match name {
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        Ok(match name {
             // Lazy instantiate the tables, but defer loading the rows until the actual scan is invoked.
             TABLE_VERSIONS => {
                 let table = TableVersionsTable::new(
@@ -68,7 +68,7 @@ impl SchemaProvider for SystemSchemaProvider {
                 }))
             }
             _ => None,
-        }
+        })
     }
 
     fn table_exist(&self, name: &str) -> bool {

@@ -301,6 +301,7 @@ impl SeafowlContext {
                 source: CopyToSource::Relation(table_name),
                 target,
                 options,
+                ..
             }) if options.contains(&CONVERT_TO_DELTA) => {
                 Ok(LogicalPlan::Extension(Extension {
                     node: Arc::new(SeafowlExtensionNode::ConvertTable(ConvertTable {
