@@ -5,7 +5,7 @@ use arrow::temporal_conversions::{
 use datafusion::common::{Column, DataFusionError};
 use datafusion::error::Result;
 use datafusion::scalar::ScalarValue;
-use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_expr::expr::InList;
 use datafusion_expr::{BinaryExpr, Expr, Operator};
 use itertools::Itertools;
@@ -109,9 +109,9 @@ pub trait FilterPushdownConverter {
 }
 
 impl<T: FilterPushdownConverter> TreeNodeVisitor for FilterPushdownVisitor<T> {
-    type N = Expr;
+    type Node = Expr;
 
-    fn pre_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
+    fn f_down(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
         match expr {
             Expr::Column(_)
             | Expr::Literal(_)
@@ -140,10 +140,10 @@ impl<T: FilterPushdownConverter> TreeNodeVisitor for FilterPushdownVisitor<T> {
                 )));
             }
         };
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 
-    fn post_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
+    fn f_up(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
         match expr {
             // Column and Literal are the only two leaf nodes atm - they don't depend on any SQL
             // expression being on the stack.
@@ -235,7 +235,7 @@ impl<T: FilterPushdownConverter> TreeNodeVisitor for FilterPushdownVisitor<T> {
             }
             _ => {}
         };
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

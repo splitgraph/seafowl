@@ -62,7 +62,7 @@ async fn test_interleaving_queries(
         .unwrap_err()
         .to_string();
     assert!(
-        err.contains("code: Internal, message: \"Error during planning: table 'default.public.nonexistent' not found\"")
+        err.contains("status: Internal, message: \"Error during planning: table 'default.public.nonexistent' not found\"")
     );
     // ...and another one after handing off the stream to the client, so we don't really capture the status in the metrics
     let err = get_flight_batches(&mut client, "SELECT 'notanint'::INT".to_string())
@@ -70,7 +70,7 @@ async fn test_interleaving_queries(
         .unwrap_err()
         .to_string();
     assert!(
-        err.contains("code: Internal, message: \"Arrow error: Cast error: Cannot cast string 'notanint' to value of Int32 type\"")
+        err.contains("status: Internal, message: \"Arrow error: Cast error: Cannot cast string 'notanint' to value of Int32 type\"")
     );
 
     // Now retrieve the results for the second ticket
@@ -91,7 +91,7 @@ async fn test_interleaving_queries(
     let err = client.do_get(ticket_2).await.unwrap_err();
     assert!(err
         .to_string()
-        .contains("code: NotFound, message: \"No results found for query id"));
+        .contains("status: NotFound, message: \"No results found for query id"));
 
     // Now retrieve the results for the first ticket
     let flight_stream = client.do_get(ticket_1).await?;

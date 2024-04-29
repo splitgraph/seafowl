@@ -1,7 +1,7 @@
 use crate::clade::*;
 
 #[rstest]
-#[should_panic(expected = "table 'default.local.file' not found")]
+#[should_panic(expected = "External(NotATable(\"no log files\"))")]
 #[case("local.file", false)]
 #[case("local.file", true)]
 #[case("s3.minio", true)]

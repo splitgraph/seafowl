@@ -6,7 +6,7 @@ use std::time::Instant;
 use std::{net::SocketAddr, sync::Arc};
 use warp::{hyper, Rejection};
 
-use arrow::json::writer::record_batches_to_json_rows;
+use arrow::json::writer::{LineDelimited, WriterBuilder};
 use arrow::record_batch::RecordBatch;
 #[cfg(feature = "frontend-arrow-flight")]
 use arrow_flight::flight_service_client::FlightServiceClient;
@@ -18,7 +18,7 @@ use bytes::Buf;
 use datafusion::datasource::DefaultTableSource;
 
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::FileType;
 use datafusion_expr::logical_plan::{LogicalPlan, TableScan};
 use deltalake::parquet::data_type::AsBytes;
@@ -68,12 +68,12 @@ struct ETagBuilderVisitor {
 }
 
 impl TreeNodeVisitor for ETagBuilderVisitor {
-    type N = LogicalPlan;
+    type Node = LogicalPlan;
 
-    fn pre_visit(
+    fn f_down(
         &mut self,
         plan: &LogicalPlan,
-    ) -> Result<VisitRecursion, DataFusionError> {
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
         if let LogicalPlan::TableScan(TableScan { source, .. }) = plan {
             // TODO handle external Parquet tables too
             if let Some(default_table_source) =
@@ -91,7 +91,7 @@ impl TreeNodeVisitor for ETagBuilderVisitor {
                 }
             }
         }
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -130,14 +130,12 @@ struct QueryBody {
 fn batch_to_json(
     maybe_batch: Result<RecordBatch, DataFusionError>,
 ) -> Result<Vec<u8>, ArrowError> {
+    let batch = maybe_batch?;
     let mut buf = Vec::new();
-    for row in record_batches_to_json_rows(&[&maybe_batch?])? {
-        buf.extend(
-            serde_json::to_vec(&row)
-                .map_err(|error| ArrowError::JsonError(error.to_string()))?,
-        );
-        buf.push(b'\n');
-    }
+    let mut writer = WriterBuilder::new()
+        .with_explicit_nulls(true)
+        .build::<_, LineDelimited>(&mut buf);
+    writer.write(&batch)?;
     Ok(buf)
 }
 
@@ -1220,7 +1218,7 @@ pub mod tests {
         let error_msg = String::from_utf8_lossy(resp.body());
         assert_eq!(
             error_msg,
-            "Json error: data type Decimal128(38, 10) not supported in nested map for json writer"
+            "Invalid argument error: JSON Writer does not support data type: Decimal128(38, 10)"
         );
     }
 
@@ -1681,7 +1679,7 @@ SELECT
         assert_eq!(
             resp.body(),
             &Bytes::from(
-                r#"{"bigint_val":1000000000,"bool_val":true,"char_val":"c","date_val":"2022-01-01","double_val":12.345678910111213,"float_val":12.345,"int_array_val":[1,2,3,4,5],"integer_val":1000000,"real_val":12.345,"smallint_val":1000,"string_val":"string","text_array_val":["one","two"],"text_val":"text","timestamp_val":"2022-01-01T12:03:11.123456","tinyint_val":1,"varchar_val":"varchar"}
+                r#"{"tinyint_val":1,"smallint_val":1000,"integer_val":1000000,"bigint_val":1000000000,"char_val":"c","varchar_val":"varchar","text_val":"text","string_val":"string","float_val":12.345,"real_val":12.345,"double_val":12.345678910111213,"bool_val":true,"date_val":"2022-01-01","timestamp_val":"2022-01-01T12:03:11.123456","int_array_val":[1,2,3,4,5],"text_array_val":["one","two"]}
 "#
             )
         );

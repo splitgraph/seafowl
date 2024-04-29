@@ -919,7 +919,7 @@ f95f3c90f2533d2267773eac66313f1d00803ff725303d03fd3fbe17a6d1\
             "| 951.0 | 951.0  | 2297.0  | 4925.0  | 263.0   | 1202.0  |",
             "| 951.0 | 951.0  | 9849.0  | 19698.0 | 1722.0  | 2104.0  |",
             "| 588.0 | 0.0    | 42224.0 | 5657.0  | 2433.0  | 1322.0  |",
-            "| 0.0   | -951.0 | 0.0     | 0.0     | 10270.0 | 9407.0  |",
+            "| 0.0   | -951.0 | -0.0    | -0.0    | 10270.0 | 9407.0  |",
             "+-------+--------+---------+---------+---------+---------+",
         ];
 
@@ -1174,15 +1174,9 @@ c40201087f230041206b2203240020032002370318200320013703102003\
         .await
         .unwrap();
 
-        let results = ctx
-            .sql("select add_i64(1,2,3)")
-            .await
-            .unwrap()
-            .collect()
-            .await;
-        assert!(results.is_err());
+        let err = ctx.sql("select add_i64(1,2,3)").await.unwrap_err();
         assert!(
-            results.err().unwrap().to_string().contains("Error during planning: Coercion from [Int64, Int64, Int64] to the signature Exact([Int64, Int64]) failed."
+            err.to_string().contains("No function matches the given name and argument types 'add_i64(Int64, Int64, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tadd_i64(Int64, Int64)"
         ));
     }
 
