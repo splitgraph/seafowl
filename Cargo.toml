@@ -50,6 +50,18 @@ object-store-gcs = ["object_store/gcp"]
 object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
+[patch.crates-io]
+# Pick up backport of https://github.com/apache/arrow-datafusion/pull/10114
+datafusion = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
+datafusion-common = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
+datafusion-execution = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
+datafusion-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
+datafusion-optimizer = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
+datafusion-physical-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
+datafusion-physical-plan = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
+datafusion-proto = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
+datafusion-sql = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
+
 [dependencies]
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
