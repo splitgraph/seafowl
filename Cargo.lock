@@ -1331,6 +1331,7 @@ dependencies = [
 name = "clade"
 version = "0.1.0"
 dependencies = [
+ "arrow-flight",
  "prost",
  "tonic",
  "tonic-build",

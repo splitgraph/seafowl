@@ -1,10 +1,12 @@
 use crate::frontend::flight::handler::{SeafowlFlightHandler, SEAFOWL_SQL_DATA};
+use arrow::record_batch::RecordBatch;
+use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_server::FlightService;
-use arrow_flight::sql::server::FlightSqlService;
+use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
 use arrow_flight::sql::{
-    CommandGetSqlInfo, CommandStatementQuery, ProstMessageExt, SqlInfo,
+    Any, CommandGetSqlInfo, CommandStatementQuery, ProstMessageExt, SqlInfo,
     TicketStatementQuery,
 };
 use arrow_flight::{
@@ -12,6 +14,7 @@ use arrow_flight::{
     Ticket,
 };
 use async_trait::async_trait;
+use clade::flight::{DoPutCommand, DoPutResult};
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -145,4 +148,46 @@ impl FlightSqlService for SeafowlFlightHandler {
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
+
+    async fn do_put_fallback(
+        &self,
+        request: Request<PeekableFlightDataStream>,
+        message: Any,
+    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
+        let cmd: DoPutCommand = Message::decode(&*message.value)
+            .map_err(|err| Status::unknown(format!("Couldn't decode command: {err}")))?;
+
+        if !cmd.pk_column.is_empty() {
+            return Err(Status::unimplemented(
+                "Append only changes supported for now",
+            ));
+        }
+
+        let table = cmd.table;
+
+        let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(
+            request.into_inner().map_err(|e| e.into()),
+        )
+        .try_collect()
+        .await?;
+
+        let ack_type =
+            self.process_batches(table.clone(), batches)
+                .await
+                .map_err(|err| {
+                    Status::internal(format!(
+                        "Failed processing DoPut for table {table}: {err}"
+                    ))
+                })?;
+
+        Ok(Response::new(Box::pin(futures::stream::iter(vec![Ok(
+            arrow_flight::PutResult {
+                app_metadata: DoPutResult {
+                    r#type: i32::from(ack_type),
+                }
+                .encode_to_vec()
+                .into(),
+            },
+        )]))))
+    }
 }

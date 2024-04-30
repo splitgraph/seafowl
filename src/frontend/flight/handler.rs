@@ -1,11 +1,17 @@
+use crate::context::delta::CreateDeltaTableDetails;
 use crate::context::SeafowlContext;
+use arrow::record_batch::RecordBatch;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::SqlInfo;
 use arrow_schema::SchemaRef;
+use clade::flight::do_put_result::AckType;
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion_common::DataFusionError;
+use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::{DataFusionError, TableReference};
 use lazy_static::lazy_static;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -32,6 +38,7 @@ lazy_static! {
 pub(super) struct SeafowlFlightHandler {
     pub context: Arc<SeafowlContext>,
     pub results: Arc<DashMap<String, Mutex<SendableRecordBatchStream>>>,
+    pub writes: Arc<DashMap<String, Vec<RecordBatch>>>,
 }
 
 impl SeafowlFlightHandler {
@@ -39,6 +46,7 @@ impl SeafowlFlightHandler {
         Self {
             context,
             results: Arc::new(Default::default()),
+            writes: Arc::new(Default::default()),
         }
     }
 
@@ -88,5 +96,47 @@ impl SeafowlFlightHandler {
         })?;
 
         Ok(batch_stream_mutex.into_inner())
+    }
+
+    pub async fn process_batches(
+        &self,
+        table: String,
+        mut batches: Vec<RecordBatch>,
+    ) -> Result<AckType> {
+        match self.writes.entry(table.clone()) {
+            Entry::Occupied(mut entry) => {
+                let schema = batches.first().unwrap().schema().clone();
+                entry.get_mut().append(&mut batches);
+
+                if entry
+                    .get()
+                    .iter()
+                    .fold(0, |rows, batch| rows + batch.num_rows())
+                    > 3
+                {
+                    let batches = entry.remove();
+
+                    let table_ref = TableReference::bare(table.clone());
+                    self.context
+                        .create_delta_table(
+                            table_ref,
+                            CreateDeltaTableDetails::EmptyTable(schema.as_ref().clone()),
+                        )
+                        .await?;
+
+                    let plan: Arc<dyn ExecutionPlan> =
+                        Arc::new(MemoryExec::try_new(&[batches], schema, None).unwrap());
+
+                    self.context.plan_to_delta_table(table, &plan).await?;
+                    Ok(AckType::Durable)
+                } else {
+                    Ok(AckType::Memory)
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(batches);
+                Ok(AckType::Memory)
+            }
+        }
     }
 }

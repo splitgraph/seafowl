@@ -273,13 +273,13 @@ pub async fn plan_to_object_store(
         .collect()
 }
 
-pub(super) enum CreateDeltaTableDetails {
+pub enum CreateDeltaTableDetails {
     EmptyTable(Schema),
     FromPath(Path),
 }
 
 impl SeafowlContext {
-    pub(super) async fn create_delta_table<'a>(
+    pub async fn create_delta_table<'a>(
         &'a self,
         name: impl Into<TableReference<'a>>,
         details: CreateDeltaTableDetails,
@@ -368,7 +368,7 @@ impl SeafowlContext {
     }
 
     /// Generate the Delta table builder and execute the write
-    pub(super) async fn plan_to_delta_table<'a>(
+    pub async fn plan_to_delta_table<'a>(
         &self,
         name: impl Into<TableReference<'a>>,
         plan: &Arc<dyn ExecutionPlan>,

@@ -24,6 +24,7 @@ use seafowl::context::SeafowlContext;
 use seafowl::frontend::flight::run_flight_server;
 
 mod client;
+mod do_put;
 mod e2e;
 mod search_path;
 
