@@ -2,54 +2,37 @@ syntax = "proto3";
 
 package clade.flight;
 
-message DoPutCommand {
-  enum CommandType {
-    // Protobuf pattern, not used
-    UNKNOWN = 0;
+import "schema.proto";
 
-    // Data: updated or inserted rows. If a column is omitted,
-    // this assumes it's unchanged.
-    UPSERT = 1;
+message DataPutCommand {
+  // Path to the Delta Table, relative to the root URL of the store below.
+  // Will be created based on the schema of the RecordBatch if doesn't exist.
+  // e.g. path/to/table
+  string path = 1;
 
-    // Data: columns forming the primary keys / replica identity
-    // of the deleted rows.
-    DELETE = 2;
-  }
+  // Root URL (e.g. s3://my-bucket) and connection options for the table's path
+  schema.StorageLocation store = 2;
 
-  CommandType type = 1;
-
-  // TODO: Table ref or URL of the Delta Table?
-  string table = 2;
-
-  // Primary key columns
+  // Primary key columns. Must not be empty: the table must always
+  // have a replica identity / PK.
   repeated string pk_column = 3;
 
   // Opaque string identifying PGD origin
-  optional string origin = 4;
+  string origin = 4;
 
-  // Monotonically-increasing transaction number (e.g. an LSN)
-  optional uint64 sequence_number = 5;
+  // Monotonically-increasing transaction number (e.g. the LSN)
+  uint64 sequence_number = 5;
 }
 
-message DoPutResult {
-  enum AckType {
-    UNKNOWN = 0;
+message DataPutResult {
+  // If false, Seafowl is overloaded and can't accept the change (e.g.
+  // can't flush fast enough). The client should wait and retry.
+  // TODO: also schema mismatch errors
+  bool accepted = 1;
 
-    // Seafowl is overloaded and can't accept the change (e.g.
-    // can't flush fast enough). The client should wait and retry.
-    // TODO: we can block when receiving FlightData instead?
-    BACKPRESSURE = 1;
+  // Sequence number up to which the changes are in Seafowl's memory.
+  uint64 memory_sequence_number = 2;
 
-    // Change acknowledged and is in-memory. Will get lost if
-    // the Seafowl instance is restarted
-    MEMORY = 2;
-
-    // Change, and all changes from this origin, has been flushed
-    // to durable storage (i.e. Delta Lake).
-    DURABLE = 3;
-  }
-
-  AckType type = 1;
+  // Sequence number up to which the changes are in Delta Lake.
+  uint64 durable_sequence_number = 3;
 }
-
-

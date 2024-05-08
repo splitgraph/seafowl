@@ -17,14 +17,14 @@ pub mod flight {
     // This in turn allows us to circumvent the default `do_put`, and use our
     // custom message/fields in `do_put_fallback` to convey additional information
     // about the command.
-    impl ProstMessageExt for DoPutCommand {
+    impl ProstMessageExt for DataPutCommand {
         fn type_url() -> &'static str {
-            "DoPutCommand"
+            "DataPutCommand"
         }
 
         fn as_any(&self) -> Any {
             Any {
-                type_url: "DoPutCommand".to_string(),
+                type_url: "DataPutCommand".to_string(),
                 value: self.encode_to_vec().into(),
             }
         }

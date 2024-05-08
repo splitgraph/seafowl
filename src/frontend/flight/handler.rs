@@ -1,23 +1,29 @@
-use crate::context::delta::CreateDeltaTableDetails;
 use crate::context::SeafowlContext;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::SqlInfo;
 use arrow_schema::SchemaRef;
-use clade::flight::do_put_result::AckType;
+use clade::flight::{DataPutCommand, DataPutResult};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{DataFusionError, TableReference};
+use datafusion_common::DataFusionError;
+use deltalake::kernel::Schema as DeltaSchema;
+use deltalake::operations::create::CreateBuilder;
+use deltalake::DeltaTable;
 use lazy_static::lazy_static;
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::metadata::MetadataMap;
 use tonic::Status;
-use tracing::{error, info};
+use tracing::{debug, error, info};
+use url::Url;
+
+pub const SEAFOWL_PUT_DATA_UD_FLAG: &str = "__seafowl_ud";
+const SEAFOWL_PUT_DATA_ORIGIN: &str = "origin";
+const SEAFOWL_PUT_DATA_SEQUENCE_NUMBER: &str = "sequence";
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -38,7 +44,7 @@ lazy_static! {
 pub(super) struct SeafowlFlightHandler {
     pub context: Arc<SeafowlContext>,
     pub results: Arc<DashMap<String, Mutex<SendableRecordBatchStream>>>,
-    pub writes: Arc<DashMap<String, Vec<RecordBatch>>>,
+    pub writes: Arc<DashMap<String, (u64, Vec<RecordBatch>)>>,
 }
 
 impl SeafowlFlightHandler {
@@ -98,44 +104,113 @@ impl SeafowlFlightHandler {
         Ok(batch_stream_mutex.into_inner())
     }
 
-    pub async fn process_batches(
+    pub async fn process_put_cmd(
         &self,
-        table: String,
+        cmd: DataPutCommand,
         mut batches: Vec<RecordBatch>,
-    ) -> Result<AckType> {
-        match self.writes.entry(table.clone()) {
+    ) -> Result<DataPutResult> {
+        let store_loc = cmd.store.unwrap().clone();
+        let log_store = self
+            .context
+            .metastore
+            .object_stores
+            .get_log_store_for_table(
+                Url::parse(&store_loc.location).map_err(|e| {
+                    DataFusionError::Execution(format!(
+                        "Couldn't parse put location: {e}"
+                    ))
+                })?,
+                store_loc.options,
+                cmd.path,
+            )?;
+
+        let url = log_store.root_uri();
+        // Check if a table exists yet in the provided location, and if not create one
+        let dur_seq = if !log_store.is_delta_table_location().await? {
+            let schema = batches.first().unwrap().schema();
+            let delta_schema = DeltaSchema::try_from(schema.as_ref())?;
+
+            debug!(
+                "Creating new Delta table at location: {}",
+                log_store.root_uri()
+            );
+            CreateBuilder::new()
+                .with_log_store(log_store)
+                .with_columns(delta_schema.fields().clone())
+                .with_comment(format!("Created by Seafowl {}", env!("CARGO_PKG_VERSION")))
+                .with_metadata([
+                    (
+                        SEAFOWL_PUT_DATA_ORIGIN.to_string(),
+                        Value::String(cmd.origin),
+                    ),
+                    (
+                        SEAFOWL_PUT_DATA_SEQUENCE_NUMBER.to_string(),
+                        Value::Number(cmd.sequence_number.into()),
+                    ),
+                ])
+                .await?;
+            None
+        } else {
+            let mut table = DeltaTable::new(log_store, Default::default());
+            table.load().await?;
+
+            // TODO: handle all edge cases with missing/un-parsable sequence numbers
+            let commit_infos = table.history(Some(1)).await?;
+            match commit_infos
+                .last()
+                .expect("Table has non-zero comits")
+                .info
+                .get(SEAFOWL_PUT_DATA_SEQUENCE_NUMBER)
+            {
+                Some(Value::Number(seq)) => seq.as_u64(),
+                _ => None,
+            }
+        };
+
+        let num_rows = batches
+            .iter()
+            .fold(0, |rows, batch| rows + batch.num_rows());
+        if num_rows == 0 {
+            debug!("Received empty batches, returning current sequence numbers");
+
+            let dur_seq = dur_seq.unwrap_or(0);
+            let mem_seq = self
+                .writes
+                .get(&url)
+                .map(|r| r.value().0)
+                .unwrap_or(dur_seq);
+
+            let result = DataPutResult {
+                accepted: false,
+                memory_sequence_number: mem_seq,
+                durable_sequence_number: dur_seq,
+            };
+            return Ok(result);
+        }
+
+        debug!("Processing data change with {num_rows} rows for url {url}");
+        let _size = batches
+            .iter()
+            .fold(0, |bytes, batch| bytes + batch.get_array_memory_size());
+
+        match self.writes.entry(url) {
             Entry::Occupied(mut entry) => {
-                let schema = batches.first().unwrap().schema().clone();
-                entry.get_mut().append(&mut batches);
-
-                if entry
-                    .get()
-                    .iter()
-                    .fold(0, |rows, batch| rows + batch.num_rows())
-                    > 3
-                {
-                    let batches = entry.remove();
-
-                    let table_ref = TableReference::bare(table.clone());
-                    self.context
-                        .create_delta_table(
-                            table_ref,
-                            CreateDeltaTableDetails::EmptyTable(schema.as_ref().clone()),
-                        )
-                        .await?;
-
-                    let plan: Arc<dyn ExecutionPlan> =
-                        Arc::new(MemoryExec::try_new(&[batches], schema, None).unwrap());
-
-                    self.context.plan_to_delta_table(table, &plan).await?;
-                    Ok(AckType::Durable)
-                } else {
-                    Ok(AckType::Memory)
-                }
+                entry.get_mut().1.append(&mut batches);
+                let result = DataPutResult {
+                    accepted: true,
+                    memory_sequence_number: cmd.sequence_number,
+                    durable_sequence_number: 0,
+                };
+                Ok(result)
             }
             Entry::Vacant(entry) => {
-                entry.insert(batches);
-                Ok(AckType::Memory)
+                entry.insert((cmd.sequence_number, batches));
+                let result = DataPutResult {
+                    accepted: true,
+                    memory_sequence_number: cmd.sequence_number,
+                    durable_sequence_number: 0,
+                };
+                Ok(result)
             }
         }
     }

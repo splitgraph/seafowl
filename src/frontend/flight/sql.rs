@@ -1,4 +1,6 @@
-use crate::frontend::flight::handler::{SeafowlFlightHandler, SEAFOWL_SQL_DATA};
+use crate::frontend::flight::handler::{
+    SeafowlFlightHandler, SEAFOWL_PUT_DATA_UD_FLAG, SEAFOWL_SQL_DATA,
+};
 use arrow::record_batch::RecordBatch;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
@@ -14,7 +16,7 @@ use arrow_flight::{
     Ticket,
 };
 use async_trait::async_trait;
-use clade::flight::{DoPutCommand, DoPutResult};
+use clade::flight::DataPutCommand;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -22,7 +24,7 @@ use prost::Message;
 use std::pin::Pin;
 use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 #[async_trait]
@@ -154,39 +156,57 @@ impl FlightSqlService for SeafowlFlightHandler {
         request: Request<PeekableFlightDataStream>,
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
-        let cmd: DoPutCommand = Message::decode(&*message.value)
-            .map_err(|err| Status::unknown(format!("Couldn't decode command: {err}")))?;
+        // Extract the command
+        let cmd: DataPutCommand = Message::decode(&*message.value).map_err(|err| {
+            let err = format!("Couldn't decode command: {err}");
+            warn!(err);
+            Status::invalid_argument(err)
+        })?;
 
-        if !cmd.pk_column.is_empty() {
-            return Err(Status::unimplemented(
-                "Append only changes supported for now",
-            ));
+        // Validate primary columns are provided
+        if cmd.pk_column.is_empty() {
+            let err = "Changes to tables without primary keys are not supported yet.";
+            warn!(err);
+            return Err(Status::unimplemented(err));
         }
 
-        let table = cmd.table;
-
+        // Extract the batches
         let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(
             request.into_inner().map_err(|e| e.into()),
         )
         .try_collect()
         .await?;
 
-        let ack_type =
-            self.process_batches(table.clone(), batches)
+        // Validate upsert/delete flag column is present
+        if !batches.is_empty()
+            && batches
+                .first()
+                .unwrap()
+                .schema()
+                .column_with_name(SEAFOWL_PUT_DATA_UD_FLAG)
+                .is_none()
+        {
+            let err = format!("Change requested but batches do not contain upsert/delete flag column `{SEAFOWL_PUT_DATA_UD_FLAG}`");
+            warn!(err);
+            return Err(Status::invalid_argument(err));
+        }
+
+        let put_result =
+            self.process_put_cmd(cmd.clone(), batches)
                 .await
                 .map_err(|err| {
-                    Status::internal(format!(
-                        "Failed processing DoPut for table {table}: {err}"
-                    ))
+                    let err = format!(
+                        "Failed processing DoPut for location {}/{}: {err}",
+                        cmd.store.unwrap().location,
+                        cmd.path
+                    );
+                    warn!(err);
+                    Status::internal(err)
                 })?;
 
         Ok(Response::new(Box::pin(futures::stream::iter(vec![Ok(
             arrow_flight::PutResult {
-                app_metadata: DoPutResult {
-                    r#type: i32::from(ack_type),
-                }
-                .encode_to_vec()
-                .into(),
+                app_metadata: put_result.encode_to_vec().into(),
             },
         )]))))
     }

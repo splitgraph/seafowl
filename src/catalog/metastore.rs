@@ -34,7 +34,7 @@ pub struct Metastore {
     pub tables: Arc<dyn TableStore>,
     pub functions: Arc<dyn FunctionStore>,
     staging_schema: Arc<MemorySchemaProvider>,
-    object_stores: Arc<ObjectStoreFactory>,
+    pub object_stores: Arc<ObjectStoreFactory>,
 }
 
 impl Metastore {
