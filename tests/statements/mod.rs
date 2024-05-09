@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::env;
-use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::array::{Int64Array, StringArray};
@@ -9,9 +8,11 @@ use chrono::{TimeZone, Utc};
 use datafusion::assert_batches_eq;
 use datafusion::datasource::TableProvider;
 use datafusion::physical_optimizer::pruning::PruningStatistics;
+use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
 use datafusion_common::Column;
 use datafusion_common::{assert_contains, Result};
-use itertools::sorted;
+use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
+use itertools::{sorted, Itertools};
 
 use seafowl::catalog::{DEFAULT_DB, DEFAULT_SCHEMA};
 #[cfg(feature = "remote-tables")]
