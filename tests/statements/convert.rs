@@ -71,5 +71,82 @@ async fn test_convert_from_flat_parquet_table() -> Result<()> {
     )
     .await;
 
+    // Ensure partition/column stats are collected in add logs:
+    // https://github.com/delta-io/delta-rs/pull/2491
+    let mut table = context.try_get_delta_table("table_converted").await?;
+    table.load().await?;
+
+    // Convoluted way of sort-stable stats asserting
+    let state = table.snapshot()?;
+    let mut min_values = state
+        .min_values(&Column::from_name("column1"))
+        .expect("min values exist")
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("Failed to downcast to Int64Array")
+        .values()
+        .to_vec();
+    min_values.sort();
+    assert_eq!(min_values, vec![1, 3, 5]);
+
+    let mut max_values = state
+        .max_values(&Column::from_name("column1"))
+        .expect("max values exist")
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("Failed to downcast to Int64Array")
+        .values()
+        .to_vec();
+    max_values.sort();
+    assert_eq!(max_values, vec![2, 4, 6]);
+
+    let min_values = state
+        .min_values(&Column::from_name("column2"))
+        .expect("min values exist");
+    let min_values = min_values
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("Failed to downcast to StringArray")
+        .iter()
+        .flatten()
+        .sorted()
+        .collect::<Vec<&str>>();
+    assert_eq!(min_values, vec!["five", "four", "one"]);
+
+    let max_values = state
+        .max_values(&Column::from_name("column2"))
+        .expect("max values exist");
+    let max_values = max_values
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("Failed to downcast to StringArray")
+        .iter()
+        .flatten()
+        .sorted()
+        .collect::<Vec<&str>>();
+    assert_eq!(max_values, vec!["six", "three", "two"]);
+
+    assert_eq!(
+        table.statistics(),
+        Some(Statistics {
+            num_rows: Exact(6),
+            total_byte_size: Inexact(1985),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Exact(0),
+                    max_value: Exact(ScalarValue::Int64(Some(6))),
+                    min_value: Exact(ScalarValue::Int64(Some(1))),
+                    distinct_count: Absent
+                },
+                ColumnStatistics {
+                    null_count: Exact(0),
+                    max_value: Absent,
+                    min_value: Absent,
+                    distinct_count: Absent
+                }
+            ]
+        }),
+    );
+
     Ok(())
 }

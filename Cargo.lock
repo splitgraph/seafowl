@@ -2179,16 +2179,16 @@ dependencies = [
 
 [[package]]
 name = "deltalake"
-version = "0.17.1"
-source = "git+https://github.com/delta-io/delta-rs?rev=28ad3950d90573fa8ff413c336b657b8561e1d41#28ad3950d90573fa8ff413c336b657b8561e1d41"
+version = "0.17.3"
+source = "git+https://github.com/splitgraph/delta-rs?branch=convert-to-delta-stats#5972aab07723fe11243c017f1938b96b70d45810"
 dependencies = [
  "deltalake-core",
 ]
 
 [[package]]
 name = "deltalake-core"
-version = "0.17.1"
-source = "git+https://github.com/delta-io/delta-rs?rev=28ad3950d90573fa8ff413c336b657b8561e1d41#28ad3950d90573fa8ff413c336b657b8561e1d41"
+version = "0.17.3"
+source = "git+https://github.com/splitgraph/delta-rs?branch=convert-to-delta-stats#5972aab07723fe11243c017f1938b96b70d45810"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -2238,7 +2238,7 @@ dependencies = [
  "roaring",
  "serde",
  "serde_json",
- "sqlparser 0.44.0",
+ "sqlparser 0.46.0",
  "thiserror",
  "tokio",
  "tracing",
@@ -5939,6 +5939,15 @@ checksum = "aaf9c7ff146298ffda83a200f8d5084f08dcee1edfc135fcc1d646a45d50ffd6"
 dependencies = [
  "log",
  "sqlparser_derive",
+]
+
+[[package]]
+name = "sqlparser"
+version = "0.46.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11a81a8cad9befe4cf1b9d2d4b9c6841c76f0882a3fec00d95133953c13b3d3d"
+dependencies = [
+ "log",
 ]
 
 [[package]]
