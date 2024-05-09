@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 use std::env;
+use std::sync::Arc;
 use std::time::Duration;
 
+use arrow::array::{Int64Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use chrono::{TimeZone, Utc};
 use datafusion::assert_batches_eq;
 use datafusion::datasource::TableProvider;
+use datafusion::physical_optimizer::pruning::PruningStatistics;
+use datafusion_common::Column;
 use datafusion_common::{assert_contains, Result};
 use itertools::sorted;
 

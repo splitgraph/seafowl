@@ -71,5 +71,27 @@ async fn test_convert_from_flat_parquet_table() -> Result<()> {
     )
     .await;
 
+    // Ensure partition/column stats are collected in add logs:
+    // https://github.com/delta-io/delta-rs/pull/2491
+    let mut table = context.try_get_delta_table("table_converted").await?;
+    table.load().await?;
+    assert_eq!(
+        table.snapshot()?.min_values(&Column::from_name("column1")),
+        Some(Arc::new(Int64Array::from(vec![3, 5, 1])) as _)
+    );
+    assert_eq!(
+        table.snapshot()?.max_values(&Column::from_name("column1")),
+        Some(Arc::new(Int64Array::from(vec![4, 6, 2])) as _)
+    );
+
+    assert_eq!(
+        table.snapshot()?.min_values(&Column::from_name("column2")),
+        Some(Arc::new(StringArray::from(vec!["four", "five", "one"])) as _)
+    );
+    assert_eq!(
+        table.snapshot()?.max_values(&Column::from_name("column2")),
+        Some(Arc::new(StringArray::from(vec!["three", "six", "two"])) as _)
+    );
+
     Ok(())
 }
