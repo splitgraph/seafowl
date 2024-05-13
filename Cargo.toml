@@ -93,7 +93,7 @@ datafusion-expr = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "convert-to-delta-stats", features = ["datafusion"] }
+deltalake = { git = "https://github.com/splitgraph/delta-rs", rev = "5972aab07723fe11243c017f1938b96b70d45810", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
