@@ -336,6 +336,7 @@ impl SeafowlContext {
                 let table = ConvertToDeltaBuilder::new()
                     .with_log_store(table_log_store)
                     .with_table_name(&*table_name)
+                    .with_save_mode(SaveMode::Overwrite)
                     .with_comment(format!(
                         "Converted by Seafowl {}",
                         env!("CARGO_PKG_VERSION")
