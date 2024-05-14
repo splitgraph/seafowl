@@ -346,6 +346,8 @@ impl SeafowlContext {
                 {
                     Ok(table) => table,
                     // Match on table already exist error
+                    // We can't match on the enum value directly, since this
+                    // Error enum isn't public
                     Err(err)
                         if err.to_string().contains(
                             "The given location is already a delta table location",
