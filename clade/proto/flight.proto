@@ -31,8 +31,8 @@ message DataPutResult {
   bool accepted = 1;
 
   // Sequence number up to which the changes are in Seafowl's memory.
-  uint64 memory_sequence_number = 2;
+  optional uint64 memory_sequence_number = 2;
 
   // Sequence number up to which the changes are in Delta Lake.
-  uint64 durable_sequence_number = 3;
+  optional uint64 durable_sequence_number = 3;
 }

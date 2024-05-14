@@ -50,8 +50,8 @@ async fn test_basic_upload() -> Result<()> {
         put_result,
         DataPutResult {
             accepted: false,
-            memory_sequence_number: 123,
-            durable_sequence_number: 0,
+            memory_sequence_number: Some(123),
+            durable_sequence_number: None,
         }
     );
 

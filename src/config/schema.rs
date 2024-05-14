@@ -232,7 +232,6 @@ pub struct Frontend {
 pub struct FlightFrontend {
     pub bind_host: String,
     pub bind_port: u16,
-    pub put_config: PutDataConfig,
 }
 
 impl Default for FlightFrontend {
@@ -240,23 +239,6 @@ impl Default for FlightFrontend {
         Self {
             bind_host: "127.0.0.1".to_string(),
             bind_port: 47470,
-            put_config: Default::default(),
-        }
-    }
-}
-
-#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(default)]
-pub struct PutDataConfig {
-    pub max_in_memory_bytes_total: u64,
-    pub max_in_memory_bytes_table: u64,
-}
-
-impl Default for PutDataConfig {
-    fn default() -> Self {
-        Self {
-            max_in_memory_bytes_total: 3 * 1024 * 1024 * 1024,
-            max_in_memory_bytes_table: 1024 * 1024 * 1024,
         }
     }
 }
@@ -365,6 +347,7 @@ pub struct Misc {
     pub ssl_cert_file: Option<String>,
     pub metrics: Option<Metrics>,
     pub object_store_cache: Option<ObjectCacheProperties>,
+    pub put_data: PutDataConfig,
 }
 
 impl Default for Misc {
@@ -375,6 +358,7 @@ impl Default for Misc {
             ssl_cert_file: None,
             metrics: None,
             object_store_cache: None,
+            put_data: Default::default(),
         }
     }
 }
@@ -409,6 +393,22 @@ impl Default for ObjectCacheProperties {
             capacity: DEFAULT_CACHE_CAPACITY,
             min_fetch_size: DEFAULT_MIN_FETCH_SIZE,
             ttl: DEFAULT_CACHE_ENTRY_TTL.as_secs(),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(default)]
+pub struct PutDataConfig {
+    pub max_in_memory_bytes: u64,
+    pub max_in_memory_duration_s: u64,
+}
+
+impl Default for PutDataConfig {
+    fn default() -> Self {
+        Self {
+            max_in_memory_bytes: 3 * 1024 * 1024 * 1024,
+            max_in_memory_duration_s: 600,
         }
     }
 }
@@ -716,6 +716,7 @@ cache_control = "private, max-age=86400"
                     ssl_cert_file: None,
                     metrics: None,
                     object_store_cache: None,
+                    put_data: Default::default(),
                 },
             }
         )
@@ -815,6 +816,7 @@ cache_control = "private, max-age=86400"
                     ssl_cert_file: None,
                     metrics: None,
                     object_store_cache: None,
+                    put_data: Default::default(),
                 },
             }
         )

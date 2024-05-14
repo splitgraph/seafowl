@@ -1,5 +1,6 @@
 mod handler;
 mod metrics;
+mod put_data;
 mod sql;
 
 use crate::config::schema::FlightFrontend;

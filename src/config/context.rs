@@ -222,6 +222,7 @@ mod tests {
                 ssl_cert_file: None,
                 metrics: None,
                 object_store_cache: None,
+                put_data: Default::default(),
             },
         };
 
