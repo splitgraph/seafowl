@@ -1,12 +1,12 @@
 use crate::statements::*;
 
-#[tokio::test]
-async fn test_convert_from_flat_parquet_table() -> Result<()> {
-    let (context, maybe_test_dir) = make_context_with_pg(ObjectStoreType::Local).await;
-
+async fn prepare_data(
+    context: &SeafowlContext,
+    maybe_test_dir: &Option<TempDir>,
+) -> Result<Uuid> {
     // Prepare a flat Parquet table
     let table_uuid = Uuid::new_v4();
-    let temp_dir = maybe_test_dir.expect("temporary data dir exists");
+    let temp_dir = maybe_test_dir.as_ref().expect("temporary data dir exists");
     let table_path = temp_dir.path().join(table_uuid.to_string());
     // Create the directory as otherwise the COPY will fail
     create_dir(table_path.clone()).await?;
@@ -30,8 +30,20 @@ async fn test_convert_from_flat_parquet_table() -> Result<()> {
             table_path.display()
         ))
         .await?;
+    Ok(table_uuid)
+}
+
+#[tokio::test]
+async fn test_convert_from_flat_parquet_table() -> Result<()> {
+    let (context, maybe_test_dir) = make_context_with_pg(ObjectStoreType::Local).await;
+    let table_uuid = prepare_data(&context, &maybe_test_dir).await?;
 
     // Now test the actual conversion
+    context
+        .plan_query(&format!("CONVERT '{table_uuid}' TO DELTA table_converted"))
+        .await?;
+
+    // Run command again to test idempotency
     context
         .plan_query(&format!("CONVERT '{table_uuid}' TO DELTA table_converted"))
         .await?;
@@ -148,5 +160,41 @@ async fn test_convert_from_flat_parquet_table() -> Result<()> {
         }),
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_convert_twice_doesnt_error() -> Result<()> {
+    let (context, maybe_test_dir) = make_context_with_pg(ObjectStoreType::Local).await;
+    let table_uuid = prepare_data(&context, &maybe_test_dir).await?;
+
+    // Convert twice and make sure the second conversion doesn't fail
+    context
+        .plan_query(&format!("CONVERT '{table_uuid}' TO DELTA table_converted"))
+        .await?;
+
+    context
+        .plan_query(&format!("CONVERT '{table_uuid}' TO DELTA table_converted"))
+        .await?;
+
+    // Test the contents of the converted table
+    let plan = context
+        .plan_query("SELECT * FROM table_converted ORDER BY column1")
+        .await?;
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = [
+        "+---------+---------+",
+        "| column1 | column2 |",
+        "+---------+---------+",
+        "| 1       | one     |",
+        "| 2       | two     |",
+        "| 3       | three   |",
+        "| 4       | four    |",
+        "| 5       | five    |",
+        "| 6       | six     |",
+        "+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &results);
     Ok(())
 }

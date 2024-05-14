@@ -333,15 +333,34 @@ impl SeafowlContext {
                 let table_log_store = self
                     .internal_object_store
                     .get_log_store(&table_uuid.to_string());
-                let table = ConvertToDeltaBuilder::new()
-                    .with_log_store(table_log_store)
+
+                let table = match ConvertToDeltaBuilder::new()
+                    .with_log_store(table_log_store.clone())
                     .with_table_name(&*table_name)
                     .with_save_mode(SaveMode::Overwrite)
                     .with_comment(format!(
                         "Converted by Seafowl {}",
                         env!("CARGO_PKG_VERSION")
                     ))
-                    .await?;
+                    .await
+                {
+                    Ok(table) => table,
+                    // Match on table already exist error
+                    // We can't match on the enum value directly, since this
+                    // Error enum isn't public
+                    Err(err)
+                        if err.to_string().contains(
+                            "The given location is already a delta table location",
+                        ) =>
+                    {
+                        let mut table =
+                            DeltaTable::new(table_log_store, Default::default());
+                        table.load().await?;
+                        // NB we're not registering it with the catalog, and presume that was already done
+                        return Ok(Arc::new(table));
+                    }
+                    Err(err) => return Err(err.into()),
+                };
                 (table_uuid, table)
             }
         };
