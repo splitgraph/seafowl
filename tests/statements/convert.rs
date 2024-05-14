@@ -36,6 +36,11 @@ async fn test_convert_from_flat_parquet_table() -> Result<()> {
         .plan_query(&format!("CONVERT '{table_uuid}' TO DELTA table_converted"))
         .await?;
 
+    // Run command again to test idempotency
+    context
+        .plan_query(&format!("CONVERT '{table_uuid}' TO DELTA table_converted"))
+        .await?;
+
     // Finally test the contents of the converted table
     let plan = context
         .plan_query("SELECT * FROM table_converted ORDER BY column1")
