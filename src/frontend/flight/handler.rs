@@ -24,8 +24,8 @@ use crate::context::SeafowlContext;
 use crate::frontend::flight::put_data::SeafowlPutDataManager;
 
 pub const SEAFOWL_PUT_DATA_UD_FLAG: &str = "__seafowl_ud";
-const SEAFOWL_PUT_DATA_ORIGIN: &str = "origin";
-const SEAFOWL_PUT_DATA_SEQUENCE_NUMBER: &str = "sequence";
+pub const SEAFOWL_PUT_DATA_ORIGIN: &str = "origin";
+pub const SEAFOWL_PUT_DATA_SEQUENCE_NUMBER: &str = "sequence";
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {

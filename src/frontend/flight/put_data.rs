@@ -2,7 +2,11 @@ use arrow::array::RecordBatch;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
+use deltalake::kernel::Action;
 use deltalake::logstore::LogStore;
+use deltalake::protocol::{DeltaOperation, SaveMode};
+use deltalake::DeltaTable;
+use serde_json::Value;
 use std::cmp::{Ordering, Reverse};
 use std::collections::hash_map::Entry;
 use std::collections::{BinaryHeap, HashMap};
@@ -13,6 +17,7 @@ use crate::context::delta::plan_to_object_store;
 use clade::flight::DataPutResult;
 
 use crate::context::SeafowlContext;
+use crate::frontend::flight::handler::SEAFOWL_PUT_DATA_SEQUENCE_NUMBER;
 
 pub(super) struct SeafowlPutDataManager {
     context: Arc<SeafowlContext>,
@@ -114,6 +119,7 @@ impl SeafowlPutDataManager {
 
     async fn flush_batches(&mut self) -> Result<()> {
         // First flush any changes that are past the configured max duration
+        // TODO: do this out-of-band
         while let Some(entry) = self.lags.peek()
             && now() - entry.0.insertion_time
                 > self.context.config.misc.put_data.max_in_memory_duration_s
@@ -122,8 +128,11 @@ impl SeafowlPutDataManager {
             let entry = self.lags.pop().unwrap().0;
             let url = entry.log_store.root_uri();
 
+            let mut table = DeltaTable::new(entry.log_store.clone(), Default::default());
+            table.load().await?;
+
             // Fetch the pending data to put
-            let (_mem_seq, data) = self.puts.remove(&url).unwrap();
+            let (mem_seq, data) = self.puts.remove(&url).unwrap();
 
             let schema = data.first().unwrap().schema();
             let input_plan: Arc<dyn ExecutionPlan> =
@@ -136,7 +145,8 @@ impl SeafowlPutDataManager {
                 None
             };
 
-            plan_to_object_store(
+            // Dump the batches to the object store
+            let adds = plan_to_object_store(
                 &self.context.inner.state(),
                 &input_plan,
                 entry.log_store.object_store(),
@@ -144,6 +154,24 @@ impl SeafowlPutDataManager {
                 self.context.config.misc.max_partition_size,
             )
             .await?;
+
+            let mut actions: Vec<Action> = adds.into_iter().map(Action::Add).collect();
+
+            // Append a special `CommitInfo` action to record new durable sequence number
+            // tied to the commit.
+            let info = HashMap::from([(
+                SEAFOWL_PUT_DATA_SEQUENCE_NUMBER.to_string(),
+                Value::Number(mem_seq.into()),
+            )]);
+            let commit_info = Action::commit_info(info);
+            actions.push(commit_info);
+
+            let op = DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            };
+            self.context.commit(actions, &table, op).await?;
         }
 
         Ok(())

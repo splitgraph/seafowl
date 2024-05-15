@@ -430,7 +430,7 @@ impl SeafowlContext {
         Ok(table)
     }
 
-    pub(super) async fn commit(
+    pub async fn commit(
         &self,
         actions: Vec<Action>,
         table: &DeltaTable,
