@@ -49,7 +49,7 @@ async fn test_basic_upload() -> Result<()> {
     assert_eq!(
         put_result,
         DataPutResult {
-            accepted: false,
+            accepted: true,
             memory_sequence_number: Some(123),
             durable_sequence_number: None,
         }

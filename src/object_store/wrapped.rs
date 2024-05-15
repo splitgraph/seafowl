@@ -1,7 +1,7 @@
 use crate::config::schema;
 use crate::config::schema::{Local, GCS, S3};
 use bytes::Bytes;
-use futures::{stream::BoxStream, StreamExt, TryFutureExt};
+use futures::{stream::BoxStream, StreamExt};
 use object_store::{
     path::Path, Error, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Result,
@@ -9,9 +9,6 @@ use object_store::{
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use tokio::io::AsyncWrite;
-use tracing::debug;
-
-use tokio::fs::{copy, create_dir_all, remove_file, rename};
 
 use deltalake::logstore::{default_logstore, LogStore};
 use object_store::{prefix::PrefixStore, PutOptions, PutResult};
@@ -79,6 +76,17 @@ impl InternalObjectStore {
         }
     }
 
+    // If the configured object store uses a local file system as an object store return
+    // the full path to the table dir
+    pub fn local_table_dir(&self, table_prefix: &str) -> Option<String> {
+        match &self.config {
+            schema::ObjectStore::Local(Local { data_dir }) => {
+                Some(format!("{data_dir}/{table_prefix}"))
+            }
+            _ => None,
+        }
+    }
+
     // Get the table prefix relative to the root of the internal object store.
     // This is either just a UUID, or potentially UUID prepended by some path.
     pub fn table_prefix(&self, table_prefix: &str) -> Path {
@@ -123,58 +131,6 @@ impl InternalObjectStore {
             }
         }
         Ok(())
-    }
-
-    /// For local filesystem object stores, try "uploading" by just moving the file.
-    /// Returns a None if the store isn't local.
-    pub async fn fast_upload(
-        &self,
-        from: &StdPath,
-        to: &Path,
-    ) -> Option<Result<(), Error>> {
-        let object_store_path = match &self.config {
-            schema::ObjectStore::Local(Local { data_dir }) => data_dir,
-            _ => return None,
-        };
-
-        let target_path =
-            StdPath::new(&object_store_path).join(StdPath::new(to.to_string().as_str()));
-
-        // Ensure all directories on the target path exist
-        if let Some(parent_dir) = target_path.parent()
-            && parent_dir != StdPath::new("")
-        {
-            create_dir_all(parent_dir).await.ok();
-        }
-
-        debug!(
-            "Moving temporary partition file from {} to {}",
-            from.display(),
-            target_path.display()
-        );
-
-        let result = rename(&from, &target_path).await;
-
-        Some(if let Err(e) = result {
-            // Cross-device link (can't move files between filesystems)
-            // Copy and remove the old file
-            if e.raw_os_error() == Some(18) {
-                copy(from, target_path)
-                    .and_then(|_| remove_file(from))
-                    .map_err(|e| Error::Generic {
-                        store: "local",
-                        source: Box::new(e),
-                    })
-                    .await
-            } else {
-                Err(Error::Generic {
-                    store: "local",
-                    source: Box::new(e),
-                })
-            }
-        } else {
-            Ok(())
-        })
     }
 }
 

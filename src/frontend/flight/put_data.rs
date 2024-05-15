@@ -1,4 +1,7 @@
 use arrow::array::RecordBatch;
+use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::Result;
 use deltalake::logstore::LogStore;
 use std::cmp::{Ordering, Reverse};
 use std::collections::hash_map::Entry;
@@ -6,6 +9,7 @@ use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::context::delta::plan_to_object_store;
 use clade::flight::DataPutResult;
 
 use crate::context::SeafowlContext;
@@ -71,7 +75,7 @@ impl SeafowlPutDataManager {
         log_store: Arc<dyn LogStore>,
         sequence_number: u64,
         mut batches: Vec<RecordBatch>,
-    ) -> datafusion_common::Result<DataPutResult> {
+    ) -> Result<DataPutResult> {
         let size = batches
             .iter()
             .fold(0, |bytes, batch| bytes + batch.get_array_memory_size());
@@ -86,23 +90,20 @@ impl SeafowlPutDataManager {
             Entry::Vacant(entry) => {
                 entry.insert((sequence_number, batches));
 
-                let insertion_time = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time went backwards")
-                    .as_secs();
+                let insertion_time = now();
                 let put_entry = DataPutEntry {
                     log_store,
                     insertion_time,
                 };
-                // We want a min-heap, so that oldest entry is poped first
+                // We want a min-heap, so that oldest entry is pop-ed first
                 self.lags.push(Reverse(put_entry));
             }
         }
 
+        // Update the total size
         self.size += size;
-        if self.size >= self.context.config.misc.put_data.max_in_memory_bytes as usize {
-            self.flush_batches().await;
-        }
+
+        self.flush_batches().await?;
 
         Ok(DataPutResult {
             accepted: true,
@@ -111,5 +112,47 @@ impl SeafowlPutDataManager {
         })
     }
 
-    async fn flush_batches(&mut self) {}
+    async fn flush_batches(&mut self) -> Result<()> {
+        // First flush any changes that are past the configured max duration
+        while let Some(entry) = self.lags.peek()
+            && now() - entry.0.insertion_time
+                > self.context.config.misc.put_data.max_in_memory_duration_s
+        {
+            // Remove the entry from the priority queue
+            let entry = self.lags.pop().unwrap().0;
+            let url = entry.log_store.root_uri();
+
+            // Fetch the pending data to put
+            let (_mem_seq, data) = self.puts.remove(&url).unwrap();
+
+            let schema = data.first().unwrap().schema();
+            let input_plan: Arc<dyn ExecutionPlan> =
+                Arc::new(MemoryExec::try_new(&[data], schema, None)?);
+
+            // Exploit fast data upload to local FS, i.e. moving the file instead of actually copying
+            let local_data_dir = if url.starts_with("file://") {
+                Some(entry.log_store.root_uri())
+            } else {
+                None
+            };
+
+            plan_to_object_store(
+                &self.context.inner.state(),
+                &input_plan,
+                entry.log_store.object_store(),
+                local_data_dir,
+                self.context.config.misc.max_partition_size,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+}
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_secs()
 }
