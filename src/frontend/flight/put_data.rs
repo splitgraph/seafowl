@@ -12,6 +12,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 use crate::context::delta::plan_to_object_store;
 use clade::flight::DataPutResult;
@@ -132,46 +133,55 @@ impl SeafowlPutDataManager {
             table.load().await?;
 
             // Fetch the pending data to put
-            let (mem_seq, data) = self.puts.remove(&url).unwrap();
+            if let Some((mem_seq, data)) = self.puts.remove(&url) {
+                let size = data
+                    .iter()
+                    .fold(0, |bytes, batch| bytes + batch.get_array_memory_size());
+                self.size -= size;
 
-            let schema = data.first().unwrap().schema();
-            let input_plan: Arc<dyn ExecutionPlan> =
-                Arc::new(MemoryExec::try_new(&[data], schema, None)?);
+                let schema = data.first().unwrap().schema();
+                let input_plan: Arc<dyn ExecutionPlan> =
+                    Arc::new(MemoryExec::try_new(&[data], schema, None)?);
 
-            // Exploit fast data upload to local FS, i.e. moving the file instead of actually copying
-            let local_data_dir = if url.starts_with("file://") {
-                Some(entry.log_store.root_uri())
+                // Exploit fast data upload to local FS, i.e. simply move the partition files once
+                // written to the disk
+                let local_data_dir = if url.starts_with("file://") {
+                    Some(entry.log_store.root_uri())
+                } else {
+                    None
+                };
+
+                // Dump the batches to the object store
+                let adds = plan_to_object_store(
+                    &self.context.inner.state(),
+                    &input_plan,
+                    entry.log_store.object_store(),
+                    local_data_dir,
+                    self.context.config.misc.max_partition_size,
+                )
+                .await?;
+
+                let mut actions: Vec<Action> =
+                    adds.into_iter().map(Action::Add).collect();
+
+                // Append a special `CommitInfo` action to record new durable sequence number
+                // tied to the commit.
+                let info = HashMap::from([(
+                    SEAFOWL_PUT_DATA_SEQUENCE_NUMBER.to_string(),
+                    Value::Number(mem_seq.into()),
+                )]);
+                let commit_info = Action::commit_info(info);
+                actions.push(commit_info);
+
+                let op = DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                };
+                self.context.commit(actions, &table, op).await?;
             } else {
-                None
-            };
-
-            // Dump the batches to the object store
-            let adds = plan_to_object_store(
-                &self.context.inner.state(),
-                &input_plan,
-                entry.log_store.object_store(),
-                local_data_dir,
-                self.context.config.misc.max_partition_size,
-            )
-            .await?;
-
-            let mut actions: Vec<Action> = adds.into_iter().map(Action::Add).collect();
-
-            // Append a special `CommitInfo` action to record new durable sequence number
-            // tied to the commit.
-            let info = HashMap::from([(
-                SEAFOWL_PUT_DATA_SEQUENCE_NUMBER.to_string(),
-                Value::Number(mem_seq.into()),
-            )]);
-            let commit_info = Action::commit_info(info);
-            actions.push(commit_info);
-
-            let op = DeltaOperation::Write {
-                mode: SaveMode::Append,
-                partition_by: None,
-                predicate: None,
-            };
-            self.context.commit(actions, &table, op).await?;
+                warn!("No pending puts found for {url}, discarding");
+            }
         }
 
         Ok(())

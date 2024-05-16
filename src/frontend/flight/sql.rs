@@ -165,7 +165,7 @@ impl FlightSqlService for SeafowlFlightHandler {
 
         // Validate primary columns are provided
         if cmd.pk_column.is_empty() {
-            let err = "Changes to tables without primary keys are not supported yet.";
+            let err = "Changes to tables without primary keys are not supported";
             warn!(err);
             return Err(Status::unimplemented(err));
         }
@@ -177,18 +177,29 @@ impl FlightSqlService for SeafowlFlightHandler {
         .try_collect()
         .await?;
 
-        // Validate upsert/delete flag column is present
-        if !batches.is_empty()
-            && batches
-                .first()
-                .unwrap()
-                .schema()
-                .column_with_name(SEAFOWL_PUT_DATA_UD_FLAG)
-                .is_none()
-        {
-            let err = format!("Change requested but batches do not contain upsert/delete flag column `{SEAFOWL_PUT_DATA_UD_FLAG}`");
-            warn!(err);
-            return Err(Status::invalid_argument(err));
+        if !batches.is_empty() {
+            let schema = batches.first().unwrap().schema();
+
+            // Validate all PKs contained in the batches schema
+            if cmd
+                .pk_column
+                .iter()
+                .any(|pk| schema.column_with_name(pk).is_none())
+            {
+                let err = format!(
+                    "Some PKs in {:?} not present in the schema {schema}",
+                    cmd.pk_column
+                );
+                warn!(err);
+                return Err(Status::invalid_argument(err));
+            }
+
+            // Validate upsert/delete flag column is present
+            if schema.column_with_name(SEAFOWL_PUT_DATA_UD_FLAG).is_none() {
+                let err = format!("Change requested but batches do not contain upsert/delete flag column `{SEAFOWL_PUT_DATA_UD_FLAG}`");
+                warn!(err);
+                return Err(Status::invalid_argument(err));
+            }
         }
 
         let put_result =
