@@ -18,10 +18,10 @@ fn put_cmd_to_flight_data(cmd: DataSyncCommand, batch: RecordBatch) -> FlightDat
 }
 
 #[tokio::test]
-async fn test_basic_upload() -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (ctx, mut client) = flight_server().await;
 
-    // Put #1 that creates the table, and dictates the full schema for following puts
+    // Sync #1 that creates the table, and dictates the full schema for following syncs
     let schema = Arc::new(Schema::new(vec![
         Field::new("col_1", DataType::Int32, true),
         Field::new("col_2", DataType::Utf8, true),
@@ -41,15 +41,8 @@ async fn test_basic_upload() -> std::result::Result<(), Box<dyn std::error::Erro
             Arc::new(StringArray::from(vec![Some("one"), Some("two")])),
             Arc::new(Float64Array::from(vec![1.0, 2.0])),
             Arc::new(TimestampMicrosecondArray::from(vec![
-                978307261000000,
-                1012611722000000,
-                // 1046660583000000,
-                // 1081051444000000,
-                // 1115262305000000,
-                // 1149566766000000,
-                // 1183784827000000,
-                // 1218175688000000,
-                // 1252480149000000,
+                978310861000000,
+                1012615322000000,
             ])),
             Arc::new(BooleanArray::from(vec![true, true])),
         ],
@@ -100,7 +93,7 @@ async fn test_basic_upload() -> std::result::Result<(), Box<dyn std::error::Erro
     // Wait for the replication lag to exceed the configured max duration
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Now go for put #2; this will flush both it and the first put as well
+    // Now go for sync #2; this will flush both it and the first sync as well
     let schema = Arc::new(Schema::new(vec![
         Field::new("col_1", DataType::Int32, true),
         Field::new("col_3", DataType::Float64, true),
@@ -139,10 +132,147 @@ async fn test_basic_upload() -> std::result::Result<(), Box<dyn std::error::Erro
         "+-------+-------+-------+---------------------+",
         "| col_1 | col_2 | col_3 | col_4               |",
         "+-------+-------+-------+---------------------+",
-        "| 1     | one   | 1.0   | 2001-01-01T00:01:01 |",
-        "| 2     | two   | 2.0   | 2002-02-02T01:02:02 |",
+        "| 1     | one   | 1.0   | 2001-01-01T01:01:01 |",
+        "| 2     | two   | 2.0   | 2002-02-02T02:02:02 |",
         "| 3     |       | 3.0   |                     |",
         "| 4     |       | 4.0   |                     |",
+        "+-------+-------+-------+---------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // Sync #3; this will be held in memory
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "col_4",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new("col_2", DataType::Utf8, true),
+        Field::new("col_1", DataType::Int32, true),
+        Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                1115269505000000,
+                1149573966000000,
+            ])),
+            Arc::new(StringArray::from(vec![Some("five"), Some("six")])),
+            Arc::new(Int32Array::from(vec![5, 6])),
+            Arc::new(BooleanArray::from(vec![true, true])),
+        ],
+    )?;
+    cmd.sequence_number = 56;
+
+    let flight_data = put_cmd_to_flight_data(cmd.clone(), batch);
+    let response = client.do_put(flight_data).await?.next().await.unwrap()?;
+
+    let put_result =
+        DataSyncResult::decode(response.app_metadata).expect("DataSyncResult");
+    assert_eq!(
+        put_result,
+        DataSyncResult {
+            accepted: true,
+            memory_sequence_number: Some(56),
+            durable_sequence_number: Some(34),
+        }
+    );
+
+    // Sync #4
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("col_2", DataType::Utf8, true),
+        Field::new("col_1", DataType::Int32, true),
+        Field::new("col_3", DataType::Float64, true),
+        Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![Some("seven"), Some("eight")])),
+            Arc::new(Int32Array::from(vec![7, 8])),
+            Arc::new(Float64Array::from(vec![7.0, 8.0])),
+            Arc::new(BooleanArray::from(vec![true, true])),
+        ],
+    )?;
+    cmd.sequence_number = 78;
+
+    let flight_data = put_cmd_to_flight_data(cmd.clone(), batch);
+    let response = client.do_put(flight_data).await?.next().await.unwrap()?;
+
+    let put_result =
+        DataSyncResult::decode(response.app_metadata).expect("DataSyncResult");
+    assert_eq!(
+        put_result,
+        DataSyncResult {
+            accepted: true,
+            memory_sequence_number: Some(78),
+            durable_sequence_number: Some(34),
+        }
+    );
+
+    // Sleep and sync #5 to flush the previous 2 syncs
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("col_1", DataType::Int32, true),
+        Field::new(
+            "col_4",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![9, 10])),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                1252487349000000,
+                1286705410000000,
+            ])),
+            Arc::new(BooleanArray::from(vec![true, true])),
+        ],
+    )?;
+    cmd.sequence_number = 910;
+
+    let flight_data = put_cmd_to_flight_data(cmd.clone(), batch);
+    let response = client.do_put(flight_data).await?.next().await.unwrap()?;
+
+    let put_result =
+        DataSyncResult::decode(response.app_metadata).expect("DataSyncResult");
+    assert_eq!(
+        put_result,
+        DataSyncResult {
+            accepted: true,
+            memory_sequence_number: Some(910),
+            durable_sequence_number: Some(34),
+        }
+    );
+
+    // Finally check that all changes have been flushed accordingly
+    let plan = ctx
+        .plan_query("SELECT * FROM replicated_table ORDER BY col_1")
+        .await?;
+    let results = ctx.collect(plan.clone()).await?;
+
+    let expected = [
+        "+-------+-------+-------+---------------------+",
+        "| col_1 | col_2 | col_3 | col_4               |",
+        "+-------+-------+-------+---------------------+",
+        "| 1     | one   | 1.0   | 2001-01-01T01:01:01 |",
+        "| 2     | two   | 2.0   | 2002-02-02T02:02:02 |",
+        "| 3     |       | 3.0   |                     |",
+        "| 4     |       | 4.0   |                     |",
+        "| 5     | five  |       | 2005-05-05T05:05:05 |",
+        "| 6     | six   |       | 2006-06-06T06:06:06 |",
+        "| 7     | seven | 7.0   |                     |",
+        "| 8     | eight | 8.0   |                     |",
+        "| 9     |       |       | 2009-09-09T09:09:09 |",
+        "| 10    |       |       | 2010-10-10T10:10:10 |",
         "+-------+-------+-------+---------------------+",
     ];
 
