@@ -4,7 +4,7 @@ package clade.flight;
 
 import "schema.proto";
 
-message DataPutCommand {
+message DataSyncCommand {
   // Path to the Delta Table, relative to the root URL of the store below.
   // Will be created based on the schema of the RecordBatch if doesn't exist.
   // e.g. path/to/table
@@ -24,7 +24,7 @@ message DataPutCommand {
   uint64 sequence_number = 5;
 }
 
-message DataPutResult {
+message DataSyncResult {
   // If false, Seafowl is overloaded and can't accept the change (e.g.
   // can't flush fast enough). The client should wait and retry.
   // TODO: also schema mismatch errors

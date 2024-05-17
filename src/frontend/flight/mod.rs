@@ -1,7 +1,7 @@
 mod handler;
 mod metrics;
-mod put_data;
 mod sql;
+mod sync;
 
 use crate::config::schema::FlightFrontend;
 use crate::context::SeafowlContext;
@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use tonic::transport::Server;
 
-pub use handler::SEAFOWL_PUT_DATA_UD_FLAG;
+pub use handler::SEAFOWL_SYNC_DATA_UD_FLAG;
 
 pub async fn run_flight_server(
     context: Arc<SeafowlContext>,

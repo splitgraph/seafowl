@@ -1,5 +1,5 @@
 use crate::frontend::flight::handler::{
-    SeafowlFlightHandler, SEAFOWL_PUT_DATA_UD_FLAG, SEAFOWL_SQL_DATA,
+    SeafowlFlightHandler, SEAFOWL_SQL_DATA, SEAFOWL_SYNC_DATA_UD_FLAG,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_flight::decode::FlightRecordBatchStream;
@@ -16,7 +16,7 @@ use arrow_flight::{
     Ticket,
 };
 use async_trait::async_trait;
-use clade::flight::DataPutCommand;
+use clade::flight::DataSyncCommand;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -157,7 +157,7 @@ impl FlightSqlService for SeafowlFlightHandler {
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         // Extract the command
-        let cmd: DataPutCommand = Message::decode(&*message.value).map_err(|err| {
+        let cmd: DataSyncCommand = Message::decode(&*message.value).map_err(|err| {
             let err = format!("Couldn't decode command: {err}");
             warn!(err);
             Status::invalid_argument(err)
@@ -195,22 +195,18 @@ impl FlightSqlService for SeafowlFlightHandler {
             }
 
             // Validate upsert/delete flag column is present
-            if schema.column_with_name(SEAFOWL_PUT_DATA_UD_FLAG).is_none() {
-                let err = format!("Change requested but batches do not contain upsert/delete flag column `{SEAFOWL_PUT_DATA_UD_FLAG}`");
+            if schema.all_fields().last().unwrap().name() != SEAFOWL_SYNC_DATA_UD_FLAG {
+                let err = format!("Change requested but batches do not contain upsert/delete flag as last column `{SEAFOWL_SYNC_DATA_UD_FLAG}`");
                 warn!(err);
                 return Err(Status::invalid_argument(err));
             }
         }
 
         let put_result =
-            self.process_put_cmd(cmd.clone(), batches)
+            self.process_sync_cmd(cmd.clone(), batches)
                 .await
                 .map_err(|err| {
-                    let err = format!(
-                        "Failed processing DoPut for location {}/{}: {err}",
-                        cmd.store.unwrap().location,
-                        cmd.path
-                    );
+                    let err = format!("Failed processing DoPut for {}: {err}", cmd.path);
                     warn!(err);
                     Status::internal(err)
                 })?;

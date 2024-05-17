@@ -2,7 +2,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::SqlInfo;
 use arrow_schema::SchemaRef;
-use clade::flight::{DataPutCommand, DataPutResult};
+use clade::flight::{DataSyncCommand, DataSyncResult};
 use dashmap::DashMap;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
@@ -21,11 +21,10 @@ use tracing::{debug, error, info};
 use url::Url;
 
 use crate::context::SeafowlContext;
-use crate::frontend::flight::put_data::SeafowlPutDataManager;
+use crate::frontend::flight::sync::SeafowlDataSyncManager;
 
-pub const SEAFOWL_PUT_DATA_UD_FLAG: &str = "__seafowl_ud";
-pub const SEAFOWL_PUT_DATA_ORIGIN: &str = "origin";
-pub const SEAFOWL_PUT_DATA_SEQUENCE_NUMBER: &str = "sequence";
+pub const SEAFOWL_SYNC_DATA_UD_FLAG: &str = "__seafowl_ud";
+pub const SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER: &str = "sequence";
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -46,7 +45,7 @@ lazy_static! {
 pub(super) struct SeafowlFlightHandler {
     pub context: Arc<SeafowlContext>,
     pub results: Arc<DashMap<String, Mutex<SendableRecordBatchStream>>>,
-    put_manager: Arc<RwLock<SeafowlPutDataManager>>,
+    put_manager: Arc<RwLock<SeafowlDataSyncManager>>,
 }
 
 impl SeafowlFlightHandler {
@@ -54,7 +53,7 @@ impl SeafowlFlightHandler {
         Self {
             context: context.clone(),
             results: Arc::new(Default::default()),
-            put_manager: Arc::new(RwLock::new(SeafowlPutDataManager::new(context))),
+            put_manager: Arc::new(RwLock::new(SeafowlDataSyncManager::new(context))),
         }
     }
 
@@ -106,31 +105,37 @@ impl SeafowlFlightHandler {
         Ok(batch_stream_mutex.into_inner())
     }
 
-    pub async fn process_put_cmd(
+    pub async fn process_sync_cmd(
         &self,
-        cmd: DataPutCommand,
+        cmd: DataSyncCommand,
         batches: Vec<RecordBatch>,
-    ) -> Result<DataPutResult> {
-        let store_loc = cmd.store.unwrap().clone();
-        let log_store = self
-            .context
-            .metastore
-            .object_stores
-            .get_log_store_for_table(
-                Url::parse(&store_loc.location).map_err(|e| {
-                    DataFusionError::Execution(format!(
-                        "Couldn't parse put location: {e}"
-                    ))
-                })?,
-                store_loc.options,
-                cmd.path,
-            )?;
+    ) -> Result<DataSyncResult> {
+        let log_store = match cmd.store {
+            None => self.context.internal_object_store.get_log_store(&cmd.path),
+            Some(store_loc) => self
+                .context
+                .metastore
+                .object_stores
+                .get_log_store_for_table(
+                    Url::parse(&store_loc.location).map_err(|e| {
+                        DataFusionError::Execution(format!(
+                            "Couldn't parse put location: {e}"
+                        ))
+                    })?,
+                    store_loc.options,
+                    cmd.path,
+                )?,
+        };
 
         // Check if a table exists yet in the provided location, and if not create one.
         // If it does fetch its durable sequence number.
         let dur_seq = if !log_store.is_delta_table_location().await? {
+            // Get the actual table schema by removing the `SEAFOWL_SYNC_DATA_UD_FLAG` column
             let schema = batches.first().unwrap().schema();
-            let delta_schema = DeltaSchema::try_from(schema.as_ref())?;
+            let idxs = (0..schema.all_fields().len() - 1).collect::<Vec<usize>>();
+            let schema = schema.project(&idxs)?;
+
+            let delta_schema = DeltaSchema::try_from(&schema)?;
 
             debug!(
                 "Creating new Delta table at location: {}",
@@ -140,16 +145,6 @@ impl SeafowlFlightHandler {
                 .with_log_store(log_store.clone())
                 .with_columns(delta_schema.fields().clone())
                 .with_comment(format!("Created by Seafowl {}", env!("CARGO_PKG_VERSION")))
-                .with_metadata([
-                    (
-                        SEAFOWL_PUT_DATA_ORIGIN.to_string(),
-                        Value::String(cmd.origin),
-                    ),
-                    (
-                        SEAFOWL_PUT_DATA_SEQUENCE_NUMBER.to_string(),
-                        Value::Number(cmd.sequence_number.into()),
-                    ),
-                ])
                 .await?;
             None
         } else {
@@ -162,7 +157,7 @@ impl SeafowlFlightHandler {
                 .last()
                 .expect("Table has non-zero comits")
                 .info
-                .get(SEAFOWL_PUT_DATA_SEQUENCE_NUMBER)
+                .get(SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER)
             {
                 Some(Value::Number(seq)) => seq.as_u64(),
                 _ => None,
@@ -183,7 +178,7 @@ impl SeafowlFlightHandler {
             .fold(0, |rows, batch| rows + batch.num_rows());
         if num_rows == 0 {
             debug!("Received empty batches, returning current sequence numbers");
-            return Ok(DataPutResult {
+            return Ok(DataSyncResult {
                 accepted: true,
                 memory_sequence_number: mem_seq,
                 durable_sequence_number: dur_seq,
@@ -192,21 +187,38 @@ impl SeafowlFlightHandler {
 
         debug!("Processing data change with {num_rows} rows for url {url}");
         // TODO: make timeout configurable
-        match tokio::time::timeout(Duration::from_secs(3), self.put_manager.write()).await
-        {
-            Ok(mut put_manager) => {
-                put_manager
-                    .put_batches(log_store, cmd.sequence_number, batches)
-                    .await
-            }
-            Err(_) => {
-                debug!("Timeout waiting for data put write lock for url {url}");
-                Ok(DataPutResult {
-                    accepted: false,
-                    memory_sequence_number: mem_seq,
-                    durable_sequence_number: dur_seq,
-                })
-            }
-        }
+        let accepted =
+            match tokio::time::timeout(Duration::from_secs(3), self.put_manager.write())
+                .await
+            {
+                Ok(mut put_manager) => {
+                    put_manager
+                        .sync_batches(
+                            log_store,
+                            cmd.sequence_number,
+                            cmd.origin,
+                            cmd.pk_column,
+                            batches,
+                        )
+                        .await?;
+                    true
+                }
+                Err(_) => {
+                    debug!("Timeout waiting for data put write lock for url {url}");
+                    false
+                }
+            };
+
+        let mem_seq = if accepted {
+            Some(cmd.sequence_number)
+        } else {
+            mem_seq
+        };
+
+        Ok(DataSyncResult {
+            accepted,
+            memory_sequence_number: mem_seq,
+            durable_sequence_number: dur_seq,
+        })
     }
 }

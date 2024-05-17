@@ -43,7 +43,7 @@ mod query;
 mod convert;
 #[allow(dead_code)]
 #[path = "../../src/testutils.rs"]
-mod testutils;
+pub mod testutils;
 mod time_travel;
 mod vacuum;
 

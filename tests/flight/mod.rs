@@ -24,9 +24,9 @@ use seafowl::context::SeafowlContext;
 use seafowl::frontend::flight::run_flight_server;
 
 mod client;
-mod do_put;
 mod e2e;
 mod search_path;
+mod sync;
 
 async fn make_test_context() -> Arc<SeafowlContext> {
     // let OS choose a free port
@@ -44,7 +44,10 @@ dsn = ":memory:"
 
 [frontend.flight]
 bind_host = "127.0.0.1"
-bind_port = {}"#,
+bind_port = {}
+
+[misc.sync_data]
+max_replication_lag_s = 1"#,
         addr.port()
     );
 
