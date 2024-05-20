@@ -155,7 +155,7 @@ impl SeafowlFlightHandler {
             let commit_infos = table.history(Some(1)).await?;
             match commit_infos
                 .last()
-                .expect("Table has non-zero comits")
+                .expect("Table has non-zero commits")
                 .info
                 .get(SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER)
             {

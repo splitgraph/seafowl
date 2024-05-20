@@ -17,7 +17,7 @@ message DataSyncCommand {
   // have a replica identity / PK.
   repeated string pk_column = 3;
 
-  // Opaque string identifying PGD origin
+  // Opaque string identifying data source
   string origin = 4;
 
   // Monotonically-increasing transaction number (e.g. the LSN)

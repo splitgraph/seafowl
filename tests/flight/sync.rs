@@ -1,16 +1,6 @@
 use crate::flight::*;
-use arrow::array::{
-    BooleanArray, Float64Array, Int32Array, StringArray, TimestampMicrosecondArray,
-};
-use arrow_flight::encode::{FlightDataEncoder, FlightDataEncoderBuilder};
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
-use clade::sync::{DataSyncCommand, DataSyncResult};
-use futures::StreamExt;
-use seafowl::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
-use std::time::Duration;
-use uuid::Uuid;
 
-fn sync_cmd_to_flight_data(
+pub(crate) fn sync_cmd_to_flight_data(
     cmd: DataSyncCommand,
     batch: RecordBatch,
 ) -> FlightDataEncoder {
@@ -18,6 +8,17 @@ fn sync_cmd_to_flight_data(
     let flight_stream_builder =
         FlightDataEncoderBuilder::new().with_flight_descriptor(Some(descriptor));
     flight_stream_builder.build(futures::stream::iter(vec![Ok(batch)]))
+}
+
+async fn do_put_sync(
+    cmd: DataSyncCommand,
+    batch: RecordBatch,
+    client: &mut FlightClient,
+) -> Result<DataSyncResult> {
+    let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
+    let response = client.do_put(flight_data).await?.next().await.unwrap()?;
+
+    Ok(DataSyncResult::decode(response.app_metadata).expect("DataSyncResult"))
 }
 
 #[tokio::test]
@@ -60,14 +61,10 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         sequence_number: 12,
     };
 
-    let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
-    let response = client.do_put(flight_data).await?.next().await.unwrap()?;
-
     // Changes are still in memory
-    let put_result =
-        DataSyncResult::decode(response.app_metadata).expect("DataSyncResult");
+    let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
-        put_result,
+        sync_result,
         DataSyncResult {
             accepted: true,
             memory_sequence_number: Some(12),
@@ -113,13 +110,9 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     )?;
     cmd.sequence_number = 34;
 
-    let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
-    let response = client.do_put(flight_data).await?.next().await.unwrap()?;
-
-    let put_result =
-        DataSyncResult::decode(response.app_metadata).expect("DataSyncResult");
+    let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
-        put_result,
+        sync_result,
         DataSyncResult {
             accepted: true,
             memory_sequence_number: Some(34),
@@ -170,13 +163,9 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     )?;
     cmd.sequence_number = 56;
 
-    let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
-    let response = client.do_put(flight_data).await?.next().await.unwrap()?;
-
-    let put_result =
-        DataSyncResult::decode(response.app_metadata).expect("DataSyncResult");
+    let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
-        put_result,
+        sync_result,
         DataSyncResult {
             accepted: true,
             memory_sequence_number: Some(56),
@@ -203,13 +192,21 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     )?;
     cmd.sequence_number = 78;
 
-    let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
-    let response = client.do_put(flight_data).await?.next().await.unwrap()?;
-
-    let put_result =
-        DataSyncResult::decode(response.app_metadata).expect("DataSyncResult");
+    let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
-        put_result,
+        sync_result,
+        DataSyncResult {
+            accepted: true,
+            memory_sequence_number: Some(78),
+            durable_sequence_number: Some(34),
+        }
+    );
+
+    // Check empty payload reflects the current state
+    let sync_result =
+        do_put_sync(cmd.clone(), RecordBatch::new_empty(schema), &mut client).await?;
+    assert_eq!(
+        sync_result,
         DataSyncResult {
             accepted: true,
             memory_sequence_number: Some(78),
@@ -241,13 +238,9 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     )?;
     cmd.sequence_number = 910;
 
-    let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
-    let response = client.do_put(flight_data).await?.next().await.unwrap()?;
-
-    let put_result =
-        DataSyncResult::decode(response.app_metadata).expect("DataSyncResult");
+    let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
-        put_result,
+        sync_result,
         DataSyncResult {
             accepted: true,
             memory_sequence_number: Some(910),

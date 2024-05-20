@@ -1,18 +1,28 @@
+use arrow::array::{
+    BooleanArray, Float64Array, Int32Array, StringArray, TimestampMicrosecondArray,
+};
 use arrow::record_batch::RecordBatch;
-use arrow_flight::error::Result;
+use arrow_flight::encode::{FlightDataEncoder, FlightDataEncoderBuilder};
+use arrow_flight::error::{FlightError, Result};
 use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt};
 use arrow_flight::{FlightClient, FlightDescriptor};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use datafusion_common::assert_batches_eq;
+use futures::StreamExt;
 use futures::TryStreamExt;
 use prost::Message;
 use reqwest::StatusCode;
 use rstest::rstest;
 use std::future;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
+use uuid::Uuid;
 use warp::hyper::Client;
+
+use clade::sync::{DataSyncCommand, DataSyncResult};
 
 use crate::http::{get_metrics, response_text};
 use crate::statements::create_table_and_insert;
@@ -22,11 +32,13 @@ use seafowl::config::context::{build_context, GRPC_REQUESTS};
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::SeafowlContext;
 use seafowl::frontend::flight::run_flight_server;
+use seafowl::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
 
 mod client;
 mod e2e;
 mod search_path;
 mod sync;
+mod sync_fail;
 
 async fn make_test_context() -> Arc<SeafowlContext> {
     // let OS choose a free port
