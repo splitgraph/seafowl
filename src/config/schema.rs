@@ -400,7 +400,7 @@ impl Default for ObjectCacheProperties {
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(default)]
 pub struct DataSyncConfig {
-    pub max_in_memory_bytes: u64,
+    pub max_in_memory_bytes: usize,
     pub max_replication_lag_s: u64,
 }
 

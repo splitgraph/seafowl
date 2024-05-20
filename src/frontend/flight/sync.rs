@@ -156,15 +156,27 @@ impl SeafowlDataSyncManager {
         self.flush_batches().await
     }
 
+    // Criteria for return the cached entry ready to be persisted to storage.
+    // First flush any records that are explicitly beyond the configured max
+    // lag, followed by further entries if we're still above max cache size.
+    fn flush_ready(&mut self) -> Option<DataSyncTarget> {
+        if let Some(entry) = self.lags.peek()
+            && now() - entry.0.insertion_time
+                >= self.context.config.misc.sync_data.max_replication_lag_s
+        {
+            // TODO: do this out-of-band
+            Some(self.lags.pop().unwrap().0)
+        } else if self.size >= self.context.config.misc.sync_data.max_in_memory_bytes {
+            // TODO: maybe better to pop from a size-based max-heap in this case
+            Some(self.lags.pop().unwrap().0)
+        } else {
+            None
+        }
+    }
+
     async fn flush_batches(&mut self) -> Result<()> {
         // First flush any changes that are past the configured max duration
-        // TODO: do this out-of-band
-        while let Some(entry) = self.lags.peek()
-            && now() - entry.0.insertion_time
-                > self.context.config.misc.sync_data.max_replication_lag_s
-        {
-            // Remove the entry from the priority queue
-            let target = self.lags.pop().unwrap().0;
+        while let Some(target) = self.flush_ready() {
             let log_store = target.log_store.clone();
             let url = log_store.root_uri();
 

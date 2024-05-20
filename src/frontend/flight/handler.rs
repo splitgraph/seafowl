@@ -2,7 +2,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::SqlInfo;
 use arrow_schema::SchemaRef;
-use clade::flight::{DataSyncCommand, DataSyncResult};
+use clade::sync::{DataSyncCommand, DataSyncResult};
 use dashmap::DashMap;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
@@ -45,7 +45,7 @@ lazy_static! {
 pub(super) struct SeafowlFlightHandler {
     pub context: Arc<SeafowlContext>,
     pub results: Arc<DashMap<String, Mutex<SendableRecordBatchStream>>>,
-    put_manager: Arc<RwLock<SeafowlDataSyncManager>>,
+    sync_manager: Arc<RwLock<SeafowlDataSyncManager>>,
 }
 
 impl SeafowlFlightHandler {
@@ -53,7 +53,7 @@ impl SeafowlFlightHandler {
         Self {
             context: context.clone(),
             results: Arc::new(Default::default()),
-            put_manager: Arc::new(RwLock::new(SeafowlDataSyncManager::new(context))),
+            sync_manager: Arc::new(RwLock::new(SeafowlDataSyncManager::new(context))),
         }
     }
 
@@ -119,7 +119,7 @@ impl SeafowlFlightHandler {
                 .get_log_store_for_table(
                     Url::parse(&store_loc.location).map_err(|e| {
                         DataFusionError::Execution(format!(
-                            "Couldn't parse put location: {e}"
+                            "Couldn't parse sync location: {e}"
                         ))
                     })?,
                     store_loc.options,
@@ -167,7 +167,7 @@ impl SeafowlFlightHandler {
         // Get the current memory sequence number, defaulting to durable sequence number if missing
         let url = log_store.root_uri();
         let mem_seq = self
-            .put_manager
+            .sync_manager
             .read()
             .await
             .mem_seq_for_table(&url)
@@ -188,11 +188,11 @@ impl SeafowlFlightHandler {
         debug!("Processing data change with {num_rows} rows for url {url}");
         // TODO: make timeout configurable
         let accepted =
-            match tokio::time::timeout(Duration::from_secs(3), self.put_manager.write())
+            match tokio::time::timeout(Duration::from_secs(3), self.sync_manager.write())
                 .await
             {
-                Ok(mut put_manager) => {
-                    put_manager
+                Ok(mut sync_manager) => {
+                    sync_manager
                         .sync_batches(
                             log_store,
                             cmd.sequence_number,
@@ -204,7 +204,7 @@ impl SeafowlFlightHandler {
                     true
                 }
                 Err(_) => {
-                    debug!("Timeout waiting for data put write lock for url {url}");
+                    debug!("Timeout waiting for data sync write lock for url {url}");
                     false
                 }
             };

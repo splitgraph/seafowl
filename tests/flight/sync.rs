@@ -4,13 +4,16 @@ use arrow::array::{
 };
 use arrow_flight::encode::{FlightDataEncoder, FlightDataEncoderBuilder};
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
-use clade::flight::{DataSyncCommand, DataSyncResult};
+use clade::sync::{DataSyncCommand, DataSyncResult};
 use futures::StreamExt;
 use seafowl::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
 use std::time::Duration;
 use uuid::Uuid;
 
-fn put_cmd_to_flight_data(cmd: DataSyncCommand, batch: RecordBatch) -> FlightDataEncoder {
+fn sync_cmd_to_flight_data(
+    cmd: DataSyncCommand,
+    batch: RecordBatch,
+) -> FlightDataEncoder {
     let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
     let flight_stream_builder =
         FlightDataEncoderBuilder::new().with_flight_descriptor(Some(descriptor));
@@ -57,7 +60,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         sequence_number: 12,
     };
 
-    let flight_data = put_cmd_to_flight_data(cmd.clone(), batch);
+    let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
     let response = client.do_put(flight_data).await?.next().await.unwrap()?;
 
     // Changes are still in memory
@@ -91,7 +94,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     assert!(results.is_empty());
 
     // Wait for the replication lag to exceed the configured max duration
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Now go for sync #2; this will flush both it and the first sync as well
     let schema = Arc::new(Schema::new(vec![
@@ -110,7 +113,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     )?;
     cmd.sequence_number = 34;
 
-    let flight_data = put_cmd_to_flight_data(cmd.clone(), batch);
+    let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
     let response = client.do_put(flight_data).await?.next().await.unwrap()?;
 
     let put_result =
@@ -167,7 +170,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     )?;
     cmd.sequence_number = 56;
 
-    let flight_data = put_cmd_to_flight_data(cmd.clone(), batch);
+    let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
     let response = client.do_put(flight_data).await?.next().await.unwrap()?;
 
     let put_result =
@@ -200,7 +203,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     )?;
     cmd.sequence_number = 78;
 
-    let flight_data = put_cmd_to_flight_data(cmd.clone(), batch);
+    let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
     let response = client.do_put(flight_data).await?.next().await.unwrap()?;
 
     let put_result =
@@ -214,8 +217,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         }
     );
 
-    // Sleep and sync #5 to flush the previous 2 syncs
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Sync #5 to flush the previous 2 syncs due to max size threshold
     let schema = Arc::new(Schema::new(vec![
         Field::new("col_1", DataType::Int32, true),
         Field::new(
@@ -239,7 +241,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     )?;
     cmd.sequence_number = 910;
 
-    let flight_data = put_cmd_to_flight_data(cmd.clone(), batch);
+    let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
     let response = client.do_put(flight_data).await?.next().await.unwrap()?;
 
     let put_result =

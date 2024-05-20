@@ -16,7 +16,7 @@ use arrow_flight::{
     Ticket,
 };
 use async_trait::async_trait;
-use clade::flight::DataSyncCommand;
+use clade::sync::DataSyncCommand;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;

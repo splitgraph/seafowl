@@ -47,6 +47,7 @@ bind_host = "127.0.0.1"
 bind_port = {}
 
 [misc.sync_data]
+max_in_memory_bytes = 2500
 max_replication_lag_s = 1"#,
         addr.port()
     );

@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package clade.flight;
+package clade.sync;
 
 import "schema.proto";
 

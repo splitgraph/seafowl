@@ -4,11 +4,11 @@ pub mod schema {
         tonic::include_file_descriptor_set!("clade_descriptor");
 }
 
-pub mod flight {
+pub mod sync {
     use arrow_flight::sql::{Any, ProstMessageExt};
     use prost::Message;
 
-    tonic::include_proto!("clade.flight");
+    tonic::include_proto!("clade.sync");
 
     // We need this since the native arrow-flight `do_put` mechanism relies on
     // decoding the command into `Any` prior to running it:
