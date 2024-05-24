@@ -13,6 +13,8 @@
 [Nightly builds](https://nightly.link/splitgraph/seafowl/workflows/nightly/main) |
 [Download](https://github.com/splitgraph/seafowl/releases)**
 
+[**✨✨✨ Seafowl now proudly powers the EDB Postgres Lakehouse ✨✨✨**](https://www.enterprisedb.com/workload/rapid-analytics-for-postgres)
+
 Seafowl is an analytical database for modern data-driven Web applications.
 
 Its CDN and HTTP cache-friendly query execution API lets you deliver data to your visualizations,
