@@ -115,13 +115,13 @@ impl SchemaStore for RepositoryStore {
 
         let schemas = cols
             .iter()
-            .group_by(|col| &col.collection_name)
+            .chunk_by(|col| &col.collection_name)
             .into_iter()
             .map(|(cn, ct)| SchemaObject {
                 name: cn.clone(),
                 tables: ct
                     .into_iter()
-                    .group_by(|t| (&t.table_name, &t.table_uuid))
+                    .chunk_by(|t| (&t.table_name, &t.table_uuid))
                     .into_iter()
                     .filter_map(|((name, uuid), _)| {
                         if let Some(name) = &name

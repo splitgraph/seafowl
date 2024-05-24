@@ -182,7 +182,7 @@ impl SeafowlSystemTable for TableVersionsTable {
             builder
                 .field_builder::<StringBuilder>(1)
                 .unwrap()
-                .append_value(&table_version.table_name.clone());
+                .append_value(table_version.table_name.clone());
             builder
                 .field_builder::<Int64Builder>(2)
                 .unwrap()
@@ -263,7 +263,7 @@ impl SeafowlSystemTable for DroppedTablesTable {
             builder
                 .field_builder::<StringBuilder>(1)
                 .unwrap()
-                .append_value(&dropped_table.table_name.clone());
+                .append_value(dropped_table.table_name.clone());
             builder
                 .field_builder::<StringBuilder>(2)
                 .unwrap()
