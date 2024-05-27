@@ -25,6 +25,7 @@ use crate::frontend::flight::sync::SeafowlDataSyncManager;
 
 pub const SEAFOWL_SYNC_DATA_UD_FLAG: &str = "__seafowl_ud";
 pub const SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER: &str = "sequence";
+pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {

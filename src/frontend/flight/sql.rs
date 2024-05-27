@@ -1,5 +1,6 @@
 use crate::frontend::flight::handler::{
-    SeafowlFlightHandler, SEAFOWL_SQL_DATA, SEAFOWL_SYNC_DATA_UD_FLAG,
+    SeafowlFlightHandler, SEAFOWL_SQL_DATA, SEAFOWL_SYNC_CALL_MAX_ROWS,
+    SEAFOWL_SYNC_DATA_UD_FLAG,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_flight::decode::FlightRecordBatchStream;
@@ -197,6 +198,17 @@ impl FlightSqlService for SeafowlFlightHandler {
             // Validate upsert/delete flag column is present
             if schema.all_fields().last().unwrap().name() != SEAFOWL_SYNC_DATA_UD_FLAG {
                 let err = format!("Change requested but batches do not contain upsert/delete flag as last column `{SEAFOWL_SYNC_DATA_UD_FLAG}`");
+                warn!(err);
+                return Err(Status::invalid_argument(err));
+            }
+
+            // Validate row count under prescribed limit
+            if batches
+                .iter()
+                .fold(0, |rows, batch| rows + batch.num_rows())
+                > SEAFOWL_SYNC_CALL_MAX_ROWS
+            {
+                let err = format!("Change contains more than max allowed {SEAFOWL_SYNC_CALL_MAX_ROWS} rows");
                 warn!(err);
                 return Err(Status::invalid_argument(err));
             }
