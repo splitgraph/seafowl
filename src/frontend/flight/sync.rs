@@ -67,7 +67,7 @@ impl Ord for DataSyncTarget {
     }
 }
 
-// An entry storing all pending in-memory data to replicate,
+// An entry storing all pending in-memory data to replicate to a given location,
 // potentially resulting from multiple `do_put` calls.
 #[derive(Debug)]
 struct DataSyncCollection {
@@ -105,7 +105,7 @@ impl SeafowlDataSyncManager {
     pub fn mem_seq_for_table(&self, url: &String) -> Option<u64> {
         self.syncs
             .get(url)
-            .map(|entry| entry.syncs.last().unwrap().sequence_number)
+            .and_then(|entry| entry.syncs.last().map(|s| s.sequence_number))
     }
 
     // Store the pending data in memory and flush if the required criteria are met.
@@ -187,59 +187,64 @@ impl SeafowlDataSyncManager {
             let full_schema = TableProvider::schema(&table);
 
             // Fetch the pending data to sync
-            if let Some(entry) = self.syncs.remove(&url) {
-                self.size -= entry.size;
-
-                let latest_sequence_number = entry.syncs.last().unwrap().sequence_number;
-
-                // Iterate through all syncs for this table and construct a full plan
-                let mut input_plan: Arc<dyn ExecutionPlan> =
-                    Arc::new(MemoryExec::try_new(&[], full_schema.clone(), None)?);
-                for sync in entry.syncs {
-                    input_plan =
-                        self.plan_data_sync(full_schema.clone(), input_plan, sync)?;
+            let entry = match self.syncs.remove(&url) {
+                None => {
+                    warn!("No pending syncs found for {url}, discarding");
+                    continue;
                 }
+                Some(entry) => entry,
+            };
 
-                // To exploit fast data upload to local FS, i.e. simply move the partition files
-                // once written to the disk, try to infer whether the location is a local dir
-                let local_data_dir = if url.starts_with("file://") {
-                    Some(log_store.root_uri())
-                } else {
-                    None
-                };
+            self.size -= entry.size;
 
-                // Dump the batches to the object store
-                let adds = plan_to_object_store(
-                    &self.context.inner.state(),
-                    &input_plan,
-                    log_store.object_store(),
-                    local_data_dir,
-                    self.context.config.misc.max_partition_size,
-                )
-                .await?;
+            let latest_sequence_number = entry.syncs.last().unwrap().sequence_number;
 
-                let mut actions: Vec<Action> =
-                    adds.into_iter().map(Action::Add).collect();
-
-                // Append a special `CommitInfo` action to record new durable sequence number
-                // tied to the commit.
-                let info = HashMap::from([(
-                    SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER.to_string(),
-                    Value::Number(latest_sequence_number.into()),
-                )]);
-                let commit_info = Action::commit_info(info);
-                actions.push(commit_info);
-
-                let op = DeltaOperation::Write {
-                    mode: SaveMode::Append,
-                    partition_by: None,
-                    predicate: None,
-                };
-                self.context.commit(actions, &table, op).await?;
-                debug!("Committed data sync up to {latest_sequence_number} for location {url}");
-            } else {
-                warn!("No pending syncs found for {url}, discarding");
+            // Iterate through all syncs for this table and construct a full plan
+            let mut input_plan: Arc<dyn ExecutionPlan> =
+                Arc::new(MemoryExec::try_new(&[], full_schema.clone(), None)?);
+            for sync in entry.syncs {
+                input_plan =
+                    self.plan_data_sync(full_schema.clone(), input_plan, sync)?;
             }
+
+            // To exploit fast data upload to local FS, i.e. simply move the partition files
+            // once written to the disk, try to infer whether the location is a local dir
+            let local_data_dir = if url.starts_with("file://") {
+                Some(log_store.root_uri())
+            } else {
+                None
+            };
+
+            // Dump the batches to the object store
+            let adds = plan_to_object_store(
+                &self.context.inner.state(),
+                &input_plan,
+                log_store.object_store(),
+                local_data_dir,
+                self.context.config.misc.max_partition_size,
+            )
+            .await?;
+
+            let mut actions: Vec<Action> = adds.into_iter().map(Action::Add).collect();
+
+            // Append a special `CommitInfo` action to record new durable sequence number
+            // tied to the commit.
+            let info = HashMap::from([(
+                SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER.to_string(),
+                Value::Number(latest_sequence_number.into()),
+            )]);
+            let commit_info = Action::commit_info(info);
+            actions.push(commit_info);
+
+            let op = DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            };
+            self.context.commit(actions, &table, op).await?;
+            debug!(
+                "Committed data sync up to {latest_sequence_number} for location {url}"
+            );
         }
 
         Ok(())
