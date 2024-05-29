@@ -19,6 +19,7 @@ use datafusion::catalog::schema::MemorySchemaProvider;
 use datafusion::datasource::TableProvider;
 
 use deltalake::DeltaTable;
+use futures::{stream, StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -84,11 +85,10 @@ impl Metastore {
             .collect();
 
         // Turn the list of all collections, tables and their columns into a nested map.
-        let schemas = catalog_schemas
-            .schemas
-            .into_iter()
-            .map(|schema| self.build_schema(schema, &store_options))
-            .collect::<CatalogResult<HashMap<_, _>>>()?;
+        let schemas = stream::iter(catalog_schemas.schemas)
+            .then(|schema| self.build_schema(schema, &store_options))
+            .try_collect()
+            .await?;
 
         let name: Arc<str> = Arc::from(catalog_name);
 
@@ -100,18 +100,17 @@ impl Metastore {
         })
     }
 
-    fn build_schema(
+    async fn build_schema(
         &self,
         schema: SchemaObject,
         store_options: &HashMap<String, HashMap<String, String>>,
     ) -> CatalogResult<(Arc<str>, Arc<SeafowlSchema>)> {
         let schema_name = schema.name;
 
-        let tables = schema
-            .tables
-            .into_iter()
-            .map(|table| self.build_table(table, store_options))
-            .collect::<CatalogResult<DashMap<_, _>>>()?;
+        let tables: DashMap<_, _> = stream::iter(schema.tables)
+            .then(|table| self.build_table(table, store_options))
+            .try_collect()
+            .await?;
 
         Ok((
             Arc::from(schema_name.clone()),
@@ -122,7 +121,7 @@ impl Metastore {
         ))
     }
 
-    fn build_table(
+    async fn build_table(
         &self,
         table: TableObject,
         store_options: &HashMap<String, HashMap<String, String>>,
@@ -143,11 +142,13 @@ impl Metastore {
                     })?
                     .clone();
 
-                self.object_stores.get_log_store_for_table(
-                    Url::parse(&location)?,
-                    this_store_options,
-                    table.path,
-                )?
+                self.object_stores
+                    .get_log_store_for_table(
+                        Url::parse(&location)?,
+                        this_store_options,
+                        table.path,
+                    )
+                    .await?
             }
             // Use the configured, default, object store
             None => self.object_stores.get_default_log_store(&table.path),

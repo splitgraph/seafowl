@@ -10,9 +10,15 @@ use deltalake::{
     DeltaResult, DeltaTableError, Path,
 };
 use object_store::{
-    aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder, local::LocalFileSystem,
-    memory::InMemory, parse_url_opts, prefix::PrefixStore, ObjectStore,
+    aws::{resolve_bucket_region, AmazonS3Builder, AmazonS3ConfigKey},
+    gcp::GoogleCloudStorageBuilder,
+    local::LocalFileSystem,
+    memory::InMemory,
+    parse_url_opts,
+    prefix::PrefixStore,
+    ClientOptions, ObjectStore,
 };
+use tracing::info;
 use url::Url;
 
 use crate::config::schema::{self, ObjectCacheProperties, SeafowlConfig, GCS, S3};
@@ -150,13 +156,14 @@ impl ObjectStoreFactory {
             factories.insert(url, self.clone());
         }
     }
-    pub fn get_log_store_for_table(
+    pub async fn get_log_store_for_table(
         &self,
         url: Url,
         options: HashMap<String, String>,
         table_path: String,
     ) -> Result<Arc<dyn LogStore>, object_store::Error> {
         let store = {
+            let mut used_options = options.clone();
             let key = StoreCacheKey {
                 url: url.clone(),
                 options,
@@ -165,7 +172,37 @@ impl ObjectStoreFactory {
             match self.custom_stores.get_mut(&key) {
                 Some(store) => store.clone(),
                 None => {
-                    let mut store = parse_url_opts(&key.url, &key.options)?.0.into();
+                    if (key.url.scheme() == "s3" || key.url.scheme() == "s3a")
+                        && !used_options.contains_key(AmazonS3ConfigKey::Bucket.as_ref())
+                        && !used_options
+                            .contains_key(AmazonS3ConfigKey::Endpoint.as_ref())
+                    {
+                        // For "real" S3, if we don't have a region passed to us, we have to figure it out
+                        // ourselves (note this won't work with HTTP paths that are actually S3, but those
+                        // usually include the region already).
+
+                        let bucket =
+                            key.url.host_str().ok_or(object_store::Error::Generic {
+                                store: "parse_url",
+                                source: format!(
+                                    "Could not find a bucket in S3 path {0}",
+                                    key.url
+                                )
+                                .into(),
+                            })?;
+
+                        info!("Autodetecting region for bucket {}", bucket);
+                        let region =
+                            resolve_bucket_region(bucket, &ClientOptions::new()).await?;
+                        info!(
+                            "Using autodetected region {} for bucket {}",
+                            region, bucket
+                        );
+
+                        used_options.insert("region".to_string(), region.to_string());
+                    };
+
+                    let mut store = parse_url_opts(&key.url, &used_options)?.0.into();
 
                     if !(key.url.scheme() == "file" || key.url.scheme() == "memory")
                         && let Some(ref cache) = self.object_store_cache

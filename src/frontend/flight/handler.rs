@@ -111,19 +111,21 @@ impl SeafowlFlightHandler {
     ) -> Result<DataSyncResult> {
         let log_store = match cmd.store {
             None => self.context.internal_object_store.get_log_store(&cmd.path),
-            Some(store_loc) => self
-                .context
-                .metastore
-                .object_stores
-                .get_log_store_for_table(
-                    Url::parse(&store_loc.location).map_err(|e| {
-                        DataFusionError::Execution(format!(
-                            "Couldn't parse sync location: {e}"
-                        ))
-                    })?,
-                    store_loc.options,
-                    cmd.path,
-                )?,
+            Some(store_loc) => {
+                self.context
+                    .metastore
+                    .object_stores
+                    .get_log_store_for_table(
+                        Url::parse(&store_loc.location).map_err(|e| {
+                            DataFusionError::Execution(format!(
+                                "Couldn't parse sync location: {e}"
+                            ))
+                        })?,
+                        store_loc.options,
+                        cmd.path,
+                    )
+                    .await?
+            }
         };
 
         let url = log_store.root_uri();
