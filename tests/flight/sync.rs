@@ -58,7 +58,8 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         store: None,
         pk_column: vec!["col_1".to_string()],
         origin: "test-origin".to_string(),
-        sequence_number: 12,
+        sequence_number: 1234,
+        last: false,
     };
 
     // Changes are still in memory
@@ -67,7 +68,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         sync_result,
         DataSyncResult {
             accepted: true,
-            memory_sequence_number: Some(12),
+            memory_sequence_number: None, // sequence not in memory because of  `last: false`
             durable_sequence_number: None,
         }
     );
@@ -108,15 +109,15 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
             Arc::new(BooleanArray::from(vec![true, true])),
         ],
     )?;
-    cmd.sequence_number = 34;
+    cmd.last = true;
 
     let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
         sync_result,
         DataSyncResult {
             accepted: true,
-            memory_sequence_number: Some(34),
-            durable_sequence_number: None,
+            memory_sequence_number: Some(1234),
+            durable_sequence_number: Some(1234),
         }
     );
 
@@ -161,15 +162,16 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
             Arc::new(BooleanArray::from(vec![true, true])),
         ],
     )?;
-    cmd.sequence_number = 56;
+    cmd.sequence_number = 5600;
+    cmd.last = true;
 
     let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
         sync_result,
         DataSyncResult {
             accepted: true,
-            memory_sequence_number: Some(56),
-            durable_sequence_number: Some(34),
+            memory_sequence_number: Some(5600),
+            durable_sequence_number: Some(1234),
         }
     );
 
@@ -190,15 +192,16 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
             Arc::new(BooleanArray::from(vec![true, true])),
         ],
     )?;
-    cmd.sequence_number = 78;
+    cmd.sequence_number = 78910;
+    cmd.last = false;
 
     let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
         sync_result,
         DataSyncResult {
             accepted: true,
-            memory_sequence_number: Some(78),
-            durable_sequence_number: Some(34),
+            memory_sequence_number: Some(5600), // again 78910 not in memory since `last = false`
+            durable_sequence_number: Some(1234),
         }
     );
 
@@ -209,8 +212,8 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         sync_result,
         DataSyncResult {
             accepted: true,
-            memory_sequence_number: Some(78),
-            durable_sequence_number: Some(34),
+            memory_sequence_number: Some(5600),
+            durable_sequence_number: Some(1234),
         }
     );
 
@@ -236,15 +239,15 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
             Arc::new(BooleanArray::from(vec![true, true])),
         ],
     )?;
-    cmd.sequence_number = 910;
+    cmd.last = true;
 
     let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
         sync_result,
         DataSyncResult {
             accepted: true,
-            memory_sequence_number: Some(910),
-            durable_sequence_number: Some(34),
+            memory_sequence_number: Some(78910),
+            durable_sequence_number: Some(78910),
         }
     );
 

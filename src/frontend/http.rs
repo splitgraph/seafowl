@@ -292,6 +292,7 @@ pub fn cached_read_query_authz(
 /// 1. GET /q/[query]
 /// 2. GET /q/[query hash] {"query": "[query]"}
 /// 3. GET -H "X-Seafowl-Query: [query]" /q/[query hash]
+///
 /// In all cases the path can have an optional prefix parameter in order do specify a non-default
 /// database as target, e.g. /[database_name]/q/[query]
 pub async fn cached_read_query(

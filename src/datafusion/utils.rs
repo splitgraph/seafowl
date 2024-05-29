@@ -32,7 +32,7 @@ pub(crate) fn build_schema(columns: Vec<SQLColumnDef>) -> Result<Schema> {
             .iter()
             .any(|x| x.option == ColumnOption::NotNull);
         fields.push(Field::new(
-            &normalize_ident(&column.name),
+            normalize_ident(&column.name),
             data_type,
             allow_null,
         ));

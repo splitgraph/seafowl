@@ -7,11 +7,9 @@ use dashmap::DashMap;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::DataFusionError;
-use deltalake::kernel::Schema as DeltaSchema;
+use deltalake::kernel::Schema;
 use deltalake::operations::create::CreateBuilder;
-use deltalake::DeltaTable;
 use lazy_static::lazy_static;
-use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
@@ -128,57 +126,34 @@ impl SeafowlFlightHandler {
                 )?,
         };
 
-        // Check if a table exists yet in the provided location, and if not create one.
-        // If it does fetch its durable sequence number.
-        let dur_seq = if !log_store.is_delta_table_location().await? {
+        let url = log_store.root_uri();
+
+        if !log_store.is_delta_table_location().await? {
+            // If it's not a delta table yet create one first.
             // Get the actual table schema by removing the `SEAFOWL_SYNC_DATA_UD_FLAG` column
+            // from the first sync.
             let schema = batches.first().unwrap().schema();
             let idxs = (0..schema.all_fields().len() - 1).collect::<Vec<usize>>();
             let schema = schema.project(&idxs)?;
 
-            let delta_schema = DeltaSchema::try_from(&schema)?;
+            let delta_schema = Schema::try_from(&schema)?;
 
-            debug!(
-                "Creating new Delta table at location: {}",
-                log_store.root_uri()
-            );
+            debug!("Creating new Delta table at location: {url}",);
             CreateBuilder::new()
                 .with_log_store(log_store.clone())
                 .with_columns(delta_schema.fields().clone())
-                .with_comment(format!("Created by Seafowl {}", env!("CARGO_PKG_VERSION")))
+                .with_comment(format!("Synced by Seafowl {}", env!("CARGO_PKG_VERSION")))
                 .await?;
-            None
-        } else {
-            let mut table = DeltaTable::new(log_store.clone(), Default::default());
-            table.load().await?;
-
-            // TODO: handle all edge cases with missing/un-parsable sequence numbers
-            let commit_infos = table.history(Some(1)).await?;
-            match commit_infos
-                .last()
-                .expect("Table has non-zero commits")
-                .info
-                .get(SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER)
-            {
-                Some(Value::Number(seq)) => seq.as_u64(),
-                _ => None,
-            }
-        };
-
-        // Get the current memory sequence number, defaulting to durable sequence number if missing
-        let url = log_store.root_uri();
-        let mem_seq = self
-            .sync_manager
-            .read()
-            .await
-            .mem_seq_for_table(&url)
-            .or(dur_seq);
+        }
 
         let num_rows = batches
             .iter()
             .fold(0, |rows, batch| rows + batch.num_rows());
         if num_rows == 0 {
+            // Get the current volatile and durable sequence numbers
             debug!("Received empty batches, returning current sequence numbers");
+            let (mem_seq, dur_seq) =
+                self.sync_manager.read().await.stored_sequences(&cmd.origin);
             return Ok(DataSyncResult {
                 accepted: true,
                 memory_sequence_number: mem_seq,
@@ -188,38 +163,34 @@ impl SeafowlFlightHandler {
 
         debug!("Processing data change with {num_rows} rows for url {url}");
         // TODO: make timeout configurable
-        let accepted =
-            match tokio::time::timeout(Duration::from_secs(3), self.sync_manager.write())
-                .await
-            {
-                Ok(mut sync_manager) => {
-                    sync_manager
-                        .sync_batches(
-                            log_store,
-                            cmd.sequence_number,
-                            cmd.origin,
-                            cmd.pk_column,
-                            batches,
-                        )
-                        .await?;
-                    true
-                }
-                Err(_) => {
-                    debug!("Timeout waiting for data sync write lock for url {url}");
-                    false
-                }
-            };
-
-        let mem_seq = if accepted {
-            Some(cmd.sequence_number)
-        } else {
-            mem_seq
-        };
-
-        Ok(DataSyncResult {
-            accepted,
-            memory_sequence_number: mem_seq,
-            durable_sequence_number: dur_seq,
-        })
+        match tokio::time::timeout(Duration::from_secs(3), self.sync_manager.write())
+            .await
+        {
+            Ok(mut sync_manager) => {
+                let (mem_seq, dur_seq) = sync_manager
+                    .sync_batches(
+                        log_store,
+                        cmd.sequence_number,
+                        cmd.origin,
+                        cmd.pk_column,
+                        cmd.last,
+                        batches,
+                    )
+                    .await?;
+                Ok(DataSyncResult {
+                    accepted: true,
+                    memory_sequence_number: mem_seq,
+                    durable_sequence_number: dur_seq,
+                })
+            }
+            Err(_) => {
+                debug!("Timeout waiting for data sync write lock for url {url}");
+                Ok(DataSyncResult {
+                    accepted: false,
+                    memory_sequence_number: None,
+                    durable_sequence_number: None,
+                })
+            }
+        }
     }
 }

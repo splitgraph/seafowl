@@ -5554,6 +5554,7 @@ dependencies = [
  "deltalake",
  "futures",
  "hex",
+ "indexmap 2.2.6",
  "itertools 0.12.1",
  "lazy_static",
  "metrics",

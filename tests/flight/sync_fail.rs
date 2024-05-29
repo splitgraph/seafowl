@@ -32,6 +32,7 @@ async fn test_sync_errors() -> std::result::Result<(), Box<dyn std::error::Error
         pk_column: vec![],
         origin: "test-origin".to_string(),
         sequence_number: 42,
+        last: true,
     };
 
     // No PKs provided
