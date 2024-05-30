@@ -154,7 +154,7 @@ impl SeafowlFlightHandler {
         {
             Ok(mut sync_manager) => {
                 let (mem_seq, dur_seq) = sync_manager
-                    .sync_batches(
+                    .enqueue_sync(
                         log_store,
                         cmd.sequence_number,
                         cmd.origin,

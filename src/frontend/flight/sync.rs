@@ -31,7 +31,7 @@ type SequenceNumber = u64;
 
 pub(super) struct SeafowlDataSyncManager {
     context: Arc<SeafowlContext>,
-    // All sequences kept in memory
+    // All sequences kept in memory, queued up by insertion order, per origin,
     seqs: HashMap<String, IndexMap<SequenceNumber, DataSyncSequence>>,
     // An indexed queue of table URL => pending batches to upsert/delete
     // sorted by insertion order
@@ -107,7 +107,7 @@ impl SeafowlDataSyncManager {
     }
 
     // Store the pending data in memory and flush if the required criteria are met.
-    pub async fn sync_batches(
+    pub async fn enqueue_sync(
         &mut self,
         log_store: Arc<dyn LogStore>,
         sequence_number: SequenceNumber,
@@ -179,7 +179,7 @@ impl SeafowlDataSyncManager {
             self.origin_memory.insert(origin.clone(), sequence_number);
         }
 
-        self.flush_batches().await?;
+        self.flush_syncs().await?;
 
         Ok(self.stored_sequences(&origin))
     }
@@ -223,7 +223,7 @@ impl SeafowlDataSyncManager {
         }
     }
 
-    async fn flush_batches(&mut self) -> Result<()> {
+    async fn flush_syncs(&mut self) -> Result<()> {
         while let Some(url) = self.flush_ready() {
             // Fetch the pending data to sync
             let entry = match self.syncs.get(&url) {
@@ -302,27 +302,20 @@ impl SeafowlDataSyncManager {
             self.context.commit(actions, &table, op).await?;
             debug!("Committed data sync up to {last_sequence_number} for location {url}");
 
-            // We've flushed all the presently accumulated batches for this location, and if we
-            // observed the last sync for any of the sequences we should set them to durable
-            let or_seqs = entry
+            // We've flushed all the presently accumulated batches for this location.
+            // Modify our syncs and sequences maps to reflect this.
+            let orseq = entry
                 .syncs
                 .iter()
                 .map(|s| (s.origin.clone(), s.sequence_number))
                 .unique()
                 .collect::<Vec<_>>();
-
-            self.advance_durable(url.clone(), or_seqs);
+            self.remove_sequence_locations(url.clone(), orseq);
             self.remove_sync(url);
+            self.advance_durable();
         }
 
         Ok(())
-    }
-
-    // Remove the in-memory sync collection for the provided location, and update the size
-    fn remove_sync(&mut self, url: String) {
-        if let Some(sync) = self.syncs.shift_remove(&url) {
-            self.size -= sync.size;
-        }
     }
 
     // Inspect the table logs to find out what is the latest sequence number committed.
@@ -382,46 +375,67 @@ impl SeafowlDataSyncManager {
         Ok(Arc::new(UnionExec::new(vec![input_plan, proj_plan])))
     }
 
-    // Based on the provided origins and sequence numbers deduce what is the current durable
-    // sequence number for each origin.
-    fn advance_durable(
+    // Remove the pending location from a sequence for all syncs in the collection
+    fn remove_sequence_locations(
         &mut self,
         url: String,
-        origin_sequence_numbers: Vec<(String, SequenceNumber)>,
+        orseq: Vec<(String, SequenceNumber)>,
     ) {
-        for (origin, seq_num) in origin_sequence_numbers {
+        for (origin, seq_num) in orseq {
             if let Some(origin_seqs) = self.seqs.get_mut(&origin) {
                 if let Some(seq) = origin_seqs.get_mut(&seq_num) {
                     // Remove the pending location for this origin/sequence
                     seq.locs.remove(&url);
                 }
+            }
+        }
+    }
 
-                let mut remove_count = 0;
-                for (seq_num, seq) in origin_seqs.into_iter() {
-                    if seq.locs.is_empty() && seq.last {
-                        // We've seen the last sync for this sequence, all pending locations
-                        // have been flushed to and there's no preceding sequence to be flushed,
-                        // so we're good to flag the sequence as durable
-                        self.origin_durable.insert(origin.clone(), *seq_num);
+    // Remove the in-memory sync collection for the provided location, and update the size
+    fn remove_sync(&mut self, url: String) {
+        if let Some(sync) = self.syncs.shift_remove(&url) {
+            self.size -= sync.size;
+        }
+    }
 
-                        remove_count += 1;
-                    } else {
-                        // We've run into a sequence that is either not last or still has locations
-                        // that need to be flushed
-                        break;
-                    }
-                }
+    // Iterate through all origins and all sequences and:
+    //    - mark as durable all flushed and final sequences up to the first one that is not
+    //    - remove the durable sequences from the map
+    fn advance_durable(&mut self) {
+        let mut origins_to_remove = HashSet::new();
 
-                if remove_count == origin_seqs.len() {
-                    // Remove the origin if there are no sequences remaining
-                    self.seqs.remove(&origin);
+        for (origin, origin_seqs) in &mut self.seqs {
+            let mut remove_count = 0;
+            let mut new_durable = 0;
+
+            // Iteration is in order of insertion, so it's basically a FIFO queue
+            for (seq_num, seq) in origin_seqs.into_iter() {
+                if seq.locs.is_empty() && seq.last {
+                    // We've seen the last sync for this sequence, all pending locations
+                    // have been flushed to and there's no preceding sequence to be flushed,
+                    // so we're good to flag the sequence as durable
+                    self.origin_durable.insert(origin.clone(), *seq_num);
+
+                    remove_count += 1;
+                    new_durable = *seq_num;
                 } else {
-                    for _ in 0..remove_count {
-                        // Finally remove the redundant sequences for this origin map
-                        origin_seqs.shift_remove_index(0);
-                    }
+                    // We've run into a sequence that is either not last or still has locations
+                    // that need to be flushed
+                    break;
                 }
             }
+
+            if remove_count == origin_seqs.len() {
+                // Remove the origin since there are no more sequences remaining
+                origins_to_remove.insert(origin.clone());
+            } else if remove_count > 0 {
+                // Remove the durable sequences for this origin
+                origin_seqs.retain(|sn, _| sn > &new_durable);
+            }
+        }
+
+        for origin in origins_to_remove {
+            self.seqs.remove(&origin);
         }
     }
 }
@@ -487,7 +501,7 @@ mod tests {
 
         // Add LSN 1 for table 1
         sync_mgr
-            .sync_batches(
+            .enqueue_sync(
                 log_store_1.clone(),
                 1,
                 "origin".to_string(),
@@ -502,7 +516,7 @@ mod tests {
 
         // Add LSN 2 for table 2
         sync_mgr
-            .sync_batches(
+            .enqueue_sync(
                 log_store_2.clone(),
                 2,
                 "origin".to_string(),
@@ -517,7 +531,7 @@ mod tests {
 
         // Add LSN 3 for table 1 and push it over the max configured size
         sync_mgr
-            .sync_batches(
+            .enqueue_sync(
                 log_store_1.clone(),
                 3,
                 "origin".to_string(),
@@ -534,7 +548,7 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         // We've now advanced durable past seq 2 and on to seq 3
-        sync_mgr.flush_batches().await.unwrap();
+        sync_mgr.flush_syncs().await.unwrap();
         assert_eq!(sync_mgr.stored_sequences(&origin), (Some(3), Some(3)),);
     }
 }
