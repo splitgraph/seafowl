@@ -19,7 +19,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::context::delta::plan_to_object_store;
 
@@ -179,7 +179,10 @@ impl SeafowlDataSyncManager {
             self.origin_memory.insert(origin.clone(), sequence_number);
         }
 
-        self.flush_syncs().await?;
+        while self.flush_ready() {
+            // TODO: do out-of-band
+            self.flush_sync().await?;
+        }
 
         Ok(self.stored_sequences(&origin))
     }
@@ -207,33 +210,25 @@ impl SeafowlDataSyncManager {
     // Criteria for return the cached entry ready to be persisted to storage.
     // First flush any records that are explicitly beyond the configured max
     // lag, followed by further entries if we're still above max cache size.
-    fn flush_ready(&mut self) -> Option<String> {
-        if let Some((url, sync)) = self.syncs.first()
+    fn flush_ready(&mut self) -> bool {
+        if let Some((_, sync)) = self.syncs.first()
             && now() - sync.insertion_time
                 >= self.context.config.misc.sync_data.max_replication_lag_s
         {
             // First flush any changes that are past the configured max duration
-            // TODO: do this out-of-band
-            Some(url.clone())
+            true
         } else if self.size >= self.context.config.misc.sync_data.max_in_memory_bytes {
             // Or if we're over the size limit flush the oldest entry
-            Some(self.syncs.first().unwrap().0.clone())
+            true
         } else {
-            None
+            false
         }
     }
 
-    async fn flush_syncs(&mut self) -> Result<()> {
-        while let Some(url) = self.flush_ready() {
-            // Fetch the pending data to sync
-            let entry = match self.syncs.get(&url) {
-                None => {
-                    warn!("No pending syncs found for {url}, discarding");
-                    continue;
-                }
-                Some(entry) => entry,
-            };
-
+    // Flush the table containing the oldest sync in memory
+    async fn flush_sync(&mut self) -> Result<()> {
+        if let Some((url, entry)) = self.syncs.first() {
+            let url = url.clone();
             let log_store = entry.log_store.clone();
 
             let last_sequence_number = entry.syncs.last().unwrap().sequence_number;
@@ -248,8 +243,8 @@ impl SeafowlDataSyncManager {
                     "Location at {url} already durable up to {table_seq}, skipping {}",
                     last_sequence_number
                 );
-                self.remove_sync(url);
-                continue;
+                self.remove_sync(&url);
+                return Ok(());
             }
 
             // Use the schema from the object store as a source of truth, since it's not guaranteed
@@ -311,7 +306,7 @@ impl SeafowlDataSyncManager {
                 .unique()
                 .collect::<Vec<_>>();
             self.remove_sequence_locations(url.clone(), orseq);
-            self.remove_sync(url);
+            self.remove_sync(&url);
             self.advance_durable();
         }
 
@@ -392,8 +387,8 @@ impl SeafowlDataSyncManager {
     }
 
     // Remove the in-memory sync collection for the provided location, and update the size
-    fn remove_sync(&mut self, url: String) {
-        if let Some(sync) = self.syncs.shift_remove(&url) {
+    fn remove_sync(&mut self, url: &String) {
+        if let Some(sync) = self.syncs.shift_remove(url) {
             self.size -= sync.size;
         }
     }
@@ -418,6 +413,7 @@ impl SeafowlDataSyncManager {
 
                     remove_count += 1;
                     new_durable = *seq_num;
+                    debug!("Set new durable sequence {new_durable} for {origin}");
                 } else {
                     // We've run into a sequence that is either not last or still has locations
                     // that need to be flushed
@@ -427,9 +423,11 @@ impl SeafowlDataSyncManager {
 
             if remove_count == origin_seqs.len() {
                 // Remove the origin since there are no more sequences remaining
+                debug!("No more pending sequences for origin {origin}, removing");
                 origins_to_remove.insert(origin.clone());
             } else if remove_count > 0 {
                 // Remove the durable sequences for this origin
+                debug!("Trimming pending sequences for {origin} up to {new_durable}");
                 origin_seqs.retain(|sn, _| sn > &new_durable);
             }
         }
@@ -455,7 +453,6 @@ mod tests {
     use arrow::array::{BooleanArray, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use std::sync::Arc;
-    use std::time::Duration;
     use uuid::Uuid;
 
     fn dummy_batch() -> RecordBatch {
@@ -478,12 +475,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_flush_interleaving() {
-        let mut ctx = in_memory_context().await;
-
-        // Just enough for two dummy batches, so a flush is forced after the third
-        ctx.config.misc.sync_data.max_in_memory_bytes = 3000;
-        // Force the remaining flush after sleeping for 1 second
-        ctx.config.misc.sync_data.max_replication_lag_s = 1;
+        let ctx = Arc::new(in_memory_context().await);
 
         let table_1_uuid = Uuid::new_v4();
         let table_2_uuid = Uuid::new_v4();
@@ -495,7 +487,7 @@ mod tests {
             .internal_object_store
             .get_log_store(&table_2_uuid.to_string());
 
-        let mut sync_mgr = SeafowlDataSyncManager::new(Arc::new(ctx));
+        let mut sync_mgr = SeafowlDataSyncManager::new(ctx);
 
         let origin = "origin".to_string();
 
@@ -512,7 +504,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(1), None),);
+        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(1), None));
 
         // Add LSN 2 for table 2
         sync_mgr
@@ -527,9 +519,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(2), None),);
+        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(2), None));
 
-        // Add LSN 3 for table 1 and push it over the max configured size
+        // Add LSN 3 for table 1
         sync_mgr
             .enqueue_sync(
                 log_store_1.clone(),
@@ -542,13 +534,16 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(3), Some(1)),);
+        // Explicitly flush the first table
+        sync_mgr.flush_sync().await.unwrap();
 
-        // Wait for the replication lag to exceed the configured max duration
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(3), Some(1)));
+
+        // Explicitly flush the remaining table
+        sync_mgr.flush_sync().await.unwrap();
 
         // We've now advanced durable past seq 2 and on to seq 3
-        sync_mgr.flush_syncs().await.unwrap();
-        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(3), Some(3)),);
+        sync_mgr.flush_sync().await.unwrap();
+        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(3), Some(3)));
     }
 }
