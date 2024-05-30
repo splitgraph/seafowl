@@ -8,8 +8,9 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{Result, ScalarValue};
-use deltalake::kernel::Action;
+use deltalake::kernel::{Action, Schema};
 use deltalake::logstore::LogStore;
+use deltalake::operations::create::CreateBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
 use indexmap::IndexMap;
@@ -27,12 +28,11 @@ use crate::frontend::flight::handler::SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER;
 use crate::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
 
 type SequenceNumber = u64;
-type OriginSequence = (String, SequenceNumber);
 
 pub(super) struct SeafowlDataSyncManager {
     context: Arc<SeafowlContext>,
     // All sequences kept in memory
-    seqs: HashMap<OriginSequence, DataSyncSequence>,
+    seqs: HashMap<String, IndexMap<SequenceNumber, DataSyncSequence>>,
     // An indexed queue of table URL => pending batches to upsert/delete
     // sorted by insertion order
     syncs: IndexMap<String, DataSyncCollection>,
@@ -72,8 +72,10 @@ struct DataSyncCollection {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct DataSyncItem {
-    // Identifier of the origin where the change stems from as well the sequence number
-    origin_sequence: OriginSequence,
+    // Identifier of the origin where the change stems from
+    origin: String,
+    // Sequence number of this particular change and origin
+    sequence_number: SequenceNumber,
     // Primary keys
     // TODO: this should probably be per-collection (not changing from sequence to sequence)
     pk_columns: Vec<String>,
@@ -116,29 +118,34 @@ impl SeafowlDataSyncManager {
     ) -> Result<(Option<SequenceNumber>, Option<SequenceNumber>)> {
         let url = log_store.root_uri();
 
-        let orseq = (origin.clone(), sequence_number);
+        // If there's no delta table at this location yet create one first.
+        if !log_store.is_delta_table_location().await? {
+            debug!("Creating new Delta table at location: {url}");
+            self.create_table(log_store.clone(), &batches).await?;
+        }
 
         // Upsert a sequence entry for this origin/LSN
+        let sequence = DataSyncSequence {
+            last,
+            locs: HashSet::from([url.clone()]),
+        };
         self
             .seqs
-            .entry(orseq.clone())
-            .and_modify(|seq| {
-                if !seq.locs.contains(&url) {
+            .entry(origin.clone())
+            .and_modify(|origin_seqs| {
+                origin_seqs.entry(sequence_number).and_modify(|seq| {if !seq.locs.contains(&url) {
                     debug!("Adding {url} as sync destination for {origin}, {sequence_number}");
                     seq.locs.insert(url.clone());
                 }
 
-                if last {
-                    debug!(
+                    if last {
+                        debug!(
                         "Received last sync for {url} from {origin}, {sequence_number}"
                     );
-                    seq.last = true;
-                }
+                        seq.last = true;
+                    }}).or_insert(sequence.clone());
             })
-            .or_insert(DataSyncSequence {
-                last,
-                locs: HashSet::from([url.clone()]),
-            });
+            .or_insert(IndexMap::from([(sequence_number, sequence)]));
 
         // Finally upsert the new sync item for this location
         let size = batches
@@ -146,7 +153,8 @@ impl SeafowlDataSyncManager {
             .fold(0, |bytes, batch| bytes + batch.get_array_memory_size());
 
         let item = DataSyncItem {
-            origin_sequence: orseq,
+            origin: origin.clone(),
+            sequence_number,
             pk_columns,
             batches,
         };
@@ -174,6 +182,26 @@ impl SeafowlDataSyncManager {
         self.flush_batches().await?;
 
         Ok(self.stored_sequences(&origin))
+    }
+
+    async fn create_table(
+        &self,
+        log_store: Arc<dyn LogStore>,
+        batches: &[RecordBatch],
+    ) -> Result<DeltaTable> {
+        // Get the actual table schema by removing the `SEAFOWL_SYNC_DATA_UD_FLAG` column
+        // from the first sync.
+        let schema = batches.first().unwrap().schema();
+        let idxs = (0..schema.all_fields().len() - 1).collect::<Vec<usize>>();
+        let schema = schema.project(&idxs)?;
+
+        let delta_schema = Schema::try_from(&schema)?;
+
+        Ok(CreateBuilder::new()
+            .with_log_store(log_store)
+            .with_columns(delta_schema.fields().clone())
+            .with_comment(format!("Synced by Seafowl {}", env!("CARGO_PKG_VERSION")))
+            .await?)
     }
 
     // Criteria for return the cached entry ready to be persisted to storage.
@@ -208,7 +236,7 @@ impl SeafowlDataSyncManager {
 
             let log_store = entry.log_store.clone();
 
-            let last_sequence_number = entry.syncs.last().unwrap().origin_sequence.1;
+            let last_sequence_number = entry.syncs.last().unwrap().sequence_number;
 
             let mut table = DeltaTable::new(log_store.clone(), Default::default());
             table.load().await?;
@@ -276,29 +304,14 @@ impl SeafowlDataSyncManager {
 
             // We've flushed all the presently accumulated batches for this location, and if we
             // observed the last sync for any of the sequences we should set them to durable
-            for orseq in entry
+            let or_seqs = entry
                 .syncs
                 .iter()
-                .map(|s| s.origin_sequence.clone())
+                .map(|s| (s.origin.clone(), s.sequence_number))
                 .unique()
-                .collect::<Vec<_>>()
-            {
-                if let Some(seq) = self.seqs.get_mut(&orseq) {
-                    // Remove the pending location for this origin/sequence
-                    seq.locs.remove(&url);
+                .collect::<Vec<_>>();
 
-                    if seq.locs.is_empty() && seq.last {
-                        // We've seen the last sync for this sequence and all pending locations
-                        // have been flushed to, so it's we're good to flag the sequence as durable
-                        // Remove from sequences maps
-
-                        self.origin_durable.insert(orseq.0.clone(), orseq.1);
-
-                        // Finally remove from the sequence map
-                        self.seqs.remove(&orseq);
-                    }
-                }
-            }
+            self.advance_durable(url.clone(), or_seqs);
             self.remove_sync(url);
         }
 
@@ -368,6 +381,49 @@ impl SeafowlDataSyncManager {
 
         Ok(Arc::new(UnionExec::new(vec![input_plan, proj_plan])))
     }
+
+    // Based on the provided origins and sequence numbers deduce what is the current durable
+    // sequence number for each origin.
+    fn advance_durable(
+        &mut self,
+        url: String,
+        origin_sequence_numbers: Vec<(String, SequenceNumber)>,
+    ) {
+        for (origin, seq_num) in origin_sequence_numbers {
+            if let Some(origin_seqs) = self.seqs.get_mut(&origin) {
+                if let Some(seq) = origin_seqs.get_mut(&seq_num) {
+                    // Remove the pending location for this origin/sequence
+                    seq.locs.remove(&url);
+                }
+
+                let mut remove_count = 0;
+                for (seq_num, seq) in origin_seqs.into_iter() {
+                    if seq.locs.is_empty() && seq.last {
+                        // We've seen the last sync for this sequence, all pending locations
+                        // have been flushed to and there's no preceding sequence to be flushed,
+                        // so we're good to flag the sequence as durable
+                        self.origin_durable.insert(origin.clone(), *seq_num);
+
+                        remove_count += 1;
+                    } else {
+                        // We've run into a sequence that is either not last or still has locations
+                        // that need to be flushed
+                        break;
+                    }
+                }
+
+                if remove_count == origin_seqs.len() {
+                    // Remove the origin if there are no sequences remaining
+                    self.seqs.remove(&origin);
+                } else {
+                    for _ in 0..remove_count {
+                        // Finally remove the redundant sequences for this origin map
+                        origin_seqs.shift_remove_index(0);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn now() -> u64 {
@@ -375,4 +431,110 @@ fn now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards")
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::context::test_utils::in_memory_context;
+    use crate::frontend::flight::sync::SeafowlDataSyncManager;
+    use crate::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
+    use arrow::array::{BooleanArray, Int32Array, RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use uuid::Uuid;
+
+    fn dummy_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Utf8, true),
+            Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, false),
+        ]));
+
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![Some("one"), None, Some("three")])),
+                Arc::new(BooleanArray::from(vec![true, true, true])),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_flush_interleaving() {
+        let mut ctx = in_memory_context().await;
+
+        // Just enough for two dummy batches, so a flush is forced after the third
+        ctx.config.misc.sync_data.max_in_memory_bytes = 3000;
+        // Force the remaining flush after sleeping for 1 second
+        ctx.config.misc.sync_data.max_replication_lag_s = 1;
+
+        let table_1_uuid = Uuid::new_v4();
+        let table_2_uuid = Uuid::new_v4();
+
+        let log_store_1 = ctx
+            .internal_object_store
+            .get_log_store(&table_1_uuid.to_string());
+        let log_store_2 = ctx
+            .internal_object_store
+            .get_log_store(&table_2_uuid.to_string());
+
+        let mut sync_mgr = SeafowlDataSyncManager::new(Arc::new(ctx));
+
+        let origin = "origin".to_string();
+
+        // Add LSN 1 for table 1
+        sync_mgr
+            .sync_batches(
+                log_store_1.clone(),
+                1,
+                "origin".to_string(),
+                vec!["c1".to_string()],
+                true,
+                vec![dummy_batch()],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(1), None),);
+
+        // Add LSN 2 for table 2
+        sync_mgr
+            .sync_batches(
+                log_store_2.clone(),
+                2,
+                "origin".to_string(),
+                vec!["c1".to_string()],
+                true,
+                vec![dummy_batch()],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(2), None),);
+
+        // Add LSN 3 for table 1 and push it over the max configured size
+        sync_mgr
+            .sync_batches(
+                log_store_1.clone(),
+                3,
+                "origin".to_string(),
+                vec!["c1".to_string()],
+                true,
+                vec![dummy_batch()],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(3), Some(1)),);
+
+        // Wait for the replication lag to exceed the configured max duration
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        // We've now advanced durable past seq 2 and on to seq 3
+        sync_mgr.flush_batches().await.unwrap();
+        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(3), Some(3)),);
+    }
 }

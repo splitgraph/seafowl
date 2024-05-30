@@ -7,8 +7,6 @@ use dashmap::DashMap;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::DataFusionError;
-use deltalake::kernel::Schema;
-use deltalake::operations::create::CreateBuilder;
 use lazy_static::lazy_static;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +22,7 @@ use crate::frontend::flight::sync::SeafowlDataSyncManager;
 pub const SEAFOWL_SYNC_DATA_UD_FLAG: &str = "__seafowl_ud";
 pub const SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER: &str = "sequence";
 pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
+const SEAFOWL_SYNC_DATA_TIMEOUT: u64 = 3;
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -129,28 +128,10 @@ impl SeafowlFlightHandler {
         };
 
         let url = log_store.root_uri();
-
-        if !log_store.is_delta_table_location().await? {
-            // If it's not a delta table yet create one first.
-            // Get the actual table schema by removing the `SEAFOWL_SYNC_DATA_UD_FLAG` column
-            // from the first sync.
-            let schema = batches.first().unwrap().schema();
-            let idxs = (0..schema.all_fields().len() - 1).collect::<Vec<usize>>();
-            let schema = schema.project(&idxs)?;
-
-            let delta_schema = Schema::try_from(&schema)?;
-
-            debug!("Creating new Delta table at location: {url}",);
-            CreateBuilder::new()
-                .with_log_store(log_store.clone())
-                .with_columns(delta_schema.fields().clone())
-                .with_comment(format!("Synced by Seafowl {}", env!("CARGO_PKG_VERSION")))
-                .await?;
-        }
-
         let num_rows = batches
             .iter()
             .fold(0, |rows, batch| rows + batch.num_rows());
+
         if num_rows == 0 {
             // Get the current volatile and durable sequence numbers
             debug!("Received empty batches, returning current sequence numbers");
@@ -165,8 +146,11 @@ impl SeafowlFlightHandler {
 
         debug!("Processing data change with {num_rows} rows for url {url}");
         // TODO: make timeout configurable
-        match tokio::time::timeout(Duration::from_secs(3), self.sync_manager.write())
-            .await
+        match tokio::time::timeout(
+            Duration::from_secs(SEAFOWL_SYNC_DATA_TIMEOUT),
+            self.sync_manager.write(),
+        )
+        .await
         {
             Ok(mut sync_manager) => {
                 let (mem_seq, dur_seq) = sync_manager
