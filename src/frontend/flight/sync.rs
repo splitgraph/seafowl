@@ -29,6 +29,44 @@ use crate::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
 
 type SequenceNumber = u64;
 
+// A handler for caching, coalescing and flushing table syncs received via
+// the Arrow Flight `do_put` calls.
+//
+// Each `DataSyncCommand` that accompanies a record batch carries information on
+// the origin of change, sequence number, primary keys and whether this is the
+// last message in the sequence.
+//
+// It uses a greedy table-based algorithm for flushing: once the criteria is met
+// it will go through table's ordered by the oldest sync flushing all pending syncs
+// for that table. Special care is taken about deducing what is the correct durable
+// sequence to report back to the caller.
+//
+//           │sync #1│sync #2│sync #3│sync #4│sync #5│
+//    ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ▶
+//           │┌─────┐│       │       │┌─────┐│       │
+//    table_1 │seq:1│                 │  3  │
+//           │└─────┘│       │       │└─────┘│       │
+//    ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ▶
+//           │       │┌─────┐│       │       │┌─────┐│
+//    table_2         │  1  │                 │  3  │
+//           │       │└─────┘│       │       │└─────┘│
+//    ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ▶
+//           │       │       │┌─────┐│       │       │
+//    table_3                 │  2  │
+//           │       │       │└─────┘│       │       │
+//    ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ▶
+//           ▼       ▼       ▼       ▼       ▼       ▼
+// In the above example, the first flush will target table_1, dumping payloads
+// of sync #1 and sync #4 (from sequences 1 and 3). Since this is not the last
+// sync of the first sequence it won't be reported as durably stored yet.
+//
+// Next, table_2 will get flushed (sync #2 and sync #5); this time sequence 1
+// is entirely persisted to storage so it will be reported as the new durable
+// sequence number. Note that while sequence 3 is also now completely flushed,
+// it isn't durable, since there is a preceding sequence (2) that is still in memory.
+//
+// Finally, once table_3 is flushed `SeafowlDataSyncManager` will advance the
+// durable sequence up to 3, since both it and 2 have now been completely persisted.
 pub(super) struct SeafowlDataSyncManager {
     context: Arc<SeafowlContext>,
     // All sequences kept in memory, queued up by insertion order, per origin,
