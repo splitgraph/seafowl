@@ -219,7 +219,7 @@ impl SeafowlDataSyncManager {
 
         while self.flush_ready() {
             // TODO: do out-of-band
-            self.flush_sync().await?;
+            self.flush_syncs().await?;
         }
 
         Ok(self.stored_sequences(&origin))
@@ -264,7 +264,7 @@ impl SeafowlDataSyncManager {
     }
 
     // Flush the table containing the oldest sync in memory
-    async fn flush_sync(&mut self) -> Result<()> {
+    async fn flush_syncs(&mut self) -> Result<()> {
         if let Some((url, entry)) = self.syncs.first() {
             let url = url.clone();
             let log_store = entry.log_store.clone();
@@ -490,17 +490,25 @@ mod tests {
     use crate::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema};
+    use rand::Rng;
     use rstest::rstest;
     use std::sync::Arc;
 
-    fn random_batch() -> RecordBatch {
+    // Create a randomly sized vector of random record batches with
+    // a pre-defined schema
+    fn random_batches() -> Vec<RecordBatch> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, true),
             Field::new("c2", DataType::Utf8, true),
             Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, false),
         ]));
 
-        create_random_batch(schema, 10, 0.2, 0.8).unwrap()
+        // Generate a random length between 1 and 3
+        let len: usize = rand::thread_rng().gen_range(1..=3);
+
+        (0..len)
+            .map(|_| create_random_batch(schema.clone(), 10, 0.2, 0.8).unwrap())
+            .collect()
     }
 
     #[rstest]
@@ -539,7 +547,7 @@ mod tests {
                     origin.clone(),
                     vec!["c1".to_string()],
                     last,
-                    vec![random_batch()],
+                    random_batches(),
                 )
                 .await
                 .unwrap();
@@ -552,7 +560,7 @@ mod tests {
             assert_eq!(
                 sync_mgr.stored_sequences(&origin),
                 (mem_seq, None),
-                "Unexpected memory/durable sequence; \nseqs {:#?}, \nsyncs {:#?}",
+                "Unexpected enqueue memory/durable sequence; \nseqs {:#?}, \nsyncs {:#?}",
                 sync_mgr.seqs,
                 sync_mgr.syncs
             );
@@ -560,11 +568,11 @@ mod tests {
 
         // Now verify the expected durable sequence reported after each flush
         for (mem_seq, dur_seq) in flush_sequence {
-            sync_mgr.flush_sync().await.unwrap();
+            sync_mgr.flush_syncs().await.unwrap();
             assert_eq!(
                 sync_mgr.stored_sequences(&origin),
                 (*mem_seq, *dur_seq),
-                "Unexpected memory/durable sequence; \nseqs {:#?}, \nsyncs {:#?}",
+                "Unexpected flush memory/durable sequence; \nseqs {:#?}, \nsyncs {:#?}",
                 sync_mgr.seqs,
                 sync_mgr.syncs
             );
