@@ -486,12 +486,13 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::context::test_utils::in_memory_context;
-    use crate::frontend::flight::sync::SeafowlDataSyncManager;
+    use crate::frontend::flight::sync::{SeafowlDataSyncManager, SequenceNumber};
     use crate::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema};
     use rand::Rng;
     use rstest::rstest;
+    use std::collections::VecDeque;
     use std::sync::Arc;
 
     // Create a randomly sized vector of random record batches with
@@ -511,45 +512,90 @@ mod tests {
             .collect()
     }
 
+    fn assert_sequences(
+        sync_mgr: &mut SeafowlDataSyncManager,
+        origin: &String,
+        memory_sequence: Option<u64>,
+        durable_sequence: Option<u64>,
+    ) {
+        assert_eq!(
+            sync_mgr.stored_sequences(origin),
+            (memory_sequence, durable_sequence),
+            "Unexpected memory/durable sequence; \nseqs {:?}",
+            sync_mgr.seqs,
+        )
+    }
+
+    const FLUSH: (&str, i64) = ("__flush", -1);
+
     #[rstest]
     #[case::basic(
-        &[("table_1", 1), ("table_2", 2), ("table_1", 3)],
-        &[Some(1), Some(3)]
+        &[("table_1", 1), ("table_2", 2), ("table_1", 3), FLUSH, FLUSH],
+        vec![Some(1), Some(3)]
     )]
     #[case::doc_example(
-        &[("table_1", 1), ("table_2", 1), ("table_3", 2), ("table_1", 3), ("table_2", 3)],
-        &[None, Some(1), Some(3)]
+        &[("table_1", 1), ("table_2", 1), ("table_3", 2), ("table_1", 3), ("table_2", 3), FLUSH, FLUSH, FLUSH],
+        vec![None, Some(1), Some(3)]
     )]
     #[case::long_sequence(
         &[("table_1", 1), ("table_1", 1), ("table_1", 1), ("table_1", 1), ("table_2", 1),
             ("table_2", 2), ("table_2", 2), ("table_2", 2), ("table_3", 2), ("table_3", 3),
-            ("table_3", 3), ("table_1", 4), ("table_3", 4), ("table_1", 4), ("table_3", 4)],
-        &[None, Some(1), Some(4)]
+            ("table_3", 3), ("table_1", 4), ("table_3", 4), ("table_1", 4), ("table_3", 4),
+            FLUSH, FLUSH, FLUSH],
+        vec![None, Some(1), Some(4)]
+    )]
+    #[case::long_sequence_mid_flush(
+        &[("table_1", 1), ("table_1", 1), ("table_1", 1), FLUSH, ("table_1", 1), ("table_2", 1),
+            ("table_2", 2), ("table_2", 2), FLUSH, ("table_2", 2), ("table_3", 2), FLUSH, ("table_3", 3),
+            FLUSH, ("table_3", 3), ("table_1", 4), ("table_3", 4), ("table_1", 4), FLUSH, ("table_3", 4),
+            FLUSH, FLUSH],
+        // Reasoning for the observed durable sequences:
+        // - seq 1 not seen last sync
+        // - seq 1 seen last sync, but it is in a unflushed table (2)
+        // - seq 1 done, seq 2 seen last, but it is in a unflushed table (3)
+        // - seq 2 done
+        // - seq 3 done, seq 4 partial
+        // - seq 4 seen last sync, but it is in a unflushed table (1)
+        // - seq 4 done
+        vec![None, None, Some(1), Some(2), Some(3), Some(3), Some(4)]
     )]
     #[tokio::test]
     async fn test_sync_flush(
-        #[case] table_sequence: &[(&str, u64)],
-        #[case] durable_sequences: &[Option<u64>],
+        #[case] table_sequence: &[(&str, i64)],
+        #[case] durable_sequences: Vec<Option<u64>>,
     ) {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncManager::new(ctx.clone());
 
         let origin = "origin".to_string();
 
+        let mut durable_sequences = VecDeque::from(durable_sequences);
         let mut mem_seq = None;
+        let mut dur_seq = None;
         // Enqueue all syncs first, checking the memory sequence in-between
         for (sync_no, (table_name, sequence)) in table_sequence.iter().enumerate() {
+            if (*table_name, *sequence) == FLUSH {
+                // Flush and assert on the next expected durable sequence
+                sync_mgr.flush_syncs().await.unwrap();
+
+                dur_seq = durable_sequences.pop_front().unwrap();
+                assert_sequences(&mut sync_mgr, &origin, mem_seq, dur_seq);
+                continue;
+            }
+
             let log_store = ctx.internal_object_store.get_log_store(table_name);
 
-            // This is the last sync in the sequence if it's the end of the list, or the next item
-            // has a sequence of a different number
-            let last = sync_no + 1 == table_sequence.len()
-                || *sequence != table_sequence[sync_no + 1].1;
+            // Determine whether this is the last sync of the sequence, i.e. are there no upcoming
+            // syncs with the same sequence number?
+            let last = !table_sequence
+                .iter()
+                .skip(sync_no + 1)
+                .any(|&(_, next_sequence)| *sequence == next_sequence);
 
             sync_mgr
                 .enqueue_sync(
                     log_store,
-                    *sequence,
+                    *sequence as SequenceNumber,
                     origin.clone(),
                     vec!["c1".to_string()],
                     last,
@@ -560,28 +606,10 @@ mod tests {
 
             // If this is the last sync in the sequence then it should be reported as in-memory
             if last {
-                mem_seq = Some(*sequence);
+                mem_seq = Some(*sequence as SequenceNumber);
             }
 
-            assert_eq!(
-                sync_mgr.stored_sequences(&origin),
-                (mem_seq, None),
-                "Unexpected enqueue memory/durable sequence; \nseqs {:#?}, \nsyncs {:#?}",
-                sync_mgr.seqs,
-                sync_mgr.syncs
-            );
-        }
-
-        // Now verify the expected durable sequence reported after each flush
-        for dur_seq in durable_sequences {
-            sync_mgr.flush_syncs().await.unwrap();
-            assert_eq!(
-                sync_mgr.stored_sequences(&origin),
-                (mem_seq, *dur_seq),
-                "Unexpected flush memory/durable sequence; \nseqs {:#?}, \nsyncs {:#?}",
-                sync_mgr.seqs,
-                sync_mgr.syncs
-            );
+            assert_sequences(&mut sync_mgr, &origin, mem_seq, dur_seq);
         }
 
         // Ensure everything has been flushed from memory
