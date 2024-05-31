@@ -22,7 +22,6 @@ use crate::frontend::flight::sync::SeafowlDataSyncManager;
 pub const SEAFOWL_SYNC_DATA_UD_FLAG: &str = "__seafowl_ud";
 pub const SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER: &str = "sequence";
 pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
-const SEAFOWL_SYNC_DATA_TIMEOUT: u64 = 3;
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -145,9 +144,8 @@ impl SeafowlFlightHandler {
         }
 
         debug!("Processing data change with {num_rows} rows for url {url}");
-        // TODO: make timeout configurable
         match tokio::time::timeout(
-            Duration::from_secs(SEAFOWL_SYNC_DATA_TIMEOUT),
+            Duration::from_secs(self.context.config.misc.sync_data.sync_lock_timeout_s),
             self.sync_manager.write(),
         )
         .await

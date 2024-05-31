@@ -20,12 +20,12 @@ message DataSyncCommand {
   // Opaque string identifying data source
   string origin = 4;
 
-  // Monotonically-increasing transaction number (e.g. the LSN)
+  // Monotonically-increasing transaction number
   uint64 sequence_number = 5;
 
   // True if this is the last command in the transaction denoted
-  // by this LSN and Seafowl can advance its LSN after flushing
-  // this command.
+  // by this sequence number which might then become durable after
+  // the next flush.
   bool last = 6;
 }
 

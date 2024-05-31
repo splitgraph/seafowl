@@ -71,8 +71,8 @@ pub(super) struct SeafowlDataSyncManager {
     context: Arc<SeafowlContext>,
     // All sequences kept in memory, queued up by insertion order, per origin,
     seqs: HashMap<String, IndexMap<SequenceNumber, DataSyncSequence>>,
-    // An indexed queue of table URL => pending batches to upsert/delete
-    // sorted by insertion order
+    // An indexed queue of table URL => pending syncs with actual batches to
+    // upsert/delete sorted by insertion order
     syncs: IndexMap<String, DataSyncCollection>,
     // Total size of all batches in memory currently
     size: usize,
@@ -162,7 +162,7 @@ impl SeafowlDataSyncManager {
             self.create_table(log_store.clone(), &batches).await?;
         }
 
-        // Upsert a sequence entry for this origin/LSN
+        // Upsert a sequence entry for this origin and sequence number
         let sequence = DataSyncSequence {
             last,
             locs: HashSet::from([url.clone()]),
