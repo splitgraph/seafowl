@@ -514,16 +514,22 @@ mod tests {
     #[rstest]
     #[case::basic(
         &[("table_1", 1), ("table_2", 2), ("table_1", 3)],
-        &[(Some(3), Some(1)), (Some(3), Some(3))]
+        &[Some(1), Some(3)]
     )]
     #[case::doc_example(
         &[("table_1", 1), ("table_2", 1), ("table_3", 2), ("table_1", 3), ("table_2", 3)],
-        &[(Some(3), None), (Some(3), Some(1)), (Some(3), Some(3))]
+        &[None, Some(1), Some(3)]
+    )]
+    #[case::long_sequence(
+        &[("table_1", 1), ("table_1", 1), ("table_1", 1), ("table_1", 1), ("table_2", 1),
+            ("table_2", 2), ("table_2", 2), ("table_2", 2), ("table_3", 2), ("table_3", 3),
+            ("table_3", 3), ("table_1", 4), ("table_3", 4), ("table_1", 4), ("table_3", 4)],
+        &[None, Some(1), Some(4)]
     )]
     #[tokio::test]
-    async fn test_flush_interleaving(
+    async fn test_sync_flush(
         #[case] table_sequence: &[(&str, u64)],
-        #[case] flush_sequence: &[(Option<u64>, Option<u64>)],
+        #[case] durable_sequences: &[Option<u64>],
     ) {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncManager::new(ctx.clone());
@@ -567,15 +573,20 @@ mod tests {
         }
 
         // Now verify the expected durable sequence reported after each flush
-        for (mem_seq, dur_seq) in flush_sequence {
+        for dur_seq in durable_sequences {
             sync_mgr.flush_syncs().await.unwrap();
             assert_eq!(
                 sync_mgr.stored_sequences(&origin),
-                (*mem_seq, *dur_seq),
+                (mem_seq, *dur_seq),
                 "Unexpected flush memory/durable sequence; \nseqs {:#?}, \nsyncs {:#?}",
                 sync_mgr.seqs,
                 sync_mgr.syncs
             );
         }
+
+        // Ensure everything has been flushed from memory
+        assert!(sync_mgr.seqs.is_empty());
+        assert!(sync_mgr.syncs.is_empty());
+        assert_eq!(sync_mgr.size, 0);
     }
 }
