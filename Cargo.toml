@@ -2,7 +2,7 @@
 members = ["clade"]
 
 [workspace.dependencies]
-arrow = "51.0.0"
+arrow = { version = "51.0.0", features = ["test_utils"] }
 arrow-buffer = "51.0.0"
 arrow-csv = "51.0.0"
 arrow-flight = "51.0.0"

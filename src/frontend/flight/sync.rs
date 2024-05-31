@@ -488,100 +488,86 @@ mod tests {
     use crate::context::test_utils::in_memory_context;
     use crate::frontend::flight::sync::SeafowlDataSyncManager;
     use crate::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
-    use arrow::array::{BooleanArray, Int32Array, RecordBatch, StringArray};
+    use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema};
+    use rstest::rstest;
     use std::sync::Arc;
-    use uuid::Uuid;
 
-    fn dummy_batch() -> RecordBatch {
+    fn random_batch() -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, true),
             Field::new("c2", DataType::Utf8, true),
             Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, false),
         ]));
 
-        RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(StringArray::from(vec![Some("one"), None, Some("three")])),
-                Arc::new(BooleanArray::from(vec![true, true, true])),
-            ],
-        )
-        .unwrap()
+        create_random_batch(schema, 10, 0.2, 0.8).unwrap()
     }
 
+    #[rstest]
+    #[case::basic(
+        &[("table_1", 1), ("table_2", 2), ("table_1", 3)],
+        &[(Some(3), Some(1)), (Some(3), Some(3))]
+    )]
+    #[case::doc_example(
+        &[("table_1", 1), ("table_2", 1), ("table_3", 2), ("table_1", 3), ("table_2", 3)],
+        &[(Some(3), None), (Some(3), Some(1)), (Some(3), Some(3))]
+    )]
     #[tokio::test]
-    async fn test_flush_interleaving() {
+    async fn test_flush_interleaving(
+        #[case] table_sequence: &[(&str, u64)],
+        #[case] flush_sequence: &[(Option<u64>, Option<u64>)],
+    ) {
         let ctx = Arc::new(in_memory_context().await);
-
-        let table_1_uuid = Uuid::new_v4();
-        let table_2_uuid = Uuid::new_v4();
-
-        let log_store_1 = ctx
-            .internal_object_store
-            .get_log_store(&table_1_uuid.to_string());
-        let log_store_2 = ctx
-            .internal_object_store
-            .get_log_store(&table_2_uuid.to_string());
-
-        let mut sync_mgr = SeafowlDataSyncManager::new(ctx);
+        let mut sync_mgr = SeafowlDataSyncManager::new(ctx.clone());
 
         let origin = "origin".to_string();
 
-        // Add LSN 1 for table 1
-        sync_mgr
-            .enqueue_sync(
-                log_store_1.clone(),
-                1,
-                "origin".to_string(),
-                vec!["c1".to_string()],
-                true,
-                vec![dummy_batch()],
-            )
-            .await
-            .unwrap();
+        let mut mem_seq = None;
+        // Enqueue all syncs first, checking the memory sequence in-between
+        for (sync_no, (table_name, sequence)) in table_sequence.iter().enumerate() {
+            let log_store = ctx.internal_object_store.get_log_store(table_name);
 
-        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(1), None));
+            // This is the last sync in the sequence if it's the end of the list, or the next item
+            // has a sequence of a different number
+            let last = sync_no + 1 == table_sequence.len()
+                || *sequence != table_sequence[sync_no + 1].1;
 
-        // Add LSN 2 for table 2
-        sync_mgr
-            .enqueue_sync(
-                log_store_2.clone(),
-                2,
-                "origin".to_string(),
-                vec!["c1".to_string()],
-                true,
-                vec![dummy_batch()],
-            )
-            .await
-            .unwrap();
+            sync_mgr
+                .enqueue_sync(
+                    log_store,
+                    *sequence,
+                    origin.clone(),
+                    vec!["c1".to_string()],
+                    last,
+                    vec![random_batch()],
+                )
+                .await
+                .unwrap();
 
-        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(2), None));
+            // If this is the last sync in the sequence then it should be reported as in-memory
+            if last {
+                mem_seq = Some(*sequence);
+            }
 
-        // Add LSN 3 for table 1
-        sync_mgr
-            .enqueue_sync(
-                log_store_1.clone(),
-                3,
-                "origin".to_string(),
-                vec!["c1".to_string()],
-                true,
-                vec![dummy_batch()],
-            )
-            .await
-            .unwrap();
+            assert_eq!(
+                sync_mgr.stored_sequences(&origin),
+                (mem_seq, None),
+                "Unexpected memory/durable sequence; \nseqs {:#?}, \nsyncs {:#?}",
+                sync_mgr.seqs,
+                sync_mgr.syncs
+            );
+        }
 
-        // Explicitly flush the first table
-        sync_mgr.flush_sync().await.unwrap();
-
-        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(3), Some(1)));
-
-        // Explicitly flush the remaining table
-        sync_mgr.flush_sync().await.unwrap();
-
-        // We've now advanced durable past seq 2 and on to seq 3
-        sync_mgr.flush_sync().await.unwrap();
-        assert_eq!(sync_mgr.stored_sequences(&origin), (Some(3), Some(3)));
+        // Now verify the expected durable sequence reported after each flush
+        for (mem_seq, dur_seq) in flush_sequence {
+            sync_mgr.flush_sync().await.unwrap();
+            assert_eq!(
+                sync_mgr.stored_sequences(&origin),
+                (*mem_seq, *dur_seq),
+                "Unexpected memory/durable sequence; \nseqs {:#?}, \nsyncs {:#?}",
+                sync_mgr.seqs,
+                sync_mgr.syncs
+            );
+        }
     }
 }
