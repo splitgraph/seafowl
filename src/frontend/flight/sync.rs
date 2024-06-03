@@ -526,10 +526,10 @@ mod tests {
         vec![vec![Some(1), Some(3)]]
     )]
     #[case::basic_2_origins(
-        &[(T1, O1, 1), (T2, O2, 2), (T1, O1, 3), FLUSH, FLUSH],
+        &[(T1, O1, 1), (T2, O2, 1001), (T1, O1, 3), FLUSH, FLUSH],
         vec![
             vec![Some(3), Some(3)],
-            vec![None, Some(2)],
+            vec![None, Some(1001)],
         ]
     )]
     #[case::doc_example(
@@ -542,11 +542,11 @@ mod tests {
         vec![vec![None, None, Some(2)]]
     )]
     #[case::staircase_2_origins(
-        &[(T1, O1, 1), (T2, O1, 1), (T3, O2, 1), (T1, O2, 2), (T2, O1, 2), (T3, O1, 2),
+        &[(T1, O1, 1), (T2, O1, 1), (T3, O2, 1001), (T1, O2, 1002), (T2, O1, 2), (T3, O1, 2),
             FLUSH, FLUSH, FLUSH],
         vec![
             vec![None, Some(1), Some(2)],
-            vec![None, None, Some(2)],
+            vec![None, None, Some(1002)],
         ]
         )]
     #[case::long_sequence(
