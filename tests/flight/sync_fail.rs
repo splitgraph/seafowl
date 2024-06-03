@@ -29,7 +29,7 @@ async fn test_sync_errors() -> std::result::Result<(), Box<dyn std::error::Error
     let mut cmd = DataSyncCommand {
         path: table_uuid.to_string(),
         store: None,
-        pk_column: vec![],
+        pk_columns: vec![],
         origin: 1,
         sequence_number: 42,
         last: true,
@@ -44,7 +44,7 @@ async fn test_sync_errors() -> std::result::Result<(), Box<dyn std::error::Error
     ).await;
 
     // Non-existent PK column
-    cmd.pk_column = vec!["c1".to_string(), "c2".to_string()];
+    cmd.pk_columns = vec!["c1".to_string(), "c2".to_string()];
     assert_sync_error(
         cmd.clone(),
         batch.clone(),
@@ -53,7 +53,7 @@ async fn test_sync_errors() -> std::result::Result<(), Box<dyn std::error::Error
     ).await;
 
     // Missing upsert/delete column
-    cmd.pk_column = vec!["c1".to_string()];
+    cmd.pk_columns = vec!["c1".to_string()];
     assert_sync_error(
         cmd.clone(),
         batch.clone(),

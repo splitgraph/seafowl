@@ -156,7 +156,7 @@ impl SeafowlFlightHandler {
                         log_store,
                         cmd.sequence_number,
                         cmd.origin,
-                        cmd.pk_column,
+                        cmd.pk_columns,
                         cmd.last,
                         batches,
                     )

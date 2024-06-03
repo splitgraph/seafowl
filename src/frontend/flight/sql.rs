@@ -165,7 +165,7 @@ impl FlightSqlService for SeafowlFlightHandler {
         })?;
 
         // Validate primary columns are provided
-        if cmd.pk_column.is_empty() {
+        if cmd.pk_columns.is_empty() {
             let err = "Changes to tables without primary keys are not supported";
             warn!(err);
             return Err(Status::unimplemented(err));
@@ -183,13 +183,13 @@ impl FlightSqlService for SeafowlFlightHandler {
 
             // Validate all PKs contained in the batches schema
             if cmd
-                .pk_column
+                .pk_columns
                 .iter()
                 .any(|pk| schema.column_with_name(pk).is_none())
             {
                 let err = format!(
                     "Some PKs in {:?} not present in the schema {schema}",
-                    cmd.pk_column
+                    cmd.pk_columns
                 );
                 warn!(err);
                 return Err(Status::invalid_argument(err));

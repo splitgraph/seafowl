@@ -15,7 +15,7 @@ message DataSyncCommand {
 
   // Primary key columns. Must not be empty: the table must always
   // have a replica identity / PK.
-  repeated string pk_column = 3;
+  repeated string pk_columns = 3;
 
   // Integer identifying data source
   uint64 origin = 4;

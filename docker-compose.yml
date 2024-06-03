@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
 
   dex:
-    image: ghcr.io/dexidp/dex
+    image: ghcr.io/dexidp/dex:v2.38.0 # mitigate https://github.com/dexidp/dex/issues/3559
     ports:
       - "5556:5556"
     volumes:
