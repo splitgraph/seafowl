@@ -493,7 +493,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use rand::Rng;
     use rstest::rstest;
-    use std::collections::VecDeque;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     // Create a randomly sized vector of random record batches with
@@ -513,96 +513,111 @@ mod tests {
             .collect()
     }
 
-    fn assert_sequences(
-        sync_mgr: &mut SeafowlDataSyncManager,
-        origin: &Origin,
-        memory_sequence: Option<u64>,
-        durable_sequence: Option<u64>,
-    ) {
-        assert_eq!(
-            sync_mgr.stored_sequences(origin),
-            (memory_sequence, durable_sequence),
-            "Unexpected memory/durable sequence; \nseqs {:?}",
-            sync_mgr.seqs,
-        )
-    }
-
-    const FLUSH: (&str, i64) = ("__flush", -1);
+    const T1: &str = "table_1";
+    const T2: &str = "table_2";
+    const T3: &str = "table_3";
+    const O1: i64 = 0; // first origin
+    const O2: i64 = 1; // second origin
+    const FLUSH: (&str, i64, i64) = ("__flush", -1, -1);
 
     #[rstest]
     #[case::basic(
-        &[("table_1", 1), ("table_2", 2), ("table_1", 3), FLUSH, FLUSH],
-        vec![Some(1), Some(3)]
+        &[(T1, O1, 1), (T2, O1, 2), (T1, O1, 3), FLUSH, FLUSH],
+        vec![vec![Some(1), Some(3)]]
+    )]
+    #[case::basic_2_origins(
+        &[(T1, O1, 1), (T2, O2, 2), (T1, O1, 3), FLUSH, FLUSH],
+        vec![
+            vec![Some(3), Some(3)],
+            vec![None, Some(2)],
+        ]
     )]
     #[case::doc_example(
-        &[("table_1", 1), ("table_2", 1), ("table_3", 2), ("table_1", 3), ("table_2", 3), FLUSH, FLUSH, FLUSH],
-        vec![None, Some(1), Some(3)]
+        &[(T1, O1, 1), (T2, O1, 1), (T3, O1, 2), (T1, O1, 3), (T2, O1, 3), FLUSH, FLUSH, FLUSH],
+        vec![vec![None, Some(1), Some(3)]]
     )]
-    #[case::table_sequence_staircase(
-        &[("table_1", 1), ("table_2", 1), ("table_3", 1), ("table_1", 2), ("table_2", 2), ("table_3", 2),
+    #[case::staircase(
+        &[(T1, O1, 1), (T2, O1, 1), (T3, O1, 1), (T1, O1, 2), (T2, O1, 2), (T3, O1, 2),
             FLUSH, FLUSH, FLUSH],
-        vec![None, None, Some(2)]
+        vec![vec![None, None, Some(2)]]
     )]
+    #[case::staircase_2_origins(
+        &[(T1, O1, 1), (T2, O1, 1), (T3, O2, 1), (T1, O2, 2), (T2, O1, 2), (T3, O1, 2),
+            FLUSH, FLUSH, FLUSH],
+        vec![
+            vec![None, Some(1), Some(2)],
+            vec![None, None, Some(2)],
+        ]
+        )]
     #[case::long_sequence(
-        &[("table_1", 1), ("table_1", 1), ("table_1", 1), ("table_1", 1), ("table_2", 1),
-            ("table_2", 2), ("table_2", 2), ("table_2", 2), ("table_3", 2), ("table_3", 3),
-            ("table_3", 3), ("table_1", 4), ("table_3", 4), ("table_1", 4), ("table_3", 4),
+        &[(T1, O1, 1), (T1, O1, 1), (T1, O1, 1), (T1, O1, 1), (T2, O1, 1),
+            (T2, O1, 2), (T2, O1, 2), (T2, O1, 2), (T3, O1, 2), (T3, O1, 3),
+            (T3, O1, 3), (T1, O1, 4), (T3, O1, 4), (T1, O1, 4), (T3, O1, 4),
             FLUSH, FLUSH, FLUSH],
-        vec![None, Some(1), Some(4)]
+        vec![vec![None, Some(1), Some(4)]]
     )]
     #[case::long_sequence_mid_flush(
-        &[("table_1", 1), ("table_1", 1), ("table_1", 1), FLUSH, ("table_1", 1), ("table_2", 1),
-            ("table_2", 2), ("table_2", 2), FLUSH, ("table_2", 2), ("table_3", 2), FLUSH, ("table_3", 3),
-            FLUSH, ("table_3", 3), ("table_1", 4), ("table_3", 4), ("table_1", 4), FLUSH, ("table_3", 4),
+        &[(T1, O1, 1), (T1, O1, 1), (T1, O1, 1), FLUSH, (T1, O1, 1), (T2, O1, 1),
+            (T2, O1, 2), (T2, O1, 2), FLUSH, (T2, O1, 2), (T3, O1, 2), FLUSH, (T3, O1, 3),
+            FLUSH, (T3, O1, 3), (T1, O1, 4), (T3, O1, 4), (T1, O1, 4), FLUSH, (T3, O1, 4),
             FLUSH, FLUSH],
         // Reasoning for the observed durable sequences:
         // - seq 1 not seen last sync
-        // - seq 1 seen last sync, but it is in an unflushed table (2)
-        // - seq 1 done, seq 2 seen last, but it is in an unflushed table (3)
+        // - seq 1 seen last sync, but it is in an unflushed table (t2)
+        // - seq 1 done, seq 2 seen last, but it is in an unflushed table (t3)
         // - seq 2 done
         // - seq 3 done, seq 4 partial
-        // - seq 4 seen last sync, but it is in an unflushed table (1)
+        // - seq 4 seen last sync, but it is in an unflushed table (t1)
         // - seq 4 done
-        vec![None, None, Some(1), Some(2), Some(3), Some(3), Some(4)]
+        vec![vec![None, None, Some(1), Some(2), Some(3), Some(3), Some(4)]]
     )]
     #[tokio::test]
     async fn test_sync_flush(
-        #[case] table_sequence: &[(&str, i64)],
-        #[case] durable_sequences: Vec<Option<u64>>,
+        #[case] table_sequence: &[(&str, i64, i64)],
+        #[case] mut durable_sequences: Vec<Vec<Option<u64>>>,
     ) {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncManager::new(ctx.clone());
 
-        let origin = 123;
+        let mut mem_seq = HashMap::from([(O1, None), (O2, None)]);
+        let mut dur_seq = HashMap::from([(O1, None), (O2, None)]);
 
-        let mut durable_sequences = VecDeque::from(durable_sequences);
-        let mut mem_seq = None;
-        let mut dur_seq = None;
-        // Enqueue all syncs first, checking the memory sequence in-between
-        for (sync_no, (table_name, sequence)) in table_sequence.iter().enumerate() {
-            if (*table_name, *sequence) == FLUSH {
+        // Start enqueueing syncs, flushing them and checking the memory sequence in-between
+        for (sync_no, (table_name, origin, sequence)) in table_sequence.iter().enumerate()
+        {
+            if (*table_name, *origin, *sequence) == FLUSH {
                 // Flush and assert on the next expected durable sequence
                 sync_mgr.flush_syncs().await.unwrap();
 
-                dur_seq = durable_sequences.pop_front().unwrap();
-                assert_sequences(&mut sync_mgr, &origin, mem_seq, dur_seq);
+                for (o, durs) in durable_sequences.iter_mut().enumerate() {
+                    let origin = o as i64;
+                    // Update expected durable sequences for this origins
+                    dur_seq.insert(origin, durs.remove(0));
+
+                    assert_eq!(
+                        sync_mgr.stored_sequences(&(origin as Origin)),
+                        (mem_seq[&origin], dur_seq[&origin]),
+                        "Unexpected flush memory/durable sequence; \nseqs {:?}",
+                        sync_mgr.seqs,
+                    );
+                }
                 continue;
             }
 
             let log_store = ctx.internal_object_store.get_log_store(table_name);
 
             // Determine whether this is the last sync of the sequence, i.e. are there no upcoming
-            // syncs with the same sequence number?
+            // syncs with the same sequence number from this origin?
             let last = !table_sequence
                 .iter()
                 .skip(sync_no + 1)
-                .any(|&(_, next_sequence)| *sequence == next_sequence);
+                .any(|&(_, o, s)| *sequence == s && *origin == o);
 
             sync_mgr
                 .enqueue_sync(
                     log_store,
                     *sequence as SequenceNumber,
-                    origin,
+                    *origin as Origin,
                     vec!["c1".to_string()],
                     last,
                     random_batches(),
@@ -612,10 +627,15 @@ mod tests {
 
             // If this is the last sync in the sequence then it should be reported as in-memory
             if last {
-                mem_seq = Some(*sequence as SequenceNumber);
+                mem_seq.insert(*origin, Some(*sequence as SequenceNumber));
             }
 
-            assert_sequences(&mut sync_mgr, &origin, mem_seq, dur_seq);
+            assert_eq!(
+                sync_mgr.stored_sequences(&(*origin as u64)),
+                (mem_seq[origin], dur_seq[origin]),
+                "Unexpected enqueue memory/durable sequence; \nseqs {:?}",
+                sync_mgr.seqs,
+            );
         }
 
         // Ensure everything has been flushed from memory
