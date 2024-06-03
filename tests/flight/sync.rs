@@ -57,7 +57,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         path: table_uuid.to_string(),
         store: None,
         pk_column: vec!["col_1".to_string()],
-        origin: "test-origin".to_string(),
+        origin: 42,
         sequence_number: 1234,
         last: false,
     };

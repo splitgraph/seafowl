@@ -27,6 +27,7 @@ use crate::context::SeafowlContext;
 use crate::frontend::flight::handler::SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER;
 use crate::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
 
+type Origin = u64;
 type SequenceNumber = u64;
 
 // A handler for caching, coalescing and flushing table syncs received via
@@ -37,7 +38,7 @@ type SequenceNumber = u64;
 // last message in the sequence.
 //
 // It uses a greedy table-based algorithm for flushing: once the criteria is met
-// it will go through table's ordered by the oldest sync flushing all pending syncs
+// it will go through tables ordered by the oldest sync, flushing all pending syncs
 // for that table. Special care is taken about deducing what is the correct durable
 // sequence to report back to the caller.
 //
@@ -61,7 +62,7 @@ type SequenceNumber = u64;
 // sync of the first sequence it won't be reported as durably stored yet.
 //
 // Next, table_2 will get flushed (sync #2 and sync #5); this time sequence 1
-// is entirely persisted to storage so it will be reported as the new durable
+// is entirely persisted to storage so it will be recorded as the new durable
 // sequence number. Note that while sequence 3 is also now completely flushed,
 // it isn't durable, since there is a preceding sequence (2) that is still in memory.
 //
@@ -70,16 +71,16 @@ type SequenceNumber = u64;
 pub(super) struct SeafowlDataSyncManager {
     context: Arc<SeafowlContext>,
     // All sequences kept in memory, queued up by insertion order, per origin,
-    seqs: HashMap<String, IndexMap<SequenceNumber, DataSyncSequence>>,
+    seqs: HashMap<Origin, IndexMap<SequenceNumber, DataSyncSequence>>,
     // An indexed queue of table URL => pending syncs with actual batches to
     // upsert/delete sorted by insertion order
     syncs: IndexMap<String, DataSyncCollection>,
     // Total size of all batches in memory currently
     size: usize,
     // Map of known memory sequence numbers per origin
-    origin_memory: HashMap<String, SequenceNumber>,
+    origin_memory: HashMap<Origin, SequenceNumber>,
     // Map of known durable sequence numbers per origin
-    origin_durable: HashMap<String, SequenceNumber>,
+    origin_durable: HashMap<Origin, SequenceNumber>,
 }
 
 // A struct tracking relevant information about a single transaction/sequence from a single origin
@@ -111,7 +112,7 @@ struct DataSyncCollection {
 #[allow(dead_code)]
 struct DataSyncItem {
     // Identifier of the origin where the change stems from
-    origin: String,
+    origin: Origin,
     // Sequence number of this particular change and origin
     sequence_number: SequenceNumber,
     // Primary keys
@@ -136,7 +137,7 @@ impl SeafowlDataSyncManager {
     // Extract the latest memory sequence number for a given table location.
     pub fn stored_sequences(
         &self,
-        origin: &String,
+        origin: &Origin,
     ) -> (Option<SequenceNumber>, Option<SequenceNumber>) {
         (
             self.origin_memory.get(origin).cloned(),
@@ -149,7 +150,7 @@ impl SeafowlDataSyncManager {
         &mut self,
         log_store: Arc<dyn LogStore>,
         sequence_number: SequenceNumber,
-        origin: String,
+        origin: Origin,
         pk_columns: Vec<String>,
         last: bool,
         batches: Vec<RecordBatch>,
@@ -169,7 +170,7 @@ impl SeafowlDataSyncManager {
         };
         self
             .seqs
-            .entry(origin.clone())
+            .entry(origin)
             .and_modify(|origin_seqs| {
                 origin_seqs.entry(sequence_number).and_modify(|seq| {if !seq.locs.contains(&url) {
                     debug!("Adding {url} as sync destination for {origin}, {sequence_number}");
@@ -191,7 +192,7 @@ impl SeafowlDataSyncManager {
             .fold(0, |bytes, batch| bytes + batch.get_array_memory_size());
 
         let item = DataSyncItem {
-            origin: origin.clone(),
+            origin,
             sequence_number,
             pk_columns,
             batches,
@@ -214,7 +215,7 @@ impl SeafowlDataSyncManager {
 
         // Flag the sequence as volatile persisted for this origin if it is the last sync command
         if last {
-            self.origin_memory.insert(origin.clone(), sequence_number);
+            self.origin_memory.insert(origin, sequence_number);
         }
 
         while self.flush_ready() {
@@ -340,7 +341,7 @@ impl SeafowlDataSyncManager {
             let orseq = entry
                 .syncs
                 .iter()
-                .map(|s| (s.origin.clone(), s.sequence_number))
+                .map(|s| (s.origin, s.sequence_number))
                 .unique()
                 .collect::<Vec<_>>();
             self.remove_sequence_locations(url.clone(), orseq);
@@ -412,7 +413,7 @@ impl SeafowlDataSyncManager {
     fn remove_sequence_locations(
         &mut self,
         url: String,
-        orseq: Vec<(String, SequenceNumber)>,
+        orseq: Vec<(Origin, SequenceNumber)>,
     ) {
         for (origin, seq_num) in orseq {
             if let Some(origin_seqs) = self.seqs.get_mut(&origin) {
@@ -447,7 +448,7 @@ impl SeafowlDataSyncManager {
                     // We've seen the last sync for this sequence, all pending locations
                     // have been flushed to and there's no preceding sequence to be flushed,
                     // so we're good to flag the sequence as durable
-                    self.origin_durable.insert(origin.clone(), *seq_num);
+                    self.origin_durable.insert(*origin, *seq_num);
 
                     remove_count += 1;
                     new_durable = *seq_num;
@@ -462,7 +463,7 @@ impl SeafowlDataSyncManager {
             if remove_count == origin_seqs.len() {
                 // Remove the origin since there are no more sequences remaining
                 debug!("No more pending sequences for origin {origin}, removing");
-                origins_to_remove.insert(origin.clone());
+                origins_to_remove.insert(*origin);
             } else if remove_count > 0 {
                 // Remove the durable sequences for this origin
                 debug!("Trimming pending sequences for {origin} up to {new_durable}");
@@ -486,7 +487,7 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::context::test_utils::in_memory_context;
-    use crate::frontend::flight::sync::{SeafowlDataSyncManager, SequenceNumber};
+    use crate::frontend::flight::sync::{Origin, SeafowlDataSyncManager, SequenceNumber};
     use crate::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema};
@@ -514,7 +515,7 @@ mod tests {
 
     fn assert_sequences(
         sync_mgr: &mut SeafowlDataSyncManager,
-        origin: &String,
+        origin: &Origin,
         memory_sequence: Option<u64>,
         durable_sequence: Option<u64>,
     ) {
@@ -537,6 +538,11 @@ mod tests {
         &[("table_1", 1), ("table_2", 1), ("table_3", 2), ("table_1", 3), ("table_2", 3), FLUSH, FLUSH, FLUSH],
         vec![None, Some(1), Some(3)]
     )]
+    #[case::table_sequence_staircase(
+        &[("table_1", 1), ("table_2", 1), ("table_3", 1), ("table_1", 2), ("table_2", 2), ("table_3", 2),
+            FLUSH, FLUSH, FLUSH],
+        vec![None, None, Some(2)]
+    )]
     #[case::long_sequence(
         &[("table_1", 1), ("table_1", 1), ("table_1", 1), ("table_1", 1), ("table_2", 1),
             ("table_2", 2), ("table_2", 2), ("table_2", 2), ("table_3", 2), ("table_3", 3),
@@ -551,11 +557,11 @@ mod tests {
             FLUSH, FLUSH],
         // Reasoning for the observed durable sequences:
         // - seq 1 not seen last sync
-        // - seq 1 seen last sync, but it is in a unflushed table (2)
-        // - seq 1 done, seq 2 seen last, but it is in a unflushed table (3)
+        // - seq 1 seen last sync, but it is in an unflushed table (2)
+        // - seq 1 done, seq 2 seen last, but it is in an unflushed table (3)
         // - seq 2 done
         // - seq 3 done, seq 4 partial
-        // - seq 4 seen last sync, but it is in a unflushed table (1)
+        // - seq 4 seen last sync, but it is in an unflushed table (1)
         // - seq 4 done
         vec![None, None, Some(1), Some(2), Some(3), Some(3), Some(4)]
     )]
@@ -567,7 +573,7 @@ mod tests {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncManager::new(ctx.clone());
 
-        let origin = "origin".to_string();
+        let origin = 123;
 
         let mut durable_sequences = VecDeque::from(durable_sequences);
         let mut mem_seq = None;
@@ -596,7 +602,7 @@ mod tests {
                 .enqueue_sync(
                     log_store,
                     *sequence as SequenceNumber,
-                    origin.clone(),
+                    origin,
                     vec!["c1".to_string()],
                     last,
                     random_batches(),
