@@ -7,7 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .file_descriptor_set_path(out_dir.join("clade_descriptor.bin"))
         .build_server(true)
         .build_client(true)
-        .compile(&["proto/schema.proto"], &["proto"])?;
+        .compile(&["proto/schema.proto", "proto/sync.proto"], &["proto"])?;
 
     Ok(())
 }

@@ -151,6 +151,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "arrow-string",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -1331,6 +1332,7 @@ dependencies = [
 name = "clade"
 version = "0.1.0"
 dependencies = [
+ "arrow-flight",
  "prost",
  "tonic",
  "tonic-build",
@@ -5562,6 +5564,7 @@ dependencies = [
  "deltalake",
  "futures",
  "hex",
+ "indexmap 2.2.6",
  "itertools 0.13.0",
  "lazy_static",
  "metrics",

@@ -1,10 +1,15 @@
-use crate::frontend::flight::handler::{SeafowlFlightHandler, SEAFOWL_SQL_DATA};
+use crate::frontend::flight::handler::{
+    SeafowlFlightHandler, SEAFOWL_SQL_DATA, SEAFOWL_SYNC_CALL_MAX_ROWS,
+    SEAFOWL_SYNC_DATA_UD_FLAG,
+};
+use arrow::record_batch::RecordBatch;
+use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_server::FlightService;
-use arrow_flight::sql::server::FlightSqlService;
+use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
 use arrow_flight::sql::{
-    CommandGetSqlInfo, CommandStatementQuery, ProstMessageExt, SqlInfo,
+    Any, CommandGetSqlInfo, CommandStatementQuery, ProstMessageExt, SqlInfo,
     TicketStatementQuery,
 };
 use arrow_flight::{
@@ -12,6 +17,7 @@ use arrow_flight::{
     Ticket,
 };
 use async_trait::async_trait;
+use clade::sync::DataSyncCommand;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -19,7 +25,7 @@ use prost::Message;
 use std::pin::Pin;
 use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 #[async_trait]
@@ -145,4 +151,82 @@ impl FlightSqlService for SeafowlFlightHandler {
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
+
+    async fn do_put_fallback(
+        &self,
+        request: Request<PeekableFlightDataStream>,
+        message: Any,
+    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
+        // Extract the command
+        let cmd: DataSyncCommand = Message::decode(&*message.value).map_err(|err| {
+            let err = format!("Couldn't decode command: {err}");
+            warn!(err);
+            Status::invalid_argument(err)
+        })?;
+
+        // Validate primary columns are provided
+        if cmd.pk_columns.is_empty() {
+            let err = "Changes to tables without primary keys are not supported";
+            warn!(err);
+            return Err(Status::unimplemented(err));
+        }
+
+        // Extract the batches
+        let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(
+            request.into_inner().map_err(|e| e.into()),
+        )
+        .try_collect()
+        .await?;
+
+        if !batches.is_empty() {
+            let schema = batches.first().unwrap().schema();
+
+            // Validate all PKs contained in the batches schema
+            if cmd
+                .pk_columns
+                .iter()
+                .any(|pk| schema.column_with_name(pk).is_none())
+            {
+                let err = format!(
+                    "Some PKs in {:?} not present in the schema {schema}",
+                    cmd.pk_columns
+                );
+                warn!(err);
+                return Err(Status::invalid_argument(err));
+            }
+
+            // Validate upsert/delete flag column is present
+            if schema.all_fields().last().unwrap().name() != SEAFOWL_SYNC_DATA_UD_FLAG {
+                let err = format!("Change requested but batches do not contain upsert/delete flag as last column `{SEAFOWL_SYNC_DATA_UD_FLAG}`");
+                warn!(err);
+                return Err(Status::invalid_argument(err));
+            }
+
+            // Validate row count under prescribed limit
+            if batches
+                .iter()
+                .fold(0, |rows, batch| rows + batch.num_rows())
+                > SEAFOWL_SYNC_CALL_MAX_ROWS
+            {
+                let err = format!("Change contains more than max allowed {SEAFOWL_SYNC_CALL_MAX_ROWS} rows");
+                warn!(err);
+                return Err(Status::invalid_argument(err));
+            }
+        }
+
+        let put_result =
+            self.process_sync_cmd(cmd.clone(), batches)
+                .await
+                .map_err(|err| {
+                    let err = format!("Failed processing DoPut for {}: {err}", cmd.path);
+                    warn!(err);
+                    Status::internal(err)
+                })?;
+
+        Ok(Response::new(Box::pin(futures::stream::iter(vec![Ok(
+            arrow_flight::PutResult {
+                app_metadata: put_result.encode_to_vec().into(),
+            },
+        )]))))
+    }
 }

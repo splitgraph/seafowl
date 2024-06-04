@@ -347,6 +347,7 @@ pub struct Misc {
     pub ssl_cert_file: Option<String>,
     pub metrics: Option<Metrics>,
     pub object_store_cache: Option<ObjectCacheProperties>,
+    pub sync_data: DataSyncConfig,
 }
 
 impl Default for Misc {
@@ -357,6 +358,7 @@ impl Default for Misc {
             ssl_cert_file: None,
             metrics: None,
             object_store_cache: None,
+            sync_data: Default::default(),
         }
     }
 }
@@ -391,6 +393,24 @@ impl Default for ObjectCacheProperties {
             capacity: DEFAULT_CACHE_CAPACITY,
             min_fetch_size: DEFAULT_MIN_FETCH_SIZE,
             ttl: DEFAULT_CACHE_ENTRY_TTL.as_secs(),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(default)]
+pub struct DataSyncConfig {
+    pub max_in_memory_bytes: usize,
+    pub max_replication_lag_s: u64,
+    pub sync_lock_timeout_s: u64,
+}
+
+impl Default for DataSyncConfig {
+    fn default() -> Self {
+        Self {
+            max_in_memory_bytes: 3 * 1024 * 1024 * 1024,
+            max_replication_lag_s: 600,
+            sync_lock_timeout_s: 3,
         }
     }
 }
@@ -698,6 +718,7 @@ cache_control = "private, max-age=86400"
                     ssl_cert_file: None,
                     metrics: None,
                     object_store_cache: None,
+                    sync_data: Default::default(),
                 },
             }
         )
@@ -797,6 +818,7 @@ cache_control = "private, max-age=86400"
                     ssl_cert_file: None,
                     metrics: None,
                     object_store_cache: None,
+                    sync_data: Default::default(),
                 },
             }
         )

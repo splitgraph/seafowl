@@ -1,7 +1,7 @@
 use crate::context::SeafowlContext;
 #[cfg(test)]
 use crate::frontend::http::tests::deterministic_uuid;
-use crate::object_store::wrapped::InternalObjectStore;
+use crate::object_store::utils::fast_upload;
 
 use bytes::BytesMut;
 use datafusion::error::Result;
@@ -26,6 +26,7 @@ use deltalake::writer::create_add;
 use deltalake::DeltaTable;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
+use object_store::ObjectStore;
 use std::fs::File;
 use std::sync::Arc;
 use tempfile::{NamedTempFile, TempPath};
@@ -95,8 +96,8 @@ fn temp_partition_file_writer(
 pub async fn plan_to_object_store(
     state: &SessionState,
     plan: &Arc<dyn ExecutionPlan>,
-    store: Arc<InternalObjectStore>,
-    prefix: Path,
+    store: Arc<dyn ObjectStore>,
+    local_data_dir: Option<String>,
     max_partition_size: u32,
 ) -> Result<Vec<Add>> {
     let mut current_partition_size = 0;
@@ -163,21 +164,16 @@ pub async fn plan_to_object_store(
         let permit = Arc::clone(&sem).acquire_owned().await.ok();
 
         let store = store.clone();
-        let prefix = prefix.clone();
+        let local_data_dir = local_data_dir.clone();
         let handle: tokio::task::JoinHandle<Result<Add>> =
             tokio::task::spawn(async move {
                 // Move the ownership of the semaphore permit into the task
                 let _permit = permit;
 
                 // This is taken from delta-rs `PartitionWriter::next_data_path`
-                let file_name =
-                    format!("part-{part:0>5}-{partitions_uuid}-c000.snappy.parquet");
-                // NB: in order to exploit the fast upload path for local FS store we need to use
-                // the internal object store here. However it is not rooted at the table directory
-                // root, so we need to fully qualify the path with the appropriate uuid prefix.
-                // On the other hand, when creating deltalake `Add`s below we only need the relative
-                // path (just the file name).
-                let location = prefix.child(file_name.clone());
+                let file_name = Path::from(format!(
+                    "part-{part:0>5}-{partitions_uuid}-c000.snappy.parquet"
+                ));
 
                 let size = tokio::fs::metadata(
                     partition_file_path
@@ -188,10 +184,11 @@ pub async fn plan_to_object_store(
                 .len() as i64;
 
                 // For local FS stores, we can just move the file to the target location
-                if let Some(result) =
-                    store.fast_upload(&partition_file_path, &location).await
-                {
-                    result?;
+                if let Some(data_dir) = local_data_dir {
+                    // NB: in order to exploit the fast upload path for local FS store we need to
+                    // provide the absolute path to the destination files
+                    let location = format!("{data_dir}/{file_name}");
+                    fast_upload(&partition_file_path, location).await?
                 } else {
                     let file = AsyncFile::open(partition_file_path).await?;
                     let mut reader =
@@ -200,7 +197,7 @@ pub async fn plan_to_object_store(
                         BytesMut::with_capacity(PARTITION_FILE_MIN_PART_SIZE);
 
                     let (multipart_id, mut writer) =
-                        store.inner.put_multipart(&location).await?;
+                        store.put_multipart(&file_name).await?;
 
                     let error: std::io::Error;
                     let mut eof_counter = 0;
@@ -246,20 +243,21 @@ pub async fn plan_to_object_store(
                             "Aborting multipart partition upload due to an error: {:?}",
                             error
                         );
-                        store
-                            .inner
-                            .abort_multipart(&location, &multipart_id)
-                            .await
-                            .ok();
+                        store.abort_multipart(&file_name, &multipart_id).await.ok();
                         return Err(DataFusionError::IoError(error));
                     }
 
                     writer.shutdown().await?;
                 }
 
-                // Create the corresponding Add action; currently we don't support partition columns
+                // Create the corresponding `Add` action; currently we don't support partition columns
                 // which simplifies things.
-                let add = create_add(&Default::default(), file_name, size, &metadata)?;
+                let add = create_add(
+                    &Default::default(),
+                    file_name.to_string(),
+                    size,
+                    &metadata,
+                )?;
 
                 Ok(add)
             });
@@ -273,13 +271,13 @@ pub async fn plan_to_object_store(
         .collect()
 }
 
-pub(super) enum CreateDeltaTableDetails {
+pub enum CreateDeltaTableDetails {
     EmptyTable(Schema),
     FromPath(Path),
 }
 
 impl SeafowlContext {
-    pub(super) async fn create_delta_table<'a>(
+    pub async fn create_delta_table<'a>(
         &'a self,
         name: impl Into<TableReference<'a>>,
         details: CreateDeltaTableDetails,
@@ -387,7 +385,7 @@ impl SeafowlContext {
     }
 
     /// Generate the Delta table builder and execute the write
-    pub(super) async fn plan_to_delta_table<'a>(
+    pub async fn plan_to_delta_table<'a>(
         &self,
         name: impl Into<TableReference<'a>>,
         plan: &Arc<dyn ExecutionPlan>,
@@ -395,14 +393,14 @@ impl SeafowlContext {
         let table_uuid = self.get_table_uuid(name).await?;
         let prefix = table_uuid.to_string();
         let table_log_store = self.internal_object_store.get_log_store(&prefix);
-        let table_prefix = self.internal_object_store.table_prefix(&prefix);
+        let local_table_dir = self.internal_object_store.local_table_dir(&prefix);
 
         // Upload partition files to table's root directory
         let adds = plan_to_object_store(
             &self.inner.state(),
             plan,
-            self.internal_object_store.clone(),
-            table_prefix,
+            table_log_store.object_store(),
+            local_table_dir,
             self.config.misc.max_partition_size,
         )
         .await?;
@@ -432,7 +430,7 @@ impl SeafowlContext {
         Ok(table)
     }
 
-    pub(super) async fn commit(
+    pub async fn commit(
         &self,
         actions: Vec<Action>,
         table: &DeltaTable,
@@ -478,7 +476,7 @@ mod tests {
     use arrow::{array::Int32Array, datatypes::DataType, record_batch::RecordBatch};
     use arrow_schema::{Field, Schema};
     use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
-    use object_store::{local::LocalFileSystem, memory::InMemory, path::Path};
+    use object_store::{local::LocalFileSystem, memory::InMemory};
     use rstest::rstest;
     use serde_json::{json, Value};
     use std::sync::Arc;
@@ -511,36 +509,41 @@ mod tests {
             .await
             .unwrap();
 
-        let (object_store, _tmpdir) = if is_local {
+        let (internal_object_store, _tmpdir) = if is_local {
             // Return tmp_dir to the upper scope so that we don't delete the temporary directory
             // until after the test is done
             let tmp_dir = TempDir::new().unwrap();
 
             (
-                Arc::new(InternalObjectStore::new(
+                InternalObjectStore::new(
                     Arc::new(LocalFileSystem::new_with_prefix(tmp_dir.path()).unwrap()),
                     schema::ObjectStore::Local(schema::Local {
                         data_dir: tmp_dir.path().to_string_lossy().to_string(),
                     }),
-                )),
+                ),
                 Some(tmp_dir),
             )
         } else {
             (
-                Arc::new(InternalObjectStore::new(
+                InternalObjectStore::new(
                     Arc::new(InMemory::new()),
                     schema::ObjectStore::InMemory(schema::InMemory {}),
-                )),
+                ),
                 None,
             )
         };
 
         let table_uuid = Uuid::default();
+        let object_store = internal_object_store
+            .get_log_store(&table_uuid.to_string())
+            .object_store();
+        let local_table_dir =
+            internal_object_store.local_table_dir(&table_uuid.to_string());
         let adds = plan_to_object_store(
             &ctx.inner.state(),
             &execution_plan,
             object_store.clone(),
-            object_store.table_prefix(&table_uuid.to_string()),
+            local_table_dir,
             2,
         )
         .await
@@ -623,9 +626,7 @@ mod tests {
         );
 
         assert_uploaded_objects(
-            object_store
-                .get_log_store(&table_uuid.to_string())
-                .object_store(),
+            object_store,
             vec![PART_0_FILE_NAME.to_string(), PART_1_FILE_NAME.to_string()],
         )
         .await;
@@ -695,7 +696,7 @@ mod tests {
             &ctx.inner.state(),
             &execution_plan,
             object_store,
-            Path::from("test"),
+            None,
             max_partition_size,
         )
         .await

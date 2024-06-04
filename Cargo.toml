@@ -2,7 +2,7 @@
 members = ["clade"]
 
 [workspace.dependencies]
-arrow = "51.0.0"
+arrow = { version = "51.0.0", features = ["test_utils"] }
 arrow-buffer = "51.0.0"
 arrow-csv = "51.0.0"
 arrow-flight = "51.0.0"
@@ -97,6 +97,7 @@ deltalake = { git = "https://github.com/splitgraph/delta-rs", rev = "5972aab0772
 
 futures = "0.3"
 hex = ">=0.4.0"
+indexmap = "2.0.0"
 itertools = { workspace = true }
 lazy_static = ">=1.4.0"
 metrics = { version = "0.22.1" }

@@ -1,17 +1,27 @@
-use crate::context::SeafowlContext;
+use arrow::record_batch::RecordBatch;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::SqlInfo;
 use arrow_schema::SchemaRef;
+use clade::sync::{DataSyncCommand, DataSyncResult};
 use dashmap::DashMap;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::DataFusionError;
 use lazy_static::lazy_static;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::time::Duration;
+use tokio::sync::{Mutex, RwLock};
 use tonic::metadata::MetadataMap;
 use tonic::Status;
-use tracing::{error, info};
+use tracing::{debug, error, info};
+use url::Url;
+
+use crate::context::SeafowlContext;
+use crate::frontend::flight::sync::SeafowlDataSyncManager;
+
+pub const SEAFOWL_SYNC_DATA_UD_FLAG: &str = "__seafowl_ud";
+pub const SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER: &str = "sequence";
+pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -32,13 +42,15 @@ lazy_static! {
 pub(super) struct SeafowlFlightHandler {
     pub context: Arc<SeafowlContext>,
     pub results: Arc<DashMap<String, Mutex<SendableRecordBatchStream>>>,
+    sync_manager: Arc<RwLock<SeafowlDataSyncManager>>,
 }
 
 impl SeafowlFlightHandler {
     pub fn new(context: Arc<SeafowlContext>) -> Self {
         Self {
-            context,
+            context: context.clone(),
             results: Arc::new(Default::default()),
+            sync_manager: Arc::new(RwLock::new(SeafowlDataSyncManager::new(context))),
         }
     }
 
@@ -88,5 +100,81 @@ impl SeafowlFlightHandler {
         })?;
 
         Ok(batch_stream_mutex.into_inner())
+    }
+
+    pub async fn process_sync_cmd(
+        &self,
+        cmd: DataSyncCommand,
+        batches: Vec<RecordBatch>,
+    ) -> Result<DataSyncResult> {
+        let log_store = match cmd.store {
+            None => self.context.internal_object_store.get_log_store(&cmd.path),
+            Some(store_loc) => {
+                self.context
+                    .metastore
+                    .object_stores
+                    .get_log_store_for_table(
+                        Url::parse(&store_loc.location).map_err(|e| {
+                            DataFusionError::Execution(format!(
+                                "Couldn't parse sync location: {e}"
+                            ))
+                        })?,
+                        store_loc.options,
+                        cmd.path,
+                    )
+                    .await?
+            }
+        };
+
+        let url = log_store.root_uri();
+        let num_rows = batches
+            .iter()
+            .fold(0, |rows, batch| rows + batch.num_rows());
+
+        if num_rows == 0 {
+            // Get the current volatile and durable sequence numbers
+            debug!("Received empty batches, returning current sequence numbers");
+            let (mem_seq, dur_seq) =
+                self.sync_manager.read().await.stored_sequences(&cmd.origin);
+            return Ok(DataSyncResult {
+                accepted: true,
+                memory_sequence_number: mem_seq,
+                durable_sequence_number: dur_seq,
+            });
+        }
+
+        debug!("Processing data change with {num_rows} rows for url {url}");
+        match tokio::time::timeout(
+            Duration::from_secs(self.context.config.misc.sync_data.sync_lock_timeout_s),
+            self.sync_manager.write(),
+        )
+        .await
+        {
+            Ok(mut sync_manager) => {
+                let (mem_seq, dur_seq) = sync_manager
+                    .enqueue_sync(
+                        log_store,
+                        cmd.sequence_number,
+                        cmd.origin,
+                        cmd.pk_columns,
+                        cmd.last,
+                        batches,
+                    )
+                    .await?;
+                Ok(DataSyncResult {
+                    accepted: true,
+                    memory_sequence_number: mem_seq,
+                    durable_sequence_number: dur_seq,
+                })
+            }
+            Err(_) => {
+                debug!("Timeout waiting for data sync write lock for url {url}");
+                Ok(DataSyncResult {
+                    accepted: false,
+                    memory_sequence_number: None,
+                    durable_sequence_number: None,
+                })
+            }
+        }
     }
 }

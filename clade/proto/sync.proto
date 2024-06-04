@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package clade.sync;
+
+import "schema.proto";
+
+message DataSyncCommand {
+  // Path to the Delta Table, relative to the root URL of the store below.
+  // Will be created based on the schema of the RecordBatch if doesn't exist.
+  // e.g. path/to/table
+  string path = 1;
+
+  // Root URL (e.g. s3://my-bucket) and connection options for the table's path
+  schema.StorageLocation store = 2;
+
+  // Primary key columns. Must not be empty: the table must always
+  // have a replica identity / PK.
+  repeated string pk_columns = 3;
+
+  // Integer identifying data source
+  uint64 origin = 4;
+
+  // Monotonically-increasing transaction number
+  uint64 sequence_number = 5;
+
+  // True if this is the last command in the transaction denoted
+  // by this sequence number which might then become durable after
+  // the next flush.
+  bool last = 6;
+}
+
+message DataSyncResult {
+  // If false, Seafowl is overloaded and can't accept the change (e.g.
+  // can't flush fast enough). The client should wait and retry.
+  // TODO: also schema mismatch errors
+  bool accepted = 1;
+
+  // Sequence number up to which the changes are in Seafowl's memory.
+  optional uint64 memory_sequence_number = 2;
+
+  // Sequence number up to which the changes are in Delta Lake.
+  optional uint64 durable_sequence_number = 3;
+}

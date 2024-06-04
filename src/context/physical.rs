@@ -347,13 +347,18 @@ impl SeafowlContext {
                     );
 
                     // Write the new files with updated data
-                    let table_prefix =
-                        self.internal_object_store.table_prefix(&uuid.to_string());
+                    let object_store = self
+                        .internal_object_store
+                        .get_log_store(&uuid.to_string())
+                        .object_store();
+                    let local_table_dir = self
+                        .internal_object_store
+                        .local_table_dir(&uuid.to_string());
                     let adds = plan_to_object_store(
                         &state,
                         &update_plan,
-                        self.internal_object_store.clone(),
-                        table_prefix,
+                        object_store,
+                        local_table_dir,
                         self.config.misc.max_partition_size,
                     )
                     .await?;
@@ -454,14 +459,18 @@ impl SeafowlContext {
                                 Arc::new(FilterExec::try_new(filter_expr, base_scan)?);
 
                             // Write the filtered out data
-                            let table_prefix = self
+                            let object_store = self
                                 .internal_object_store
-                                .table_prefix(&uuid.to_string());
+                                .get_log_store(&uuid.to_string())
+                                .object_store();
+                            let local_table_dir = self
+                                .internal_object_store
+                                .local_table_dir(&uuid.to_string());
                             let adds = plan_to_object_store(
                                 &state,
                                 &filter_plan,
-                                self.internal_object_store.clone(),
-                                table_prefix,
+                                object_store,
+                                local_table_dir,
                                 self.config.misc.max_partition_size,
                             )
                             .await?;
