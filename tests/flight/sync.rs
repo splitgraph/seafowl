@@ -25,16 +25,16 @@ async fn do_put_sync(
 async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (ctx, mut client) = flight_server().await;
 
+    //
     // Sync #1 that creates the table, and dictates the full schema for following syncs
+    //
+
     let schema = Arc::new(Schema::new(vec![
-        Field::new("col_1", DataType::Int32, true),
-        Field::new("col_2", DataType::Utf8, true),
-        Field::new("col_3", DataType::Float64, true),
-        Field::new(
-            "col_4",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-            true,
-        ),
+        Field::new("c1", DataType::Int32, false),
+        Field::new("c2", DataType::Utf8, false),
+        Field::new("c3", DataType::Float64, true),
+        Field::new("c4", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        Field::new("c5", DataType::Boolean, true),
         Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, false),
     ]));
 
@@ -48,7 +48,8 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
                 978310861000000,
                 1012615322000000,
             ])),
-            Arc::new(BooleanArray::from(vec![true, true])),
+            Arc::new(BooleanArray::from(vec![false, false])),
+            Arc::new(BooleanArray::from(vec![true, true])), // all-append batch
         ],
     )?;
 
@@ -56,7 +57,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     let mut cmd = DataSyncCommand {
         path: table_uuid.to_string(),
         store: None,
-        pk_columns: vec!["col_1".to_string()],
+        pk_columns: vec!["c1".to_string(), "c2".to_string()],
         origin: 42,
         sequence_number: 1234,
         last: false,
@@ -94,19 +95,32 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     // Wait for the replication lag to exceed the configured max duration
     tokio::time::sleep(Duration::from_secs(1)).await;
 
+    //
     // Now go for sync #2; this will flush both it and the first sync as well
+    //
+
     let schema = Arc::new(Schema::new(vec![
-        Field::new("col_1", DataType::Int32, true),
-        Field::new("col_3", DataType::Float64, true),
+        Field::new("c1", DataType::Int32, false),
+        Field::new("c3", DataType::Float64, true),
+        Field::new("c5", DataType::Boolean, true),
+        Field::new("c2", DataType::Utf8, false),
         Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
     ]));
 
+    // Update row 1 such that we omit the timestamp column (c4) and so it should inherit the old
+    // value from the previous sync, and explicitly set the boolean column to None
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Int32Array::from(vec![3, 4])),
-            Arc::new(Float64Array::from(vec![3.0, 4.0])),
-            Arc::new(BooleanArray::from(vec![true, true])),
+            Arc::new(Int32Array::from(vec![3, 4, 1])),
+            Arc::new(Float64Array::from(vec![3.0, 4.0, 1.1])),
+            Arc::new(BooleanArray::from(vec![Some(false), Some(false), None])),
+            Arc::new(StringArray::from(vec![
+                Some("three"),
+                Some("four"),
+                Some("one"),
+            ])),
+            Arc::new(BooleanArray::from(vec![true, true, true])),
         ],
     )?;
     cmd.last = true;
@@ -126,27 +140,26 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     let results = ctx.collect(plan.clone()).await?;
 
     let expected = [
-        "+-------+-------+-------+---------------------+",
-        "| col_1 | col_2 | col_3 | col_4               |",
-        "+-------+-------+-------+---------------------+",
-        "| 1     | one   | 1.0   | 2001-01-01T01:01:01 |",
-        "| 2     | two   | 2.0   | 2002-02-02T02:02:02 |",
-        "| 3     |       | 3.0   |                     |",
-        "| 4     |       | 4.0   |                     |",
-        "+-------+-------+-------+---------------------+",
+        "+----+-------+-----+---------------------+-------+",
+        "| c1 | c2    | c3  | c4                  | c5    |",
+        "+----+-------+-----+---------------------+-------+",
+        "| 1  | one   | 1.1 | 2001-01-01T01:01:01 |       |",
+        "| 2  | two   | 2.0 | 2002-02-02T02:02:02 | false |",
+        "| 3  | three | 3.0 |                     | false |",
+        "| 4  | four  | 4.0 |                     | false |",
+        "+----+-------+-----+---------------------+-------+",
     ];
 
-    assert_batches_eq!(expected, &results);
+    assert_batches_sorted_eq!(expected, &results);
 
+    //
     // Sync #3; this will be held in memory
+    //
+
     let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "col_4",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-            true,
-        ),
-        Field::new("col_2", DataType::Utf8, true),
-        Field::new("col_1", DataType::Int32, true),
+        Field::new("c4", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        Field::new("c2", DataType::Utf8, false),
+        Field::new("c1", DataType::Int32, false),
         Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
     ]));
 
@@ -175,21 +188,29 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         }
     );
 
+    //
     // Sync #4
+    //
+
     let schema = Arc::new(Schema::new(vec![
-        Field::new("col_2", DataType::Utf8, true),
-        Field::new("col_1", DataType::Int32, true),
-        Field::new("col_3", DataType::Float64, true),
+        Field::new("c2", DataType::Utf8, false),
+        Field::new("c1", DataType::Int32, false),
+        Field::new("c3", DataType::Float64, true),
         Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
     ]));
 
+    // Update a row from the first sequence
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec![Some("seven"), Some("eight")])),
-            Arc::new(Int32Array::from(vec![7, 8])),
-            Arc::new(Float64Array::from(vec![7.0, 8.0])),
-            Arc::new(BooleanArray::from(vec![true, true])),
+            Arc::new(StringArray::from(vec![
+                Some("seven"),
+                Some("four"),
+                Some("eight"),
+            ])),
+            Arc::new(Int32Array::from(vec![7, 4, 8])),
+            Arc::new(Float64Array::from(vec![7.0, 4.4, 8.0])),
+            Arc::new(BooleanArray::from(vec![true, true, true])),
         ],
     )?;
     cmd.sequence_number = 78910;
@@ -217,26 +238,42 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         }
     );
 
+    //
     // Sync #5 to flush the previous 2 syncs due to max size threshold
+    //
+
     let schema = Arc::new(Schema::new(vec![
-        Field::new("col_1", DataType::Int32, true),
-        Field::new(
-            "col_4",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-            true,
-        ),
+        Field::new("c1", DataType::Int32, false),
+        Field::new("c4", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        Field::new("c5", DataType::Boolean, true),
+        Field::new("c2", DataType::Utf8, false),
         Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
     ]));
 
+    // Update a row from the first sequence, delete a row from the first sync in this sequence
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Int32Array::from(vec![9, 10])),
+            Arc::new(Int32Array::from(vec![4, 9, 10, 6])),
             Arc::new(TimestampMicrosecondArray::from(vec![
-                1252487349000000,
-                1286705410000000,
+                None,
+                Some(1252487349000000),
+                Some(1286705410000000),
+                None,
             ])),
-            Arc::new(BooleanArray::from(vec![true, true])),
+            Arc::new(BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(false),
+                None,
+            ])),
+            Arc::new(StringArray::from(vec![
+                Some("four"),
+                Some("nine"),
+                Some("ten"),
+                Some("six"),
+            ])),
+            Arc::new(BooleanArray::from(vec![true, true, true, false])),
         ],
     )?;
     cmd.last = true;
@@ -252,29 +289,26 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     );
 
     // Finally check that all changes have been flushed accordingly
-    let plan = ctx
-        .plan_query("SELECT * FROM replicated_table ORDER BY col_1")
-        .await?;
+    let plan = ctx.plan_query("SELECT * FROM replicated_table").await?;
     let results = ctx.collect(plan.clone()).await?;
 
     let expected = [
-        "+-------+-------+-------+---------------------+",
-        "| col_1 | col_2 | col_3 | col_4               |",
-        "+-------+-------+-------+---------------------+",
-        "| 1     | one   | 1.0   | 2001-01-01T01:01:01 |",
-        "| 2     | two   | 2.0   | 2002-02-02T02:02:02 |",
-        "| 3     |       | 3.0   |                     |",
-        "| 4     |       | 4.0   |                     |",
-        "| 5     | five  |       | 2005-05-05T05:05:05 |",
-        "| 6     | six   |       | 2006-06-06T06:06:06 |",
-        "| 7     | seven | 7.0   |                     |",
-        "| 8     | eight | 8.0   |                     |",
-        "| 9     |       |       | 2009-09-09T09:09:09 |",
-        "| 10    |       |       | 2010-10-10T10:10:10 |",
-        "+-------+-------+-------+---------------------+",
+        "+----+-------+-----+---------------------+-------+",
+        "| c1 | c2    | c3  | c4                  | c5    |",
+        "+----+-------+-----+---------------------+-------+",
+        "| 1  | one   | 1.1 | 2001-01-01T01:01:01 |       |",
+        "| 10 | ten   |     | 2010-10-10T10:10:10 | false |",
+        "| 2  | two   | 2.0 | 2002-02-02T02:02:02 | false |",
+        "| 3  | three | 3.0 |                     | false |",
+        "| 4  | four  | 4.4 |                     | true  |",
+        "| 5  | five  |     | 2005-05-05T05:05:05 |       |",
+        "| 7  | seven | 7.0 |                     |       |",
+        "| 8  | eight | 8.0 |                     |       |",
+        "| 9  | nine  |     | 2009-09-09T09:09:09 | false |",
+        "+----+-------+-----+---------------------+-------+",
     ];
 
-    assert_batches_eq!(expected, &results);
+    assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
 }

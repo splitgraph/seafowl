@@ -1,14 +1,19 @@
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
-use datafusion::datasource::TableProvider;
-use datafusion::physical_expr::expressions::{col, lit};
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{Result, ScalarValue};
-use deltalake::kernel::{Action, Schema};
+use datafusion::datasource::{provider_as_source, TableProvider};
+use datafusion::physical_expr::create_physical_expr;
+use datafusion::physical_expr::expressions::{MaxAccumulator, MinAccumulator};
+use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::prelude::DataFrame;
+use datafusion_common::{
+    Column, DataFusionError, JoinType, Result, ScalarValue, ToDFSchema,
+};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::{
+    col, is_false, is_null, lit, when, LogicalPlanBuilder, UNNAMED_TABLE,
+};
+use datafusion_expr::{Accumulator, Expr};
+use deltalake::kernel::{Action, Remove, Schema};
 use deltalake::logstore::LogStore;
 use deltalake::operations::create::CreateBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
@@ -29,6 +34,8 @@ use crate::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
 
 type Origin = u64;
 type SequenceNumber = u64;
+const SYNC_REF: &str = "sync_data";
+const SYNC_JOIN_COLUMN: &str = "__sync_join";
 
 // A handler for caching, coalescing and flushing table syncs received via
 // the Arrow Flight `do_put` calls.
@@ -101,6 +108,8 @@ struct DataSyncCollection {
     size: usize,
     // Unix epoch of the first sync command in this collection
     insertion_time: u64,
+    // Primary keys
+    pk_columns: Vec<String>,
     // Table log store
     log_store: Arc<dyn LogStore>,
     // Collection of batches to replicate
@@ -109,15 +118,11 @@ struct DataSyncCollection {
 
 // An object corresponding to a single `do_put` call.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct DataSyncItem {
     // Identifier of the origin where the change stems from
     origin: Origin,
     // Sequence number of this particular change and origin
     sequence_number: SequenceNumber,
-    // Primary keys
-    // TODO: this should probably be per-collection (not changing from sequence to sequence)
-    pk_columns: Vec<String>,
     // Record batches to replicate
     batches: Vec<RecordBatch>,
 }
@@ -194,7 +199,6 @@ impl SeafowlDataSyncManager {
         let item = DataSyncItem {
             origin,
             sequence_number,
-            pk_columns,
             batches,
         };
         self.syncs
@@ -206,6 +210,7 @@ impl SeafowlDataSyncManager {
             .or_insert(DataSyncCollection {
                 size,
                 insertion_time: now(),
+                pk_columns,
                 log_store,
                 syncs: vec![item],
             });
@@ -266,88 +271,112 @@ impl SeafowlDataSyncManager {
 
     // Flush the table containing the oldest sync in memory
     async fn flush_syncs(&mut self) -> Result<()> {
-        if let Some((url, entry)) = self.syncs.first() {
-            let url = url.clone();
-            let log_store = entry.log_store.clone();
-
-            let last_sequence_number = entry.syncs.last().unwrap().sequence_number;
-
-            let mut table = DeltaTable::new(log_store.clone(), Default::default());
-            table.load().await?;
-
-            if let Some(table_seq) = self.table_sequence(&table).await?
-                && table_seq > last_sequence_number
-            {
-                info!(
-                    "Location at {url} already durable up to {table_seq}, skipping {}",
-                    last_sequence_number
-                );
-                self.remove_sync(&url);
+        let (url, entry) = match self.syncs.first() {
+            Some(table_syncs) => table_syncs,
+            None => {
+                info!("No pending syncs to flush");
                 return Ok(());
             }
+        };
 
-            // Use the schema from the object store as a source of truth, since it's not guaranteed
-            // that any of the entries has the full column list.
-            let full_schema = TableProvider::schema(&table);
+        let url = url.clone();
+        let log_store = entry.log_store.clone();
 
-            // Iterate through all syncs for this table and construct a full plan
-            let mut input_plan: Arc<dyn ExecutionPlan> =
-                Arc::new(MemoryExec::try_new(&[], full_schema.clone(), None)?);
-            for sync in &entry.syncs {
-                let data = sync.batches.clone();
-                input_plan =
-                    self.plan_data_sync(full_schema.clone(), input_plan, data)?;
-            }
+        let last_sequence_number = entry.syncs.last().unwrap().sequence_number;
 
-            // To exploit fast data upload to local FS, i.e. simply move the partition files
-            // once written to the disk, try to infer whether the location is a local dir
-            let local_data_dir = if url.starts_with("file://") {
-                Some(log_store.root_uri())
-            } else {
-                None
-            };
+        let mut table = DeltaTable::new(log_store.clone(), Default::default());
+        table.load().await?;
 
-            // Dump the batches to the object store
-            let adds = plan_to_object_store(
-                &self.context.inner.state(),
-                &input_plan,
-                log_store.object_store(),
-                local_data_dir,
-                self.context.config.misc.max_partition_size,
-            )
-            .await?;
-
-            let mut actions: Vec<Action> = adds.into_iter().map(Action::Add).collect();
-
-            // Append a special `CommitInfo` action to record new durable sequence number
-            // tied to the commit.
-            let info = HashMap::from([(
-                SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER.to_string(),
-                Value::Number(last_sequence_number.into()),
-            )]);
-            let commit_info = Action::commit_info(info);
-            actions.push(commit_info);
-
-            let op = DeltaOperation::Write {
-                mode: SaveMode::Append,
-                partition_by: None,
-                predicate: None,
-            };
-            self.context.commit(actions, &table, op).await?;
-            debug!("Committed data sync up to {last_sequence_number} for location {url}");
-
-            // We've flushed all the presently accumulated batches for this location.
-            // Modify our syncs and sequences maps to reflect this.
-            let orseq = entry
-                .syncs
-                .iter()
-                .map(|s| (s.origin, s.sequence_number))
-                .unique()
-                .collect::<Vec<_>>();
-            self.remove_sequence_locations(url.clone(), orseq);
+        if let Some(table_seq) = self.table_sequence(&table).await?
+            && table_seq > last_sequence_number
+        {
+            // TODO 1: partial skipping if only a subset of syncs older than the commited sequence
+            // TODO 2: persist the final flag to to enable >= comparison
+            info!(
+                "Location at {url} already durable up to {table_seq}, skipping {}",
+                last_sequence_number
+            );
             self.remove_sync(&url);
-            self.advance_durable();
+            return Ok(());
         }
+
+        // Use the schema from the object store as a source of truth, since it's not guaranteed
+        // that any of the entries has the full column list.
+        let full_schema = TableProvider::schema(&table);
+
+        // Generate a qualifier expression for pruning partition files and filtering the base scan
+        let qualifier = self.construct_qualifier(full_schema.clone(), entry)?;
+
+        // Iterate through all syncs for this table and construct a full plan by applying each
+        // individual sync
+        let base_plan = LogicalPlanBuilder::scan_with_filters(
+            SYNC_REF,
+            provider_as_source(Arc::new(table.clone())),
+            None,
+            vec![qualifier.clone()],
+        )?
+        .build()?;
+        let mut sync_df = DataFrame::new(self.context.inner.state(), base_plan);
+
+        for sync in &entry.syncs {
+            let data = sync.batches.clone();
+            sync_df =
+                self.apply_sync(&entry.pk_columns, full_schema.clone(), sync_df, data)?;
+        }
+
+        let input_plan = sync_df.create_physical_plan().await?;
+
+        // To exploit fast data upload to local FS, i.e. simply move the partition files
+        // once written to the disk, try to infer whether the location is a local dir
+        let local_data_dir = if url.starts_with("file://") {
+            Some(log_store.root_uri())
+        } else {
+            None
+        };
+
+        // Dump the batches to the object store
+        let adds = plan_to_object_store(
+            &self.context.inner.state(),
+            &input_plan,
+            log_store.object_store(),
+            local_data_dir,
+            self.context.config.misc.max_partition_size,
+        )
+        .await?;
+
+        let mut actions: Vec<Action> = adds.into_iter().map(Action::Add).collect();
+
+        // Prune away files that are refuted by the qualifier
+        actions.extend(self.get_removes(&qualifier, full_schema.clone(), &table)?);
+
+        // Append a special `CommitInfo` action to record new durable sequence number
+        // tied to the commit.
+        let info = HashMap::from([(
+            SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER.to_string(),
+            Value::Number(last_sequence_number.into()),
+        )]);
+        let commit_info = Action::commit_info(info);
+        actions.push(commit_info);
+
+        let op = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: None,
+            predicate: None,
+        };
+        self.context.commit(actions, &table, op).await?;
+        debug!("Committed data sync up to {last_sequence_number} for location {url}");
+
+        // We've flushed all the presently accumulated batches for this location.
+        // Modify our syncs and sequences maps to reflect this.
+        let orseq = entry
+            .syncs
+            .iter()
+            .map(|s| (s.origin, s.sequence_number))
+            .unique()
+            .collect::<Vec<_>>();
+        self.remove_sequence_locations(url.clone(), orseq);
+        self.remove_sync(&url);
+        self.advance_durable();
 
         Ok(())
     }
@@ -371,42 +400,170 @@ impl SeafowlDataSyncManager {
         )
     }
 
-    fn plan_data_sync(
+    // Get a list of files that will be scanned and removed based on the pruning qualifier.
+    fn get_removes(
+        &self,
+        predicate: &Expr,
+        full_schema: SchemaRef,
+        table: &DeltaTable,
+    ) -> Result<Vec<Action>> {
+        let prune_expr = create_physical_expr(
+            predicate,
+            &full_schema.clone().to_dfschema()?,
+            &ExecutionProps::new(),
+        )?;
+        let pruning_predicate =
+            PruningPredicate::try_new(prune_expr, full_schema.clone())?;
+        let snapshot = table.snapshot()?;
+        let prune_map = pruning_predicate.prune(snapshot)?;
+
+        Ok(snapshot
+            .file_actions()?
+            .iter()
+            .zip(prune_map)
+            .filter_map(|(add, keep)| {
+                if keep {
+                    Some(Action::Remove(Remove {
+                        path: add.path.clone(),
+                        deletion_timestamp: Some(now() as i64),
+                        data_change: true,
+                        extended_file_metadata: Some(true),
+                        partition_values: Some(add.partition_values.clone()),
+                        size: Some(add.size),
+                        tags: None,
+                        deletion_vector: None,
+                        base_row_id: None,
+                        default_row_commit_version: None,
+                    }))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<Action>>())
+    }
+
+    // Generates a pruning qualifier for the table based on the PK columns and the min/max values
+    // in the data sync entries.
+    fn construct_qualifier(
         &self,
         full_schema: SchemaRef,
-        input_plan: Arc<dyn ExecutionPlan>,
-        data: Vec<RecordBatch>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = data.first().unwrap().schema();
-        let mem_plan: Arc<dyn ExecutionPlan> =
-            Arc::new(MemoryExec::try_new(&[data], schema.clone(), None)?);
+        entry: &DataSyncCollection,
+    ) -> Result<Expr> {
+        // Initialize the min/max accumulators needed to prune the table files
+        let (mut min_values, mut max_values): (Vec<MinAccumulator>, Vec<MaxAccumulator>) =
+            entry
+                .pk_columns
+                .iter()
+                .map(|pk_col| {
+                    // The validation in the interface should have ensured these fields exist.
+                    let f = full_schema.column_with_name(pk_col).unwrap().1;
+                    Ok((
+                        MinAccumulator::try_new(f.data_type())?,
+                        MaxAccumulator::try_new(f.data_type())?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .unzip();
 
-        // TODO: Filter away deletes for now
-        let filter_plan: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
-            col(SEAFOWL_SYNC_DATA_UD_FLAG, schema.as_ref())?,
-            mem_plan,
-        )?);
+        // Collect all min/max stats for PK columns
+        for sync in &entry.syncs {
+            for batch in &sync.batches {
+                entry
+                    .pk_columns
+                    .iter()
+                    .zip(min_values.iter_mut())
+                    .zip(max_values.iter_mut())
+                    .try_for_each(|((pk_col, min_value), max_value)| {
+                        let pk_array = batch.column_by_name(pk_col).unwrap().clone();
+                        min_value.update_batch(&[pk_array.clone()])?;
+                        max_value.update_batch(&[pk_array])?;
+                        Ok::<(), DataFusionError>(())
+                    })?
+            }
+        }
+
+        // Combine the statistics into a single qualifier expression
+        Ok(entry
+            .pk_columns
+            .iter()
+            .zip(min_values.iter_mut())
+            .zip(max_values.iter_mut())
+            .map(|((pk_col, min_value), max_value)| {
+                Ok(lit(pk_col)
+                    .between(lit(min_value.evaluate()?), lit(max_value.evaluate()?)))
+            })
+            .collect::<Result<Vec<Expr>>>()?
+            .into_iter()
+            .reduce(|e1: Expr, e2| e1.and(e2))
+            .unwrap())
+    }
+
+    fn apply_sync(
+        &self,
+        pk_columns: &[String],
+        full_schema: SchemaRef,
+        input_df: DataFrame,
+        data: Vec<RecordBatch>,
+    ) -> Result<DataFrame> {
+        let schema = data.first().unwrap().schema();
+
+        let sync_df = self.context.inner.read_batches(data)?;
+
+        // First remove all deleted rows
+        let join_cols = pk_columns.iter().map(|pk| pk.as_str()).collect::<Vec<_>>();
+        let input_df = input_df.join(
+            sync_df
+                .clone()
+                .filter(is_false(col(SEAFOWL_SYNC_DATA_UD_FLAG)))?,
+            JoinType::LeftAnti,
+            &join_cols,
+            &join_cols,
+            None,
+        )?;
 
         // Normalize the schema, by ordering columns according to the full table schema and
-        // projecting any missing columns as NULLs.
+        // projecting the sync data accordingly.
         let projection = full_schema
             .all_fields()
             .iter()
             .map(|f| {
                 let name = f.name();
-                if schema.column_with_name(name).is_some() {
-                    Ok((col(name, schema.as_ref())?, name.to_string()))
+                Ok(when(
+                    // If the row is not present in the sync data, project the existing row
+                    is_null(col(SEAFOWL_SYNC_DATA_UD_FLAG)),
+                    Expr::Column(Column::new(Some(SYNC_REF), name)),
+                )
+                .otherwise(if schema.column_with_name(name).is_some() {
+                    // If the row and column are present in the sync project its value
+                    Expr::Column(Column::new(Some(UNNAMED_TABLE), name))
                 } else {
-                    Ok((
+                    when(
+                        is_null(col(SYNC_JOIN_COLUMN)),
+                        // Neither the old row nor the sync column exist, project a NULL
                         lit(ScalarValue::Null.cast_to(f.data_type())?),
-                        name.to_string(),
-                    ))
-                }
+                    )
+                    .otherwise(
+                        // Sync column doesn't exist but an old row does, project the old row
+                        Expr::Column(Column::new(Some(SYNC_REF), name)),
+                    )?
+                })?
+                .alias_qualified(Some(SYNC_REF), name))
             })
             .collect::<Result<_>>()?;
-        let proj_plan = Arc::new(ProjectionExec::try_new(projection, filter_plan)?);
 
-        Ok(Arc::new(UnionExec::new(vec![input_plan, proj_plan])))
+        let input_df = input_df
+            .with_column(SYNC_JOIN_COLUMN, lit(true))?
+            .join(
+                sync_df.filter(col(SEAFOWL_SYNC_DATA_UD_FLAG))?,
+                JoinType::Full,
+                &join_cols,
+                &join_cols,
+                None,
+            )?
+            .select(projection)?;
+
+        Ok(input_df)
     }
 
     // Remove the pending location from a sequence for all syncs in the collection
@@ -500,7 +657,7 @@ mod tests {
     // a pre-defined schema
     fn random_batches() -> Vec<RecordBatch> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, true),
+            Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Utf8, true),
             Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, false),
         ]));

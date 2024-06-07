@@ -7,7 +7,7 @@ use arrow_flight::error::{FlightError, Result};
 use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt};
 use arrow_flight::{FlightClient, FlightDescriptor};
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
-use datafusion_common::assert_batches_eq;
+use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use prost::Message;
