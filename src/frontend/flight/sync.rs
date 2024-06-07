@@ -8,7 +8,9 @@ use datafusion::prelude::DataFrame;
 use datafusion_common::{
     Column, DataFusionError, JoinType, Result, ScalarValue, ToDFSchema,
 };
+use datafusion_expr::aggregate_function::AggregateFunction as AggregateFunctionFunc;
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::{
     col, is_false, is_null, lit, when, LogicalPlanBuilder, UNNAMED_TABLE,
 };
@@ -400,48 +402,6 @@ impl SeafowlDataSyncManager {
         )
     }
 
-    // Get a list of files that will be scanned and removed based on the pruning qualifier.
-    fn get_removes(
-        &self,
-        predicate: &Expr,
-        full_schema: SchemaRef,
-        table: &DeltaTable,
-    ) -> Result<Vec<Action>> {
-        let prune_expr = create_physical_expr(
-            predicate,
-            &full_schema.clone().to_dfschema()?,
-            &ExecutionProps::new(),
-        )?;
-        let pruning_predicate =
-            PruningPredicate::try_new(prune_expr, full_schema.clone())?;
-        let snapshot = table.snapshot()?;
-        let prune_map = pruning_predicate.prune(snapshot)?;
-
-        Ok(snapshot
-            .file_actions()?
-            .iter()
-            .zip(prune_map)
-            .filter_map(|(add, keep)| {
-                if keep {
-                    Some(Action::Remove(Remove {
-                        path: add.path.clone(),
-                        deletion_timestamp: Some(now() as i64),
-                        data_change: true,
-                        extended_file_metadata: Some(true),
-                        partition_values: Some(add.partition_values.clone()),
-                        size: Some(add.size),
-                        tags: None,
-                        deletion_vector: None,
-                        base_row_id: None,
-                        default_row_commit_version: None,
-                    }))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<Action>>())
-    }
-
     // Generates a pruning qualifier for the table based on the PK columns and the min/max values
     // in the data sync entries.
     fn construct_qualifier(
@@ -508,7 +468,35 @@ impl SeafowlDataSyncManager {
     ) -> Result<DataFrame> {
         let schema = data.first().unwrap().schema();
 
-        let sync_df = self.context.inner.read_batches(data)?;
+        // Construct the sync dataframe out of the record batches, making sure to take only the last
+        // version of each row.
+        let sync_df = self.context.inner.read_batches(data)?.aggregate(
+            pk_columns
+                .iter()
+                .map(|pk| Expr::Column(Column::new(Some(UNNAMED_TABLE), pk.clone())))
+                .collect::<Vec<_>>(),
+            schema
+                .all_fields()
+                .iter()
+                .filter_map(|f| {
+                    if !pk_columns.contains(f.name()) {
+                        Some(
+                            Expr::AggregateFunction(AggregateFunction::new(
+                                AggregateFunctionFunc::LastValue,
+                                vec![col(f.name().clone())],
+                                false,
+                                None,
+                                None,
+                                None,
+                            ))
+                            .alias_qualified(Some(UNNAMED_TABLE), f.name()),
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        )?;
 
         // First remove all deleted rows
         let join_cols = pk_columns.iter().map(|pk| pk.as_str()).collect::<Vec<_>>();
@@ -564,6 +552,48 @@ impl SeafowlDataSyncManager {
             .select(projection)?;
 
         Ok(input_df)
+    }
+
+    // Get a list of files that will be scanned and removed based on the pruning qualifier.
+    fn get_removes(
+        &self,
+        predicate: &Expr,
+        full_schema: SchemaRef,
+        table: &DeltaTable,
+    ) -> Result<Vec<Action>> {
+        let prune_expr = create_physical_expr(
+            predicate,
+            &full_schema.clone().to_dfschema()?,
+            &ExecutionProps::new(),
+        )?;
+        let pruning_predicate =
+            PruningPredicate::try_new(prune_expr, full_schema.clone())?;
+        let snapshot = table.snapshot()?;
+        let prune_map = pruning_predicate.prune(snapshot)?;
+
+        Ok(snapshot
+            .file_actions()?
+            .iter()
+            .zip(prune_map)
+            .filter_map(|(add, keep)| {
+                if keep {
+                    Some(Action::Remove(Remove {
+                        path: add.path.clone(),
+                        deletion_timestamp: Some(now() as i64),
+                        data_change: true,
+                        extended_file_metadata: Some(true),
+                        partition_values: Some(add.partition_values.clone()),
+                        size: Some(add.size),
+                        tags: None,
+                        deletion_vector: None,
+                        base_row_id: None,
+                        default_row_commit_version: None,
+                    }))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<Action>>())
     }
 
     // Remove the pending location from a sequence for all syncs in the collection

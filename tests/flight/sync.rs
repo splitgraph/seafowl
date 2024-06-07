@@ -108,19 +108,28 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     ]));
 
     // Update row 1 such that we omit the timestamp column (c4) and so it should inherit the old
-    // value from the previous sync, and explicitly set the boolean column to None
+    // value from the previous sync, and explicitly set the boolean column to None, but only in the
+    // last row (i.e. test that multiple updates to the same row use the last value).
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Int32Array::from(vec![3, 4, 1])),
-            Arc::new(Float64Array::from(vec![3.0, 4.0, 1.1])),
-            Arc::new(BooleanArray::from(vec![Some(false), Some(false), None])),
+            Arc::new(Int32Array::from(vec![1, 3, 1, 4, 1])),
+            Arc::new(Float64Array::from(vec![1.1, 3.0, 1.11, 4.0, 1.111])),
+            Arc::new(BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(false),
+                None,
+            ])),
             Arc::new(StringArray::from(vec![
+                Some("one"),
                 Some("three"),
+                Some("one"),
                 Some("four"),
                 Some("one"),
             ])),
-            Arc::new(BooleanArray::from(vec![true, true, true])),
+            Arc::new(BooleanArray::from(vec![true, true, true, true, true])),
         ],
     )?;
     cmd.last = true;
@@ -140,14 +149,14 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     let results = ctx.collect(plan.clone()).await?;
 
     let expected = [
-        "+----+-------+-----+---------------------+-------+",
-        "| c1 | c2    | c3  | c4                  | c5    |",
-        "+----+-------+-----+---------------------+-------+",
-        "| 1  | one   | 1.1 | 2001-01-01T01:01:01 |       |",
-        "| 2  | two   | 2.0 | 2002-02-02T02:02:02 | false |",
-        "| 3  | three | 3.0 |                     | false |",
-        "| 4  | four  | 4.0 |                     | false |",
-        "+----+-------+-----+---------------------+-------+",
+        "+----+-------+-------+---------------------+-------+",
+        "| c1 | c2    | c3    | c4                  | c5    |",
+        "+----+-------+-------+---------------------+-------+",
+        "| 1  | one   | 1.111 | 2001-01-01T01:01:01 |       |",
+        "| 2  | two   | 2.0   | 2002-02-02T02:02:02 | false |",
+        "| 3  | three | 3.0   |                     | false |",
+        "| 4  | four  | 4.0   |                     | false |",
+        "+----+-------+-------+---------------------+-------+",
     ];
 
     assert_batches_sorted_eq!(expected, &results);
@@ -163,16 +172,24 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
     ]));
 
+    // Have one row (5) be an append, followed by delete followed by append
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
             Arc::new(TimestampMicrosecondArray::from(vec![
-                1115269505000000,
-                1149573966000000,
+                None,
+                None,
+                Some(1115269505000000),
+                Some(1149573966000000),
             ])),
-            Arc::new(StringArray::from(vec![Some("five"), Some("six")])),
-            Arc::new(Int32Array::from(vec![5, 6])),
-            Arc::new(BooleanArray::from(vec![true, true])),
+            Arc::new(StringArray::from(vec![
+                Some("five"),
+                Some("five"),
+                Some("five"),
+                Some("six"),
+            ])),
+            Arc::new(Int32Array::from(vec![5, 5, 5, 6])),
+            Arc::new(BooleanArray::from(vec![true, false, true, true])),
         ],
     )?;
     cmd.sequence_number = 5600;
@@ -250,30 +267,35 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
     ]));
 
-    // Update a row from the first sequence, delete a row from the first sync in this sequence
+    // Update a row from the first sequence.
+    // Also delete a row from the first sync in this sequence with a pre-ceding change that just
+    // updates it (tests executing the last change per PK).
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Int32Array::from(vec![4, 9, 10, 6])),
+            Arc::new(Int32Array::from(vec![4, 9, 6, 10, 6])),
             Arc::new(TimestampMicrosecondArray::from(vec![
                 None,
                 Some(1252487349000000),
+                None,
                 Some(1286705410000000),
                 None,
             ])),
             Arc::new(BooleanArray::from(vec![
                 Some(true),
                 Some(false),
+                Some(true),
                 Some(false),
                 None,
             ])),
             Arc::new(StringArray::from(vec![
                 Some("four"),
                 Some("nine"),
+                Some("six"),
                 Some("ten"),
                 Some("six"),
             ])),
-            Arc::new(BooleanArray::from(vec![true, true, true, false])),
+            Arc::new(BooleanArray::from(vec![true, true, true, true, false])),
         ],
     )?;
     cmd.last = true;
@@ -293,19 +315,19 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     let results = ctx.collect(plan.clone()).await?;
 
     let expected = [
-        "+----+-------+-----+---------------------+-------+",
-        "| c1 | c2    | c3  | c4                  | c5    |",
-        "+----+-------+-----+---------------------+-------+",
-        "| 1  | one   | 1.1 | 2001-01-01T01:01:01 |       |",
-        "| 10 | ten   |     | 2010-10-10T10:10:10 | false |",
-        "| 2  | two   | 2.0 | 2002-02-02T02:02:02 | false |",
-        "| 3  | three | 3.0 |                     | false |",
-        "| 4  | four  | 4.4 |                     | true  |",
-        "| 5  | five  |     | 2005-05-05T05:05:05 |       |",
-        "| 7  | seven | 7.0 |                     |       |",
-        "| 8  | eight | 8.0 |                     |       |",
-        "| 9  | nine  |     | 2009-09-09T09:09:09 | false |",
-        "+----+-------+-----+---------------------+-------+",
+        "+----+-------+-------+---------------------+-------+",
+        "| c1 | c2    | c3    | c4                  | c5    |",
+        "+----+-------+-------+---------------------+-------+",
+        "| 1  | one   | 1.111 | 2001-01-01T01:01:01 |       |",
+        "| 10 | ten   |       | 2010-10-10T10:10:10 | false |",
+        "| 2  | two   | 2.0   | 2002-02-02T02:02:02 | false |",
+        "| 3  | three | 3.0   |                     | false |",
+        "| 4  | four  | 4.4   |                     | true  |",
+        "| 5  | five  |       | 2005-05-05T05:05:05 |       |",
+        "| 7  | seven | 7.0   |                     |       |",
+        "| 8  | eight | 8.0   |                     |       |",
+        "| 9  | nine  |       | 2009-09-09T09:09:09 | false |",
+        "+----+-------+-------+---------------------+-------+",
     ];
 
     assert_batches_sorted_eq!(expected, &results);
