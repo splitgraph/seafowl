@@ -35,7 +35,6 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         Field::new("c3", DataType::Float64, true),
         Field::new("c4", DataType::Timestamp(TimeUnit::Microsecond, None), true),
         Field::new("c5", DataType::Boolean, true),
-        Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, false),
     ]));
 
     let batch = RecordBatch::try_new(
@@ -49,7 +48,6 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
                 1012615322000000,
             ])),
             Arc::new(BooleanArray::from(vec![false, false])),
-            Arc::new(BooleanArray::from(vec![true, true])), // all-append batch
         ],
     )?;
 
@@ -57,7 +55,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     let mut cmd = DataSyncCommand {
         path: table_uuid.to_string(),
         store: None,
-        pk_columns: vec!["c1".to_string(), "c2".to_string()],
+        column_descriptors: vec![],
         origin: 42,
         sequence_number: 1234,
         last: false,
@@ -104,7 +102,6 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         Field::new("c3", DataType::Float64, true),
         Field::new("c5", DataType::Boolean, true),
         Field::new("c2", DataType::Utf8, false),
-        Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
     ]));
 
     // Update row 1 such that we omit the timestamp column (c4) and so it should inherit the old
@@ -129,7 +126,6 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
                 Some("four"),
                 Some("one"),
             ])),
-            Arc::new(BooleanArray::from(vec![true, true, true, true, true])),
         ],
     )?;
     cmd.last = true;
@@ -169,7 +165,6 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         Field::new("c4", DataType::Timestamp(TimeUnit::Microsecond, None), true),
         Field::new("c2", DataType::Utf8, false),
         Field::new("c1", DataType::Int32, false),
-        Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
     ]));
 
     // Have one row (5) be an append, followed by delete followed by append
@@ -189,7 +184,6 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
                 Some("six"),
             ])),
             Arc::new(Int32Array::from(vec![5, 5, 5, 6])),
-            Arc::new(BooleanArray::from(vec![true, false, true, true])),
         ],
     )?;
     cmd.sequence_number = 5600;
@@ -213,7 +207,6 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         Field::new("c2", DataType::Utf8, false),
         Field::new("c1", DataType::Int32, false),
         Field::new("c3", DataType::Float64, true),
-        Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
     ]));
 
     // Update a row from the first sequence
@@ -227,7 +220,6 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
             ])),
             Arc::new(Int32Array::from(vec![7, 4, 8])),
             Arc::new(Float64Array::from(vec![7.0, 4.4, 8.0])),
-            Arc::new(BooleanArray::from(vec![true, true, true])),
         ],
     )?;
     cmd.sequence_number = 78910;
@@ -264,7 +256,6 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         Field::new("c4", DataType::Timestamp(TimeUnit::Microsecond, None), true),
         Field::new("c5", DataType::Boolean, true),
         Field::new("c2", DataType::Utf8, false),
-        Field::new(SEAFOWL_SYNC_DATA_UD_FLAG, DataType::Boolean, true),
     ]));
 
     // Update a row from the first sequence.
@@ -295,7 +286,6 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
                 Some("ten"),
                 Some("six"),
             ])),
-            Arc::new(BooleanArray::from(vec![true, true, true, true, false])),
         ],
     )?;
     cmd.last = true;

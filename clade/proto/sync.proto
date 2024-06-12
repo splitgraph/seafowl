@@ -4,6 +4,22 @@ package clade.sync;
 
 import "schema.proto";
 
+enum ColumnRole {
+  // Denotes a column that that has the old value for a primary key column
+  OLD_PK = 0;
+  // Denotes a column that that has the new value for a primary key column
+  NEW_PK = 1;
+  // Denotes whether a particular column has changed in value
+  CHANGED = 2;
+  // Denotes the value of a non-PK column
+  VALUE = 3;
+}
+
+message ColumnDescriptor {
+  ColumnRole role = 1;
+  string name = 2;
+}
+
 message DataSyncCommand {
   // Path to the Delta Table, relative to the root URL of the store below.
   // Will be created based on the schema of the RecordBatch if doesn't exist.
@@ -13,9 +29,8 @@ message DataSyncCommand {
   // Root URL (e.g. s3://my-bucket) and connection options for the table's path
   schema.StorageLocation store = 2;
 
-  // Primary key columns. Must not be empty: the table must always
-  // have a replica identity / PK.
-  repeated string pk_columns = 3;
+  // Metadata about the columns in the RecordBatch
+  repeated ColumnDescriptor column_descriptors = 3;
 
   // Integer identifying data source
   uint64 origin = 4;

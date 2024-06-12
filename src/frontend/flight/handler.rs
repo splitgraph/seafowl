@@ -17,9 +17,8 @@ use tracing::{debug, error, info};
 use url::Url;
 
 use crate::context::SeafowlContext;
-use crate::frontend::flight::sync::SeafowlDataSyncManager;
+use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
 
-pub const SEAFOWL_SYNC_DATA_UD_FLAG: &str = "__seafowl_ud";
 pub const SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER: &str = "sequence";
 pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
 
@@ -42,7 +41,7 @@ lazy_static! {
 pub(super) struct SeafowlFlightHandler {
     pub context: Arc<SeafowlContext>,
     pub results: Arc<DashMap<String, Mutex<SendableRecordBatchStream>>>,
-    sync_manager: Arc<RwLock<SeafowlDataSyncManager>>,
+    sync_manager: Arc<RwLock<SeafowlDataSyncWriter>>,
 }
 
 impl SeafowlFlightHandler {
@@ -50,7 +49,7 @@ impl SeafowlFlightHandler {
         Self {
             context: context.clone(),
             results: Arc::new(Default::default()),
-            sync_manager: Arc::new(RwLock::new(SeafowlDataSyncManager::new(context))),
+            sync_manager: Arc::new(RwLock::new(SeafowlDataSyncWriter::new(context))),
         }
     }
 
@@ -156,7 +155,7 @@ impl SeafowlFlightHandler {
                         log_store,
                         cmd.sequence_number,
                         cmd.origin,
-                        cmd.pk_columns,
+                        cmd.column_descriptors,
                         cmd.last,
                         batches,
                     )

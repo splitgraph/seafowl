@@ -1,6 +1,5 @@
 use crate::frontend::flight::handler::{
     SeafowlFlightHandler, SEAFOWL_SQL_DATA, SEAFOWL_SYNC_CALL_MAX_ROWS,
-    SEAFOWL_SYNC_DATA_UD_FLAG,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_flight::decode::FlightRecordBatchStream;
@@ -17,7 +16,7 @@ use arrow_flight::{
     Ticket,
 };
 use async_trait::async_trait;
-use clade::sync::DataSyncCommand;
+use clade::sync::{ColumnRole, DataSyncCommand};
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -165,8 +164,8 @@ impl FlightSqlService for SeafowlFlightHandler {
         })?;
 
         // Validate primary columns are provided
-        if cmd.pk_columns.is_empty() {
-            let err = "Changes to tables without primary keys are not supported";
+        if cmd.column_descriptors.is_empty() {
+            let err = "Changes to tables without column descriptors are not supported";
             warn!(err);
             return Err(Status::unimplemented(err));
         }
@@ -180,24 +179,41 @@ impl FlightSqlService for SeafowlFlightHandler {
 
         if !batches.is_empty() {
             let schema = batches.first().unwrap().schema();
+            // TODO: validate all Changed column roles are not nullable
 
             // Validate all PKs contained in the batches schema
-            if cmd
-                .pk_columns
-                .iter()
-                .any(|pk| schema.column_with_name(pk).is_none())
-            {
+            if cmd.column_descriptors.len() != schema.all_fields().len() {
                 let err = format!(
-                    "Some PKs in {:?} not present in the schema {schema}",
-                    cmd.pk_columns
+                    "Column descriptors {:?} do not match the schema {schema}",
+                    cmd.column_descriptors
                 );
                 warn!(err);
                 return Err(Status::invalid_argument(err));
             }
 
-            // Validate upsert/delete flag column is present
-            if schema.all_fields().last().unwrap().name() != SEAFOWL_SYNC_DATA_UD_FLAG {
-                let err = format!("Change requested but batches do not contain upsert/delete flag as last column `{SEAFOWL_SYNC_DATA_UD_FLAG}`");
+            // Validate all PKs contained in the batches schema
+            let mut old_pks = false;
+            let mut new_pks = false;
+            for col_desc in &cmd.column_descriptors {
+                if schema.field_with_name(&col_desc.name).is_err() {
+                    let err = format!(
+                        "Column {} not present in the schema {schema}",
+                        col_desc.name
+                    );
+                    warn!(err);
+                    return Err(Status::invalid_argument(err));
+                }
+
+                match col_desc.get_role() {
+                    ColumnRole::OldPk => old_pks = true,
+                    ColumnRole::NewPk => new_pks = true,
+                    _ => {}
+                };
+            }
+
+            if !old_pks || !new_pks {
+                let err =
+                    "Change requested but batches do not contain old/new PK columns";
                 warn!(err);
                 return Err(Status::invalid_argument(err));
             }

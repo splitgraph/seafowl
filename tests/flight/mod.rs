@@ -32,7 +32,6 @@ use seafowl::config::context::{build_context, GRPC_REQUESTS};
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::SeafowlContext;
 use seafowl::frontend::flight::run_flight_server;
-use seafowl::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
 
 mod client;
 mod e2e;
