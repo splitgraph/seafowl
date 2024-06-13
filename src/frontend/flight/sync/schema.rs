@@ -15,11 +15,9 @@ impl SyncSchema {
         schema: SchemaRef,
     ) -> Result<Self, SyncError> {
         if column_descriptors.len() != schema.all_fields().len() {
-            let err = format!(
-                "Column descriptors {:?} do not match the schema {schema}",
-                column_descriptors
-            );
-            return Err(SyncError::SchemaError { reason: err });
+            return Err(SyncError::SchemaError {
+                reason: "Column descriptors do not match the schema".to_string(),
+            });
         }
 
         // Validate field role's are parsable, we have the correct number of old/new PKs,
@@ -60,7 +58,7 @@ impl SyncSchema {
                     return Err(SyncError::SchemaError { reason: err });
                 }
                 Err(err) => {
-                    let err = format!("Failed parsing role from field metadata: {err:?}");
+                    let err = format!("Failed parsing role: {err:?}");
                     warn!(err);
                     return Err(SyncError::SchemaError { reason: err });
                 }

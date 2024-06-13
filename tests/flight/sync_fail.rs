@@ -1,4 +1,5 @@
 use crate::flight::*;
+use clade::sync::{ColumnDescriptor, ColumnRole};
 
 async fn assert_sync_error(
     cmd: DataSyncCommand,
@@ -18,8 +19,11 @@ async fn assert_sync_error(
 async fn test_sync_errors() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (_ctx, mut client) = flight_server().await;
 
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
-
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "old_c1",
+        DataType::Int32,
+        true,
+    )]));
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![Arc::new(Int32Array::from(vec![1, 2]))],
@@ -35,30 +39,60 @@ async fn test_sync_errors() -> std::result::Result<(), Box<dyn std::error::Error
         last: true,
     };
 
-    // No PKs provided
+    // No column descriptors provided
     assert_sync_error(
         cmd.clone(),
         batch.clone(),
         &mut client,
-        "status: Unimplemented, message: \"Changes to tables without primary keys are not supported\""
+        r#"status: InvalidArgument, message: "Invalid sync schema: Column descriptors do not match the schema"#
     ).await;
 
-    // Non-existent PK column
-    cmd.column_descriptors = vec![];
+    // Provided column descriptors without new PKs
+    cmd.column_descriptors = vec![ColumnDescriptor {
+        role: ColumnRole::OldPk as i32,
+        name: "c1".to_string(),
+    }];
     assert_sync_error(
         cmd.clone(),
         batch.clone(),
         &mut client,
-        r#"status: InvalidArgument, message: "Some PKs in [\"c1\", \"c2\"] not present in the schema"#
+        r#"status: InvalidArgument, message: "Invalid sync schema: Change requested but batches do not contain old/new PK columns"#
     ).await;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("old_c1", DataType::Int32, true),
+        Field::new("new_c1", DataType::Int32, true),
+        Field::new("changed_c2", DataType::Boolean, true),
+    ]));
+    cmd.column_descriptors = vec![
+        ColumnDescriptor {
+            role: ColumnRole::OldPk as i32,
+            name: "c1".to_string(),
+        },
+        ColumnDescriptor {
+            role: ColumnRole::NewPk as i32,
+            name: "c1".to_string(),
+        },
+        ColumnDescriptor {
+            role: ColumnRole::Changed as i32,
+            name: "c2".to_string(),
+        },
+    ];
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(Int32Array::from(vec![2, 1])),
+            Arc::new(BooleanArray::from(vec![true, false])),
+        ],
+    )?;
 
     // Missing upsert/delete column
-    cmd.column_descriptors = vec![];
     assert_sync_error(
         cmd.clone(),
         batch.clone(),
         &mut client,
-        r#"status: InvalidArgument, message: "Change requested but batches do not contain upsert/delete flag as last column `__seafowl_ud`""#
+        r#"status: InvalidArgument, message: "Invalid sync schema: Field for column with `Changed` role can not be nullable: changed_c2""#
     ).await;
 
     Ok(())

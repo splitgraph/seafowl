@@ -16,7 +16,6 @@ use arrow_flight::{
     FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
     Ticket,
 };
-use arrow_schema::Schema;
 use async_trait::async_trait;
 use clade::sync::DataSyncCommand;
 use futures::Stream;
@@ -24,7 +23,6 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 use prost::Message;
 use std::pin::Pin;
-use std::sync::Arc;
 use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, warn};
@@ -173,7 +171,7 @@ impl FlightSqlService for SeafowlFlightHandler {
         .try_collect()
         .await?;
 
-        let schema = if !batches.is_empty() {
+        let sync_schema = if !batches.is_empty() {
             // Validate row count under prescribed limit
             if batches
                 .iter()
@@ -185,16 +183,19 @@ impl FlightSqlService for SeafowlFlightHandler {
                 return Err(Status::invalid_argument(err));
             }
 
-            batches.first().unwrap().schema()
+            Some(
+                SyncSchema::try_new(
+                    cmd.column_descriptors.clone(),
+                    batches.first().unwrap().schema(),
+                )
+                .map_err(|err| {
+                    warn!("{err}");
+                    Status::invalid_argument(err.to_string())
+                })?,
+            )
         } else {
-            Arc::new(Schema::empty())
+            None
         };
-
-        let sync_schema = SyncSchema::try_new(cmd.column_descriptors.clone(), schema)
-            .map_err(|err| {
-                warn!("{err}");
-                Status::internal(err.to_string())
-            })?;
 
         let put_result = self
             .process_sync_cmd(cmd.clone(), sync_schema, batches)

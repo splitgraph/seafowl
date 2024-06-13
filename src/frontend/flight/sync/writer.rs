@@ -531,7 +531,7 @@ impl SeafowlDataSyncWriter {
                     .collect::<Vec<_>>(),
                 None,
             )?
-            .filter(old_pk_nulls.is_not_null().and(new_pk_nulls).not())? // Remove deletes
+            .filter(old_pk_nulls.not().and(new_pk_nulls).not())? // Remove deletes
             .select(projection)?;
 
         Ok(input_df)

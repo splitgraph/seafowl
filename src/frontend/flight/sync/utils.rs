@@ -159,13 +159,20 @@ pub(super) fn compact_batches(
                 indices.insert(col_id, &new_pk_indices);
             }
             ColumnRole::Changed => {
-                // Insert the indices for both this column as well as for the actual changed
-                // Value column
+                // Insert the indices for both this column...
                 indices.insert(col_id, &changed_indices[0]);
-                indices.insert(
-                    schema.index_of(col.name()).expect("Field exists"),
-                    &changed_indices[0],
-                );
+
+                // ... as well as for the actual changed Value column
+                let changed_col_id = schema
+                    .index_of(
+                        sync_schema
+                            .column(col.name(), ColumnRole::Value)
+                            .unwrap()
+                            .field()
+                            .name(),
+                    )
+                    .expect("Field exists");
+                indices.insert(changed_col_id, &changed_indices[0]);
                 changed_pos += 1;
             }
             ColumnRole::Value => {
