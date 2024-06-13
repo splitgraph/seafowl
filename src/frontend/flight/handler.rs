@@ -17,6 +17,7 @@ use tracing::{debug, error, info};
 use url::Url;
 
 use crate::context::SeafowlContext;
+use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
 
 pub const SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER: &str = "sequence";
@@ -104,6 +105,7 @@ impl SeafowlFlightHandler {
     pub async fn process_sync_cmd(
         &self,
         cmd: DataSyncCommand,
+        sync_schema: SyncSchema,
         batches: Vec<RecordBatch>,
     ) -> Result<DataSyncResult> {
         let log_store = match cmd.store {
@@ -155,7 +157,7 @@ impl SeafowlFlightHandler {
                         log_store,
                         cmd.sequence_number,
                         cmd.origin,
-                        cmd.column_descriptors,
+                        sync_schema,
                         cmd.last,
                         batches,
                     )

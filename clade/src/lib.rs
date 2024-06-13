@@ -29,10 +29,4 @@ pub mod sync {
             }
         }
     }
-
-    impl ColumnDescriptor {
-        pub fn get_role(&self) -> ColumnRole {
-            ColumnRole::try_from(self.role).expect("ColumnRole is valid i32")
-        }
-    }
 }

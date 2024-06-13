@@ -1,14 +1,14 @@
 use arrow::array::RecordBatch;
 use arrow_schema::{SchemaBuilder, SchemaRef};
-use clade::sync::{ColumnDescriptor, ColumnRole};
+use clade::sync::ColumnRole;
 use datafusion::datasource::{provider_as_source, TableProvider};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::prelude::DataFrame;
-use datafusion_common::{Column, JoinType, Result, ScalarValue, ToDFSchema};
+use datafusion_common::{JoinType, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::Expr;
-use datafusion_expr::{col, is_null, lit, when, LogicalPlanBuilder, UNNAMED_TABLE};
+use datafusion_expr::{col, is_null, lit, when, LogicalPlanBuilder};
+use datafusion_expr::{is_true, Expr};
 use deltalake::kernel::{Action, Remove, Schema};
 use deltalake::logstore::LogStore;
 use deltalake::operations::create::CreateBuilder;
@@ -18,6 +18,7 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::ops::Not;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
@@ -26,6 +27,7 @@ use crate::context::delta::plan_to_object_store;
 
 use crate::context::SeafowlContext;
 use crate::frontend::flight::handler::SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER;
+use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::utils::{compact_batches, construct_qualifier};
 
 type Origin = u64;
@@ -118,7 +120,7 @@ pub(super) struct DataSyncItem {
     // Sequence number of this particular change and origin
     sequence_number: SequenceNumber,
     // Old and new primary keys, changed and value columns
-    pub(super) column_descriptors: Vec<ColumnDescriptor>,
+    pub(super) sync_schema: SyncSchema,
     // Record batch to replicate
     pub(super) batch: RecordBatch,
 }
@@ -152,7 +154,7 @@ impl SeafowlDataSyncWriter {
         log_store: Arc<dyn LogStore>,
         sequence_number: SequenceNumber,
         origin: Origin,
-        column_descriptors: Vec<ColumnDescriptor>,
+        sync_schema: SyncSchema,
         last: bool,
         batches: Vec<RecordBatch>,
     ) -> Result<(Option<SequenceNumber>, Option<SequenceNumber>)> {
@@ -181,20 +183,19 @@ impl SeafowlDataSyncWriter {
             })
             .or_insert(IndexMap::from([(sequence_number, sequence)]));
 
-        let batch = compact_batches(&column_descriptors, batches)?;
+        let batch = compact_batches(&sync_schema, batches)?;
         let size = batch.get_array_memory_size();
 
         // If there's no delta table at this location yet create one first.
         if !log_store.is_delta_table_location().await? {
             debug!("Creating new Delta table at location: {url}");
-            self.create_table(log_store.clone(), &column_descriptors, batch.schema())
-                .await?;
+            self.create_table(log_store.clone(), &sync_schema).await?;
         }
 
         let item = DataSyncItem {
             origin,
             sequence_number,
-            column_descriptors,
+            sync_schema,
             batch,
         };
         self.syncs
@@ -229,20 +230,16 @@ impl SeafowlDataSyncWriter {
     async fn create_table(
         &self,
         log_store: Arc<dyn LogStore>,
-        column_descriptors: &[ColumnDescriptor],
-        schema: SchemaRef,
+        sync_schema: &SyncSchema,
     ) -> Result<DeltaTable> {
         // Get the actual table schema by removing the OldPk and Changed column roles from the schema.
         let mut builder = SchemaBuilder::new();
-        column_descriptors
-            .iter()
-            .zip(schema.fields().iter())
-            .for_each(|(col_desc, field)| {
-                if matches!(col_desc.get_role(), ColumnRole::NewPk | ColumnRole::Value) {
-                    let field = field.as_ref().clone().with_name(col_desc.name.clone());
-                    builder.push(field);
-                }
-            });
+        sync_schema.columns().for_each(|col| {
+            if matches!(col.role(), ColumnRole::NewPk | ColumnRole::Value) {
+                let field = col.field().as_ref().clone().with_name(col.name());
+                builder.push(field);
+            }
+        });
 
         let delta_schema = Schema::try_from(&builder.finish())?;
 
@@ -324,7 +321,7 @@ impl SeafowlDataSyncWriter {
             sync_df = self.apply_sync(
                 full_schema.clone(),
                 sync_df,
-                &sync.column_descriptors,
+                &sync.sync_schema,
                 sync.batch.clone(),
             )?;
         }
@@ -409,19 +406,30 @@ impl SeafowlDataSyncWriter {
         &self,
         full_schema: SchemaRef,
         input_df: DataFrame,
-        column_descriptors: &[ColumnDescriptor],
+        sync_schema: &SyncSchema,
         data: RecordBatch,
     ) -> Result<DataFrame> {
-        let schema = data.schema();
-
         // Skip rows where both old and new primary keys are NULL, meaning a row inserted/updated
         // and deleted within the same sync message (so it shouldn't be in the input nor output)
-        let skip_nulls = column_descriptors
-            .iter()
-            .zip(schema.all_fields().iter())
-            .filter_map(|(col_desc, field)| {
-                if matches!(col_desc.get_role(), ColumnRole::OldPk | ColumnRole::NewPk) {
-                    Some(is_null(col(field.name())))
+        let old_pk_nulls = sync_schema
+            .columns()
+            .filter_map(|column| {
+                if column.role() == ColumnRole::OldPk {
+                    Some(is_null(col(column.field().name())))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<Expr>>()
+            .into_iter()
+            .reduce(|e1: Expr, e2| e1.and(e2))
+            .unwrap();
+
+        let new_pk_nulls = sync_schema
+            .columns()
+            .filter_map(|column| {
+                if column.role() == ColumnRole::NewPk {
+                    Some(is_null(col(column.field().name())))
                 } else {
                     None
                 }
@@ -432,20 +440,24 @@ impl SeafowlDataSyncWriter {
             .unwrap();
 
         // Construct the sync dataframe out of the record batch
-        let sync_df = self.context.inner.read_batch(data)?.filter(skip_nulls)?;
+        let sync_df = self
+            .context
+            .inner
+            .read_batch(data)?
+            .filter(old_pk_nulls.and(new_pk_nulls.clone()).not())?;
 
-        // These differ since the real column names are reflected in the ColumnDescriptor
-        let (input_pk_cols, sync_pk_columns): (Vec<&str>, Vec<&str>) = column_descriptors
-            .iter()
-            .zip(schema.all_fields().iter())
-            .filter_map(|(col_desc, field)| {
-                if matches!(col_desc.get_role(), ColumnRole::OldPk) {
-                    Some((col_desc.name.as_str(), field.name().as_str()))
+        // These differ since the physical column names are reflected in the ColumnDescriptor,
+        // while logical column names are found in the arrow fields
+        let (input_pk_cols, sync_pk_cols): (Vec<String>, Vec<String>) = sync_schema
+            .columns()
+            .filter_map(|column| {
+                if column.role() == ColumnRole::OldPk {
+                    Some((column.name().clone(), column.field().name().clone()))
                 } else {
                     None
                 }
             })
-            .collect::<Vec<(&str, &str)>>()
+            .collect::<Vec<(String, String)>>()
             .into_iter()
             .unzip();
 
@@ -456,9 +468,28 @@ impl SeafowlDataSyncWriter {
             .iter()
             .map(|f| {
                 let name = f.name();
-                Ok(if schema.column_with_name(name).is_some() {
-                    // If the row and column are present in the sync project its value
-                    Expr::Column(Column::new(Some(UNNAMED_TABLE), name))
+
+                let expr = if let Some(sync_col) = sync_schema
+                    .column(name, ColumnRole::Value)
+                    .or(sync_schema.column(name, ColumnRole::NewPk))
+                {
+                    if let Some(changed_sync_col) =
+                        sync_schema.column(name, ColumnRole::Changed)
+                    {
+                        // There is a Changed column denoting whether the column has changed
+                        when(
+                            is_true(col(changed_sync_col.field().name())),
+                            // If it's true take the new value
+                            col(sync_col.field().name()),
+                        )
+                        .otherwise(
+                            // If it's false take the old value
+                            col(name),
+                        )?
+                    } else {
+                        // Field doesn't have a Changed column, so just project the new value
+                        col(sync_col.field().name())
+                    }
                 } else {
                     when(
                         is_null(col(SYNC_JOIN_COLUMN)),
@@ -466,11 +497,12 @@ impl SeafowlDataSyncWriter {
                         lit(ScalarValue::Null.cast_to(f.data_type())?),
                     )
                     .otherwise(
-                        // Sync column doesn't exist but an old row does, project the old row
-                        Expr::Column(Column::new(Some(SYNC_REF), name)),
+                        // Sync column doesn't exist but an old value does so project it
+                        col(name),
                     )?
-                }
-                .alias_qualified(Some(SYNC_REF), name))
+                };
+
+                Ok(expr.alias(name))
             })
             .collect::<Result<_>>()?;
 
@@ -479,10 +511,17 @@ impl SeafowlDataSyncWriter {
             .join(
                 sync_df,
                 JoinType::Full,
-                &input_pk_cols,
-                &sync_pk_columns,
+                &input_pk_cols
+                    .iter()
+                    .map(|pk| pk.as_str())
+                    .collect::<Vec<_>>(),
+                &sync_pk_cols
+                    .iter()
+                    .map(|pk| pk.as_str())
+                    .collect::<Vec<_>>(),
                 None,
             )?
+            .filter(new_pk_nulls.not())? // Remove deletes
             .select(projection)?;
 
         Ok(input_df)
@@ -608,36 +647,26 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::context::test_utils::in_memory_context;
+    use crate::frontend::flight::sync::schema::SyncSchema;
     use crate::frontend::flight::sync::writer::{
         Origin, SeafowlDataSyncWriter, SequenceNumber,
     };
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use clade::sync::{ColumnDescriptor, ColumnRole};
     use rand::Rng;
     use rstest::rstest;
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    // Create a randomly sized vector of random record batches with
-    // a pre-defined schema
-    fn random_batches() -> Vec<RecordBatch> {
+    fn sync_schema() -> SyncSchema {
         let schema = Arc::new(Schema::new(vec![
             Field::new("old_c1", DataType::Int32, true),
             Field::new("new_c1", DataType::Int32, true),
             Field::new("value_c2", DataType::Float32, true),
         ]));
 
-        // Generate a random length between 1 and 3
-        let len: usize = rand::thread_rng().gen_range(1..=3);
-
-        (0..len)
-            .map(|_| create_random_batch(schema.clone(), 10, 0.2, 0.8).unwrap())
-            .collect()
-    }
-
-    fn column_descriptors() -> Vec<ColumnDescriptor> {
-        vec![
+        let column_descriptors = vec![
             ColumnDescriptor {
                 role: ColumnRole::OldPk as i32,
                 name: "c1".to_string(),
@@ -650,7 +679,20 @@ mod tests {
                 role: ColumnRole::Value as i32,
                 name: "c2".to_string(),
             },
-        ]
+        ];
+
+        SyncSchema::try_new(column_descriptors, schema).unwrap()
+    }
+
+    // Create a randomly sized vector of random record batches with
+    // a pre-defined schema
+    fn random_batches(schema: SchemaRef) -> Vec<RecordBatch> {
+        // Generate a random length between 1 and 3
+        let len: usize = rand::thread_rng().gen_range(1..=3);
+
+        (0..len)
+            .map(|_| create_random_batch(schema.clone(), 10, 0.2, 0.8).unwrap())
+            .collect()
     }
 
     const T1: &str = "table_1";
@@ -718,6 +760,7 @@ mod tests {
     ) {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
+        let sync_schema = sync_schema();
 
         let mut mem_seq = HashMap::from([(O1, None), (O2, None)]);
         let mut dur_seq = HashMap::from([(O1, None), (O2, None)]);
@@ -758,9 +801,9 @@ mod tests {
                     log_store,
                     *sequence as SequenceNumber,
                     *origin as Origin,
-                    column_descriptors(),
+                    sync_schema.clone(),
                     last,
-                    random_batches(),
+                    random_batches(sync_schema.arrow_schema()),
                 )
                 .await
                 .unwrap();

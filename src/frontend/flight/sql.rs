@@ -1,6 +1,7 @@
 use crate::frontend::flight::handler::{
     SeafowlFlightHandler, SEAFOWL_SQL_DATA, SEAFOWL_SYNC_CALL_MAX_ROWS,
 };
+use crate::frontend::flight::sync::schema::SyncSchema;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
@@ -15,13 +16,15 @@ use arrow_flight::{
     FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
     Ticket,
 };
+use arrow_schema::Schema;
 use async_trait::async_trait;
-use clade::sync::{ColumnRole, DataSyncCommand};
+use clade::sync::DataSyncCommand;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use prost::Message;
 use std::pin::Pin;
+use std::sync::Arc;
 use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, warn};
@@ -163,13 +166,6 @@ impl FlightSqlService for SeafowlFlightHandler {
             Status::invalid_argument(err)
         })?;
 
-        // Validate primary columns are provided
-        if cmd.column_descriptors.is_empty() {
-            let err = "Changes to tables without column descriptors are not supported";
-            warn!(err);
-            return Err(Status::unimplemented(err));
-        }
-
         // Extract the batches
         let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(
             request.into_inner().map_err(|e| e.into()),
@@ -177,47 +173,7 @@ impl FlightSqlService for SeafowlFlightHandler {
         .try_collect()
         .await?;
 
-        if !batches.is_empty() {
-            let schema = batches.first().unwrap().schema();
-            // TODO: validate all Changed column roles are not nullable
-
-            // Validate all PKs contained in the batches schema
-            if cmd.column_descriptors.len() != schema.all_fields().len() {
-                let err = format!(
-                    "Column descriptors {:?} do not match the schema {schema}",
-                    cmd.column_descriptors
-                );
-                warn!(err);
-                return Err(Status::invalid_argument(err));
-            }
-
-            // Validate all PKs contained in the batches schema
-            let mut old_pks = false;
-            let mut new_pks = false;
-            for col_desc in &cmd.column_descriptors {
-                if schema.field_with_name(&col_desc.name).is_err() {
-                    let err = format!(
-                        "Column {} not present in the schema {schema}",
-                        col_desc.name
-                    );
-                    warn!(err);
-                    return Err(Status::invalid_argument(err));
-                }
-
-                match col_desc.get_role() {
-                    ColumnRole::OldPk => old_pks = true,
-                    ColumnRole::NewPk => new_pks = true,
-                    _ => {}
-                };
-            }
-
-            if !old_pks || !new_pks {
-                let err =
-                    "Change requested but batches do not contain old/new PK columns";
-                warn!(err);
-                return Err(Status::invalid_argument(err));
-            }
-
+        let schema = if !batches.is_empty() {
             // Validate row count under prescribed limit
             if batches
                 .iter()
@@ -228,16 +184,26 @@ impl FlightSqlService for SeafowlFlightHandler {
                 warn!(err);
                 return Err(Status::invalid_argument(err));
             }
-        }
 
-        let put_result =
-            self.process_sync_cmd(cmd.clone(), batches)
-                .await
-                .map_err(|err| {
-                    let err = format!("Failed processing DoPut for {}: {err}", cmd.path);
-                    warn!(err);
-                    Status::internal(err)
-                })?;
+            batches.first().unwrap().schema()
+        } else {
+            Arc::new(Schema::empty())
+        };
+
+        let sync_schema = SyncSchema::try_new(cmd.column_descriptors.clone(), schema)
+            .map_err(|err| {
+                warn!("{err}");
+                Status::internal(err.to_string())
+            })?;
+
+        let put_result = self
+            .process_sync_cmd(cmd.clone(), sync_schema, batches)
+            .await
+            .map_err(|err| {
+                let err = format!("Failed processing DoPut for {}: {err}", cmd.path);
+                warn!(err);
+                Status::internal(err)
+            })?;
 
         Ok(Response::new(Box::pin(futures::stream::iter(vec![Ok(
             arrow_flight::PutResult {

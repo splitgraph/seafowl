@@ -1,9 +1,10 @@
+use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::writer::DataSyncCollection;
 use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, UInt64Array};
 use arrow::compute::{concat_batches, take};
 use arrow_row::{Row, RowConverter, Rows, SortField};
 use arrow_schema::SchemaRef;
-use clade::sync::{ColumnDescriptor, ColumnRole};
+use clade::sync::ColumnRole;
 use datafusion::physical_expr::expressions::{MaxAccumulator, MinAccumulator};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{lit, Accumulator, Expr};
@@ -38,7 +39,7 @@ fn rows(columns: Vec<ArrayRef>) -> Result<(Rows, Rows)> {
 // output batch (meaning the last NewPk and Value role columns and the last Value column where the
 // accompanying Changed field was `true`).
 pub(super) fn compact_batches(
-    column_descriptors: &[ColumnDescriptor],
+    sync_schema: &SyncSchema,
     data: Vec<RecordBatch>,
 ) -> Result<RecordBatch> {
     // Concatenate all the record batches into a single one
@@ -47,11 +48,11 @@ pub(super) fn compact_batches(
 
     // Get columns for a particular role
     let columns = |role: ColumnRole| -> Vec<ArrayRef> {
-        column_descriptors
-            .iter()
+        sync_schema
+            .columns()
             .zip(batch.columns().iter())
-            .filter_map(|(col_desc, array)| {
-                if col_desc.get_role() == role {
+            .filter_map(|(col, array)| {
+                if col.role() == role {
                     Some(array.clone())
                 } else {
                     None
@@ -149,38 +150,35 @@ pub(super) fn compact_batches(
         .collect::<Vec<_>>();
     let mut changed_pos = 0;
     let mut indices: HashMap<usize, &UInt64Array> = HashMap::new();
-    column_descriptors
-        .iter()
-        .enumerate()
-        .for_each(|(col_id, col_desc)| {
-            match col_desc.get_role() {
-                ColumnRole::OldPk => {
-                    indices.insert(col_id, &old_pk_indices);
-                }
-                ColumnRole::NewPk => {
-                    indices.insert(col_id, &new_pk_indices);
-                }
-                ColumnRole::Changed => {
-                    // Insert the indices for both this column as well as for the actual changed
-                    // Value column
-                    indices.insert(col_id, &changed_indices[0]);
-                    indices.insert(
-                        schema.index_of(&col_desc.name).expect("Field exists"),
-                        &changed_indices[0],
-                    );
-                    changed_pos += 1;
-                }
-                ColumnRole::Value => {
-                    indices.entry(col_id).or_insert(&new_pk_indices);
-                }
+    sync_schema.columns().enumerate().for_each(|(col_id, col)| {
+        match col.role() {
+            ColumnRole::OldPk => {
+                indices.insert(col_id, &old_pk_indices);
             }
-        });
+            ColumnRole::NewPk => {
+                indices.insert(col_id, &new_pk_indices);
+            }
+            ColumnRole::Changed => {
+                // Insert the indices for both this column as well as for the actual changed
+                // Value column
+                indices.insert(col_id, &changed_indices[0]);
+                indices.insert(
+                    schema.index_of(col.name()).expect("Field exists"),
+                    &changed_indices[0],
+                );
+                changed_pos += 1;
+            }
+            ColumnRole::Value => {
+                indices.entry(col_id).or_insert(&new_pk_indices);
+            }
+        }
+    });
 
     // Finally take the designated rows from each old PK, new PK, value and changed columns from the
     // batch
     let batch = RecordBatch::try_new(
         schema.clone(),
-        (0..column_descriptors.len())
+        (0..schema.fields().len())
             .map(|col_id| {
                 Ok(take(
                     batch.columns()[col_id].as_ref(),
@@ -206,14 +204,11 @@ pub(super) fn construct_qualifier(
         .syncs
         .iter()
         .flat_map(|sync| {
-            sync.column_descriptors
-                .iter()
-                .filter_map(|col_desc| {
-                    if matches!(
-                        col_desc.get_role(),
-                        ColumnRole::OldPk | ColumnRole::NewPk
-                    ) {
-                        Some(col_desc.name.clone())
+            sync.sync_schema
+                .columns()
+                .filter_map(|col| {
+                    if matches!(col.role(), ColumnRole::OldPk | ColumnRole::NewPk) {
+                        Some(col.name().to_string())
                     } else {
                         None
                     }
@@ -262,6 +257,7 @@ pub(super) fn construct_qualifier(
 
 #[cfg(test)]
 mod tests {
+    use crate::frontend::flight::sync::schema::SyncSchema;
     use crate::frontend::flight::sync::utils::compact_batches;
     use arrow::array::{
         BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
@@ -279,7 +275,7 @@ mod tests {
             Field::new("new_c1", DataType::Int32, true),
             Field::new("new_c2", DataType::Utf8, true),
             Field::new("value_c3", DataType::Float64, true),
-            Field::new("changed_c4", DataType::Boolean, true),
+            Field::new("changed_c4", DataType::Boolean, false),
             Field::new("value_c4", DataType::Utf8, true),
         ]));
 
@@ -306,13 +302,15 @@ mod tests {
             },
             ColumnDescriptor {
                 role: ColumnRole::Changed as i32,
-                name: "value_c4".to_string(),
+                name: "c4".to_string(),
             },
             ColumnDescriptor {
                 role: ColumnRole::Value as i32,
                 name: "c4".to_string(),
             },
         ];
+
+        let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
 
         // Test a batch with several edge cases with changes resulting in chains that
         let batch = RecordBatch::try_new(
@@ -401,7 +399,7 @@ mod tests {
         ];
         assert_batches_eq!(expected, &[batch.clone()]);
 
-        let compacted = compact_batches(&column_descriptors, vec![batch.clone()])?;
+        let compacted = compact_batches(&sync_schema, vec![batch.clone()])?;
 
         let expected = [
             "+--------+--------+--------+--------+----------+------------+----------+",
