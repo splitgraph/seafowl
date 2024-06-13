@@ -25,6 +25,7 @@ impl SyncSchema {
         // Validate field role's are parsable, we have the correct number of old/new PKs,
         // and Changed role is non-nullable boolean type which points to an existing column
         // TODO: Validate types on old and new PKS
+        // TODO: Validate a column can not be a PK and Value at the same time
         let mut old_pk_count = 0;
         let mut new_pk_count = 0;
         for (col_desc, field) in column_descriptors.iter().zip(schema.fields()) {

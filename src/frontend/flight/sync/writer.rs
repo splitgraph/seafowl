@@ -444,7 +444,7 @@ impl SeafowlDataSyncWriter {
             .context
             .inner
             .read_batch(data)?
-            .filter(old_pk_nulls.and(new_pk_nulls.clone()).not())?;
+            .filter(old_pk_nulls.clone().and(new_pk_nulls.clone()).not())?;
 
         // These differ since the physical column names are reflected in the ColumnDescriptor,
         // while logical column names are found in the arrow fields
@@ -473,31 +473,41 @@ impl SeafowlDataSyncWriter {
                     .column(name, ColumnRole::Value)
                     .or(sync_schema.column(name, ColumnRole::NewPk))
                 {
-                    if let Some(changed_sync_col) =
-                        sync_schema.column(name, ColumnRole::Changed)
-                    {
-                        // There is a Changed column denoting whether the column has changed
-                        when(
-                            is_true(col(changed_sync_col.field().name())),
-                            // If it's true take the new value
-                            col(sync_col.field().name()),
-                        )
-                        .otherwise(
-                            // If it's false take the old value
-                            col(name),
-                        )?
-                    } else {
-                        // Field doesn't have a Changed column, so just project the new value
-                        col(sync_col.field().name())
-                    }
+                    // The column is present in the sync schema...
+                    when(
+                        old_pk_nulls.clone().and(new_pk_nulls.clone()),
+                        // ...but the row doesn't exist in the sync, so inherit the old value
+                        col(name),
+                    )
+                    .otherwise(
+                        if let Some(changed_sync_col) =
+                            sync_schema.column(name, ColumnRole::Changed)
+                        {
+                            // ... and there is a `Changed` flag denoting whether the column has changed.
+                            when(
+                                is_true(col(changed_sync_col.field().name())),
+                                // If it's true take the new value
+                                col(sync_col.field().name()),
+                            )
+                            .otherwise(
+                                // If it's false take the old value
+                                col(name),
+                            )?
+                        } else {
+                            // ... and the sync has a new corresponding value without a `Changed` flag
+                            col(sync_col.field().name())
+                        },
+                    )?
                 } else {
                     when(
                         is_null(col(SYNC_JOIN_COLUMN)),
-                        // Neither the old row nor the sync column exist, project a NULL
+                        // Column is not present in the sync schema, and the old row doesn't exist
+                        // either, project a NULL
                         lit(ScalarValue::Null.cast_to(f.data_type())?),
                     )
                     .otherwise(
-                        // Sync column doesn't exist but an old value does so project it
+                        // Column is not present in the sync schema, but the old row does exist
+                        // so project its value
                         col(name),
                     )?
                 };
@@ -521,7 +531,7 @@ impl SeafowlDataSyncWriter {
                     .collect::<Vec<_>>(),
                 None,
             )?
-            .filter(new_pk_nulls.not())? // Remove deletes
+            .filter(old_pk_nulls.is_not_null().and(new_pk_nulls).not())? // Remove deletes
             .select(projection)?;
 
         Ok(input_df)
