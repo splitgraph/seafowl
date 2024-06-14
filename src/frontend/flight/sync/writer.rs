@@ -234,7 +234,7 @@ impl SeafowlDataSyncWriter {
     ) -> Result<DeltaTable> {
         // Get the actual table schema by removing the OldPk and Changed column roles from the schema.
         let mut builder = SchemaBuilder::new();
-        sync_schema.columns().for_each(|col| {
+        sync_schema.columns().iter().for_each(|col| {
             if matches!(col.role(), ColumnRole::NewPk | ColumnRole::Value) {
                 let field = col.field().as_ref().clone().with_name(col.name());
                 builder.push(field);

@@ -28,6 +28,7 @@ pub(super) fn compact_batches(
     let columns = |role: ColumnRole| -> (Vec<ArrayRef>, (Vec<SortField>, Vec<ArrayRef>)) {
         sync_schema
             .columns()
+            .iter()
             .zip(batch.columns().iter())
             .filter_map(|(col, array)| {
                 if col.role() == role {
@@ -150,36 +151,40 @@ pub(super) fn compact_batches(
         .collect::<Vec<_>>();
     let mut changed_pos = 0;
     let mut indices: HashMap<usize, &UInt64Array> = HashMap::new();
-    sync_schema.columns().enumerate().for_each(|(col_id, col)| {
-        match col.role() {
-            ColumnRole::OldPk => {
-                indices.insert(col_id, &old_pk_indices);
-            }
-            ColumnRole::NewPk => {
-                indices.insert(col_id, &new_pk_indices);
-            }
-            ColumnRole::Changed => {
-                // Insert the indices for both this column...
-                indices.insert(col_id, &changed_indices[0]);
+    sync_schema
+        .columns()
+        .iter()
+        .enumerate()
+        .for_each(|(col_id, col)| {
+            match col.role() {
+                ColumnRole::OldPk => {
+                    indices.insert(col_id, &old_pk_indices);
+                }
+                ColumnRole::NewPk => {
+                    indices.insert(col_id, &new_pk_indices);
+                }
+                ColumnRole::Changed => {
+                    // Insert the indices for both this column...
+                    indices.insert(col_id, &changed_indices[0]);
 
-                // ... as well as for the actual changed Value column
-                let changed_col_id = schema
-                    .index_of(
-                        sync_schema
-                            .column(col.name(), ColumnRole::Value)
-                            .unwrap()
-                            .field()
-                            .name(),
-                    )
-                    .expect("Field exists");
-                indices.insert(changed_col_id, &changed_indices[0]);
-                changed_pos += 1;
+                    // ... as well as for the actual changed Value column
+                    let changed_col_id = schema
+                        .index_of(
+                            sync_schema
+                                .column(col.name(), ColumnRole::Value)
+                                .unwrap()
+                                .field()
+                                .name(),
+                        )
+                        .expect("Field exists");
+                    indices.insert(changed_col_id, &changed_indices[0]);
+                    changed_pos += 1;
+                }
+                ColumnRole::Value => {
+                    indices.entry(col_id).or_insert(&new_pk_indices);
+                }
             }
-            ColumnRole::Value => {
-                indices.entry(col_id).or_insert(&new_pk_indices);
-            }
-        }
-    });
+        });
 
     // Finally take the designated rows from each old PK, new PK, value and changed columns from the
     // batch
@@ -213,6 +218,7 @@ pub(super) fn construct_qualifier(
         .flat_map(|sync| {
             sync.sync_schema
                 .columns()
+                .iter()
                 .filter_map(|col| {
                     if matches!(col.role(), ColumnRole::OldPk | ColumnRole::NewPk) {
                         Some(col.name().to_string())

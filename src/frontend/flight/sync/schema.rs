@@ -3,10 +3,10 @@ use arrow_schema::{DataType, FieldRef, SchemaRef};
 use clade::sync::{ColumnDescriptor, ColumnRole};
 use std::collections::HashSet;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct SyncSchema {
-    column_descriptors: Vec<ColumnDescriptor>,
     schema: SchemaRef,
+    columns: Vec<SyncColumn>,
 }
 
 impl SyncSchema {
@@ -81,10 +81,17 @@ impl SyncSchema {
             });
         }
 
-        Ok(Self {
-            column_descriptors,
-            schema,
-        })
+        let columns = column_descriptors
+            .iter()
+            .zip(schema.fields())
+            .map(|(column_descriptor, field)| SyncColumn {
+                role: column_descriptor.role(),
+                name: column_descriptor.name.clone(),
+                field: field.clone(),
+            })
+            .collect();
+
+        Ok(Self { schema, columns })
     }
 
     #[allow(dead_code)]
@@ -92,35 +99,31 @@ impl SyncSchema {
         self.schema.clone()
     }
 
-    pub fn column(&self, name: &str, role: ColumnRole) -> Option<SyncColumn> {
+    pub fn column(&self, name: &str, role: ColumnRole) -> Option<&SyncColumn> {
         self.columns()
+            .iter()
             .find(|col| col.name == name && col.role == role)
     }
 
-    pub fn columns(&self) -> impl Iterator<Item = SyncColumn> + '_ {
-        self.column_descriptors
-            .iter()
-            .zip(self.schema.fields())
-            .map(|(column_descriptor, field)| SyncColumn {
-                role: column_descriptor.role(),
-                name: column_descriptor.name.clone(),
-                field: field.clone(),
-            })
+    pub fn columns(&self) -> &[SyncColumn] {
+        &self.columns
     }
 
     // Map over all columns with a specific role
     pub fn map_columns<F, T>(&self, role: ColumnRole, f: F) -> Vec<T>
     where
         Self: Sized,
-        F: FnMut(SyncColumn) -> T,
+        F: FnMut(&SyncColumn) -> T,
     {
-        self.columns()
+        self.columns
+            .iter()
             .filter(|sc| sc.role == role)
             .map(f)
             .collect::<Vec<T>>()
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct SyncColumn {
     role: ColumnRole,
     name: String,
