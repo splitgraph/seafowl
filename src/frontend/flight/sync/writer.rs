@@ -412,29 +412,13 @@ impl SeafowlDataSyncWriter {
         // Skip rows where both old and new primary keys are NULL, meaning a row inserted/updated
         // and deleted within the same sync message (so it shouldn't be in the input nor output)
         let old_pk_nulls = sync_schema
-            .columns()
-            .filter_map(|column| {
-                if column.role() == ColumnRole::OldPk {
-                    Some(is_null(col(column.field().name())))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<Expr>>()
+            .map_columns(ColumnRole::OldPk, |c| is_null(col(c.field().name())))
             .into_iter()
             .reduce(|e1: Expr, e2| e1.and(e2))
             .unwrap();
 
         let new_pk_nulls = sync_schema
-            .columns()
-            .filter_map(|column| {
-                if column.role() == ColumnRole::NewPk {
-                    Some(is_null(col(column.field().name())))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<Expr>>()
+            .map_columns(ColumnRole::NewPk, |c| is_null(col(c.field().name())))
             .into_iter()
             .reduce(|e1: Expr, e2| e1.and(e2))
             .unwrap();
@@ -449,15 +433,9 @@ impl SeafowlDataSyncWriter {
         // These differ since the physical column names are reflected in the ColumnDescriptor,
         // while logical column names are found in the arrow fields
         let (input_pk_cols, sync_pk_cols): (Vec<String>, Vec<String>) = sync_schema
-            .columns()
-            .filter_map(|column| {
-                if column.role() == ColumnRole::OldPk {
-                    Some((column.name().clone(), column.field().name().clone()))
-                } else {
-                    None
-                }
+            .map_columns(ColumnRole::OldPk, |c| {
+                (c.name().clone(), c.field().name().clone())
             })
-            .collect::<Vec<(String, String)>>()
             .into_iter()
             .unzip();
 

@@ -107,6 +107,18 @@ impl SyncSchema {
                 field: field.clone(),
             })
     }
+
+    // Map over all columns with a specific role
+    pub fn map_columns<F, T>(&self, role: ColumnRole, f: F) -> Vec<T>
+    where
+        Self: Sized,
+        F: FnMut(SyncColumn) -> T,
+    {
+        self.columns()
+            .filter(|sc| sc.role == role)
+            .map(f)
+            .collect::<Vec<T>>()
+    }
 }
 
 pub struct SyncColumn {
