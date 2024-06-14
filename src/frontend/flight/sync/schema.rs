@@ -1,7 +1,7 @@
 use crate::frontend::flight::sync::SyncError;
 use arrow_schema::{DataType, FieldRef, SchemaRef};
 use clade::sync::{ColumnDescriptor, ColumnRole};
-use tracing::warn;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct SyncSchema {
@@ -22,14 +22,17 @@ impl SyncSchema {
 
         // Validate field role's are parsable, we have the correct number of old/new PKs,
         // and Changed role is non-nullable boolean type which points to an existing column
-        // TODO: Validate types on old and new PKS
         // TODO: Validate a column can not be a PK and Value at the same time
-        let mut old_pk_count = 0;
-        let mut new_pk_count = 0;
+        let mut old_pk_types = HashSet::new();
+        let mut new_pk_types = HashSet::new();
         for (col_desc, field) in column_descriptors.iter().zip(schema.fields()) {
             match ColumnRole::try_from(col_desc.role) {
-                Ok(ColumnRole::OldPk) => old_pk_count += 1,
-                Ok(ColumnRole::NewPk) => new_pk_count += 1,
+                Ok(ColumnRole::OldPk) => {
+                    old_pk_types.insert((&col_desc.name, field.data_type().clone()));
+                }
+                Ok(ColumnRole::NewPk) => {
+                    new_pk_types.insert((&col_desc.name, field.data_type().clone()));
+                }
                 Ok(ColumnRole::Value) => {}
                 Ok(ColumnRole::Changed) => {
                     let err = if field.data_type() != &DataType::Boolean {
@@ -54,21 +57,27 @@ impl SyncSchema {
                         // All good
                         continue;
                     };
-                    warn!(err);
                     return Err(SyncError::SchemaError { reason: err });
                 }
                 Err(err) => {
-                    let err = format!("Failed parsing role: {err:?}");
-                    warn!(err);
-                    return Err(SyncError::SchemaError { reason: err });
+                    return Err(SyncError::SchemaError {
+                        reason: format!("Failed parsing role: {err:?}"),
+                    });
                 }
             }
         }
-        if old_pk_count == 0 || new_pk_count == 0 || old_pk_count != new_pk_count {
-            let err = "Change requested but batches do not contain old/new PK columns";
-            warn!(err);
+
+        if old_pk_types.is_empty() || new_pk_types.is_empty() {
             return Err(SyncError::SchemaError {
-                reason: err.to_string(),
+                reason: "Change requested but batches do not contain old/new PK columns"
+                    .to_string(),
+            });
+        }
+
+        if old_pk_types != new_pk_types {
+            return Err(SyncError::SchemaError {
+                reason: "Change requested but old and new PK columns are not the same"
+                    .to_string(),
             });
         }
 

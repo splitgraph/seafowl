@@ -2,7 +2,7 @@ use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::writer::DataSyncCollection;
 use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, UInt64Array};
 use arrow::compute::{concat_batches, take};
-use arrow_row::{Row, RowConverter, Rows, SortField};
+use arrow_row::{Row, RowConverter, SortField};
 use arrow_schema::SchemaRef;
 use clade::sync::ColumnRole;
 use datafusion::physical_expr::expressions::{MaxAccumulator, MinAccumulator};
@@ -10,28 +10,6 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{lit, Accumulator, Expr};
 use itertools::Itertools;
 use std::collections::{HashMap, VecDeque};
-
-// Get rows out of the provided columns, and a null row for comparisons
-fn rows(columns: Vec<ArrayRef>) -> Result<(Rows, Rows)> {
-    let (fields, nulls): (Vec<SortField>, Vec<ArrayRef>) = columns
-        .iter()
-        .map(|array| {
-            let data_type = array.data_type();
-            (
-                SortField::new(data_type.clone()),
-                new_null_array(data_type, 1),
-            )
-        })
-        .collect::<Vec<_>>()
-        .into_iter()
-        .unzip();
-
-    let converter = RowConverter::new(fields)?;
-    Ok((
-        converter.convert_columns(&columns)?,
-        converter.convert_columns(&nulls)?,
-    ))
-}
 
 // Compact a set of record batches into a single one, squashing any chain of changes to a given row
 // into a single row in the output batch.
@@ -46,25 +24,47 @@ pub(super) fn compact_batches(
     let schema = data.first().unwrap().schema();
     let batch = concat_batches(&schema, &data)?;
 
-    // Get columns for a particular role
-    let columns = |role: ColumnRole| -> Vec<ArrayRef> {
+    // Get columns, sort fields and null arrays for a particular role
+    let columns = |role: ColumnRole| -> (Vec<ArrayRef>, (Vec<SortField>, Vec<ArrayRef>)) {
         sync_schema
             .columns()
             .zip(batch.columns().iter())
             .filter_map(|(col, array)| {
                 if col.role() == role {
-                    Some(array.clone())
+                    let data_type = array.data_type();
+                    Some((
+                        array.clone(),
+                        (
+                            SortField::new(data_type.clone()),
+                            new_null_array(data_type, 1),
+                        ),
+                    ))
                 } else {
                     None
                 }
             })
-            .collect()
+            .unzip()
     };
 
-    let (old_pks, _) = rows(columns(ColumnRole::OldPk))?;
-    let (new_pks, new_nulls) = rows(columns(ColumnRole::NewPk))?;
+    let (old_pk_cols, (sort_fields, nulls)) = columns(ColumnRole::OldPk);
+    let (new_pk_cols, _) = columns(ColumnRole::NewPk);
 
-    let changed_binding = columns(ColumnRole::Changed);
+    // NB: we must use the same row converter in order to compare fields, or else the comparison
+    // might not make sense:
+    // https://github.com/apache/arrow-rs/blob/956fe76731b80f62559e6290cfe6fb360794c3ce/arrow-row/src/lib.rs#L47-L48
+    //
+    // In our case this also necessitates that we use the same sort fields for both old and new PKs
+    // and so need to validate this during `SyncSchema` construction.
+    //
+    // If we ever need to support PK evolution this could be achieved by projecting any missing
+    // columns as nulls before constructing the rows.
+    let converter = RowConverter::new(sort_fields)?;
+    let old_pks = converter.convert_columns(&old_pk_cols)?;
+    let new_pks = converter.convert_columns(&new_pk_cols)?;
+    let null_rows = converter.convert_columns(&nulls)?;
+    let nulls = null_rows.row(0);
+
+    let (changed_binding, _) = columns(ColumnRole::Changed);
     let changed = changed_binding
         .iter()
         .map(|array| {
@@ -75,11 +75,11 @@ pub(super) fn compact_batches(
         })
         .collect::<Vec<_>>();
 
-    // Iterate through pairs of old and new PKs, keeping track of any chains that appear and
-    // denoting those with the same chain ID in a new column.
+    // Iterate through pairs of old and new PKs, keeping track of any change chains that appear,
+    // denoting each chain with the same ID, and appending or updating the relevant row id for
+    // columns. There are 3 categories of columns for which we track row ids: old PKs, new PKs, and
+    // changed columns.
     let mut chain_count = 0;
-
-    // Map of compacted changes, with row ids for the old PK, new PK and changed rows
     let mut column_rows: Vec<(u64, u64, Vec<u64>)> = vec![];
     let mut pk_chains: HashMap<Row, usize> = HashMap::new();
 
@@ -99,7 +99,7 @@ pub(super) fn compact_batches(
                             *row = row_id as u64;
                         }
                     });
-                if new_pk != new_nulls.row(0) {
+                if new_pk != nulls {
                     // If the new PK is not null keep pointing to the same chain ID, since
                     // otherwise the chain ends by row deletion, and so we don't need to update
                     // its column_rows anymore
@@ -115,7 +115,7 @@ pub(super) fn compact_batches(
                     row_id as u64,
                     changed.iter().map(|_| row_id as u64).collect(),
                 ));
-                if new_pk != new_nulls.row(0) {
+                if new_pk != nulls {
                     pk_chains.insert(new_pk, chain_count);
                 }
                 chain_count += 1;
