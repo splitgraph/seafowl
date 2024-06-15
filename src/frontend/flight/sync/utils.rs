@@ -278,6 +278,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use clade::sync::{ColumnDescriptor, ColumnRole};
     use datafusion_common::assert_batches_eq;
+    use itertools::Itertools;
     use std::sync::Arc;
 
     #[test]
@@ -325,73 +326,95 @@ mod tests {
 
         let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
 
+        // Setup the test data in row order for simpler extension
+        let (old_c1, old_c2, new_c1, new_c2, value_c3, changed_c4, value_c4): (
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+        ) = vec![
+            (
+                None,
+                None,
+                Some(1),
+                Some("one"),
+                Some(1.0),
+                Some(false),
+                None,
+            ),
+            (
+                None,
+                None,
+                Some(2),
+                Some("two"),
+                Some(2.0),
+                Some(true),
+                Some("two"),
+            ),
+            (
+                Some(1),
+                Some("one"),
+                Some(1),
+                Some("one"),
+                Some(1.1),
+                Some(true),
+                Some("one"),
+            ),
+            (
+                Some(2),
+                Some("two"),
+                Some(2),
+                Some("2"),
+                Some(2.1),
+                Some(false),
+                None,
+            ),
+            (
+                Some(3),
+                Some("three"),
+                Some(3),
+                Some("three"),
+                Some(3.3),
+                Some(true),
+                Some("three"),
+            ),
+            (
+                Some(4),
+                Some("four"),
+                Some(4),
+                Some("four"),
+                Some(4.0),
+                Some(false),
+                Some("four"),
+            ),
+            (
+                Some(1),
+                Some("one"),
+                Some(1),
+                Some("1"),
+                Some(1.2),
+                Some(true),
+                None,
+            ),
+            (Some(3), Some("three"), None, None, None, Some(false), None),
+        ]
+        .into_iter()
+        .multiunzip();
+
         // Test a batch with several edge cases with changes resulting in chains that
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from(vec![
-                    None,
-                    None,
-                    Some(1),
-                    Some(2),
-                    Some(3),
-                    Some(4),
-                    Some(1),
-                    Some(3),
-                ])),
-                Arc::new(StringArray::from(vec![
-                    None,
-                    None,
-                    Some("one"),
-                    Some("two"),
-                    Some("three"),
-                    Some("four"),
-                    Some("one"),
-                    Some("three"),
-                ])),
-                Arc::new(Int32Array::from(vec![
-                    Some(1),
-                    Some(2),
-                    Some(1),
-                    Some(2),
-                    Some(3),
-                    Some(4),
-                    Some(1),
-                    None,
-                ])),
-                Arc::new(StringArray::from(vec![
-                    Some("one"),
-                    Some("two"),
-                    Some("one"),
-                    Some("2"),
-                    Some("three"),
-                    Some("four"),
-                    Some("1"),
-                    None,
-                ])),
-                Arc::new(Float64Array::from(vec![
-                    Some(1.0),
-                    Some(2.0),
-                    Some(1.1),
-                    Some(2.1),
-                    Some(3.3),
-                    Some(4.0),
-                    Some(1.2),
-                    None,
-                ])),
-                Arc::new(BooleanArray::from(vec![
-                    false, true, true, false, true, false, true, false,
-                ])),
-                Arc::new(StringArray::from(vec![
-                    None,
-                    Some("two"),
-                    Some("one"),
-                    None,
-                    Some("three"),
-                    Some("four"),
-                    None,
-                    None,
-                ])),
+                Arc::new(Int32Array::from(old_c1)),
+                Arc::new(StringArray::from(old_c2)),
+                Arc::new(Int32Array::from(new_c1)),
+                Arc::new(StringArray::from(new_c2)),
+                Arc::new(Float64Array::from(value_c3)),
+                Arc::new(BooleanArray::from(changed_c4)),
+                Arc::new(StringArray::from(value_c4)),
             ],
         )?;
 
