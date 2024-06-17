@@ -116,9 +116,9 @@ pub(super) struct DataSyncCollection {
 #[derive(Debug, Clone)]
 pub(super) struct DataSyncItem {
     // Identifier of the origin where the change stems from
-    origin: Origin,
+    pub(super) origin: Origin,
     // Sequence number of this particular change and origin
-    sequence_number: SequenceNumber,
+    pub(super) sequence_number: SequenceNumber,
     // Old and new primary keys, changed and value columns
     pub(super) sync_schema: SyncSchema,
     // Record batch to replicate
@@ -304,7 +304,7 @@ impl SeafowlDataSyncWriter {
         let full_schema = TableProvider::schema(&table);
 
         // Generate a qualifier expression for pruning partition files and filtering the base scan
-        let qualifier = construct_qualifier(full_schema.clone(), entry)?;
+        let qualifier = construct_qualifier(&entry.syncs)?;
 
         // Iterate through all syncs for this table and construct a full plan by applying each
         // individual sync
