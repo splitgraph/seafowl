@@ -219,13 +219,13 @@ pub(super) fn construct_qualifier(syncs: &[DataSyncItem]) -> Result<Expr> {
     // Initialize the min/max accumulators for the primary key columns needed to prune the table
     // files.
     // The assumption here is that the primary key columns are the same across all syncs.
-    let mut min_max_values: HashMap<String, (MinAccumulator, MaxAccumulator)> = syncs
+    let mut min_max_values: Vec<(String, (MinAccumulator, MaxAccumulator))> = syncs
         .first()
         .expect("At least one sync item in the queue")
         .sync_schema
         .columns()
         .iter()
-        .filter(|col| matches!(col.role(), ColumnRole::OldPk | ColumnRole::NewPk))
+        .filter(|col| col.role() == ColumnRole::OldPk)
         .map(|col| {
             Ok((
                 col.name().clone(),
@@ -271,7 +271,7 @@ pub(super) fn construct_qualifier(syncs: &[DataSyncItem]) -> Result<Expr> {
     Ok(min_max_values
         .iter_mut()
         .map(|(pk_col, (min_value, max_value))| {
-            Ok(col(pk_col)
+            Ok(col(pk_col.as_str())
                 .between(lit(min_value.evaluate()?), lit(max_value.evaluate()?)))
         })
         .collect::<Result<Vec<Expr>>>()?
@@ -628,7 +628,7 @@ mod tests {
             DataSyncItem {
                 origin: 0,
                 sequence_number: 0,
-                sync_schema: sync_schema.clone(),
+                sync_schema,
                 batch: batch_2,
             },
         ])?;
