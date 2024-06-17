@@ -647,7 +647,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    fn sync_schema() -> SyncSchema {
+    fn sync_schema() -> (SchemaRef, SyncSchema) {
         let schema = Arc::new(Schema::new(vec![
             Field::new("old_c1", DataType::Int32, true),
             Field::new("new_c1", DataType::Int32, true),
@@ -669,7 +669,10 @@ mod tests {
             },
         ];
 
-        SyncSchema::try_new(column_descriptors, schema).unwrap()
+        (
+            schema.clone(),
+            SyncSchema::try_new(column_descriptors, schema).unwrap(),
+        )
     }
 
     // Create a randomly sized vector of random record batches with
@@ -748,7 +751,7 @@ mod tests {
     ) {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
-        let sync_schema = sync_schema();
+        let (arrow_schema, sync_schema) = sync_schema();
 
         let mut mem_seq = HashMap::from([(O1, None), (O2, None)]);
         let mut dur_seq = HashMap::from([(O1, None), (O2, None)]);
@@ -791,7 +794,7 @@ mod tests {
                     *origin as Origin,
                     sync_schema.clone(),
                     last,
-                    random_batches(sync_schema.arrow_schema()),
+                    random_batches(arrow_schema.clone()),
                 )
                 .await
                 .unwrap();

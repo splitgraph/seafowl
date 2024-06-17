@@ -5,7 +5,6 @@ use std::collections::HashSet;
 
 #[derive(Clone, Debug)]
 pub struct SyncSchema {
-    schema: SchemaRef,
     columns: Vec<SyncColumn>,
 }
 
@@ -91,12 +90,7 @@ impl SyncSchema {
             })
             .collect();
 
-        Ok(Self { schema, columns })
-    }
-
-    #[allow(dead_code)]
-    pub fn arrow_schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Ok(Self { columns })
     }
 
     pub fn column(&self, name: &str, role: ColumnRole) -> Option<&SyncColumn> {
