@@ -273,21 +273,109 @@ mod tests {
     use crate::frontend::flight::sync::schema::SyncSchema;
     use crate::frontend::flight::sync::utils::compact_batches;
     use arrow::array::{
-        BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
+        BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray, UInt8Array,
     };
     use arrow_schema::{DataType, Field, Schema};
     use clade::sync::{ColumnDescriptor, ColumnRole};
     use datafusion_common::assert_batches_eq;
     use itertools::Itertools;
+    use rand::distributions::{Alphanumeric, DistString, Distribution, WeightedIndex};
+    use rand::seq::IteratorRandom;
+    use rand::Rng;
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     #[test]
     fn test_batch_compaction() -> Result<(), Box<dyn std::error::Error>> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("old_c1", DataType::Int32, true),
-            Field::new("old_c2", DataType::Utf8, true),
             Field::new("new_c1", DataType::Int32, true),
-            Field::new("new_c2", DataType::Utf8, true),
+            Field::new("value_c2", DataType::Float64, true),
+            Field::new("changed_c3", DataType::Boolean, false),
+            Field::new("value_c3", DataType::Utf8, true),
+        ]));
+
+        let column_descriptors = vec![
+            ColumnDescriptor {
+                role: ColumnRole::OldPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::NewPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c2".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c3".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c3".to_string(),
+            },
+        ];
+
+        let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
+
+        // Setup the test data in row order for simpler extension
+        let (old_c1, new_c1, val_c2, chg_c3, val_c3): (
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+        ) = vec![
+            (None, Some(1), Some(1.0), Some(false), None),
+            (None, Some(2), Some(2.0), Some(true), Some("two")),
+            (Some(1), Some(1), Some(1.1), Some(true), Some("one")),
+            (Some(2), Some(-2), Some(2.1), Some(false), None),
+            (Some(3), Some(3), Some(3.3), Some(true), Some("three")),
+            (Some(4), Some(4), Some(4.0), Some(false), Some("four")),
+            (Some(1), Some(2), Some(1.2), Some(true), None),
+            (Some(3), None, None, Some(false), None),
+        ]
+        .into_iter()
+        .multiunzip();
+
+        // Test a batch with several edge cases with changes resulting in chains that
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(old_c1)),
+                Arc::new(Int32Array::from(new_c1)),
+                Arc::new(Float64Array::from(val_c2)),
+                Arc::new(BooleanArray::from(chg_c3)),
+                Arc::new(StringArray::from(val_c3)),
+            ],
+        )?;
+
+        let compacted = compact_batches(&sync_schema, vec![batch.clone()])?;
+
+        let expected = [
+            "+--------+--------+----------+------------+----------+",
+            "| old_c1 | new_c1 | value_c2 | changed_c3 | value_c3 |",
+            "+--------+--------+----------+------------+----------+",
+            "|        | 2      | 1.2      | true       |          |",
+            "|        | -2     | 2.1      | true       | two      |",
+            "| 3      |        |          | true       | three    |",
+            "| 4      | 4      | 4.0      | false      | four     |",
+            "+--------+--------+----------+------------+----------+",
+        ];
+        assert_batches_eq!(expected, &[compacted]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn fuzz_batch_compaction() -> Result<(), Box<dyn std::error::Error>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("old_c1", DataType::UInt8, true),
+            Field::new("old_c2", DataType::UInt8, true),
+            Field::new("new_c1", DataType::UInt8, true),
+            Field::new("new_c2", DataType::UInt8, true),
             Field::new("value_c3", DataType::Float64, true),
             Field::new("changed_c4", DataType::Boolean, false),
             Field::new("value_c4", DataType::Utf8, true),
@@ -326,128 +414,131 @@ mod tests {
 
         let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
 
-        // Setup the test data in row order for simpler extension
-        let (old_c1, old_c2, new_c1, new_c2, value_c3, changed_c4, value_c4): (
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-        ) = vec![
-            (
-                None,
-                None,
-                Some(1),
-                Some("one"),
-                Some(1.0),
-                Some(false),
-                None,
-            ),
-            (
-                None,
-                None,
-                Some(2),
-                Some("two"),
-                Some(2.0),
-                Some(true),
-                Some("two"),
-            ),
-            (
-                Some(1),
-                Some("one"),
-                Some(1),
-                Some("one"),
-                Some(1.1),
-                Some(true),
-                Some("one"),
-            ),
-            (
-                Some(2),
-                Some("two"),
-                Some(2),
-                Some("2"),
-                Some(2.1),
-                Some(false),
-                None,
-            ),
-            (
-                Some(3),
-                Some("three"),
-                Some(3),
-                Some("three"),
-                Some(3.3),
-                Some(true),
-                Some("three"),
-            ),
-            (
-                Some(4),
-                Some("four"),
-                Some(4),
-                Some("four"),
-                Some(4.0),
-                Some(false),
-                Some("four"),
-            ),
-            (
-                Some(1),
-                Some("one"),
-                Some(1),
-                Some("1"),
-                Some(1.2),
-                Some(true),
-                None,
-            ),
-            (Some(3), Some("three"), None, None, None, Some(false), None),
-        ]
-        .into_iter()
-        .multiunzip();
+        let mut rng = rand::thread_rng();
+        let row_count = rng.gen_range(1..=1000); // With more than 1000 rows the test becomes slow
 
-        // Test a batch with several edge cases with changes resulting in chains that
+        let mut used_pks = HashSet::new();
+        let mut free_pks = HashSet::new();
+        // Insert all possible pairs of u8 values into the HashSet as available primary keys
+        for c1 in 0..=u8::MAX {
+            for c2 in 0..=u8::MAX {
+                // Randomly assign possible PKs as either free or used
+                free_pks.insert((c1, c2));
+            }
+        }
+
+        #[derive(Clone)]
+        enum Action {
+            Insert,
+            UpdateNonPk,
+            UpdatePk,
+            Delete,
+        }
+
+        let actions = [
+            Action::Insert,
+            Action::UpdateNonPk,
+            Action::UpdatePk,
+            Action::Delete,
+        ];
+        let weights = [2, 3, 3, 2];
+        let action_dist = WeightedIndex::new(weights).unwrap();
+
+        let mut insert_count = 0;
+
+        // Generate a random set of rows with random actions
+        let (old_c1, old_c2, new_c1, new_c2, val_c3, chg_c4, val_c4): (
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+        ) = (0..row_count)
+            .map(|_| {
+                let val_c3: Option<f64> = rng.gen();
+                let chg_c4: bool = rng.gen_range(1..=10) == 1; // 1/10 chance of a changed value
+                let val_c4 = if rng.gen_range(1..=10) > 2 {
+                    Some(Alphanumeric.sample_string(&mut rng, 10)) // 80 % chance of a random string
+                } else {
+                    None // 20 % chance of a null string
+                };
+
+                let action = if free_pks.is_empty() {
+                    Action::Delete
+                } else if used_pks.is_empty() {
+                    Action::Insert
+                } else {
+                    actions[action_dist.sample(&mut rng)].clone()
+                };
+
+                let (old_c1, old_c2, new_c1, new_c2) = match action {
+                    Action::Insert => {
+                        insert_count += 1;
+                        let new_pk = *free_pks.iter().choose(&mut rng).unwrap();
+                        free_pks.remove(&new_pk);
+                        used_pks.insert(new_pk);
+                        (None, None, Some(new_pk.0), Some(new_pk.1))
+                    }
+                    Action::UpdateNonPk => {
+                        let old_pk = *used_pks.iter().choose(&mut rng).unwrap();
+                        // Keep the old primary key
+                        (
+                            Some(old_pk.0),
+                            Some(old_pk.1),
+                            Some(old_pk.0),
+                            Some(old_pk.1),
+                        )
+                    }
+                    Action::UpdatePk => {
+                        let old_pk = *used_pks.iter().choose(&mut rng).unwrap();
+                        used_pks.remove(&old_pk);
+                        free_pks.insert(old_pk);
+                        let new_pk = *free_pks.iter().choose(&mut rng).unwrap();
+                        free_pks.remove(&new_pk);
+                        used_pks.insert(new_pk);
+                        (
+                            Some(old_pk.0),
+                            Some(old_pk.1),
+                            Some(new_pk.0),
+                            Some(new_pk.1),
+                        )
+                    }
+                    Action::Delete => {
+                        let old_pk = *used_pks.iter().choose(&mut rng).unwrap();
+                        used_pks.remove(&old_pk);
+                        free_pks.insert(old_pk);
+                        (Some(old_pk.0), Some(old_pk.1), None, None)
+                    }
+                };
+
+                (old_c1, old_c2, new_c1, new_c2, val_c3, chg_c4, val_c4)
+            })
+            .multiunzip();
+
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from(old_c1)),
-                Arc::new(StringArray::from(old_c2)),
-                Arc::new(Int32Array::from(new_c1)),
-                Arc::new(StringArray::from(new_c2)),
-                Arc::new(Float64Array::from(value_c3)),
-                Arc::new(BooleanArray::from(changed_c4)),
-                Arc::new(StringArray::from(value_c4)),
+                Arc::new(UInt8Array::from(old_c1)),
+                Arc::new(UInt8Array::from(old_c2)),
+                Arc::new(UInt8Array::from(new_c1)),
+                Arc::new(UInt8Array::from(new_c2)),
+                Arc::new(Float64Array::from(val_c3)),
+                Arc::new(BooleanArray::from(chg_c4)),
+                Arc::new(StringArray::from(val_c4)),
             ],
         )?;
 
-        // Pretty print original batch
-        let expected = [
-            "+--------+--------+--------+--------+----------+------------+----------+",
-            "| old_c1 | old_c2 | new_c1 | new_c2 | value_c3 | changed_c4 | value_c4 |",
-            "+--------+--------+--------+--------+----------+------------+----------+",
-            "|        |        | 1      | one    | 1.0      | false      |          |",
-            "|        |        | 2      | two    | 2.0      | true       | two      |",
-            "| 1      | one    | 1      | one    | 1.1      | true       | one      |",
-            "| 2      | two    | 2      | 2      | 2.1      | false      |          |",
-            "| 3      | three  | 3      | three  | 3.3      | true       | three    |",
-            "| 4      | four   | 4      | four   | 4.0      | false      | four     |",
-            "| 1      | one    | 1      | 1      | 1.2      | true       |          |",
-            "| 3      | three  |        |        |          | false      |          |",
-            "+--------+--------+--------+--------+----------+------------+----------+",
-        ];
-        assert_batches_eq!(expected, &[batch.clone()]);
-
         let compacted = compact_batches(&sync_schema, vec![batch.clone()])?;
+        println!(
+            "Compacted PKs from {row_count} to {} rows",
+            compacted.num_rows()
+        );
 
-        let expected = [
-            "+--------+--------+--------+--------+----------+------------+----------+",
-            "| old_c1 | old_c2 | new_c1 | new_c2 | value_c3 | changed_c4 | value_c4 |",
-            "+--------+--------+--------+--------+----------+------------+----------+",
-            "|        |        | 1      | 1      | 1.2      | true       |          |",
-            "|        |        | 2      | 2      | 2.1      | true       | two      |",
-            "| 3      | three  |        |        |          | true       | three    |",
-            "| 4      | four   | 4      | four   | 4.0      | false      | four     |",
-            "+--------+--------+--------+--------+----------+------------+----------+",
-        ];
-        assert_batches_eq!(expected, &[compacted]);
+        // Since we only ever UPDATE or DELETE rows that were already inserted in the test batch,
+        // the number of chains, and thus the expected row count is equal to the number of INSERTs.
+        assert_eq!(compacted.num_rows(), insert_count);
 
         Ok(())
     }
