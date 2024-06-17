@@ -107,8 +107,8 @@ pub(super) fn compact_batches(
                     // its column_rows anymore
                     pk_chains.insert(new_pk, chain_id);
                 } else if old_pks.row(column_rows[chain_id].0 as usize) == nulls {
-                    // If both the first old PK is null, and the new PK is null, we have a temporary
-                    // row that doesn't need to be included in the output batch
+                    // If both the first old PK is null, and the last new PK is null, we have a
+                    // temporary row that doesn't need to be included in the output batch
                     temp_rows.insert(chain_id);
                 }
             }
@@ -214,8 +214,9 @@ pub(super) fn compact_batches(
     Ok(batch)
 }
 
-// Generates a pruning qualifier for the table based on the PK columns and the min/max values
-// in the data sync entries.
+// Generate a qualifier expression that, when applied to the table, will only return
+// rows whose primary keys are affected by the changes in `entry`. This is so that
+// we can only read the partitions from Delta Lake that we need to rewrite.
 pub(super) fn construct_qualifier(
     full_schema: SchemaRef,
     entry: &DataSyncCollection,
@@ -330,7 +331,12 @@ mod tests {
 
         let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
 
-        // Setup the test data in row order for simpler extension
+        // Test a batch with several edge cases with:
+        // - multiple changes to the same row
+        // - PK change
+        // - existing row deletion (UPDATE + DELETE)
+        // - temp row (INSERT + UPDATE + DELETE)
+        // - changed value set to None
         let (old_c1, new_c1, val_c2, chg_c3, val_c3): (
             Vec<_>,
             Vec<_>,
@@ -338,19 +344,22 @@ mod tests {
             Vec<_>,
             Vec<_>,
         ) = vec![
-            (None, Some(1), Some(1.0), Some(false), None),
-            (None, Some(2), Some(2.0), Some(true), Some("two")),
-            (Some(1), Some(1), Some(1.1), Some(true), Some("one")),
-            (Some(2), Some(-2), Some(2.1), Some(false), None),
-            (Some(3), Some(3), Some(3.3), Some(true), Some("three")),
-            (Some(4), Some(4), Some(4.0), Some(false), Some("four")),
-            (Some(1), Some(2), Some(1.2), Some(true), None),
-            (Some(3), None, None, Some(false), None),
+            (None, Some(1), Some(1.0), true, Some("one")), // INSERT
+            (None, Some(2), Some(2.0), false, None),       // INSERT
+            (None, Some(3), Some(3.0), true, Some("three")), // INSERT
+            (Some(1), Some(1), Some(1.1), true, None), // UPDATE and change the last value
+            (Some(2), Some(-2), Some(2.1), false, None), // UPDATE PK
+            (Some(3), Some(6), None, false, None),     // UPDATE PK
+            (Some(4), Some(4), Some(4.4), true, Some("four")),
+            (Some(5), Some(5), Some(5.0), false, Some("five")),
+            (Some(-2), Some(3), Some(3.0), true, Some("two")), // UPDATE PK
+            (Some(6), None, Some(5.5), true, Some("five")),    // DELETE temp row
+            (Some(1), Some(2), Some(1.2), false, Some("discarded")),
+            (Some(5), None, None, false, None), // DELETE existing row
         ]
         .into_iter()
         .multiunzip();
 
-        // Test a batch with several edge cases with changes resulting in chains that
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
@@ -369,9 +378,9 @@ mod tests {
             "| old_c1 | new_c1 | value_c2 | changed_c3 | value_c3 |",
             "+--------+--------+----------+------------+----------+",
             "|        | 2      | 1.2      | true       |          |",
-            "|        | -2     | 2.1      | true       | two      |",
-            "| 3      |        |          | true       | three    |",
-            "| 4      | 4      | 4.0      | false      | four     |",
+            "|        | 3      | 3.0      | true       | two      |",
+            "| 4      | 4      | 4.4      | true       | four     |",
+            "| 5      |        |          | false      | five     |",
             "+--------+--------+----------+------------+----------+",
         ];
         assert_batches_eq!(expected, &[compacted]);
