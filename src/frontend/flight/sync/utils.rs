@@ -9,7 +9,7 @@ use datafusion::physical_expr::expressions::{MaxAccumulator, MinAccumulator};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{lit, Accumulator, Expr};
 use itertools::Itertools;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 // Compact a set of record batches into a single one, squashing any chain of changes to a given row
 // into a single row in the output batch.
@@ -82,6 +82,7 @@ pub(super) fn compact_batches(
     // changed columns.
     let mut chain_count = 0;
     let mut column_rows: Vec<(u64, u64, Vec<u64>)> = vec![];
+    let mut temp_rows = HashSet::new();
     let mut pk_chains: HashMap<Row, usize> = HashMap::new();
 
     for (row_id, (old_pk, new_pk)) in old_pks.iter().zip(new_pks.iter()).enumerate() {
@@ -105,6 +106,10 @@ pub(super) fn compact_batches(
                     // otherwise the chain ends by row deletion, and so we don't need to update
                     // its column_rows anymore
                     pk_chains.insert(new_pk, chain_id);
+                } else if old_pks.row(column_rows[chain_id].0 as usize) == nulls {
+                    // If both the first old PK is null, and the new PK is null, we have a temporary
+                    // row that doesn't need to be included in the output batch
+                    temp_rows.insert(chain_id);
                 }
             }
             None => {
@@ -131,7 +136,12 @@ pub(super) fn compact_batches(
         Vec::with_capacity(rows),
         VecDeque::with_capacity(rows),
     );
-    for (old_pk, new_pk, changed_row) in column_rows {
+    for (id, (old_pk, new_pk, changed_row)) in column_rows.into_iter().enumerate() {
+        if temp_rows.contains(&id) {
+            // Exclude temporary rows from the output batch
+            continue;
+        }
+
         old_pks.push(old_pk);
         new_pks.push(new_pk);
         for (idx, changed_row) in changed_row.iter().enumerate() {
@@ -441,10 +451,11 @@ mod tests {
             Action::UpdatePk,
             Action::Delete,
         ];
-        let weights = [2, 3, 3, 2];
+        let weights = [3, 3, 2, 2];
         let action_dist = WeightedIndex::new(weights).unwrap();
 
         let mut insert_count = 0;
+        let mut delete_count = 0;
 
         // Generate a random set of rows with random actions
         let (old_c1, old_c2, new_c1, new_c2, val_c3, chg_c4, val_c4): (
@@ -506,6 +517,7 @@ mod tests {
                         )
                     }
                     Action::Delete => {
+                        delete_count += 1;
                         let old_pk = *used_pks.iter().choose(&mut rng).unwrap();
                         used_pks.remove(&old_pk);
                         free_pks.insert(old_pk);
@@ -537,8 +549,9 @@ mod tests {
         );
 
         // Since we only ever UPDATE or DELETE rows that were already inserted in the test batch,
-        // the number of chains, and thus the expected row count is equal to the number of INSERTs.
-        assert_eq!(compacted.num_rows(), insert_count);
+        // the number of chains, and thus the expected row count is equal to the difference between
+        // INSERT and DELETE count.
+        assert_eq!(compacted.num_rows(), insert_count - delete_count);
 
         Ok(())
     }
