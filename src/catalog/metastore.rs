@@ -18,6 +18,7 @@ use dashmap::DashMap;
 use datafusion::catalog::schema::MemorySchemaProvider;
 use datafusion::datasource::TableProvider;
 
+use crate::catalog::memory::MemoryStore;
 use deltalake::DeltaTable;
 use futures::{stream, StreamExt, TryStreamExt};
 use std::collections::HashMap;
@@ -66,6 +67,21 @@ impl Metastore {
             schemas: external_store.clone(),
             tables: external_store.clone(),
             functions: external_store,
+            staging_schema,
+            object_stores,
+        }
+    }
+
+    pub fn new_from_memory(
+        memory_store: Arc<MemoryStore>,
+        object_stores: Arc<ObjectStoreFactory>,
+    ) -> Self {
+        let staging_schema = Arc::new(MemorySchemaProvider::new());
+        Self {
+            catalogs: memory_store.clone(),
+            schemas: memory_store.clone(),
+            tables: memory_store.clone(),
+            functions: memory_store,
             staging_schema,
             object_stores,
         }

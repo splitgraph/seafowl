@@ -1,3 +1,4 @@
+use crate::catalog::memory::MemoryStore;
 use crate::frontend::flight::handler::{
     SeafowlFlightHandler, SEAFOWL_SQL_DATA, SEAFOWL_SYNC_CALL_MAX_ROWS,
 };
@@ -9,15 +10,14 @@ use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
 use arrow_flight::sql::{
-    Any, CommandGetSqlInfo, CommandStatementQuery, ProstMessageExt, SqlInfo,
-    TicketStatementQuery,
+    Any, Command, CommandGetSqlInfo, CommandStatementQuery, SqlInfo, TicketStatementQuery,
 };
 use arrow_flight::{
     FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
     Ticket,
 };
 use async_trait::async_trait;
-use clade::sync::DataSyncCommand;
+use clade::{schema::InlineMetastoreCommandStatementQuery, sync::DataSyncCommand};
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -89,7 +89,6 @@ impl FlightSqlService for SeafowlFlightHandler {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         // Use a new UUID to fingerprint a query
-        // TODO: Should we use something else here (and keep that in the results map)?
         let query_id = Uuid::new_v4().to_string();
 
         debug!(
@@ -97,26 +96,55 @@ impl FlightSqlService for SeafowlFlightHandler {
             request.metadata(),
             query.query,
         );
-        let schema = self
-            .query_to_stream(&query.query, query_id.clone(), request.metadata())
+        let info = self
+            .query_to_stream(&query.query, query_id.clone(), request, None)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let ticket = TicketStatementQuery {
-            statement_handle: query_id.clone().into(),
+        let resp = Response::new(info);
+        debug!("Results for query id {query_id} ready for streaming");
+        Ok(resp)
+    }
+
+    // Fallback method for our custom commands
+    async fn get_flight_info_fallback(
+        &self,
+        cmd: Command,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let inline_query: InlineMetastoreCommandStatementQuery = match cmd {
+            Command::Unknown(message) => Message::decode(&*message.value).map_err(|err| {
+                let err = format!("Couldn't decode command: {err}");
+                warn!(err);
+                Status::invalid_argument(err)
+            })?,
+            _ => unreachable!("The fallback method should only be called with `Command::Unknown` variant"),
         };
 
-        let endpoint = FlightEndpoint::new()
-            .with_ticket(Ticket::new(ticket.as_any().encode_to_vec()));
+        let query_id = Uuid::new_v4().to_string();
 
-        let flight_info = FlightInfo::new()
-            .try_with_schema(&schema)
-            .map_err(|e| Status::internal(e.to_string()))?
-            .with_endpoint(endpoint)
-            .with_descriptor(request.into_inner());
+        debug!(
+            "Executing inlined query with id {query_id} for request {:?}:\n {}",
+            request.metadata(),
+            inline_query.query,
+        );
 
-        let resp = Response::new(flight_info);
-        debug!("Results for query id {query_id} ready for streaming");
+        let memory_store = MemoryStore {
+            schemas: inline_query.schemas.expect("Schema list provided"),
+        };
+
+        let info = self
+            .query_to_stream(
+                &inline_query.query,
+                query_id.clone(),
+                request,
+                Some(memory_store),
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let resp = Response::new(info);
+        debug!("Results for inlined query id {query_id} ready for streaming");
         Ok(resp)
     }
 
