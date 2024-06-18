@@ -1,12 +1,10 @@
-use arrow::array::{
-    BooleanArray, Float64Array, Int32Array, StringArray, TimestampMicrosecondArray,
-};
+use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use arrow_flight::encode::{FlightDataEncoder, FlightDataEncoderBuilder};
 use arrow_flight::error::{FlightError, Result};
 use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt};
 use arrow_flight::{FlightClient, FlightDescriptor};
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -32,7 +30,6 @@ use seafowl::config::context::{build_context, GRPC_REQUESTS};
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::SeafowlContext;
 use seafowl::frontend::flight::run_flight_server;
-use seafowl::frontend::flight::SEAFOWL_SYNC_DATA_UD_FLAG;
 
 mod client;
 mod e2e;

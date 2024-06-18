@@ -10,6 +10,7 @@ arrow-flight = "51.0.0"
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
 arrow-integration-test = "51.0.0"
+arrow-row = "51.0.0"
 arrow-schema = "51.0.0"
 async-trait = "0.1.64"
 
@@ -71,6 +72,7 @@ arrow-flight = { workspace = true, optional = true }
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
 arrow-integration-test = { workspace = true }
+arrow-row = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 base64 = "0.21.0"

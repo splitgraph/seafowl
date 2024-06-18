@@ -17,9 +17,9 @@ use tracing::{debug, error, info};
 use url::Url;
 
 use crate::context::SeafowlContext;
-use crate::frontend::flight::sync::SeafowlDataSyncManager;
+use crate::frontend::flight::sync::schema::SyncSchema;
+use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
 
-pub const SEAFOWL_SYNC_DATA_UD_FLAG: &str = "__seafowl_ud";
 pub const SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER: &str = "sequence";
 pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
 
@@ -42,7 +42,7 @@ lazy_static! {
 pub(super) struct SeafowlFlightHandler {
     pub context: Arc<SeafowlContext>,
     pub results: Arc<DashMap<String, Mutex<SendableRecordBatchStream>>>,
-    sync_manager: Arc<RwLock<SeafowlDataSyncManager>>,
+    sync_manager: Arc<RwLock<SeafowlDataSyncWriter>>,
 }
 
 impl SeafowlFlightHandler {
@@ -50,7 +50,7 @@ impl SeafowlFlightHandler {
         Self {
             context: context.clone(),
             results: Arc::new(Default::default()),
-            sync_manager: Arc::new(RwLock::new(SeafowlDataSyncManager::new(context))),
+            sync_manager: Arc::new(RwLock::new(SeafowlDataSyncWriter::new(context))),
         }
     }
 
@@ -105,6 +105,7 @@ impl SeafowlFlightHandler {
     pub async fn process_sync_cmd(
         &self,
         cmd: DataSyncCommand,
+        sync_schema: Option<SyncSchema>,
         batches: Vec<RecordBatch>,
     ) -> Result<DataSyncResult> {
         let log_store = match cmd.store {
@@ -156,7 +157,7 @@ impl SeafowlFlightHandler {
                         log_store,
                         cmd.sequence_number,
                         cmd.origin,
-                        cmd.pk_columns,
+                        sync_schema.expect("Schema available"),
                         cmd.last,
                         batches,
                     )

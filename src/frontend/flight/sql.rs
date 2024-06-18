@@ -1,7 +1,7 @@
 use crate::frontend::flight::handler::{
     SeafowlFlightHandler, SEAFOWL_SQL_DATA, SEAFOWL_SYNC_CALL_MAX_ROWS,
-    SEAFOWL_SYNC_DATA_UD_FLAG,
 };
+use crate::frontend::flight::sync::schema::SyncSchema;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
@@ -164,13 +164,6 @@ impl FlightSqlService for SeafowlFlightHandler {
             Status::invalid_argument(err)
         })?;
 
-        // Validate primary columns are provided
-        if cmd.pk_columns.is_empty() {
-            let err = "Changes to tables without primary keys are not supported";
-            warn!(err);
-            return Err(Status::unimplemented(err));
-        }
-
         // Extract the batches
         let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(
             request.into_inner().map_err(|e| e.into()),
@@ -178,30 +171,7 @@ impl FlightSqlService for SeafowlFlightHandler {
         .try_collect()
         .await?;
 
-        if !batches.is_empty() {
-            let schema = batches.first().unwrap().schema();
-
-            // Validate all PKs contained in the batches schema
-            if cmd
-                .pk_columns
-                .iter()
-                .any(|pk| schema.column_with_name(pk).is_none())
-            {
-                let err = format!(
-                    "Some PKs in {:?} not present in the schema {schema}",
-                    cmd.pk_columns
-                );
-                warn!(err);
-                return Err(Status::invalid_argument(err));
-            }
-
-            // Validate upsert/delete flag column is present
-            if schema.all_fields().last().unwrap().name() != SEAFOWL_SYNC_DATA_UD_FLAG {
-                let err = format!("Change requested but batches do not contain upsert/delete flag as last column `{SEAFOWL_SYNC_DATA_UD_FLAG}`");
-                warn!(err);
-                return Err(Status::invalid_argument(err));
-            }
-
+        let sync_schema = if !batches.is_empty() {
             // Validate row count under prescribed limit
             if batches
                 .iter()
@@ -212,16 +182,29 @@ impl FlightSqlService for SeafowlFlightHandler {
                 warn!(err);
                 return Err(Status::invalid_argument(err));
             }
-        }
 
-        let put_result =
-            self.process_sync_cmd(cmd.clone(), batches)
-                .await
+            Some(
+                SyncSchema::try_new(
+                    cmd.column_descriptors.clone(),
+                    batches.first().unwrap().schema(),
+                )
                 .map_err(|err| {
-                    let err = format!("Failed processing DoPut for {}: {err}", cmd.path);
-                    warn!(err);
-                    Status::internal(err)
-                })?;
+                    warn!("{err}");
+                    Status::invalid_argument(err.to_string())
+                })?,
+            )
+        } else {
+            None
+        };
+
+        let put_result = self
+            .process_sync_cmd(cmd.clone(), sync_schema, batches)
+            .await
+            .map_err(|err| {
+                let err = format!("Failed processing DoPut for {}: {err}", cmd.path);
+                warn!(err);
+                Status::internal(err)
+            })?;
 
         Ok(Response::new(Box::pin(futures::stream::iter(vec![Ok(
             arrow_flight::PutResult {

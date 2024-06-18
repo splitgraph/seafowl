@@ -5541,6 +5541,7 @@ dependencies = [
  "arrow-csv",
  "arrow-flight",
  "arrow-integration-test",
+ "arrow-row",
  "arrow-schema",
  "assert_cmd",
  "assert_unordered",

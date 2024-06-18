@@ -15,8 +15,6 @@ use std::sync::Arc;
 
 use tonic::transport::Server;
 
-pub use handler::SEAFOWL_SYNC_DATA_UD_FLAG;
-
 pub async fn run_flight_server(
     context: Arc<SeafowlContext>,
     config: FlightFrontend,
