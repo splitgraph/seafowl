@@ -1,18 +1,14 @@
-use crate::fixtures::fake_gcs_creds;
+use crate::fixtures::schemas;
 use clade::schema::{
     schema_store_service_server::{SchemaStoreService, SchemaStoreServiceServer},
-    ListSchemaRequest, ListSchemaResponse, SchemaObject, StorageLocation, TableObject,
-    FILE_DESCRIPTOR_SET,
+    ListSchemaRequest, ListSchemaResponse, FILE_DESCRIPTOR_SET,
 };
 use datafusion_common::assert_batches_eq;
-use object_store::aws::AmazonS3ConfigKey;
-use object_store::gcp::GoogleConfigKey;
 use rstest::rstest;
 use seafowl::catalog::DEFAULT_DB;
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;
 use seafowl::context::SeafowlContext;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -78,66 +74,7 @@ async fn run_clade_server(addr: SocketAddr) {
     // Setup a test metastore with some fake tables in test object stores.
     let metastore = TestCladeMetastore {
         catalog: DEFAULT_DB.to_string(),
-        schemas: ListSchemaResponse {
-            schemas: vec![
-                SchemaObject {
-                    name: "local".to_string(),
-                    tables: vec![TableObject {
-                        name: "file".to_string(),
-                        path: "delta-0.8.0-partitioned".to_string(),
-                        location: None,
-                    }],
-                },
-                SchemaObject {
-                    name: "s3".to_string(),
-                    tables: vec![TableObject {
-                        name: "minio".to_string(),
-                        path: "test-data/delta-0.8.0-partitioned".to_string(),
-                        location: Some("s3://seafowl-test-bucket".to_string()),
-                    }],
-                },
-                SchemaObject {
-                    name: "gcs".to_string(),
-                    tables: vec![TableObject {
-                        name: "fake".to_string(),
-                        path: "delta-0.8.0-partitioned".to_string(),
-                        location: Some("gs://test-data".to_string()),
-                    }],
-                },
-            ],
-            stores: vec![
-                StorageLocation {
-                    location: "s3://seafowl-test-bucket".to_string(),
-                    options: HashMap::from([
-                        (
-                            AmazonS3ConfigKey::Endpoint.as_ref().to_string(),
-                            "http://127.0.0.1:9000".to_string(),
-                        ),
-                        (
-                            AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
-                            "minioadmin".to_string(),
-                        ),
-                        (
-                            AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
-                            "minioadmin".to_string(),
-                        ),
-                        (
-                            // This has been removed from the config enum, but it can
-                            // still be picked up via `AmazonS3ConfigKey::from_str`
-                            "aws_allow_http".to_string(),
-                            "true".to_string(),
-                        ),
-                    ]),
-                },
-                StorageLocation {
-                    location: "gs://test-data".to_string(),
-                    options: HashMap::from([(
-                        GoogleConfigKey::ServiceAccount.as_ref().to_string(),
-                        fake_gcs_creds(),
-                    )]),
-                },
-            ],
-        },
+        schemas: schemas(),
     };
 
     let svc = SchemaStoreServiceServer::new(metastore);

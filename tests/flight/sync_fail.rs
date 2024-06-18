@@ -17,7 +17,7 @@ async fn assert_sync_error(
 
 #[tokio::test]
 async fn test_sync_errors() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let (_ctx, mut client) = flight_server().await;
+    let (_ctx, mut client) = flight_server(false).await;
 
     let schema = Arc::new(Schema::new(vec![Field::new(
         "old_c1",

@@ -2,7 +2,7 @@ use crate::flight::*;
 
 #[tokio::test]
 async fn test_basic_queries() -> Result<()> {
-    let (context, mut client) = flight_server().await;
+    let (context, mut client) = flight_server(false).await;
     create_table_and_insert(context.as_ref(), "flight_table").await;
 
     // Test the handshake works
@@ -28,7 +28,7 @@ async fn test_basic_queries() -> Result<()> {
 
 #[tokio::test]
 async fn test_ddl_types_roundtrip() -> Result<()> {
-    let (_context, mut client) = flight_server().await;
+    let (_context, mut client) = flight_server(false).await;
 
     let all_types_query = r#"
 SELECT
