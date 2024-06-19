@@ -256,11 +256,11 @@ impl SeafowlDataSyncWriter {
     fn flush_ready(&mut self) -> bool {
         if let Some((_, sync)) = self.syncs.first()
             && now() - sync.insertion_time
-                >= self.context.config.misc.sync_data.max_replication_lag_s
+                >= self.context.config.misc.sync_conf.max_replication_lag_s
         {
             // First flush any changes that are past the configured max duration
             true
-        } else if self.size >= self.context.config.misc.sync_data.max_in_memory_bytes {
+        } else if self.size >= self.context.config.misc.sync_conf.max_in_memory_bytes {
             // Or if we're over the size limit flush the oldest entry
             true
         } else {

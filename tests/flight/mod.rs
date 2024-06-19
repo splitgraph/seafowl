@@ -58,15 +58,11 @@ type = "memory""#
         r#"
 {object_store_section}
 
-[catalog]
-type = "sqlite"
-dsn = ":memory:"
-
 [frontend.flight]
 bind_host = "127.0.0.1"
 bind_port = {}
 
-[misc.sync_data]
+[misc.sync_conf]
 max_in_memory_bytes = 2500
 max_replication_lag_s = 1"#,
         addr.port()

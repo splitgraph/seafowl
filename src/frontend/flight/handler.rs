@@ -171,7 +171,7 @@ impl SeafowlFlightHandler {
 
         debug!("Processing data change with {num_rows} rows for url {url}");
         match tokio::time::timeout(
-            Duration::from_secs(self.context.config.misc.sync_data.sync_lock_timeout_s),
+            Duration::from_secs(self.context.config.misc.sync_conf.sync_lock_timeout_s),
             self.sync_manager.write(),
         )
         .await

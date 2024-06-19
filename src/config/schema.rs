@@ -347,7 +347,7 @@ pub struct Misc {
     pub ssl_cert_file: Option<String>,
     pub metrics: Option<Metrics>,
     pub object_store_cache: Option<ObjectCacheProperties>,
-    pub sync_data: DataSyncConfig,
+    pub sync_conf: DataSyncConfig,
 }
 
 impl Default for Misc {
@@ -358,7 +358,7 @@ impl Default for Misc {
             ssl_cert_file: None,
             metrics: None,
             object_store_cache: None,
-            sync_data: Default::default(),
+            sync_conf: Default::default(),
         }
     }
 }
@@ -718,7 +718,7 @@ cache_control = "private, max-age=86400"
                     ssl_cert_file: None,
                     metrics: None,
                     object_store_cache: None,
-                    sync_data: Default::default(),
+                    sync_conf: Default::default(),
                 },
             }
         )
@@ -818,7 +818,7 @@ cache_control = "private, max-age=86400"
                     ssl_cert_file: None,
                     metrics: None,
                     object_store_cache: None,
-                    sync_data: Default::default(),
+                    sync_conf: Default::default(),
                 },
             }
         )
