@@ -27,7 +27,6 @@
 
 pub use datafusion::sql::parser::Statement;
 use datafusion::sql::parser::{CopyToSource, CopyToStatement, CreateExternalTable};
-use datafusion_common::parsers::CompressionTypeVariant;
 use lazy_static::lazy_static;
 use sqlparser::ast::{CreateFunctionBody, Expr, ObjectName, OrderByExpr, Value};
 use sqlparser::tokenizer::{TokenWithLocation, Word};
@@ -37,8 +36,7 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
 };
-use std::collections::{HashMap, VecDeque};
-use std::str::FromStr;
+use std::collections::VecDeque;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -49,6 +47,15 @@ macro_rules! parser_err {
 
 fn parse_file_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
+}
+
+fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
+    if field.is_some() {
+        return Err(ParserError::ParserError(format!(
+            "{name} specified more than once",
+        )));
+    }
+    Ok(())
 }
 
 // XXX SEAFOWL: removed the struct definitions here because we want to use
@@ -183,8 +190,6 @@ impl<'a> DFParser<'a> {
             target: location,
             options: vec![CONVERT_TO_DELTA.clone()],
             partitioned_by: vec![],
-            has_header: false,
-
             stored_as: None,
         }))
     }
@@ -243,7 +248,6 @@ impl<'a> DFParser<'a> {
             target,
             options,
             partitioned_by: vec![],
-            has_header: false,
             stored_as: None,
         }))
     }
@@ -257,7 +261,21 @@ impl<'a> DFParser<'a> {
     pub fn parse_option_key(&mut self) -> Result<String, ParserError> {
         let next_token = self.parser.next_token();
         match next_token.token {
-            Token::Word(Word { value, .. }) => Ok(value),
+            Token::Word(Word { value, .. }) => {
+                let mut parts = vec![value];
+                while self.parser.consume_token(&Token::Period) {
+                    let next_token = self.parser.next_token();
+                    if let Token::Word(Word { value, .. }) = next_token.token {
+                        parts.push(value);
+                    } else {
+                        // Unquoted namespaced keys have to conform to the syntax
+                        // "<WORD>[\.<WORD>]*". If we have a key that breaks this
+                        // pattern, error out:
+                        return self.parser.expected("key name", next_token);
+                    }
+                }
+                Ok(parts.join("."))
+            }
             Token::SingleQuotedString(s) => Ok(s),
             Token::DoubleQuotedString(s) => Ok(s),
             Token::EscapedStringLiteral(s) => Ok(s),
@@ -274,7 +292,8 @@ impl<'a> DFParser<'a> {
     pub fn parse_option_value(&mut self) -> Result<Value, ParserError> {
         let next_token = self.parser.next_token();
         match next_token.token {
-            Token::Word(Word { value, .. }) => Ok(Value::UnQuotedString(value)),
+            // e.g. things like "snappy" or "gzip" that may be keywords
+            Token::Word(word) => Ok(Value::SingleQuotedString(word.value)),
             Token::SingleQuotedString(s) => Ok(Value::SingleQuotedString(s)),
             Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
             Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
@@ -318,23 +337,42 @@ impl<'a> DFParser<'a> {
     ) -> Result<Statement, ParserError> {
         let name = self.parser.parse_object_name(false)?;
         self.parser.expect_keyword(Keyword::AS)?;
-        let class_name = self.parser.parse_function_definition()?;
-        let params = CreateFunctionBody {
-            as_: Some(class_name),
-            using: self.parser.parse_optional_create_function_using()?,
-            ..Default::default()
-        };
+        let body = self.parse_create_function_body_string()?;
 
         let create_function = SQLStatement::CreateFunction {
             or_replace,
             temporary,
+            if_not_exists: false,
             name,
             args: None,
             return_type: None,
-            params,
+            function_body: Some(CreateFunctionBody::AsBeforeOptions(body)),
+            behavior: None,
+            called_on_null: None,
+            parallel: None,
+            using: None,
+            language: None,
+            determinism_specifier: None,
+            options: None,
+            remote_connection: None,
         };
 
         Ok(Statement::Statement(Box::from(create_function)))
+    }
+
+    /// Parse the body of a `CREATE FUNCTION` specified as a string.
+    /// e.g. `CREATE FUNCTION ... AS $$ body $$`.
+    fn parse_create_function_body_string(&mut self) -> Result<Expr, ParserError> {
+        let peek_token = self.parser.peek_token();
+        match peek_token.token {
+            Token::DollarQuotedString(s) => {
+                self.parser.next_token();
+                Ok(Expr::Value(Value::DollarQuotedString(s)))
+            }
+            _ => Ok(Expr::Value(Value::SingleQuotedString(
+                self.parser.parse_literal_string()?,
+            ))),
+        }
     }
 
     fn parse_partitions(&mut self) -> Result<Vec<String>, ParserError> {
@@ -491,29 +529,17 @@ impl<'a> DFParser<'a> {
             self.parser
                 .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
         let table_name = self.parser.parse_object_name(true)?;
-        let (columns, constraints) = self.parse_columns()?;
+        let (mut columns, constraints) = self.parse_columns()?;
 
         #[derive(Default)]
         struct Builder {
             file_type: Option<String>,
             location: Option<String>,
-            has_header: Option<bool>,
-            delimiter: Option<char>,
-            file_compression_type: Option<CompressionTypeVariant>,
             table_partition_cols: Option<Vec<String>>,
             order_exprs: Vec<Vec<OrderByExpr>>,
-            options: Option<HashMap<String, String>>,
+            options: Option<Vec<(String, Value)>>,
         }
         let mut builder = Builder::default();
-
-        fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
-            if field.is_some() {
-                return Err(ParserError::ParserError(format!(
-                    "{name} specified more than once",
-                )));
-            }
-            Ok(())
-        }
 
         loop {
             if let Some(keyword) = self.parser.parse_one_of_keywords(&[
@@ -541,31 +567,47 @@ impl<'a> DFParser<'a> {
                         } else {
                             self.parser.expect_keyword(Keyword::HEADER)?;
                             self.parser.expect_keyword(Keyword::ROW)?;
-                            ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
-                            builder.has_header = Some(true);
+                            return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS (format.has_header true)");
                         }
                     }
                     Keyword::DELIMITER => {
-                        ensure_not_set(&builder.delimiter, "DELIMITER")?;
-                        builder.delimiter = Some(self.parse_delimiter()?);
+                        return parser_err!("DELIMITER clause is no longer in use. Please use the OPTIONS clause with 'format.delimiter' set appropriately, e.g., OPTIONS (format.delimiter ',')");
                     }
                     Keyword::COMPRESSION => {
                         self.parser.expect_keyword(Keyword::TYPE)?;
-                        ensure_not_set(
-                            &builder.file_compression_type,
-                            "COMPRESSION TYPE",
-                        )?;
-                        builder.file_compression_type =
-                            Some(self.parse_file_compression_type()?);
+                        return parser_err!("COMPRESSION TYPE clause is no longer in use. Please use the OPTIONS clause with 'format.compression' set appropriately, e.g., OPTIONS (format.compression gzip)");
                     }
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
                         ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
-                        builder.table_partition_cols = Some(self.parse_partitions()?);
+                        // Expects either list of column names (col_name [, col_name]*)
+                        // or list of column definitions (col_name datatype [, col_name datatype]* )
+                        // use the token after the name to decide which parsing rule to use
+                        // Note that mixing both names and definitions is not allowed
+                        let peeked = self.parser.peek_nth_token(2);
+                        if peeked == Token::Comma || peeked == Token::RParen {
+                            // list of column names
+                            builder.table_partition_cols = Some(self.parse_partitions()?)
+                        } else {
+                            // list of column defs
+                            let (cols, cons) = self.parse_columns()?;
+                            builder.table_partition_cols = Some(
+                                cols.iter().map(|col| col.name.to_string()).collect(),
+                            );
+
+                            columns.extend(cols);
+
+                            if !cons.is_empty() {
+                                return Err(ParserError::ParserError(
+                                    "Constraints on Partition Columns are not supported"
+                                        .to_string(),
+                                ));
+                            }
+                        }
                     }
                     Keyword::OPTIONS => {
                         ensure_not_set(&builder.options, "OPTIONS")?;
-                        builder.options = Some(self.parse_string_options()?);
+                        builder.options = Some(self.parse_value_options()?);
                     }
                     _ => {
                         unreachable!()
@@ -599,17 +641,12 @@ impl<'a> DFParser<'a> {
             name: table_name.to_string(),
             columns,
             file_type: builder.file_type.unwrap(),
-            has_header: builder.has_header.unwrap_or(false),
-            delimiter: builder.delimiter.unwrap_or(','),
             location: builder.location.unwrap(),
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
             order_exprs: builder.order_exprs,
             if_not_exists,
-            file_compression_type: builder
-                .file_compression_type
-                .unwrap_or(CompressionTypeVariant::UNCOMPRESSED),
             unbounded,
-            options: builder.options.unwrap_or(HashMap::new()),
+            options: builder.options.unwrap_or(Vec::new()),
             constraints,
         };
         Ok(Statement::CreateExternalTable(create))
@@ -620,49 +657,10 @@ impl<'a> DFParser<'a> {
         let token = self.parser.next_token();
         match &token.token {
             Token::Word(w) => parse_file_type(&w.value),
-            _ => self.expected("one of PARQUET, NDJSON, or CSV", token),
+            _ => self.expected("one of ARROW, PARQUET, NDJSON, or CSV", token),
         }
     }
 
-    /// Parses the set of
-    fn parse_file_compression_type(
-        &mut self,
-    ) -> Result<CompressionTypeVariant, ParserError> {
-        let token = self.parser.next_token();
-        match &token.token {
-            Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
-            _ => self.expected("one of GZIP, BZIP2, XZ, ZSTD", token),
-        }
-    }
-
-    /// Parses (key value) style options where the values are literal strings.
-    fn parse_string_options(&mut self) -> Result<HashMap<String, String>, ParserError> {
-        let mut options = HashMap::new();
-        self.parser.expect_token(&Token::LParen)?;
-
-        loop {
-            let key = self.parser.parse_literal_string()?;
-            let value = self.parser.parse_literal_string()?;
-            options.insert(key, value);
-            let comma = self.parser.consume_token(&Token::Comma);
-            if self.parser.consume_token(&Token::RParen) {
-                // allow a trailing comma, even though it's not in standard
-                break;
-            } else if !comma {
-                return self.expected(
-                    "',' or ')' after option definition",
-                    self.parser.peek_token(),
-                );
-            }
-        }
-        Ok(options)
-    }
-
-    /// Parses (key value) style options into a map of String --> [`Value`].
-    ///
-    /// Unlike [`Self::parse_string_options`], this method supports
-    /// keywords as key names as well as multiple value types such as
-    /// Numbers as well as Strings.
     fn parse_value_options(&mut self) -> Result<Vec<(String, Value)>, ParserError> {
         let mut options = vec![];
         self.parser.expect_token(&Token::LParen)?;
@@ -683,15 +681,5 @@ impl<'a> DFParser<'a> {
             }
         }
         Ok(options)
-    }
-
-    fn parse_delimiter(&mut self) -> Result<char, ParserError> {
-        let token = self.parser.parse_literal_string()?;
-        match token.len() {
-            1 => Ok(token.chars().next().unwrap()),
-            _ => Err(ParserError::TokenizerError(
-                "Delimiter must be a single char".to_string(),
-            )),
-        }
     }
 }

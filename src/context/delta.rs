@@ -32,7 +32,7 @@ use std::sync::Arc;
 use tempfile::{NamedTempFile, TempPath};
 
 use tokio::fs::File as AsyncFile;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, BufReader};
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -196,10 +196,9 @@ pub async fn plan_to_object_store(
                     let mut part_buffer =
                         BytesMut::with_capacity(PARTITION_FILE_MIN_PART_SIZE);
 
-                    let (multipart_id, mut writer) =
-                        store.put_multipart(&file_name).await?;
+                    let mut multipart_upload = store.put_multipart(&file_name).await?;
 
-                    let error: std::io::Error;
+                    let error: object_store::Error;
                     let mut eof_counter = 0;
                     loop {
                         match reader.read_buf(&mut part_buffer).await {
@@ -226,28 +225,35 @@ pub async fn plan_to_object_store(
                                 continue;
                             }
                             Ok(_) => {
-                                let part_size = part_buffer.len();
-                                debug!("Uploading part with {} bytes", part_size);
-                                match writer.write_all(&part_buffer[..part_size]).await {
+                                let payload = part_buffer.freeze();
+                                debug!("Uploading part with {} bytes", payload.len());
+                                match multipart_upload.put_part(payload.into()).await {
                                     Ok(_) => {
-                                        part_buffer.clear();
+                                        part_buffer = BytesMut::with_capacity(
+                                            PARTITION_FILE_MIN_PART_SIZE,
+                                        );
                                         continue;
                                     }
                                     Err(err) => error = err,
                                 }
                             }
-                            Err(err) => error = err,
+                            Err(err) => {
+                                error = object_store::Error::Generic {
+                                    store: "multipart_upload",
+                                    source: Box::new(err),
+                                }
+                            }
                         }
 
                         warn!(
                             "Aborting multipart partition upload due to an error: {:?}",
                             error
                         );
-                        store.abort_multipart(&file_name, &multipart_id).await.ok();
-                        return Err(DataFusionError::IoError(error));
+                        multipart_upload.abort().await.ok();
+                        return Err(DataFusionError::ObjectStore(error));
                     }
 
-                    writer.shutdown().await?;
+                    multipart_upload.complete().await?;
                 }
 
                 // Create the corresponding `Add` action; currently we don't support partition columns
@@ -257,6 +263,8 @@ pub async fn plan_to_object_store(
                     file_name.to_string(),
                     size,
                     &metadata,
+                    -1, // collect stats for all columns
+                    &None::<Vec<String>>,
                 )?;
 
                 Ok(add)
@@ -277,9 +285,9 @@ pub enum CreateDeltaTableDetails {
 }
 
 impl SeafowlContext {
-    pub async fn create_delta_table<'a>(
-        &'a self,
-        name: impl Into<TableReference<'a>>,
+    pub async fn create_delta_table(
+        &self,
+        name: impl Into<TableReference>,
         details: CreateDeltaTableDetails,
     ) -> Result<Arc<DeltaTable>> {
         let resolved_ref = self.resolve_table_ref(name);
@@ -312,7 +320,7 @@ impl SeafowlContext {
                 let table = CreateBuilder::new()
                     .with_log_store(table_log_store)
                     .with_table_name(&*table_name)
-                    .with_columns(delta_schema.fields().clone())
+                    .with_columns(delta_schema.fields().cloned())
                     .with_comment(format!(
                         "Created by Seafowl {}",
                         env!("CARGO_PKG_VERSION")
@@ -385,9 +393,9 @@ impl SeafowlContext {
     }
 
     /// Generate the Delta table builder and execute the write
-    pub async fn plan_to_delta_table<'a>(
+    pub async fn plan_to_delta_table(
         &self,
-        name: impl Into<TableReference<'a>>,
+        name: impl Into<TableReference>,
         plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<DeltaTable> {
         let table_uuid = self.get_table_uuid(name).await?;
@@ -439,9 +447,6 @@ impl SeafowlContext {
         Ok(CommitBuilder::default()
             .with_actions(actions)
             .build(Some(table.snapshot()?), table.log_store(), op)
-            .map_err(|e| {
-                DataFusionError::Execution(format!("Transaction commit failed: {e}"))
-            })?
             .await?
             .version)
     }
@@ -449,7 +454,7 @@ impl SeafowlContext {
     // Cleanup the table objects in the storage
     pub async fn delete_delta_table<'a>(
         &self,
-        table_name: impl Into<TableReference<'a>>,
+        table_name: impl Into<TableReference>,
     ) -> Result<()> {
         let table = self.try_get_delta_table(table_name).await?;
         let store = table.object_store();
@@ -702,7 +707,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(adds.len(), output_partitions.len(),);
+        assert_eq!(adds.len(), output_partitions.len());
 
         for i in 0..output_partitions.len() {
             assert_eq!(

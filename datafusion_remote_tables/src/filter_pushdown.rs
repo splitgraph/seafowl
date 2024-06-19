@@ -108,7 +108,7 @@ pub trait FilterPushdownConverter {
     }
 }
 
-impl<T: FilterPushdownConverter> TreeNodeVisitor for FilterPushdownVisitor<T> {
+impl<T: FilterPushdownConverter> TreeNodeVisitor<'_> for FilterPushdownVisitor<T> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {

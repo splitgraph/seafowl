@@ -21,7 +21,7 @@ impl TableProviderFactory for RemoteTableFactory {
     ) -> Result<Arc<dyn TableProvider>> {
         let table = RemoteTable::new(
             cmd.options
-                .get("name")
+                .get("format.name")
                 .ok_or(DataFusionError::Execution(
                     "Missing 'name' option".to_string(),
                 ))?

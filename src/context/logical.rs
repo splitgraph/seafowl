@@ -25,10 +25,9 @@ use datafusion_expr::logical_plan::{Extension, LogicalPlan};
 use deltalake::DeltaTable;
 use itertools::Itertools;
 use sqlparser::ast::{
-    AlterTableOperation, CreateFunctionBody, Expr as SqlExpr, FunctionDefinition,
-    ObjectType, Query, Statement, TableFactor, TableWithJoins, VisitMut,
+    AlterTableOperation, CreateFunctionBody, Expr as SqlExpr, Expr, Insert, ObjectType,
+    Query, Statement, TableFactor, TableWithJoins, Value, VisitMut,
 };
-use std::borrow::Cow;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -114,7 +113,7 @@ impl SeafowlContext {
                 | Statement::CreateSchema { .. }
                 | Statement::CreateView { .. }
                 | Statement::CreateDatabase { .. } => self.inner.state().statement_to_plan(stmt).await,
-                Statement::Insert{ source: Some(ref mut source), .. } => {
+                Statement::Insert(Insert{ source: Some(ref mut source), .. }) => {
                     let state = self.rewrite_time_travel_query(source).await?;
                     let plan = state.statement_to_plan(stmt).await?;
                     state.optimize(&plan)
@@ -134,7 +133,7 @@ impl SeafowlContext {
                     // We also need to do a analyze round beforehand for type coercion.
                     let analyzer = Analyzer::new();
                     let plan = analyzer.execute_and_check(
-                        &plan,
+                        plan,
                         self.inner.copied_config().options(),
                         |_, _| {},
                     )?;
@@ -144,7 +143,7 @@ impl SeafowlContext {
                         ]
                     );
                     let config = OptimizerContext::default();
-                    optimizer.optimize(&plan, &config, |plan: &LogicalPlan, rule: &dyn OptimizerRule| {
+                    optimizer.optimize(plan, &config, |plan: &LogicalPlan, rule: &dyn OptimizerRule| {
                         debug!(
                                 "After applying rule '{}':\n{}\n",
                                 rule.name(),
@@ -225,7 +224,7 @@ impl SeafowlContext {
                     or_replace,
                     temporary: false,
                     name,
-                    params: CreateFunctionBody { as_: Some( FunctionDefinition::SingleQuotedDef(details) ), .. },
+                    function_body: Some(CreateFunctionBody::AsBeforeOptions(Expr::Value(Value::SingleQuotedString(details)))),
                     ..
                 } => {
                     // We abuse the fact that in CREATE FUNCTION AS [class_name], class_name can be an arbitrary string
@@ -366,7 +365,7 @@ impl SeafowlContext {
             delta_table.load_with_datetime(datetime).await?;
             let table_provider_for_version = Arc::from(delta_table);
 
-            resolved_ref.table = Cow::Borrowed(name_with_version.as_str());
+            resolved_ref.table = Arc::from(name_with_version.as_str());
 
             if !session_ctx.table_exist(resolved_ref.clone())? {
                 session_ctx.register_table(resolved_ref, table_provider_for_version)?;

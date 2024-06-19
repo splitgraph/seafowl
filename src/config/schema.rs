@@ -138,12 +138,13 @@ impl S3 {
         bucket: String,
         map: &mut HashMap<String, String>,
     ) -> Result<Self, ConfigError> {
+        // TODO: This is a bit of a hack. We should probably use a pre-defined config struct.
         Ok(S3 {
-            region: map.get("region").cloned(),
-            access_key_id: map.remove("access_key_id"),
-            secret_access_key: map.remove("secret_access_key"),
-            session_token: map.remove("session_token"),
-            endpoint: map.remove("endpoint"),
+            region: map.remove("format.region"),
+            access_key_id: map.remove("format.access_key_id"),
+            secret_access_key: map.remove("format.secret_access_key"),
+            session_token: map.remove("format.session_token"),
+            endpoint: map.remove("format.endpoint"),
             bucket,
             prefix: None,
         })
@@ -165,7 +166,8 @@ impl GCS {
         GCS {
             bucket,
             prefix: None,
-            google_application_credentials: map.remove("google_application_credentials"),
+            google_application_credentials: map
+                .remove("format.google_application_credentials"),
         }
     }
 }

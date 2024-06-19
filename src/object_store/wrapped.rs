@@ -3,12 +3,11 @@ use crate::config::schema::{Local, GCS, S3};
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt};
 use object_store::{
-    path::Path, Error, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, Result,
+    path::Path, Error, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOpts, PutPayload, Result,
 };
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
-use tokio::io::AsyncWrite;
 
 use deltalake::logstore::{default_logstore, LogStore};
 use object_store::{prefix::PrefixStore, PutOptions, PutResult};
@@ -143,32 +142,29 @@ impl Display for InternalObjectStore {
 #[async_trait::async_trait]
 impl ObjectStore for InternalObjectStore {
     /// Save the provided bytes to the specified location.
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        self.inner.put(location, bytes).await
+    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
+        self.inner.put(location, payload).await
     }
 
     async fn put_opts(
         &self,
         location: &Path,
-        bytes: Bytes,
+        payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        self.inner.put_opts(location, bytes, opts).await
+        self.inner.put_opts(location, payload, opts).await
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         self.inner.put_multipart(location).await
     }
 
-    async fn abort_multipart(
+    async fn put_multipart_opts(
         &self,
         location: &Path,
-        multipart_id: &MultipartId,
-    ) -> Result<()> {
-        self.inner.abort_multipart(location, multipart_id).await
+        opts: PutMultipartOpts,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
     }
 
     /// Return the bytes that are stored at the specified location.

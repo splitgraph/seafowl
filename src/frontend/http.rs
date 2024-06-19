@@ -67,7 +67,7 @@ struct ETagBuilderVisitor {
     table_versions: Vec<u8>,
 }
 
-impl TreeNodeVisitor for ETagBuilderVisitor {
+impl TreeNodeVisitor<'_> for ETagBuilderVisitor {
     type Node = LogicalPlan;
 
     fn f_down(
