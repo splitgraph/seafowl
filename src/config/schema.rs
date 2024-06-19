@@ -42,6 +42,7 @@ pub const MEBIBYTES: u64 = 1024 * 1024;
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct SeafowlConfig {
     pub object_store: Option<ObjectStore>,
+    #[serde(default)]
     pub catalog: Catalog,
     #[serde(default)]
     pub frontend: Frontend,
@@ -176,6 +177,16 @@ pub enum Catalog {
     Postgres(Postgres),
     Sqlite(Sqlite),
     Clade(Clade),
+}
+
+impl Default for Catalog {
+    fn default() -> Self {
+        Catalog::Sqlite(Sqlite {
+            dsn: ":memory:".to_string(),
+            journal_mode: Default::default(),
+            read_only: false,
+        })
+    }
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
