@@ -1,7 +1,24 @@
 pub mod schema {
+    use arrow_flight::sql::{Any, ProstMessageExt};
+    use prost::Message;
+
     tonic::include_proto!("clade.schema");
     pub const FILE_DESCRIPTOR_SET: &[u8] =
         tonic::include_file_descriptor_set!("clade_descriptor");
+
+    // Same reasoning as below, but for `get_flight_info_fallback` instead
+    impl ProstMessageExt for InlineMetastoreCommandStatementQuery {
+        fn type_url() -> &'static str {
+            "InlineMetastoreCommandStatementQuery"
+        }
+
+        fn as_any(&self) -> Any {
+            Any {
+                type_url: InlineMetastoreCommandStatementQuery::type_url().to_string(),
+                value: self.encode_to_vec().into(),
+            }
+        }
+    }
 }
 
 pub mod sync {
@@ -24,7 +41,7 @@ pub mod sync {
 
         fn as_any(&self) -> Any {
             Any {
-                type_url: "DataSyncCommand".to_string(),
+                type_url: DataSyncCommand::type_url().to_string(),
                 value: self.encode_to_vec().into(),
             }
         }

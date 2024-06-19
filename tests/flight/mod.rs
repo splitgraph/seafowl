@@ -2,7 +2,7 @@ use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use arrow_flight::encode::{FlightDataEncoder, FlightDataEncoderBuilder};
 use arrow_flight::error::{FlightError, Result};
-use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt};
+use arrow_flight::sql::{Any, CommandStatementQuery, ProstMessageExt};
 use arrow_flight::{FlightClient, FlightDescriptor};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
@@ -20,8 +20,10 @@ use tonic::transport::Channel;
 use uuid::Uuid;
 use warp::hyper::Client;
 
+use clade::schema::{InlineMetastoreCommandStatementQuery, ListSchemaResponse};
 use clade::sync::{DataSyncCommand, DataSyncResult};
 
+use crate::fixtures::schemas;
 use crate::http::{get_metrics, response_text};
 use crate::statements::create_table_and_insert;
 use crate::{test_seafowl, TestSeafowl};
@@ -33,41 +35,46 @@ use seafowl::frontend::flight::run_flight_server;
 
 mod client;
 mod e2e;
+mod inline_metastore;
 mod search_path;
 mod sync;
 mod sync_fail;
 
-async fn make_test_context() -> Arc<SeafowlContext> {
+async fn make_test_context(local_store: bool) -> Arc<SeafowlContext> {
     // let OS choose a free port
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
+    let object_store_section = if local_store {
+        r#"[object_store]
+type = "local"
+data_dir = "tests/data""#
+    } else {
+        r#"[object_store]
+type = "memory""#
+    };
+
     let config_text = format!(
         r#"
-[object_store]
-type = "memory"
-
-[catalog]
-type = "sqlite"
-dsn = ":memory:"
+{object_store_section}
 
 [frontend.flight]
 bind_host = "127.0.0.1"
 bind_port = {}
 
-[misc.sync_data]
+[misc.sync_conf]
 max_in_memory_bytes = 2500
 max_replication_lag_s = 1"#,
         addr.port()
     );
 
-    let config = load_config_from_string(&config_text, false, None).unwrap();
+    let config = load_config_from_string(&config_text, true, None).unwrap();
 
     Arc::from(build_context(config).await.unwrap())
 }
 
-async fn flight_server() -> (Arc<SeafowlContext>, FlightClient) {
-    let context = make_test_context().await;
+async fn flight_server(local_store: bool) -> (Arc<SeafowlContext>, FlightClient) {
+    let context = make_test_context(local_store).await;
 
     let flight_cfg = context
         .config
@@ -100,7 +107,26 @@ async fn get_flight_batches(
         query,
         transaction_id: None,
     };
-    let request = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+    get_flight_batches_inner(client, cmd.as_any()).await
+}
+
+async fn get_flight_batches_inlined(
+    client: &mut FlightClient,
+    query: String,
+    schemas: ListSchemaResponse,
+) -> Result<Vec<RecordBatch>> {
+    let cmd = InlineMetastoreCommandStatementQuery {
+        query,
+        schemas: Some(schemas),
+    };
+    get_flight_batches_inner(client, cmd.as_any()).await
+}
+
+async fn get_flight_batches_inner(
+    client: &mut FlightClient,
+    message: Any,
+) -> Result<Vec<RecordBatch>> {
+    let request = FlightDescriptor::new_cmd(message.encode_to_vec());
     let response = client.get_flight_info(request).await?;
 
     // Get the returned ticket

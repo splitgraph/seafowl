@@ -222,7 +222,7 @@ mod tests {
                 ssl_cert_file: None,
                 metrics: None,
                 object_store_cache: None,
-                sync_data: Default::default(),
+                sync_conf: Default::default(),
             },
         };
 

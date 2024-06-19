@@ -60,6 +60,17 @@ impl SeafowlContext {
         self.scope_to(self.default_catalog.clone(), schema)
     }
 
+    pub fn with_metastore(&self, metastore: Arc<Metastore>) -> Arc<SeafowlContext> {
+        Arc::from(SeafowlContext {
+            config: self.config.clone(),
+            inner: self.inner.clone(),
+            metastore,
+            internal_object_store: self.internal_object_store.clone(),
+            default_catalog: self.default_catalog.clone(),
+            default_schema: self.default_schema.clone(),
+        })
+    }
+
     pub fn inner(&self) -> &SessionContext {
         &self.inner
     }

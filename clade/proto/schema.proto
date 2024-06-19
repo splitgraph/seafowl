@@ -36,3 +36,8 @@ service SchemaStoreService {
   // List the available schemas
   rpc ListSchemas(ListSchemaRequest) returns (ListSchemaResponse);
 }
+
+message InlineMetastoreCommandStatementQuery {
+  string query = 1;
+  ListSchemaResponse schemas = 2;
+}

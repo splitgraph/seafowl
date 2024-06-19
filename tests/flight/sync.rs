@@ -24,7 +24,7 @@ async fn do_put_sync(
 
 #[tokio::test]
 async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let (ctx, mut client) = flight_server().await;
+    let (ctx, mut client) = flight_server(false).await;
 
     //
     // Sync #1 that creates the table, and dictates the full schema for following syncs

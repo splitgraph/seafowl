@@ -1,18 +1,20 @@
+use crate::catalog::memory::MemoryStore;
+use crate::catalog::metastore::Metastore;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
-use arrow_flight::sql::SqlInfo;
-use arrow_schema::SchemaRef;
+use arrow_flight::sql::{ProstMessageExt, SqlInfo, TicketStatementQuery};
+use arrow_flight::{FlightDescriptor, FlightEndpoint, FlightInfo, Ticket};
 use clade::sync::{DataSyncCommand, DataSyncResult};
 use dashmap::DashMap;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::DataFusionError;
 use lazy_static::lazy_static;
+use prost::Message;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
-use tonic::metadata::MetadataMap;
-use tonic::Status;
+use tonic::{Request, Status};
 use tracing::{debug, error, info};
 use url::Url;
 
@@ -59,9 +61,10 @@ impl SeafowlFlightHandler {
         &self,
         query: &str,
         query_id: String,
-        metadata: &MetadataMap,
-    ) -> Result<SchemaRef> {
-        let ctx = if let Some(search_path) = metadata.get("search-path") {
+        request: Request<FlightDescriptor>,
+        memory_store: Option<MemoryStore>,
+    ) -> Result<FlightInfo> {
+        let mut ctx = if let Some(search_path) = request.metadata().get("search-path") {
             self.context.scope_to_schema(
                 search_path
                     .to_str()
@@ -74,6 +77,14 @@ impl SeafowlFlightHandler {
             self.context.clone()
         };
 
+        if let Some(memory_store) = memory_store {
+            // If metastore was inlined with the query use it for resolving tables/locations
+            ctx = ctx.with_metastore(Arc::new(Metastore::new_from_memory(
+                Arc::new(memory_store),
+                ctx.metastore.object_stores.clone(),
+            )));
+        }
+
         let plan = ctx
             .plan_query(query)
             .await
@@ -84,9 +95,23 @@ impl SeafowlFlightHandler {
             .inspect_err(|err| info!("Error executing query id {query_id}: {err}"))?;
         let schema = batch_stream.schema();
 
-        self.results.insert(query_id, Mutex::new(batch_stream));
+        self.results
+            .insert(query_id.clone(), Mutex::new(batch_stream));
 
-        Ok(schema)
+        // Issue a ticket for fetching the query stream
+        let ticket = TicketStatementQuery {
+            statement_handle: query_id.clone().into(),
+        };
+
+        let endpoint = FlightEndpoint::new()
+            .with_ticket(Ticket::new(ticket.as_any().encode_to_vec()));
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(&schema)?
+            .with_endpoint(endpoint)
+            .with_descriptor(request.into_inner());
+
+        Ok(flight_info)
     }
 
     // Get a specific stream from the map
@@ -146,7 +171,7 @@ impl SeafowlFlightHandler {
 
         debug!("Processing data change with {num_rows} rows for url {url}");
         match tokio::time::timeout(
-            Duration::from_secs(self.context.config.misc.sync_data.sync_lock_timeout_s),
+            Duration::from_secs(self.context.config.misc.sync_conf.sync_lock_timeout_s),
             self.sync_manager.write(),
         )
         .await
