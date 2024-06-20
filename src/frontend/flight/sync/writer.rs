@@ -196,8 +196,8 @@ impl SeafowlDataSyncWriter {
                 rows + batch.num_rows(),
             )
         });
-        self.metrics.request_size(old_size as u64);
-        self.metrics.request_rows(old_rows as u64);
+        self.metrics.request_bytes.increment(old_size as u64);
+        self.metrics.request_rows.increment(old_rows as u64);
         let start = Instant::now();
         let batch = compact_batches(&sync_schema, batches)?;
         let duration = start.elapsed().as_millis();
@@ -235,11 +235,15 @@ impl SeafowlDataSyncWriter {
 
         // Update the total size and metrics
         self.size += size;
-        self.metrics.in_memory_size().increment(size as f64);
-        self.metrics.in_memory_rows().increment(rows as f64);
+        self.metrics.in_memory_bytes.increment(size as f64);
+        self.metrics.in_memory_bytes.increment(rows as f64);
         self.metrics.compaction_time.record(duration as f64);
-        self.metrics.compacted_size((old_size - size) as u64);
-        self.metrics.compacted_rows((old_rows - rows) as u64);
+        self.metrics
+            .compacted_bytes
+            .increment((old_size - size) as u64);
+        self.metrics
+            .compacted_rows
+            .increment((old_rows - rows) as u64);
 
         // Flag the sequence as volatile persisted for this origin if it is the last sync command
         if last {
@@ -413,8 +417,9 @@ impl SeafowlDataSyncWriter {
         // Record flush metrics
         let flush_duration = start.elapsed().as_millis();
         self.metrics.flushing_time.record(flush_duration as f64);
-        self.metrics.flushed_size(size as u64);
-        self.metrics.flushed_rows(rows as u64);
+        self.metrics.flushed_bytes.increment(size as u64);
+        self.metrics.flushed_rows.increment(rows as u64);
+        self.metrics.flushed_last.set(now() as f64);
 
         Ok(())
     }
@@ -613,8 +618,8 @@ impl SeafowlDataSyncWriter {
     fn remove_sync(&mut self, url: &String) {
         if let Some(sync) = self.syncs.shift_remove(url) {
             self.size -= sync.size;
-            self.metrics.in_memory_size().decrement(sync.size as f64);
-            self.metrics.in_memory_rows().decrement(sync.rows as f64);
+            self.metrics.in_memory_bytes.decrement(sync.size as f64);
+            self.metrics.in_memory_rows.decrement(sync.rows as f64);
         }
     }
 
