@@ -7,8 +7,8 @@ use futures::{stream, StreamExt, TryStreamExt};
 use chrono::{DateTime, TimeZone, Utc};
 use object_store::path::Path;
 use object_store::{
-    GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, PutOptions, PutResult,
+    GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
 };
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use warp::hyper::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
@@ -31,7 +31,6 @@ use std::io::Read;
 use std::ops::Range;
 use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::io::AsyncWrite;
 use tracing::warn;
 use url::Url;
 use warp::hyper::header::{
@@ -246,7 +245,7 @@ impl ObjectStore for HttpObjectStore {
     async fn put(
         &self,
         _location: &Path,
-        _bytes: Bytes,
+        _payload: PutPayload,
     ) -> object_store::Result<PutResult> {
         Err(object_store::Error::NotSupported {
             source: Box::new(HttpObjectStoreError::WritesUnsupported),
@@ -256,7 +255,7 @@ impl ObjectStore for HttpObjectStore {
     async fn put_opts(
         &self,
         _location: &Path,
-        _bytes: Bytes,
+        _payload: PutPayload,
         _opts: PutOptions,
     ) -> object_store::Result<PutResult> {
         Err(object_store::Error::NotSupported {
@@ -267,17 +266,17 @@ impl ObjectStore for HttpObjectStore {
     async fn put_multipart(
         &self,
         _location: &Path,
-    ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
         Err(object_store::Error::NotSupported {
             source: Box::new(HttpObjectStoreError::WritesUnsupported),
         })
     }
 
-    async fn abort_multipart(
+    async fn put_multipart_opts(
         &self,
         _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> object_store::Result<()> {
+        _opts: PutMultipartOpts,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
         Err(object_store::Error::NotSupported {
             source: Box::new(HttpObjectStoreError::WritesUnsupported),
         })
@@ -358,6 +357,7 @@ impl ObjectStore for HttpObjectStore {
             range,
             payload: stream,
             meta,
+            attributes: Default::default(),
         })
     }
 

@@ -208,18 +208,34 @@ async fn test_remote_table_querying(
     let results = list_columns_query(&context).await;
 
     let expected = if introspect_schema {
-        vec![
-            "+--------------+--------------+-------------+-----------+",
-            "| table_schema | table_name   | column_name | data_type |",
-            "+--------------+--------------+-------------+-----------+",
-            "| staging      | remote_table | a           | Int64     |",
-            "| staging      | remote_table | b           | Float64   |",
-            "| staging      | remote_table | c           | Utf8      |",
-            "| staging      | remote_table | date field  | Date32    |",
-            "| staging      | remote_table | e           | Date64    |",
-            "| staging      | remote_table | f           | Utf8      |",
-            "+--------------+--------------+-------------+-----------+",
-        ]
+        // TODO: for some reason introspection assumes different units for the timestamp
+        if db_type == "SQLite" {
+            vec![
+                "+--------------+--------------+-------------+-----------------------------+",
+                "| table_schema | table_name   | column_name | data_type                   |",
+                "+--------------+--------------+-------------+-----------------------------+",
+                "| staging      | remote_table | a           | Int64                       |",
+                "| staging      | remote_table | b           | Float64                     |",
+                "| staging      | remote_table | c           | Utf8                        |",
+                "| staging      | remote_table | date field  | Date32                      |",
+                "| staging      | remote_table | e           | Timestamp(Nanosecond, None) |",
+                "| staging      | remote_table | f           | Utf8                        |",
+                "+--------------+--------------+-------------+-----------------------------+",
+            ]
+        } else {
+            vec![
+                "+--------------+--------------+-------------+------------------------------+",
+                "| table_schema | table_name   | column_name | data_type                    |",
+                "+--------------+--------------+-------------+------------------------------+",
+                "| staging      | remote_table | a           | Int64                        |",
+                "| staging      | remote_table | b           | Float64                      |",
+                "| staging      | remote_table | c           | Utf8                         |",
+                "| staging      | remote_table | date field  | Date32                       |",
+                "| staging      | remote_table | e           | Timestamp(Microsecond, None) |",
+                "| staging      | remote_table | f           | Utf8                         |",
+                "+--------------+--------------+-------------+------------------------------+",
+            ]
+        }
     } else {
         vec![
             "+--------------+--------------+-------------+-----------------------------+",
@@ -293,17 +309,27 @@ async fn test_remote_table_querying(
 
     let actual_lines: Vec<&str> = formatted.trim().lines().collect();
     if introspect_schema {
-        // TODO: Looks like not all filters get pushed down in the case of introspection
-        assert_contains!(
-            actual_lines[6],
-            format!(
-                r#"TableScan: staging.remote_table projection=[a, c, date field, e], full_filters=[staging.remote_table.date field > Date32("19297") OR staging.remote_table.c = Utf8("two")]"#
-            )
-        );
+        if db_type == "SQLite" {
+            assert_contains!(
+                actual_lines[5],
+                format!(
+                    r#"TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Date32("2022-11-01") OR staging.remote_table.c = Utf8("two"), staging.remote_table.a > Int64(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2"#
+                )
+            );
+        } else {
+            assert_contains!(
+                actual_lines[5],
+                format!(
+                    r#"TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Date32("2022-11-01") OR staging.remote_table.c = Utf8("two"), staging.remote_table.a > Int64(2) OR staging.remote_table.e < TimestampMicrosecond(1667599865000000, None)], fetch=2"#
+                )
+            );
+        }
     } else {
         assert_contains!(
             actual_lines[5],
-            format!("TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Date32(\"19297\") OR staging.remote_table.c = Utf8(\"two\"), staging.remote_table.a > Int32(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2")
+            format!(
+                r#"TableScan: staging.remote_table projection=[c, date field], full_filters=[staging.remote_table.date field > Date32("2022-11-01") OR staging.remote_table.c = Utf8("two"), staging.remote_table.a > Int32(2) OR staging.remote_table.e < TimestampNanosecond(1667599865000000000, None)], fetch=2"#
+            )
         );
     };
 }

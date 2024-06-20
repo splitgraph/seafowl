@@ -2,21 +2,21 @@
 members = ["clade"]
 
 [workspace.dependencies]
-arrow = { version = "51.0.0", features = ["test_utils"] }
-arrow-buffer = "51.0.0"
-arrow-csv = "51.0.0"
-arrow-flight = "51.0.0"
+arrow = { version = "52.0.0", features = ["test_utils"] }
+arrow-buffer = "52.0.0"
+arrow-csv = "52.0.0"
+arrow-flight = "52.0.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "51.0.0"
-arrow-row = "51.0.0"
-arrow-schema = "51.0.0"
+arrow-integration-test = "52.0.0"
+arrow-row = "52.0.0"
+arrow-schema = "52.0.0"
 async-trait = "0.1.64"
 
-datafusion = "37.1.0"
-datafusion-common = "37.1.0"
-datafusion-expr = "37.1.0"
+datafusion = "39.0.0"
+datafusion-common = "39.0.0"
+datafusion-expr = "39.0.0"
 
 itertools = ">=0.10.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
@@ -51,18 +51,6 @@ object-store-gcs = ["object_store/gcp"]
 object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
-[patch.crates-io]
-# Pick up backport of https://github.com/apache/arrow-datafusion/pull/10114
-datafusion = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
-datafusion-common = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
-datafusion-execution = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
-datafusion-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
-datafusion-optimizer = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
-datafusion-physical-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
-datafusion-physical-plan = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
-datafusion-proto = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
-datafusion-sql = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "avg-acc-fix" }
-
 [dependencies]
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
@@ -84,8 +72,8 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-37.1-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-37.1-upgrade", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-39-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-39-upgrade", optional = true }
 
 dashmap = "5.4.0"
 
@@ -95,7 +83,7 @@ datafusion-expr = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/splitgraph/delta-rs", rev = "5972aab07723fe11243c017f1938b96b70d45810", features = ["datafusion"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "6205f006f444113c4e5cedf06856c4b5c93a565c", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
@@ -105,7 +93,7 @@ lazy_static = ">=1.4.0"
 metrics = { version = "0.22.1" }
 metrics-exporter-prometheus = { version = "0.13.1" }
 moka = { version = "0.12.5", default-features = false, features = ["future", "atomic64", "quanta"] }
-object_store = "0.9.1"
+object_store = "0.10.1"
 percent-encoding = "2.2.0"
 prost = "0.12.1"
 
@@ -121,7 +109,7 @@ rustyline = "13.0"
 serde = "1.0.156"
 serde_json = "1.0.93"
 sha2 = ">=0.10.1"
-sqlparser = { version = "0.44", features = ["visitor"] }
+sqlparser = { version = "0.47", features = ["visitor"] }
 sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"

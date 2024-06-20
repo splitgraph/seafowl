@@ -52,7 +52,6 @@ use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
 use object_store::path::Path;
-use std::borrow::Cow;
 use std::ops::Deref;
 use std::ops::Not;
 use std::sync::Arc;
@@ -225,11 +224,11 @@ impl SeafowlContext {
                 // and 2nd from the insert, while it seems more reasonable that in this case we have
                 // only one
                 self.create_delta_table(
-                    name,
+                    name.clone(),
                     CreateDeltaTableDetails::EmptyTable(plan.schema().as_ref().clone()),
                 )
                 .await?;
-                self.plan_to_delta_table(name, &plan).await?;
+                self.plan_to_delta_table(name.clone(), &plan).await?;
 
                 Ok(make_dummy_exec())
             }
@@ -241,7 +240,8 @@ impl SeafowlContext {
             }) => {
                 let physical = self.inner.state().create_physical_plan(input).await?;
 
-                self.plan_to_delta_table(table_name, &physical).await?;
+                self.plan_to_delta_table(table_name.clone(), &physical)
+                    .await?;
 
                 Ok(make_dummy_exec())
             }
@@ -259,7 +259,7 @@ impl SeafowlContext {
                     ));
                 };
 
-                let mut table = self.try_get_delta_table(table_name).await?;
+                let mut table = self.try_get_delta_table(table_name.clone()).await?;
                 table.load().await?;
                 let snapshot = table.snapshot()?;
 
@@ -329,7 +329,7 @@ impl SeafowlContext {
                         (None, snapshot.file_actions()?)
                     };
 
-                let uuid = self.get_table_uuid(table_name).await?;
+                let uuid = self.get_table_uuid(table_name.clone()).await?;
                 let mut actions: Vec<Action> = vec![];
                 if !removes.is_empty() {
                     let base_scan = table.scan(&state, None, &filter, None).await?;
@@ -405,10 +405,11 @@ impl SeafowlContext {
                 table_schema,
                 op: WriteOp::Delete,
                 input,
+                ..
             }) => {
-                let uuid = self.get_table_uuid(table_name).await?;
+                let uuid = self.get_table_uuid(table_name.clone()).await?;
 
-                let mut table = self.try_get_delta_table(table_name).await?;
+                let mut table = self.try_get_delta_table(table_name.clone()).await?;
                 table.load().await?;
                 let snapshot = table.snapshot()?;
                 let schema_ref = SchemaRef::from(table_schema.deref().clone());
@@ -521,15 +522,15 @@ impl SeafowlContext {
                 if_exists: _,
                 schema: _,
             })) => {
-                let resolved_ref = self.resolve_table_ref(name);
+                let resolved_ref = self.resolve_table_ref(name.clone());
 
-                if resolved_ref.schema == STAGING_SCHEMA {
+                if resolved_ref.schema.as_ref() == STAGING_SCHEMA {
                     // Dropping a staging table is a in-memory only op
                     self.inner.deregister_table(resolved_ref)?;
                     return Ok(make_dummy_exec());
                 }
 
-                self.delete_delta_table(name)
+                self.delete_delta_table(name.clone())
                     .await
                     .unwrap_or_else(|e| info!("Failed to cleanup table {name}: {e}"));
 
@@ -551,7 +552,7 @@ impl SeafowlContext {
                 let schema_name = name.schema_name();
 
                 if let SchemaReference::Full { catalog, .. } = name
-                    && catalog != &self.default_catalog
+                    && catalog.as_ref() != self.default_catalog
                 {
                     return Err(DataFusionError::Execution(
                         "Cannot delete schemas in other catalogs".to_string(),
@@ -579,9 +580,9 @@ impl SeafowlContext {
                 // Delete each table sequentially
                 for table_name in schema.table_names() {
                     let table_ref = ResolvedTableReference {
-                        catalog: Cow::from(&self.default_catalog),
-                        schema: Cow::from(schema_name),
-                        table: Cow::from(table_name),
+                        catalog: Arc::from(self.default_catalog.as_str()),
+                        schema: Arc::from(schema_name),
+                        table: Arc::from(table_name),
                     };
                     self.delete_delta_table(table_ref.clone()).await?;
 
@@ -667,7 +668,7 @@ impl SeafowlContext {
                         }) => {
                             // Resolve new table reference
                             let resolved_new_ref = self.resolve_table_ref(new_name);
-                            if resolved_new_ref.catalog != self.default_catalog {
+                            if resolved_new_ref.catalog.as_ref() != self.default_catalog {
                                 return Err(Error::Plan(
                                     "Changing the table's database is not supported!"
                                         .to_string(),
@@ -886,9 +887,9 @@ impl SeafowlContext {
         let plan = source.scan(&self.inner.state(), None, &[], None).await?;
 
         let table_ref = TableReference::Full {
-            catalog: Cow::from(&self.default_catalog),
-            schema: Cow::from(schema_name),
-            table: Cow::from(table_name),
+            catalog: Arc::from(self.default_catalog.as_str()),
+            schema: Arc::from(schema_name),
+            table: Arc::from(table_name),
         };
 
         if !table_exists {

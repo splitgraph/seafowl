@@ -175,6 +175,14 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
         Arc::from(self.clone())
     }
 
+    fn with_exprs_and_inputs(
+        &self,
+        _exprs: Vec<Expr>,
+        _inputs: Vec<LogicalPlan>,
+    ) -> datafusion_common::Result<Arc<dyn UserDefinedLogicalNode>> {
+        Ok(Arc::from(self.clone()))
+    }
+
     fn dyn_hash(&self, state: &mut dyn Hasher) {
         let mut s = state;
         self.hash(&mut s)

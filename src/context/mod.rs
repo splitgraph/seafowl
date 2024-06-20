@@ -12,8 +12,11 @@ use crate::wasm_udf::wasm::create_udf_from_wasm;
 use crate::config::schema::SeafowlConfig;
 use base64::{engine::general_purpose::STANDARD, Engine};
 pub use datafusion::error::{DataFusionError as Error, Result};
-use datafusion::{error::DataFusionError, prelude::SessionContext, sql::TableReference};
-use datafusion_common::{OwnedTableReference, ResolvedTableReference};
+use datafusion::{
+    error::DataFusionError,
+    prelude::SessionContext,
+    sql::{ResolvedTableReference, TableReference},
+};
 use deltalake::DeltaTable;
 use object_store::path::Path;
 use std::sync::Arc;
@@ -102,10 +105,10 @@ impl SeafowlContext {
     }
 
     // Taken from DF SessionState where's it's private
-    pub fn resolve_table_ref<'a>(
-        &'a self,
-        table_ref: impl Into<TableReference<'a>>,
-    ) -> ResolvedTableReference<'a> {
+    pub fn resolve_table_ref(
+        &self,
+        table_ref: impl Into<TableReference>,
+    ) -> ResolvedTableReference {
         table_ref
             .into()
             .resolve(&self.default_catalog, &self.default_schema)
@@ -114,12 +117,9 @@ impl SeafowlContext {
     // Check that the TableReference doesn't have a database/schema in it.
     // We create all external tables in the staging schema (backed by DataFusion's
     // in-memory schema provider) instead.
-    fn resolve_staging_ref(
-        &self,
-        name: &OwnedTableReference,
-    ) -> Result<OwnedTableReference> {
+    fn resolve_staging_ref(&self, name: &TableReference) -> Result<TableReference> {
         // NB: Since Datafusion 16.0.0 for external tables the parsed ObjectName is coerced into the
-        // `OwnedTableReference::Bare` enum variant, since qualified names are not supported for them
+        // `TableReference::Bare` enum variant, since qualified names are not supported for them
         // (see `external_table_to_plan` in datafusion-sql).
         //
         // This means that any potential catalog/schema references get condensed into the name, so
@@ -127,8 +127,8 @@ impl SeafowlContext {
         let reference = TableReference::from(name.to_string());
         let resolved_reference = reference.resolve(&self.default_catalog, STAGING_SCHEMA);
 
-        if resolved_reference.catalog != self.default_catalog
-            || resolved_reference.schema != STAGING_SCHEMA
+        if resolved_reference.catalog.as_ref() != self.default_catalog
+            || resolved_reference.schema.as_ref() != STAGING_SCHEMA
         {
             return Err(DataFusionError::Plan(format!(
                 "Can only create external tables in the staging schema.
@@ -137,13 +137,13 @@ impl SeafowlContext {
             )));
         }
 
-        Ok(TableReference::from(resolved_reference).to_owned_reference())
+        Ok(TableReference::from(resolved_reference))
     }
 
     /// Resolve a table reference into a Delta table
     pub async fn try_get_delta_table<'a>(
         &self,
-        table_name: impl Into<TableReference<'a>>,
+        table_name: impl Into<TableReference>,
     ) -> Result<DeltaTable> {
         self.inner
             .table_provider(table_name)
@@ -159,7 +159,7 @@ impl SeafowlContext {
     // Parse the uuid from the Delta table uri if available
     pub async fn get_table_uuid<'a>(
         &self,
-        name: impl Into<TableReference<'a>>,
+        name: impl Into<TableReference>,
     ) -> Result<Uuid> {
         match self
             .inner

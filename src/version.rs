@@ -79,9 +79,9 @@ impl VisitorMut for TableVersionProcessor {
                 let resolved_ref = TableReference::from(unresolved_name.as_str())
                     .resolve(&self.default_catalog, &self.default_schema);
                 let full_object_name = ObjectName(vec![
-                    Ident::new(resolved_ref.catalog),
-                    Ident::new(resolved_ref.schema),
-                    Ident::new(resolved_ref.table),
+                    Ident::new(resolved_ref.catalog.as_ref()),
+                    Ident::new(resolved_ref.schema.as_ref()),
+                    Ident::new(resolved_ref.table.as_ref()),
                 ]);
 
                 self.table_versions

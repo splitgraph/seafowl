@@ -11,8 +11,8 @@ use metrics::{
 use moka::future::{Cache, CacheBuilder, FutureExt};
 use moka::notification::RemovalCause;
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions,
-    PutResult,
+    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult,
 };
 use tempfile::TempDir;
 use tokio::time::Instant;
@@ -29,7 +29,6 @@ use std::path::{Path, PathBuf};
 use moka::policy::EvictionPolicy;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncWrite;
 
 pub const DEFAULT_MIN_FETCH_SIZE: u64 = 1024 * 1024; // 1 MiB
 pub const DEFAULT_CACHE_CAPACITY: u64 = 1024 * 1024 * 1024; // 1 GiB
@@ -594,11 +593,11 @@ impl ObjectStore for CachingObjectStore {
     async fn put_opts(
         &self,
         location: &object_store::path::Path,
-        bytes: Bytes,
+        payload: PutPayload,
         opts: PutOptions,
     ) -> object_store::Result<PutResult> {
         let start = Instant::now();
-        let result = self.inner.put_opts(location, bytes, opts).await;
+        let result = self.inner.put_opts(location, payload, opts).await;
         self.metrics.log_object_store_outbound_request(
             start,
             "put",
@@ -610,7 +609,7 @@ impl ObjectStore for CachingObjectStore {
     async fn put_multipart(
         &self,
         location: &object_store::path::Path,
-    ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
         let start = Instant::now();
         let result = self.inner.put_multipart(location).await;
         self.metrics.log_object_store_outbound_request(
@@ -621,19 +620,12 @@ impl ObjectStore for CachingObjectStore {
         result
     }
 
-    async fn abort_multipart(
+    async fn put_multipart_opts(
         &self,
         location: &object_store::path::Path,
-        multipart_id: &MultipartId,
-    ) -> object_store::Result<()> {
-        let start = Instant::now();
-        let result = self.inner.abort_multipart(location, multipart_id).await;
-        self.metrics.log_object_store_outbound_request(
-            start,
-            "abort_multipart",
-            Some(result.is_ok()),
-        );
-        result
+        opts: PutMultipartOpts,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
     }
 
     async fn get_opts(

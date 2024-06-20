@@ -245,7 +245,7 @@ impl SeafowlDataSyncWriter {
 
         Ok(CreateBuilder::new()
             .with_log_store(log_store)
-            .with_columns(delta_schema.fields().clone())
+            .with_columns(delta_schema.fields().cloned())
             .with_comment(format!("Synced by Seafowl {}", env!("CARGO_PKG_VERSION")))
             .await?)
     }
