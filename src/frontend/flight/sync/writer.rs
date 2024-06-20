@@ -27,6 +27,7 @@ use crate::context::delta::plan_to_object_store;
 
 use crate::context::SeafowlContext;
 use crate::frontend::flight::handler::SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER;
+use crate::frontend::flight::sync::metrics::SyncMetrics;
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::utils::{compact_batches, construct_qualifier};
 
@@ -86,6 +87,8 @@ pub(crate) struct SeafowlDataSyncWriter {
     origin_memory: HashMap<Origin, SequenceNumber>,
     // Map of known durable sequence numbers per origin
     origin_durable: HashMap<Origin, SequenceNumber>,
+    // Keep track of various metrics for observability
+    metrics: SyncMetrics,
 }
 
 // A struct tracking relevant information about a single transaction/sequence from a single origin
@@ -104,6 +107,8 @@ struct DataSyncSequence {
 pub(super) struct DataSyncCollection {
     // Total in-memory size of all the batches in all the items for this table
     size: usize,
+    // Total in-memory rows of all the batches in all the items for this table
+    rows: usize,
     // Unix epoch of the first sync command in this collection
     insertion_time: u64,
     // Table log store
@@ -134,6 +139,7 @@ impl SeafowlDataSyncWriter {
             size: 0,
             origin_memory: Default::default(),
             origin_durable: Default::default(),
+            metrics: Default::default(),
         }
     }
 
@@ -185,6 +191,7 @@ impl SeafowlDataSyncWriter {
 
         let batch = compact_batches(&sync_schema, batches)?;
         let size = batch.get_array_memory_size();
+        let rows = batch.num_rows();
 
         // If there's no delta table at this location yet create one first.
         if !log_store.is_delta_table_location().await? {
@@ -203,9 +210,11 @@ impl SeafowlDataSyncWriter {
             .and_modify(|entry| {
                 entry.syncs.push(item.clone());
                 entry.size += size;
+                entry.rows += rows;
             })
             .or_insert(DataSyncCollection {
                 size,
+                rows,
                 insertion_time: now(),
                 log_store,
                 syncs: vec![item],
@@ -213,6 +222,8 @@ impl SeafowlDataSyncWriter {
 
         // Update the total size
         self.size += size;
+        self.metrics.in_memory_size.increment(size as f64);
+        self.metrics.in_memory_rows.increment(rows as f64);
 
         // Flag the sequence as volatile persisted for this origin if it is the last sync command
         if last {
@@ -577,6 +588,8 @@ impl SeafowlDataSyncWriter {
     fn remove_sync(&mut self, url: &String) {
         if let Some(sync) = self.syncs.shift_remove(url) {
             self.size -= sync.size;
+            self.metrics.in_memory_size.decrement(sync.size as f64);
+            self.metrics.in_memory_rows.decrement(sync.rows as f64);
         }
     }
 
