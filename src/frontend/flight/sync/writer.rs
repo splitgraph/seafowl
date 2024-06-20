@@ -200,7 +200,7 @@ impl SeafowlDataSyncWriter {
         self.metrics.request_rows.increment(old_rows as u64);
         let start = Instant::now();
         let batch = compact_batches(&sync_schema, batches)?;
-        let duration = start.elapsed().as_millis();
+        let duration = start.elapsed().as_secs();
 
         // Get new size and row count
         let size = batch.get_array_memory_size();

@@ -9,7 +9,7 @@ const REQUEST_ROWS: &str = "seafowl_changeset_writer_request_rows_total";
 const IN_MEMORY_BYTES: &str = "seafowl_changeset_writer_in_memory_bytes_current";
 const IN_MEMORY_ROWS: &str = "seafowl_changeset_writer_in_memory_rows_current";
 const IN_MEMORY_OLDEST: &str =
-    "seafowl_changeset_writer_in_memory_oldest_timestamp_seconds_current";
+    "seafowl_changeset_writer_in_memory_oldest_timestamp_seconds";
 const COMPACTION_TIME: &str = "seafowl_changeset_writer_compaction_time_seconds";
 const COMPACTED_BYTES: &str = "seafowl_changeset_writer_compacted_bytes_total";
 const COMPACTED_ROWS: &str = "seafowl_changeset_writer_compacted_rows_total";
@@ -52,7 +52,7 @@ impl SyncMetrics {
             "The total byte size of all batches in the sync message"
         );
         describe_counter!(
-            REQUEST_BYTES,
+            REQUEST_ROWS,
             "The total row count of of all batches in the sync message"
         );
         describe_gauge!(
@@ -60,7 +60,7 @@ impl SyncMetrics {
             "The total byte size of all pending batches in memory"
         );
         describe_gauge!(
-            IN_MEMORY_BYTES,
+            IN_MEMORY_ROWS,
             "The total row count of all pending batches in memory"
         );
         describe_gauge!(
@@ -76,7 +76,7 @@ impl SyncMetrics {
             "The reduction in byte size due to batch compaction"
         );
         describe_counter!(
-            COMPACTED_BYTES,
+            COMPACTED_ROWS,
             "The reduction in row count due to batch compaction"
         );
         describe_histogram!(FLUSH_TIME, "The time taken to flush a collections of syncs");
