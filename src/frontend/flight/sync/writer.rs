@@ -303,6 +303,9 @@ impl SeafowlDataSyncWriter {
             }
         };
 
+        let start = Instant::now();
+        let rows = entry.rows;
+        let size = entry.size;
         let url = url.clone();
         let log_store = entry.log_store.clone();
 
@@ -404,6 +407,12 @@ impl SeafowlDataSyncWriter {
         self.remove_sequence_locations(url.clone(), orseq);
         self.remove_sync(&url);
         self.advance_durable();
+
+        // Record flush metrics
+        let flush_duration = start.elapsed().as_millis();
+        self.metrics.flushing_time.record(flush_duration as f64);
+        self.metrics.flushed_size(size as u64);
+        self.metrics.flushed_rows(rows as u64);
 
         Ok(())
     }
