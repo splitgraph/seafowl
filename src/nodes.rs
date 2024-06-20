@@ -180,7 +180,7 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
         _exprs: Vec<Expr>,
         _inputs: Vec<LogicalPlan>,
     ) -> datafusion_common::Result<Arc<dyn UserDefinedLogicalNode>> {
-        todo!("Should we implement this")
+        Ok(Arc::from(self.clone()))
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {
