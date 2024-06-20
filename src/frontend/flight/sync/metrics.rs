@@ -4,19 +4,20 @@ use metrics::{
     Counter, Gauge, Histogram,
 };
 
-const REQUEST_BYTES: &str = "seafowl_changeset_writer_request_bytes";
-const REQUEST_ROWS: &str = "seafowl_changeset_writer_request_rows";
-const IN_MEMORY_BYTES: &str = "seafowl_changeset_writer_in_memory_bytes";
-const IN_MEMORY_ROWS: &str = "seafowl_changeset_writer_in_memory_rows";
-const IN_MEMORY_OLDEST: &str = "seafowl_changeset_writer_in_memory_oldest";
-const COMPACTION_TIME: &str = "seafowl_changeset_writer_compaction_time";
-const COMPACTED_BYTES: &str = "seafowl_changeset_writer_compacted_bytes";
-const COMPACTED_ROWS: &str = "seafowl_changeset_writer_compacted_rows";
-const FLUSH_TIME: &str = "seafowl_changeset_writer_flush_time";
-const FLUSH_BYTES: &str = "seafowl_changeset_writer_flush_bytes";
-const FLUSH_ROWS: &str = "seafowl_changeset_writer_flush_rows";
+const REQUEST_BYTES: &str = "seafowl_changeset_writer_request_bytes_total";
+const REQUEST_ROWS: &str = "seafowl_changeset_writer_request_rows_total";
+const IN_MEMORY_BYTES: &str = "seafowl_changeset_writer_in_memory_bytes_current";
+const IN_MEMORY_ROWS: &str = "seafowl_changeset_writer_in_memory_rows_current";
+const IN_MEMORY_OLDEST: &str =
+    "seafowl_changeset_writer_in_memory_oldest_timestamp_seconds_current";
+const COMPACTION_TIME: &str = "seafowl_changeset_writer_compaction_time_seconds";
+const COMPACTED_BYTES: &str = "seafowl_changeset_writer_compacted_bytes_total";
+const COMPACTED_ROWS: &str = "seafowl_changeset_writer_compacted_rows_total";
+const FLUSH_TIME: &str = "seafowl_changeset_writer_flush_time_seconds";
+const FLUSH_BYTES: &str = "seafowl_changeset_writer_flush_bytes_total";
+const FLUSH_ROWS: &str = "seafowl_changeset_writer_flush_rows_total";
 const FLUSH_LAST: &str =
-    "seafowl_changeset_writer_last_successful_flush_timestamp_seconds";
+    "seafowl_changeset_writer_last_successful_flush_timestamp_seconds_current";
 const FLUSH_LAG: &str = "seafowl_changeset_writer_flush_lag_seconds";
 const SEQUENCE_DURABLE: &str = "seafowl_changeset_writer_sequence_durable_bytes";
 const SEQUENCE_MEMORY: &str = "seafowl_changeset_writer_sequence_memory_bytes";
