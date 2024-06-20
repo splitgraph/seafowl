@@ -190,12 +190,14 @@ impl SeafowlDataSyncWriter {
             .or_insert(IndexMap::from([(sequence_number, sequence)]));
 
         // Compactify the batches and measure the time it took and the reduction in rows/size
-        let old_rows = batches
-            .iter()
-            .fold(0, |rows, batch| rows + batch.num_rows());
-        let old_size = batches
-            .iter()
-            .fold(0, |size, batch| size + batch.get_array_memory_size());
+        let (old_size, old_rows) = batches.iter().fold((0, 0), |(size, rows), batch| {
+            (
+                size + batch.get_array_memory_size(),
+                rows + batch.num_rows(),
+            )
+        });
+        self.metrics.request_size(old_size as u64);
+        self.metrics.request_rows(old_rows as u64);
         let start = Instant::now();
         let batch = compact_batches(&sync_schema, batches)?;
         let duration = start.elapsed().as_millis();
@@ -233,8 +235,8 @@ impl SeafowlDataSyncWriter {
 
         // Update the total size and metrics
         self.size += size;
-        self.metrics.in_memory_size.increment(size as f64);
-        self.metrics.in_memory_rows.increment(rows as f64);
+        self.metrics.in_memory_size().increment(size as f64);
+        self.metrics.in_memory_rows().increment(rows as f64);
         self.metrics.compaction_time.record(duration as f64);
         self.metrics.compacted_size((old_size - size) as u64);
         self.metrics.compacted_rows((old_rows - rows) as u64);
@@ -611,8 +613,8 @@ impl SeafowlDataSyncWriter {
     fn remove_sync(&mut self, url: &String) {
         if let Some(sync) = self.syncs.shift_remove(url) {
             self.size -= sync.size;
-            self.metrics.in_memory_size.decrement(sync.size as f64);
-            self.metrics.in_memory_rows.decrement(sync.rows as f64);
+            self.metrics.in_memory_size().decrement(sync.size as f64);
+            self.metrics.in_memory_rows().decrement(sync.rows as f64);
         }
     }
 
