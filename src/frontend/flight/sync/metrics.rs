@@ -1,3 +1,4 @@
+use crate::frontend::flight::sync::writer::{Origin, SequenceNumber};
 use metrics::{
     counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram,
     Counter, Gauge, Histogram,
@@ -17,6 +18,8 @@ const FLUSH_ROWS: &str = "seafowl_changeset_writer_flush_rows";
 const FLUSH_LAST: &str =
     "seafowl_changeset_writer_last_successful_flush_timestamp_seconds";
 const FLUSH_LAG: &str = "seafowl_changeset_writer_flush_lag_seconds";
+const SEQUENCE_DURABLE: &str = "seafowl_changeset_writer_sequence_durable_bytes";
+const SEQUENCE_MEMORY: &str = "seafowl_changeset_writer_sequence_memory_bytes";
 
 #[derive(Clone)]
 pub struct SyncMetrics {
@@ -83,6 +86,8 @@ impl SyncMetrics {
             FLUSH_LAG,
             "The total time between the first queued change set and flush"
         );
+        describe_gauge!(SEQUENCE_DURABLE, "The durable sequence number per origin");
+        describe_gauge!(SEQUENCE_MEMORY, "The memory sequence number per origin");
 
         Self {
             request_bytes: counter!(REQUEST_BYTES),
@@ -99,5 +104,15 @@ impl SyncMetrics {
             flush_last: gauge!(FLUSH_LAST),
             flush_lag: histogram!(FLUSH_LAG),
         }
+    }
+
+    pub fn sequence_durable(&self, origin: &Origin, sequence: SequenceNumber) {
+        let sequence_durable = gauge!(SEQUENCE_DURABLE, "origin" => origin.to_string());
+        sequence_durable.set(sequence as f64);
+    }
+
+    pub fn sequence_memory(&self, origin: &Origin, sequence: SequenceNumber) {
+        let sequence_memory = gauge!(SEQUENCE_MEMORY, "origin" => origin.to_string());
+        sequence_memory.set(sequence as f64);
     }
 }

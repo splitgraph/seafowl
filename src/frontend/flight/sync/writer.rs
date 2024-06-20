@@ -31,8 +31,8 @@ use crate::frontend::flight::sync::metrics::SyncMetrics;
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::utils::{compact_batches, construct_qualifier};
 
-type Origin = u64;
-type SequenceNumber = u64;
+pub(super) type Origin = u64;
+pub(super) type SequenceNumber = u64;
 const SYNC_REF: &str = "sync_data";
 const SYNC_JOIN_COLUMN: &str = "__sync_join";
 
@@ -253,6 +253,9 @@ impl SeafowlDataSyncWriter {
 
         // Flag the sequence as volatile persisted for this origin if it is the last sync command
         if last {
+            self.metrics.sequence_memory(&origin, sequence_number);
+            // TODO: (when) shsould we be removing the memory sequence number?
+
             self.origin_memory.insert(origin, sequence_number);
         }
 
@@ -442,6 +445,9 @@ impl SeafowlDataSyncWriter {
         self.metrics
             .flush_lag
             .record((now() - insertion_time) as f64);
+        self.origin_durable.iter().for_each(|(origin, seq)| {
+            self.metrics.sequence_durable(origin, *seq);
+        });
 
         Ok(())
     }
