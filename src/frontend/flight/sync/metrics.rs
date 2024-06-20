@@ -7,14 +7,16 @@ const REQUEST_BYTES: &str = "seafowl_changeset_writer_request_bytes";
 const REQUEST_ROWS: &str = "seafowl_changeset_writer_request_rows";
 const IN_MEMORY_BYTES: &str = "seafowl_changeset_writer_in_memory_bytes";
 const IN_MEMORY_ROWS: &str = "seafowl_changeset_writer_in_memory_rows";
+const IN_MEMORY_OLDEST: &str = "seafowl_changeset_writer_in_memory_oldest";
 const COMPACTION_TIME: &str = "seafowl_changeset_writer_compaction_time";
 const COMPACTED_BYTES: &str = "seafowl_changeset_writer_compacted_bytes";
 const COMPACTED_ROWS: &str = "seafowl_changeset_writer_compacted_rows";
-const FLUSHING_TIME: &str = "seafowl_changeset_writer_flushing_time";
-const FLUSHED_BYTES: &str = "seafowl_changeset_writer_flushed_bytes";
-const FLUSHED_ROWS: &str = "seafowl_changeset_writer_flushed_rows";
-const FLUSHED_LAST: &str =
+const FLUSH_TIME: &str = "seafowl_changeset_writer_flush_time";
+const FLUSH_BYTES: &str = "seafowl_changeset_writer_flush_bytes";
+const FLUSH_ROWS: &str = "seafowl_changeset_writer_flush_rows";
+const FLUSH_LAST: &str =
     "seafowl_changeset_writer_last_successful_flush_timestamp_seconds";
+const FLUSH_LAG: &str = "seafowl_changeset_writer_flush_lag_seconds";
 
 #[derive(Clone)]
 pub struct SyncMetrics {
@@ -22,13 +24,15 @@ pub struct SyncMetrics {
     pub request_rows: Counter,
     pub in_memory_bytes: Gauge,
     pub in_memory_rows: Gauge,
+    pub in_memory_oldest: Gauge,
     pub compaction_time: Histogram,
     pub compacted_bytes: Counter,
     pub compacted_rows: Counter,
-    pub flushing_time: Histogram,
-    pub flushed_bytes: Counter,
-    pub flushed_rows: Counter,
-    pub flushed_last: Gauge,
+    pub flush_time: Histogram,
+    pub flush_bytes: Counter,
+    pub flush_rows: Counter,
+    pub flush_last: Gauge,
+    pub flush_lag: Histogram,
 }
 
 impl Default for SyncMetrics {
@@ -55,6 +59,10 @@ impl SyncMetrics {
             IN_MEMORY_BYTES,
             "The total row count of all pending batches in memory"
         );
+        describe_gauge!(
+            IN_MEMORY_OLDEST,
+            "The timestamp of the oldest pending change set in memory"
+        );
         describe_histogram!(
             COMPACTION_TIME,
             "The time taken to compact a single sync message"
@@ -67,26 +75,29 @@ impl SyncMetrics {
             COMPACTED_BYTES,
             "The reduction in row count due to batch compaction"
         );
-        describe_histogram!(
-            FLUSHING_TIME,
-            "The time taken to flush a collections of syncs"
+        describe_histogram!(FLUSH_TIME, "The time taken to flush a collections of syncs");
+        describe_counter!(FLUSH_BYTES, "The total byte size flushed");
+        describe_counter!(FLUSH_ROWS, "The total row count flushed");
+        describe_counter!(FLUSH_LAST, "The timestamp of the last successful flush");
+        describe_counter!(
+            FLUSH_LAG,
+            "The total time between the first queued change set and flush"
         );
-        describe_counter!(FLUSHED_BYTES, "The total byte size flushed");
-        describe_counter!(FLUSHED_ROWS, "The total row count flushed");
-        describe_counter!(FLUSHED_LAST, "The timestamp of the last successful flush");
 
         Self {
             request_bytes: counter!(REQUEST_BYTES),
             request_rows: counter!(REQUEST_ROWS),
             in_memory_bytes: gauge!(IN_MEMORY_BYTES),
             in_memory_rows: gauge!(IN_MEMORY_ROWS),
+            in_memory_oldest: gauge!(IN_MEMORY_OLDEST),
             compaction_time: histogram!(COMPACTION_TIME),
             compacted_bytes: counter!(COMPACTED_BYTES),
             compacted_rows: counter!(COMPACTED_ROWS),
-            flushing_time: histogram!(FLUSHING_TIME),
-            flushed_bytes: counter!(FLUSHED_BYTES),
-            flushed_rows: counter!(FLUSHED_ROWS),
-            flushed_last: gauge!(FLUSHED_LAST),
+            flush_time: histogram!(FLUSH_TIME),
+            flush_bytes: counter!(FLUSH_BYTES),
+            flush_rows: counter!(FLUSH_ROWS),
+            flush_last: gauge!(FLUSH_LAST),
+            flush_lag: histogram!(FLUSH_LAG),
         }
     }
 }

@@ -236,7 +236,7 @@ impl SeafowlDataSyncWriter {
         // Update the total size and metrics
         self.size += size;
         self.metrics.in_memory_bytes.increment(size as f64);
-        self.metrics.in_memory_bytes.increment(rows as f64);
+        self.metrics.in_memory_rows.increment(rows as f64);
         self.metrics.compaction_time.record(duration as f64);
         self.metrics
             .compacted_bytes
@@ -244,17 +244,19 @@ impl SeafowlDataSyncWriter {
         self.metrics
             .compacted_rows
             .increment((old_rows - rows) as u64);
+        self.metrics.in_memory_oldest.set(
+            self.syncs
+                .first()
+                .map(|(_, v)| v.insertion_time as f64)
+                .unwrap_or(0.0),
+        );
 
         // Flag the sequence as volatile persisted for this origin if it is the last sync command
         if last {
             self.origin_memory.insert(origin, sequence_number);
         }
 
-        while self.flush_ready() {
-            // TODO: do out-of-band
-            self.flush_syncs().await?;
-        }
-
+        self.flush().await?;
         Ok(self.stored_sequences(&origin))
     }
 
@@ -279,6 +281,22 @@ impl SeafowlDataSyncWriter {
             .with_columns(delta_schema.fields().cloned())
             .with_comment(format!("Synced by Seafowl {}", env!("CARGO_PKG_VERSION")))
             .await?)
+    }
+
+    pub async fn flush(&mut self) -> Result<()> {
+        while self.flush_ready() {
+            // TODO: do out-of-band
+            self.flush_syncs().await?;
+        }
+
+        self.metrics.in_memory_oldest.set(
+            self.syncs
+                .first()
+                .map(|(_, v)| v.insertion_time as f64)
+                .unwrap_or(0.0),
+        );
+
+        Ok(())
     }
 
     // Criteria for return the cached entry ready to be persisted to storage.
@@ -310,6 +328,7 @@ impl SeafowlDataSyncWriter {
         };
 
         let start = Instant::now();
+        let insertion_time = entry.insertion_time;
         let rows = entry.rows;
         let size = entry.size;
         let url = url.clone();
@@ -416,10 +435,13 @@ impl SeafowlDataSyncWriter {
 
         // Record flush metrics
         let flush_duration = start.elapsed().as_millis();
-        self.metrics.flushing_time.record(flush_duration as f64);
-        self.metrics.flushed_bytes.increment(size as u64);
-        self.metrics.flushed_rows.increment(rows as u64);
-        self.metrics.flushed_last.set(now() as f64);
+        self.metrics.flush_time.record(flush_duration as f64);
+        self.metrics.flush_bytes.increment(size as u64);
+        self.metrics.flush_rows.increment(rows as u64);
+        self.metrics.flush_last.set(now() as f64);
+        self.metrics
+            .flush_lag
+            .record((now() - insertion_time) as f64);
 
         Ok(())
     }
