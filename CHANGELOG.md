@@ -4,6 +4,23 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Add flush task (<https://github.com/splitgraph/seafowl/pull/534>)
+- Add sync metrics (<https://github.com/splitgraph/seafowl/pull/533>)
+- Upgrade to DataFusion 39 (<https://github.com/splitgraph/seafowl/pull/532>)
+- Add support for inline-ing metastore over Flight
+  (<https://github.com/splitgraph/seafowl/pull/531>)
+- Sync protocol improvements (<https://github.com/splitgraph/seafowl/pull/530>)
+- Data replication interface (<https://github.com/splitgraph/seafowl/pull/527>)
+- Autodetect bucket region in S3 without custom endpoints
+  (<https://github.com/splitgraph/seafowl/pull/526>)
+- Ignore DeltaTableAlready delta error during conversion of a parquet folder
+  (<https://github.com/splitgraph/seafowl/pull/525>)
+- Make `CONVERT TO DELTA` overwrite if exists (<https://github.com/splitgraph/seafowl/pull/523>)
+- DataFusion 37.1 upgrade (<https://github.com/splitgraph/seafowl/pull/520>)
+- Add various object store cache Prometheus metrics
+  (<https://github.com/splitgraph/seafowl/pull/519>)
+- Add Prometheus metrics to MemoryManager (<https://github.com/splitgraph/seafowl/pull/518>)
+
 ## [0.5.6] - 2024-04-22
 
 - Improve Arrow Flight SQL interface logging (<https://github.com/splitgraph/seafowl/pull/517>)
