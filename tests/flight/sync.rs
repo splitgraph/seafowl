@@ -144,9 +144,6 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     let results = ctx.collect(plan.clone()).await?;
     assert!(results.is_empty());
 
-    // Wait for the replication lag to exceed the configured max duration
-    tokio::time::sleep(Duration::from_secs(1)).await;
-
     //
     // Now go for sync #2; this will flush both it and the first sync as well
     //
@@ -213,11 +210,15 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         DataSyncResult {
             accepted: true,
             memory_sequence_number: Some(1234),
-            durable_sequence_number: Some(1234),
+            durable_sequence_number: None,
         }
     );
 
-    // Changes have now been flushed to storage
+    // Wait for the replication lag to exceed the configured max duration and for the flush task to
+    // pick it up
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Changes should have now been flushed to storage by the flush task
     let plan = ctx.plan_query("SELECT * FROM replicated_table").await?;
     let results = ctx.collect(plan.clone()).await?;
 
@@ -233,6 +234,22 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     ];
 
     assert_batches_sorted_eq!(expected, &results);
+
+    //
+    // Check empty payload shows the first flush
+    //
+
+    cmd.column_descriptors = vec![];
+    let sync_result =
+        do_put_sync(cmd.clone(), RecordBatch::new_empty(schema), &mut client).await?;
+    assert_eq!(
+        sync_result,
+        DataSyncResult {
+            accepted: true,
+            memory_sequence_number: Some(1234),
+            durable_sequence_number: Some(1234),
+        }
+    );
 
     //
     // Sync #3; this will be held in memory

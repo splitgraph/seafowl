@@ -64,7 +64,8 @@ bind_port = {}
 
 [misc.sync_conf]
 max_in_memory_bytes = 2500
-max_replication_lag_s = 1"#,
+max_replication_lag_s = 1
+flush_task_interval_s = 1"#,
         addr.port()
     );
 

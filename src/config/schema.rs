@@ -415,7 +415,8 @@ impl Default for ObjectCacheProperties {
 pub struct DataSyncConfig {
     pub max_in_memory_bytes: usize,
     pub max_replication_lag_s: u64,
-    pub sync_lock_timeout_s: u64,
+    pub write_lock_timeout_s: u64,
+    pub flush_task_interval_s: u64,
 }
 
 impl Default for DataSyncConfig {
@@ -423,7 +424,8 @@ impl Default for DataSyncConfig {
         Self {
             max_in_memory_bytes: 3 * 1024 * 1024 * 1024,
             max_replication_lag_s: 600,
-            sync_lock_timeout_s: 3,
+            write_lock_timeout_s: 3,
+            flush_task_interval_s: 900,
         }
     }
 }

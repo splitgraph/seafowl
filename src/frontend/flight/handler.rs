@@ -48,11 +48,14 @@ pub(super) struct SeafowlFlightHandler {
 }
 
 impl SeafowlFlightHandler {
-    pub fn new(context: Arc<SeafowlContext>) -> Self {
+    pub fn new(
+        context: Arc<SeafowlContext>,
+        sync_manager: Arc<RwLock<SeafowlDataSyncWriter>>,
+    ) -> Self {
         Self {
             context: context.clone(),
             results: Arc::new(Default::default()),
-            sync_manager: Arc::new(RwLock::new(SeafowlDataSyncWriter::new(context))),
+            sync_manager,
         }
     }
 
@@ -171,7 +174,7 @@ impl SeafowlFlightHandler {
 
         debug!("Processing data change with {num_rows} rows for url {url}");
         match tokio::time::timeout(
-            Duration::from_secs(self.context.config.misc.sync_conf.sync_lock_timeout_s),
+            Duration::from_secs(self.context.config.misc.sync_conf.write_lock_timeout_s),
             self.sync_manager.write(),
         )
         .await
