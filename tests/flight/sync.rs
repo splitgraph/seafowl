@@ -139,10 +139,15 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         .await
         .unwrap();
 
-    // Ensure table is empty
-    let plan = ctx.plan_query("SELECT * FROM replicated_table").await?;
-    let results = ctx.collect(plan.clone()).await?;
-    assert!(results.is_empty());
+    // Ensure table doesn't exist yet
+    let err = ctx
+        .plan_query("SELECT * FROM replicated_table")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "External error: Not a Delta table: no log files".to_string()
+    );
 
     //
     // Now go for sync #2; this will flush both it and the first sync as well
