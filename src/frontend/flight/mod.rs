@@ -12,7 +12,11 @@ use metrics::MetricsLayer;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
 
+use crate::frontend::flight::sync::flush_task;
+use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
 use tonic::transport::Server;
 
 pub async fn run_flight_server(
@@ -24,7 +28,14 @@ pub async fn run_flight_server(
         .parse()
         .expect("Error parsing the Arrow Flight listen address");
 
-    let handler = SeafowlFlightHandler::new(context);
+    let flush_interval =
+        Duration::from_secs(context.config.misc.sync_conf.flush_task_interval_s);
+    let lock_timeout =
+        Duration::from_secs(context.config.misc.sync_conf.write_lock_timeout_s);
+    let sync_writer = Arc::new(RwLock::new(SeafowlDataSyncWriter::new(context.clone())));
+    let handler = SeafowlFlightHandler::new(context, sync_writer.clone());
+    tokio::spawn(flush_task(flush_interval, lock_timeout, sync_writer));
+
     let svc = FlightServiceServer::new(handler);
 
     let server = Server::builder();

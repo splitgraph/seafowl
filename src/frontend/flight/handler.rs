@@ -44,15 +44,18 @@ lazy_static! {
 pub(super) struct SeafowlFlightHandler {
     pub context: Arc<SeafowlContext>,
     pub results: Arc<DashMap<String, Mutex<SendableRecordBatchStream>>>,
-    sync_manager: Arc<RwLock<SeafowlDataSyncWriter>>,
+    sync_writer: Arc<RwLock<SeafowlDataSyncWriter>>,
 }
 
 impl SeafowlFlightHandler {
-    pub fn new(context: Arc<SeafowlContext>) -> Self {
+    pub fn new(
+        context: Arc<SeafowlContext>,
+        sync_writer: Arc<RwLock<SeafowlDataSyncWriter>>,
+    ) -> Self {
         Self {
             context: context.clone(),
             results: Arc::new(Default::default()),
-            sync_manager: Arc::new(RwLock::new(SeafowlDataSyncWriter::new(context))),
+            sync_writer,
         }
     }
 
@@ -161,7 +164,7 @@ impl SeafowlFlightHandler {
             // Get the current volatile and durable sequence numbers
             debug!("Received empty batches, returning current sequence numbers");
             let (mem_seq, dur_seq) =
-                self.sync_manager.read().await.stored_sequences(&cmd.origin);
+                self.sync_writer.read().await.stored_sequences(&cmd.origin);
             return Ok(DataSyncResult {
                 accepted: true,
                 memory_sequence_number: mem_seq,
@@ -171,22 +174,24 @@ impl SeafowlFlightHandler {
 
         debug!("Processing data change with {num_rows} rows for url {url}");
         match tokio::time::timeout(
-            Duration::from_secs(self.context.config.misc.sync_conf.sync_lock_timeout_s),
-            self.sync_manager.write(),
+            Duration::from_secs(self.context.config.misc.sync_conf.write_lock_timeout_s),
+            self.sync_writer.write(),
         )
         .await
         {
-            Ok(mut sync_manager) => {
-                let (mem_seq, dur_seq) = sync_manager
-                    .enqueue_sync(
-                        log_store,
-                        cmd.sequence_number,
-                        cmd.origin,
-                        sync_schema.expect("Schema available"),
-                        cmd.last,
-                        batches,
-                    )
-                    .await?;
+            Ok(mut sync_writer) => {
+                sync_writer.enqueue_sync(
+                    log_store,
+                    cmd.sequence_number,
+                    cmd.origin,
+                    sync_schema.expect("Schema available"),
+                    cmd.last,
+                    batches,
+                )?;
+
+                sync_writer.flush().await?;
+
+                let (mem_seq, dur_seq) = sync_writer.stored_sequences(&cmd.origin);
                 Ok(DataSyncResult {
                     accepted: true,
                     memory_sequence_number: mem_seq,

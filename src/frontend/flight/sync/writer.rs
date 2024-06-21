@@ -155,7 +155,7 @@ impl SeafowlDataSyncWriter {
     }
 
     // Store the pending data in memory and flush if the required criteria are met.
-    pub async fn enqueue_sync(
+    pub fn enqueue_sync(
         &mut self,
         log_store: Arc<dyn LogStore>,
         sequence_number: SequenceNumber,
@@ -163,7 +163,7 @@ impl SeafowlDataSyncWriter {
         sync_schema: SyncSchema,
         last: bool,
         batches: Vec<RecordBatch>,
-    ) -> Result<(Option<SequenceNumber>, Option<SequenceNumber>)> {
+    ) -> Result<()> {
         let url = log_store.root_uri();
 
         // Upsert a sequence entry for this origin and sequence number
@@ -205,12 +205,6 @@ impl SeafowlDataSyncWriter {
         // Get new size and row count
         let size = batch.get_array_memory_size();
         let rows = batch.num_rows();
-
-        // If there's no delta table at this location yet create one first.
-        if !log_store.is_delta_table_location().await? {
-            debug!("Creating new Delta table at location: {url}");
-            self.create_table(log_store.clone(), &sync_schema).await?;
-        }
 
         let item = DataSyncItem {
             origin,
@@ -259,8 +253,7 @@ impl SeafowlDataSyncWriter {
             self.origin_memory.insert(origin, sequence_number);
         }
 
-        self.flush().await?;
-        Ok(self.stored_sequences(&origin))
+        Ok(())
     }
 
     async fn create_table(
@@ -336,6 +329,16 @@ impl SeafowlDataSyncWriter {
         let size = entry.size;
         let url = url.clone();
         let log_store = entry.log_store.clone();
+
+        // If there's no delta table at this location yet create one first.
+        if !log_store.is_delta_table_location().await? {
+            debug!("Creating new Delta table at location: {url}");
+            self.create_table(
+                log_store.clone(),
+                &entry.syncs.first().unwrap().sync_schema,
+            )
+            .await?;
+        }
 
         let last_sequence_number = entry.syncs.last().unwrap().sequence_number;
 
@@ -867,7 +870,6 @@ mod tests {
                     last,
                     random_batches(arrow_schema.clone()),
                 )
-                .await
                 .unwrap();
 
             // If this is the last sync in the sequence then it should be reported as in-memory
