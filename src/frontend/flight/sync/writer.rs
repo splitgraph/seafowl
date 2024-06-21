@@ -20,18 +20,19 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::ops::Not;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
 use crate::context::delta::plan_to_object_store;
 
 use crate::context::SeafowlContext;
 use crate::frontend::flight::handler::SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER;
+use crate::frontend::flight::sync::metrics::SyncMetrics;
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::utils::{compact_batches, construct_qualifier};
 
-type Origin = u64;
-type SequenceNumber = u64;
+pub(super) type Origin = u64;
+pub(super) type SequenceNumber = u64;
 const SYNC_REF: &str = "sync_data";
 const SYNC_JOIN_COLUMN: &str = "__sync_join";
 
@@ -86,6 +87,8 @@ pub(crate) struct SeafowlDataSyncWriter {
     origin_memory: HashMap<Origin, SequenceNumber>,
     // Map of known durable sequence numbers per origin
     origin_durable: HashMap<Origin, SequenceNumber>,
+    // Keep track of various metrics for observability
+    metrics: SyncMetrics,
 }
 
 // A struct tracking relevant information about a single transaction/sequence from a single origin
@@ -104,6 +107,8 @@ struct DataSyncSequence {
 pub(super) struct DataSyncCollection {
     // Total in-memory size of all the batches in all the items for this table
     size: usize,
+    // Total in-memory rows of all the batches in all the items for this table
+    rows: usize,
     // Unix epoch of the first sync command in this collection
     insertion_time: u64,
     // Table log store
@@ -134,6 +139,7 @@ impl SeafowlDataSyncWriter {
             size: 0,
             origin_memory: Default::default(),
             origin_durable: Default::default(),
+            metrics: Default::default(),
         }
     }
 
@@ -183,8 +189,22 @@ impl SeafowlDataSyncWriter {
             })
             .or_insert(IndexMap::from([(sequence_number, sequence)]));
 
+        // Compactify the batches and measure the time it took and the reduction in rows/size
+        let (old_size, old_rows) = batches.iter().fold((0, 0), |(size, rows), batch| {
+            (
+                size + batch.get_array_memory_size(),
+                rows + batch.num_rows(),
+            )
+        });
+        self.metrics.request_bytes.increment(old_size as u64);
+        self.metrics.request_rows.increment(old_rows as u64);
+        let start = Instant::now();
         let batch = compact_batches(&sync_schema, batches)?;
+        let duration = start.elapsed().as_secs();
+
+        // Get new size and row count
         let size = batch.get_array_memory_size();
+        let rows = batch.num_rows();
 
         // If there's no delta table at this location yet create one first.
         if !log_store.is_delta_table_location().await? {
@@ -203,27 +223,43 @@ impl SeafowlDataSyncWriter {
             .and_modify(|entry| {
                 entry.syncs.push(item.clone());
                 entry.size += size;
+                entry.rows += rows;
             })
             .or_insert(DataSyncCollection {
                 size,
+                rows,
                 insertion_time: now(),
                 log_store,
                 syncs: vec![item],
             });
 
-        // Update the total size
+        // Update the total size and metrics
         self.size += size;
+        self.metrics.in_memory_bytes.increment(size as f64);
+        self.metrics.in_memory_rows.increment(rows as f64);
+        self.metrics.compaction_time.record(duration as f64);
+        self.metrics
+            .compacted_bytes
+            .increment((old_size - size) as u64);
+        self.metrics
+            .compacted_rows
+            .increment((old_rows - rows) as u64);
+        self.metrics.in_memory_oldest.set(
+            self.syncs
+                .first()
+                .map(|(_, v)| v.insertion_time as f64)
+                .unwrap_or(0.0),
+        );
 
         // Flag the sequence as volatile persisted for this origin if it is the last sync command
         if last {
+            self.metrics.sequence_memory(&origin, sequence_number);
+            // TODO: (when) shsould we be removing the memory sequence number?
+
             self.origin_memory.insert(origin, sequence_number);
         }
 
-        while self.flush_ready() {
-            // TODO: do out-of-band
-            self.flush_syncs().await?;
-        }
-
+        self.flush().await?;
         Ok(self.stored_sequences(&origin))
     }
 
@@ -248,6 +284,22 @@ impl SeafowlDataSyncWriter {
             .with_columns(delta_schema.fields().cloned())
             .with_comment(format!("Synced by Seafowl {}", env!("CARGO_PKG_VERSION")))
             .await?)
+    }
+
+    pub async fn flush(&mut self) -> Result<()> {
+        while self.flush_ready() {
+            // TODO: do out-of-band
+            self.flush_syncs().await?;
+        }
+
+        self.metrics.in_memory_oldest.set(
+            self.syncs
+                .first()
+                .map(|(_, v)| v.insertion_time as f64)
+                .unwrap_or(0.0),
+        );
+
+        Ok(())
     }
 
     // Criteria for return the cached entry ready to be persisted to storage.
@@ -278,6 +330,10 @@ impl SeafowlDataSyncWriter {
             }
         };
 
+        let start = Instant::now();
+        let insertion_time = entry.insertion_time;
+        let rows = entry.rows;
+        let size = entry.size;
         let url = url.clone();
         let log_store = entry.log_store.clone();
 
@@ -379,6 +435,19 @@ impl SeafowlDataSyncWriter {
         self.remove_sequence_locations(url.clone(), orseq);
         self.remove_sync(&url);
         self.advance_durable();
+
+        // Record flush metrics
+        let flush_duration = start.elapsed().as_millis();
+        self.metrics.flush_time.record(flush_duration as f64);
+        self.metrics.flush_bytes.increment(size as u64);
+        self.metrics.flush_rows.increment(rows as u64);
+        self.metrics.flush_last.set(now() as f64);
+        self.metrics
+            .flush_lag
+            .record((now() - insertion_time) as f64);
+        self.origin_durable.iter().for_each(|(origin, seq)| {
+            self.metrics.sequence_durable(origin, *seq);
+        });
 
         Ok(())
     }
@@ -577,6 +646,8 @@ impl SeafowlDataSyncWriter {
     fn remove_sync(&mut self, url: &String) {
         if let Some(sync) = self.syncs.shift_remove(url) {
             self.size -= sync.size;
+            self.metrics.in_memory_bytes.decrement(sync.size as f64);
+            self.metrics.in_memory_rows.decrement(sync.rows as f64);
         }
     }
 

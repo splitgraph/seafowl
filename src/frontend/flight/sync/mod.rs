@@ -1,3 +1,4 @@
+mod metrics;
 pub mod schema;
 mod utils;
 pub(crate) mod writer;
