@@ -4,6 +4,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.5.7] - 2024-06-21
+
 - Add flush task (<https://github.com/splitgraph/seafowl/pull/534>)
 - Add sync metrics (<https://github.com/splitgraph/seafowl/pull/533>)
 - Upgrade to DataFusion 39 (<https://github.com/splitgraph/seafowl/pull/532>)
@@ -257,7 +259,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.6...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/splitgraph/seafowl/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/splitgraph/seafowl/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/splitgraph/seafowl/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/splitgraph/seafowl/compare/v0.5.4...v0.5.4
