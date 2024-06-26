@@ -31,7 +31,7 @@ use crate::frontend::flight::sync::metrics::SyncMetrics;
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::utils::{compact_batches, construct_qualifier};
 
-pub(super) type Origin = u64;
+pub(super) type Origin = String;
 pub(super) type SequenceNumber = u64;
 const SYNC_REF: &str = "sync_data";
 const SYNC_JOIN_COLUMN: &str = "__sync_join";
@@ -173,7 +173,7 @@ impl SeafowlDataSyncWriter {
         };
         self
             .seqs
-            .entry(origin)
+            .entry(origin.clone())
             .and_modify(|origin_seqs| {
                 origin_seqs.entry(sequence_number).and_modify(|seq| {if !seq.locs.contains(&url) {
                     debug!("Adding {url} as sync destination for {origin}, {sequence_number}");
@@ -207,7 +207,7 @@ impl SeafowlDataSyncWriter {
         let rows = batch.num_rows();
 
         let item = DataSyncItem {
-            origin,
+            origin: origin.clone(),
             sequence_number,
             sync_schema,
             batch,
@@ -432,7 +432,7 @@ impl SeafowlDataSyncWriter {
         let orseq = entry
             .syncs
             .iter()
-            .map(|s| (s.origin, s.sequence_number))
+            .map(|s| (s.origin.clone(), s.sequence_number))
             .unique()
             .collect::<Vec<_>>();
         self.remove_sequence_locations(url.clone(), orseq);
@@ -670,7 +670,7 @@ impl SeafowlDataSyncWriter {
                     // We've seen the last sync for this sequence, all pending locations
                     // have been flushed to and there's no preceding sequence to be flushed,
                     // so we're good to flag the sequence as durable
-                    self.origin_durable.insert(*origin, *seq_num);
+                    self.origin_durable.insert(origin.clone(), *seq_num);
 
                     remove_count += 1;
                     new_durable = *seq_num;
@@ -685,7 +685,7 @@ impl SeafowlDataSyncWriter {
             if remove_count == origin_seqs.len() {
                 // Remove the origin since there are no more sequences remaining
                 debug!("No more pending sequences for origin {origin}, removing");
-                origins_to_remove.insert(*origin);
+                origins_to_remove.insert(origin.clone());
             } else if remove_count > 0 {
                 // Remove the durable sequences for this origin
                 debug!("Trimming pending sequences for {origin} up to {new_durable}");
@@ -763,9 +763,9 @@ mod tests {
     const T1: &str = "table_1";
     const T2: &str = "table_2";
     const T3: &str = "table_3";
-    const O1: i64 = 0; // first origin
-    const O2: i64 = 1; // second origin
-    const FLUSH: (&str, i64, i64) = ("__flush", -1, -1);
+    static O1: &str = "1"; // first origin
+    static O2: &str = "1"; // second origin
+    static FLUSH: (&str, &str, i64) = ("__flush", "-1", -1);
 
     #[rstest]
     #[case::basic(
@@ -820,7 +820,7 @@ mod tests {
     )]
     #[tokio::test]
     async fn test_sync_flush(
-        #[case] table_sequence: &[(&str, i64, i64)],
+        #[case] table_sequence: &[(&str, &str, i64)],
         #[case] mut durable_sequences: Vec<Vec<Option<u64>>>,
     ) {
         let ctx = Arc::new(in_memory_context().await);
@@ -838,12 +838,13 @@ mod tests {
                 sync_mgr.flush_syncs().await.unwrap();
 
                 for (o, durs) in durable_sequences.iter_mut().enumerate() {
-                    let origin = o as i64;
+		    // What is this supposed to mean?
+                    let origin = *o;
                     // Update expected durable sequences for this origins
                     dur_seq.insert(origin, durs.remove(0));
 
                     assert_eq!(
-                        sync_mgr.stored_sequences(&(origin as Origin)),
+                        sync_mgr.stored_sequences(&origin),
                         (mem_seq[&origin], dur_seq[&origin]),
                         "Unexpected flush memory/durable sequence; \nseqs {:?}",
                         sync_mgr.seqs,
@@ -853,19 +854,20 @@ mod tests {
             }
 
             let log_store = ctx.internal_object_store.get_log_store(table_name);
+	    let origin = (*origin).to_string();
 
             // Determine whether this is the last sync of the sequence, i.e. are there no upcoming
             // syncs with the same sequence number from this origin?
             let last = !table_sequence
                 .iter()
                 .skip(sync_no + 1)
-                .any(|&(_, o, s)| *sequence == s && *origin == o);
+                .any(|&(_, o, s)| *sequence == s && o == o);
 
             sync_mgr
                 .enqueue_sync(
                     log_store,
                     *sequence as SequenceNumber,
-                    *origin as Origin,
+                    origin,
                     sync_schema.clone(),
                     last,
                     random_batches(arrow_schema.clone()),
@@ -874,12 +876,12 @@ mod tests {
 
             // If this is the last sync in the sequence then it should be reported as in-memory
             if last {
-                mem_seq.insert(*origin, Some(*sequence as SequenceNumber));
+                mem_seq.insert(origin, Some(*sequence as SequenceNumber));
             }
 
             assert_eq!(
-                sync_mgr.stored_sequences(&(*origin as u64)),
-                (mem_seq[origin], dur_seq[origin]),
+                sync_mgr.stored_sequences(&origin),
+                (mem_seq[&origin], dur_seq[&origin]),
                 "Unexpected enqueue memory/durable sequence; \nseqs {:?}",
                 sync_mgr.seqs,
             );

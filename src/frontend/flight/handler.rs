@@ -183,7 +183,7 @@ impl SeafowlFlightHandler {
                 sync_writer.enqueue_sync(
                     log_store,
                     cmd.sequence_number,
-                    cmd.origin,
+                    cmd.origin.clone(),
                     sync_schema.expect("Schema available"),
                     cmd.last,
                     batches,
