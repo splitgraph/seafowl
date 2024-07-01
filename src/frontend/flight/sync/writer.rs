@@ -763,7 +763,7 @@ mod tests {
     const T1: &str = "table_1";
     const T2: &str = "table_2";
     const T3: &str = "table_3";
-    static O1: &str = "1"; // first origin
+    static O1: &str = "0"; // first origin
     static O2: &str = "1"; // second origin
     static FLUSH: (&str, &str, i64) = ("__flush", "-1", -1);
 
