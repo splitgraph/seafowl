@@ -861,7 +861,7 @@ mod tests {
             let last = !table_sequence
                 .iter()
                 .skip(sync_no + 1)
-                .any(|&(_, o, s)| *sequence == s && o == o);
+                .any(|&(_, this_o, s)| *sequence == s && o == this_o);
 
             sync_mgr
                 .enqueue_sync(
