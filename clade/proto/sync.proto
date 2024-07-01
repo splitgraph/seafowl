@@ -33,7 +33,7 @@ message DataSyncCommand {
   repeated ColumnDescriptor column_descriptors = 3;
 
   // Integer identifying data source
-  uint64 origin = 4;
+  string origin = 4;
 
   // Monotonically-increasing transaction number
   uint64 sequence_number = 5;

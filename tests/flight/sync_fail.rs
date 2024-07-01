@@ -34,7 +34,7 @@ async fn test_sync_errors() -> std::result::Result<(), Box<dyn std::error::Error
         path: table_uuid.to_string(),
         store: None,
         column_descriptors: vec![],
-        origin: 1,
+        origin: "1".to_string(),
         sequence_number: 42,
         last: true,
     };
