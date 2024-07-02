@@ -711,7 +711,7 @@ mod tests {
     use crate::context::test_utils::in_memory_context;
     use crate::frontend::flight::sync::schema::SyncSchema;
     use crate::frontend::flight::sync::writer::{
-        Origin, SeafowlDataSyncWriter, SequenceNumber,
+        SeafowlDataSyncWriter, SequenceNumber,
     };
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
@@ -827,8 +827,8 @@ mod tests {
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
         let (arrow_schema, sync_schema) = sync_schema();
 
-        let mut mem_seq = HashMap::from([(O1, None), (O2, None)]);
-        let mut dur_seq = HashMap::from([(O1, None), (O2, None)]);
+        let mut mem_seq = HashMap::from([(O1.to_string(), None), (O2.to_string(), None)]);
+        let mut dur_seq = HashMap::from([(O1.to_string(), None), (O2.to_string(), None)]);
 
         // Start enqueueing syncs, flushing them and checking the memory sequence in-between
         for (sync_no, (table_name, origin, sequence)) in table_sequence.iter().enumerate()
@@ -838,10 +838,9 @@ mod tests {
                 sync_mgr.flush_syncs().await.unwrap();
 
                 for (o, durs) in durable_sequences.iter_mut().enumerate() {
-		    // What is this supposed to mean?
-                    let origin = *o;
+                    let origin = o.to_string();
                     // Update expected durable sequences for this origins
-                    dur_seq.insert(origin, durs.remove(0));
+                    dur_seq.insert(origin.clone(), durs.remove(0));
 
                     assert_eq!(
                         sync_mgr.stored_sequences(&origin),
@@ -854,20 +853,20 @@ mod tests {
             }
 
             let log_store = ctx.internal_object_store.get_log_store(table_name);
-	    let origin = (*origin).to_string();
+	    let origin: String = (*origin).to_owned();
 
             // Determine whether this is the last sync of the sequence, i.e. are there no upcoming
             // syncs with the same sequence number from this origin?
             let last = !table_sequence
                 .iter()
                 .skip(sync_no + 1)
-                .any(|&(_, this_o, s)| *sequence == s && o == this_o);
+                .any(|&(_, o, s)| *sequence == s && o == origin);
 
             sync_mgr
                 .enqueue_sync(
                     log_store,
                     *sequence as SequenceNumber,
-                    origin,
+                    origin.clone(),
                     sync_schema.clone(),
                     last,
                     random_batches(arrow_schema.clone()),
@@ -876,7 +875,7 @@ mod tests {
 
             // If this is the last sync in the sequence then it should be reported as in-memory
             if last {
-                mem_seq.insert(origin, Some(*sequence as SequenceNumber));
+                mem_seq.insert(origin.clone(), Some(*sequence as SequenceNumber));
             }
 
             assert_eq!(
