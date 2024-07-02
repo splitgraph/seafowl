@@ -54,11 +54,7 @@ async fn test_upload_base(
     // drop the writer early to release the borrow.
     if file_format == "csv" {
         let mut writer = WriterBuilder::new()
-            .with_header(if let Some(has_headers) = add_headers {
-                has_headers
-            } else {
-                true
-            })
+            .with_header(add_headers.unwrap_or(true))
             .build(&mut named_tempfile);
         writer.write(&input_batch).unwrap();
     } else if file_format == "parquet" {
