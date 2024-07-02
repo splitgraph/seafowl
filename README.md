@@ -211,4 +211,3 @@ manipulate/access JSON data, similar to the
 ### PostgreSQL-compatible endpoint
 
 This will make Seafowl queryable by existing BI tools like Metabase/Superset/Looker.
-
