@@ -710,9 +710,7 @@ fn now() -> u64 {
 mod tests {
     use crate::context::test_utils::in_memory_context;
     use crate::frontend::flight::sync::schema::SyncSchema;
-    use crate::frontend::flight::sync::writer::{
-        SeafowlDataSyncWriter, SequenceNumber,
-    };
+    use crate::frontend::flight::sync::writer::{SeafowlDataSyncWriter, SequenceNumber};
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use clade::sync::{ColumnDescriptor, ColumnRole};
@@ -853,7 +851,7 @@ mod tests {
             }
 
             let log_store = ctx.internal_object_store.get_log_store(table_name);
-	    let origin: String = (*origin).to_owned();
+            let origin: String = (*origin).to_owned();
 
             // Determine whether this is the last sync of the sequence, i.e. are there no upcoming
             // syncs with the same sequence number from this origin?
