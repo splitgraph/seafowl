@@ -59,7 +59,7 @@ jobs:
           cache-on-failure: "true"
 
       - name: Check pre-commit hooks (formatting and Clippy)
-        run: pre-commit run --all
+        run: pre-commit run --all --verbose
 
       - name: Build workspace in debug mode
         run: |
