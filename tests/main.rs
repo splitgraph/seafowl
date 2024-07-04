@@ -14,6 +14,7 @@ use std::process::{Child, Command};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tonic::transport::Channel;
+use tracing::warn;
 
 mod clade;
 mod cli;
@@ -99,7 +100,9 @@ pub async fn test_seafowl() -> TestSeafowl {
         .expect("seafowl started");
 
     // Try to connect to the client
-    let mut retries = 3;
+    let max_retries = 5;
+    let mut retries = 0;
+    let mut delay = Duration::from_millis(200);
     loop {
         match Channel::from_shared(format!("http://{flight_addr}"))
             .expect("Endpoint created")
@@ -113,13 +116,23 @@ pub async fn test_seafowl() -> TestSeafowl {
                     proc: child,
                 }
             }
-            Err(_err) if retries > 0 => {
-                retries -= 1;
-                tokio::time::sleep(Duration::from_millis(500)).await;
+            Err(err) if retries < max_retries => {
+                warn!(
+                    "Connection attempt {}/{} to Seafowl failed: {}",
+                    retries + 1,
+                    max_retries,
+                    err
+                );
+                tokio::time::sleep(delay).await;
+                retries += 1;
+                delay *= 2;
             }
-            _ => {
+            Err(err) => {
                 let _ = child.kill();
-                panic!("Failed to connect to the test Seafowl")
+                panic!(
+                    "Failed to connect to the test Seafowl after {} retries: {:?}",
+                    retries, err
+                );
             }
         }
     }
