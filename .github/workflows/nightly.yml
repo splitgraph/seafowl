@@ -105,7 +105,7 @@ jobs:
 
       - name: Build and push Docker image (Linux only)
         if: matrix.build == 'linux-x86_64'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
