@@ -8,6 +8,7 @@ on:
       - main
     tags:
       - "v*"
+  workflow_dispatch:
 
 jobs:
   build_binary:
@@ -98,8 +99,9 @@ jobs:
           tags: |
             type=raw,value=nightly,enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},enable=${{startsWith(github.event.ref, 'refs/tags/v')}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{startsWith(github.event.ref, 'refs/tags/v')}}
+            type=raw,value=commit-{{sha}}
 
       - name: Build and push Docker image (Linux only)
         if: matrix.build == 'linux-x86_64'
