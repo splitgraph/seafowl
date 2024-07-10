@@ -26,6 +26,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
+// Root URL for a storage location alongside client connection options
+type LocationAndOptions = (String, HashMap<String, String>);
+
 // This is the main entrypoint to all individual catalogs for various objects types.
 // The intention is to make it extensible and de-coupled from the underlying metastore
 // persistence mechanism (such as the presently used `Repository`).
@@ -119,7 +122,7 @@ impl Metastore {
     async fn build_schema(
         &self,
         schema: SchemaObject,
-        store_options: &HashMap<String, (String, HashMap<String, String>)>,
+        store_options: &HashMap<String, LocationAndOptions>,
     ) -> CatalogResult<(Arc<str>, Arc<SeafowlSchema>)> {
         let schema_name = schema.name;
 
@@ -140,7 +143,7 @@ impl Metastore {
     async fn build_table(
         &self,
         table: TableObject,
-        store_options: &HashMap<String, (String, HashMap<String, String>)>,
+        store_options: &HashMap<String, LocationAndOptions>,
     ) -> CatalogResult<(Arc<str>, Arc<dyn TableProvider>)> {
         // Build a delta table but don't load it yet; we'll do that only for tables that are
         // actually referenced in a statement, via the async `table` method of the schema provider.
