@@ -75,6 +75,13 @@ fn prepare_tracing(json_logs: bool) {
         .from_env_lossy();
 
     let sub = tracing_subscriber::fmt()
+        .with_ansi(
+            env::var_os("RUST_LOG_STYLE")
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                != "never",
+        )
         .with_thread_names(true)
         .with_thread_ids(true)
         .with_env_filter(env_filter);
