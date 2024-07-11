@@ -22,6 +22,18 @@ itertools = ">=0.10.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
 tracing = { version = "0.1", features = ["log"] }
 
+[patch.crates-io]
+# Pick up backport of https://github.com/apache/arrow-datafusion/pull/11386
+datafusion = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
+datafusion-common = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
+datafusion-execution = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
+datafusion-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
+datafusion-optimizer = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
+datafusion-physical-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
+datafusion-physical-plan = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
+datafusion-proto = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
+datafusion-sql = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
+
 [package]
 name = "seafowl"
 build = "build.rs"

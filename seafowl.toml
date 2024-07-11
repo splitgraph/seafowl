@@ -1,8 +1,11 @@
 # Default config for dev
 
 [object_store]
-type = "local"
-data_dir = "../seafowl-data"
+type = "s3"
+access_key_id = "minioadmin"
+secret_access_key = "minioadmin"
+endpoint = "http://127.0.0.1:9000"
+bucket = "seafowl-test-bucket"
 
 [catalog]
 type = "sqlite"
