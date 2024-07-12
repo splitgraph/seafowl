@@ -29,7 +29,7 @@ pub fn schemas() -> ListSchemaResponse {
                 tables: vec![TableObject {
                     name: "file".to_string(),
                     path: "delta-0.8.0-partitioned".to_string(),
-                    location: None,
+                    store: None,
                 }],
             },
             SchemaObject {
@@ -37,7 +37,7 @@ pub fn schemas() -> ListSchemaResponse {
                 tables: vec![TableObject {
                     name: "minio".to_string(),
                     path: "test-data/delta-0.8.0-partitioned".to_string(),
-                    location: Some("s3://seafowl-test-bucket".to_string()),
+                    store: Some("minio".to_string()),
                 }],
             },
             SchemaObject {
@@ -45,12 +45,13 @@ pub fn schemas() -> ListSchemaResponse {
                 tables: vec![TableObject {
                     name: "fake".to_string(),
                     path: "delta-0.8.0-partitioned".to_string(),
-                    location: Some("gs://test-data".to_string()),
+                    store: Some("fake-gcs".to_string()),
                 }],
             },
         ],
         stores: vec![
             StorageLocation {
+                name: "minio".to_string(),
                 location: "s3://seafowl-test-bucket".to_string(),
                 options: HashMap::from([
                     (
@@ -74,6 +75,7 @@ pub fn schemas() -> ListSchemaResponse {
                 ]),
             },
             StorageLocation {
+                name: "fake-gcs".to_string(),
                 location: "gs://test-data".to_string(),
                 options: HashMap::from([(
                     GoogleConfigKey::ServiceAccount.as_ref().to_string(),

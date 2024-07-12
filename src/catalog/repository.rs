@@ -130,7 +130,7 @@ impl SchemaStore for RepositoryStore {
                             Some(TableObject {
                                 name: name.clone(),
                                 path: uuid.to_string(),
-                                location: None,
+                                store: None,
                             })
                         } else {
                             None

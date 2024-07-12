@@ -26,6 +26,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
+// Root URL for a storage location alongside client connection options
+type LocationAndOptions = (String, HashMap<String, String>);
+
 // This is the main entrypoint to all individual catalogs for various objects types.
 // The intention is to make it extensible and de-coupled from the underlying metastore
 // persistence mechanism (such as the presently used `Repository`).
@@ -97,7 +100,7 @@ impl Metastore {
         let store_options = catalog_schemas
             .stores
             .into_iter()
-            .map(|store| (store.location, store.options))
+            .map(|store| (store.name, (store.location, store.options)))
             .collect();
 
         // Turn the list of all collections, tables and their columns into a nested map.
@@ -119,7 +122,7 @@ impl Metastore {
     async fn build_schema(
         &self,
         schema: SchemaObject,
-        store_options: &HashMap<String, HashMap<String, String>>,
+        store_options: &HashMap<String, LocationAndOptions>,
     ) -> CatalogResult<(Arc<str>, Arc<SeafowlSchema>)> {
         let schema_name = schema.name;
 
@@ -140,7 +143,7 @@ impl Metastore {
     async fn build_table(
         &self,
         table: TableObject,
-        store_options: &HashMap<String, HashMap<String, String>>,
+        store_options: &HashMap<String, LocationAndOptions>,
     ) -> CatalogResult<(Arc<str>, Arc<dyn TableProvider>)> {
         // Build a delta table but don't load it yet; we'll do that only for tables that are
         // actually referenced in a statement, via the async `table` method of the schema provider.
@@ -148,13 +151,13 @@ impl Metastore {
         // delta tables present in the database. The real fix for this is to make DF use `TableSource`
         // for the information schema, and then implement `TableSource` for `DeltaTable` in delta-rs.
 
-        let table_log_store = match table.location {
+        let table_log_store = match table.store {
             // Use the provided customized location
-            Some(location) => {
-                let this_store_options = store_options
-                    .get(&location)
+            Some(name) => {
+                let (location, this_store_options) = store_options
+                    .get(&name)
                     .ok_or(CatalogError::Generic {
-                        reason: format!("Object store for location {location} not found"),
+                        reason: format!("Object store with name {name} not found"),
                     })?
                     .clone();
 
