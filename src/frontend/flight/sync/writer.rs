@@ -29,7 +29,10 @@ use crate::context::SeafowlContext;
 use crate::frontend::flight::handler::SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER;
 use crate::frontend::flight::sync::metrics::SyncMetrics;
 use crate::frontend::flight::sync::schema::SyncSchema;
-use crate::frontend::flight::sync::utils::{compact_batches, construct_qualifier};
+use crate::frontend::flight::sync::utils::{
+    compact_batches, construct_qualifier, normalize_syncs,
+};
+use crate::frontend::flight::sync::SyncResult;
 
 pub(super) type Origin = String;
 pub(super) type SequenceNumber = u64;
@@ -163,7 +166,7 @@ impl SeafowlDataSyncWriter {
         sync_schema: SyncSchema,
         last: bool,
         batches: Vec<RecordBatch>,
-    ) -> Result<()> {
+    ) -> SyncResult<()> {
         let url = log_store.root_uri();
 
         // Upsert a sequence entry for this origin and sequence number
@@ -260,7 +263,7 @@ impl SeafowlDataSyncWriter {
         &self,
         log_store: Arc<dyn LogStore>,
         sync_schema: &SyncSchema,
-    ) -> Result<DeltaTable> {
+    ) -> SyncResult<DeltaTable> {
         // Get the actual table schema by removing the OldPk and Changed column roles from the schema.
         let mut builder = SchemaBuilder::new();
         sync_schema.columns().iter().for_each(|col| {
@@ -279,7 +282,7 @@ impl SeafowlDataSyncWriter {
             .await?)
     }
 
-    pub async fn flush(&mut self) -> Result<()> {
+    pub async fn flush(&mut self) -> SyncResult<()> {
         while self.flush_ready() {
             // TODO: do out-of-band
             self.flush_syncs().await?;
@@ -314,7 +317,7 @@ impl SeafowlDataSyncWriter {
     }
 
     // Flush the table containing the oldest sync in memory
-    async fn flush_syncs(&mut self) -> Result<()> {
+    async fn flush_syncs(&mut self) -> SyncResult<()> {
         let (url, entry) = match self.syncs.first() {
             Some(table_syncs) => table_syncs,
             None => {
@@ -358,12 +361,16 @@ impl SeafowlDataSyncWriter {
             return Ok(());
         }
 
+        // Normalize and compactify all changes
+        let (sync_schema, batch) = normalize_syncs(&entry.syncs)?;
+        let batch = compact_batches(&sync_schema, vec![batch])?;
+
+        // Generate a qualifier expression for pruning partition files and filtering the base scan
+        let qualifier = construct_qualifier(&sync_schema, &batch)?;
+
         // Use the schema from the object store as a source of truth, since it's not guaranteed
         // that any of the entries has the full column list.
         let full_schema = TableProvider::schema(&table);
-
-        // Generate a qualifier expression for pruning partition files and filtering the base scan
-        let qualifier = construct_qualifier(&entry.syncs)?;
 
         // Iterate through all syncs for this table and construct a full plan by applying each
         // individual sync
@@ -374,18 +381,11 @@ impl SeafowlDataSyncWriter {
             vec![qualifier.clone()],
         )?
         .build()?;
-        let mut sync_df = DataFrame::new(self.context.inner.state(), base_plan);
+        let base_df = DataFrame::new(self.context.inner.state(), base_plan);
 
-        for sync in &entry.syncs {
-            sync_df = self.apply_sync(
-                full_schema.clone(),
-                sync_df,
-                &sync.sync_schema,
-                sync.batch.clone(),
-            )?;
-        }
-
-        let input_plan = sync_df.create_physical_plan().await?;
+        let input_df =
+            self.apply_sync(full_schema.clone(), base_df, &sync_schema, batch)?;
+        let input = input_df.create_physical_plan().await?;
 
         // To exploit fast data upload to local FS, i.e. simply move the partition files
         // once written to the disk, try to infer whether the location is a local dir
@@ -398,7 +398,7 @@ impl SeafowlDataSyncWriter {
         // Dump the batches to the object store
         let adds = plan_to_object_store(
             &self.context.inner.state(),
-            &input_plan,
+            &input,
             log_store.object_store(),
             local_data_dir,
             self.context.config.misc.max_partition_size,
@@ -459,7 +459,10 @@ impl SeafowlDataSyncWriter {
     // Note that this doesn't guarantee that the sequence is durable, since we may not have
     // yet received the last sync from it, or even if we have we may not have flushed all
     // the locations.
-    async fn table_sequence(&self, table: &DeltaTable) -> Result<Option<SequenceNumber>> {
+    async fn table_sequence(
+        &self,
+        table: &DeltaTable,
+    ) -> SyncResult<Option<SequenceNumber>> {
         let commit_infos = table.history(Some(1)).await?;
         Ok(
             match commit_infos
@@ -477,10 +480,10 @@ impl SeafowlDataSyncWriter {
     fn apply_sync(
         &self,
         full_schema: SchemaRef,
-        input_df: DataFrame,
+        base_df: DataFrame,
         sync_schema: &SyncSchema,
         data: RecordBatch,
-    ) -> Result<DataFrame> {
+    ) -> SyncResult<DataFrame> {
         // Skip rows where both old and new primary keys are NULL, meaning a row inserted/updated
         // and deleted within the same sync message (so it shouldn't be in the input nor output)
         let old_pk_nulls = sync_schema
@@ -566,7 +569,7 @@ impl SeafowlDataSyncWriter {
             })
             .collect::<Result<_>>()?;
 
-        let input_df = input_df
+        let input_df = base_df
             .with_column(SYNC_JOIN_COLUMN, lit(true))?
             .join(
                 sync_df,
@@ -593,7 +596,7 @@ impl SeafowlDataSyncWriter {
         predicate: &Expr,
         full_schema: SchemaRef,
         table: &DeltaTable,
-    ) -> Result<Vec<Action>> {
+    ) -> SyncResult<Vec<Action>> {
         let prune_expr = create_physical_expr(
             predicate,
             &full_schema.clone().to_dfschema()?,

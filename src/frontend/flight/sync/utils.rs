@@ -1,13 +1,19 @@
-use crate::frontend::flight::sync::schema::SyncSchema;
-use crate::frontend::flight::sync::writer::DataSyncItem;
-use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, UInt64Array};
+use crate::frontend::flight::sync::{
+    schema::SyncSchema, writer::DataSyncItem, SyncError,
+};
+use arrow::array::{
+    new_null_array, Array, ArrayRef, BooleanArray, RecordBatch, UInt64Array,
+};
 use arrow::compute::{concat_batches, take};
 use arrow_row::{Row, RowConverter, SortField};
-use clade::sync::ColumnRole;
+use arrow_schema::{DataType, Field, Schema};
+use clade::sync::{ColumnDescriptor, ColumnRole};
 use datafusion::physical_expr::expressions::{MaxAccumulator, MinAccumulator};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{col, lit, Accumulator, Expr};
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 // Compact a set of record batches into a single one, squashing any chain of changes to a given row
 // into a single row in the output batch.
@@ -69,7 +75,7 @@ pub(super) fn compact_batches(
         .map(|array| {
             array
                 .as_any()
-                .downcast_ref::<arrow::array::BooleanArray>()
+                .downcast_ref::<BooleanArray>()
                 .expect("Changed column must be boolean")
         })
         .collect::<Vec<_>>();
@@ -212,17 +218,113 @@ pub(super) fn compact_batches(
     Ok(batch)
 }
 
+// Merge the batches by enforcing the same ordering of columns, adding null arrays for any missing
+// fields and then concatenating into a single output batch
+pub(super) fn normalize_syncs(
+    syncs: &[DataSyncItem],
+) -> Result<(SyncSchema, RecordBatch), SyncError> {
+    // Determine the sync super-schema, obtained by merging the fields from all sync items.
+    // First gather all unique `ColumnDescriptors` appearing across all change batches.
+    let col_desc_types = syncs
+        .iter()
+        .flat_map(|sync| {
+            sync.sync_schema
+                .columns()
+                .iter()
+                .map(|col| {
+                    (
+                        col.column_descriptor(),
+                        col.field().data_type().clone(),
+                        col.field().is_nullable(),
+                    )
+                })
+                .collect::<Vec<(ColumnDescriptor, DataType, bool)>>()
+        })
+        .unique()
+        .collect::<Vec<_>>();
+
+    let schema = Arc::new(Schema::new(
+        col_desc_types
+            .iter()
+            .map(|(col_desc, data_type, nullable)| {
+                Field::new(
+                    format!(
+                        "{}_{}",
+                        col_desc.role().as_str_name().to_ascii_lowercase(),
+                        col_desc.name
+                    ),
+                    data_type.clone(),
+                    *nullable,
+                )
+            })
+            .collect::<Vec<_>>(),
+    ));
+
+    // Next enforce same ordering and null-interpolation across all batches
+    let batches = syncs
+        .iter()
+        .map(|sync| {
+            let num_rows = sync.batch.num_rows();
+
+            let columns = col_desc_types
+                .iter()
+                .map(|(col_desc, data_type, _)| {
+                    match sync
+                        .sync_schema
+                        .column_descriptors()
+                        .iter()
+                        .position(|batch_cd| col_desc == batch_cd)
+                    {
+                        Some(index) => sync.batch.column(index).clone(),
+                        // Batch doesn't contain the column
+                        None => {
+                            if col_desc.role() == ColumnRole::Changed {
+                                // If the column is just `Changed` flag for an actual physical column
+                                // fill it with a false boolean array unless the corresponding
+                                // `Value` common is actually present
+                                if sync
+                                    .sync_schema
+                                    .column(&col_desc.name, ColumnRole::Value)
+                                    .is_some()
+                                {
+                                    Arc::from(BooleanArray::from(vec![true; num_rows]))
+                                } else {
+                                    Arc::from(BooleanArray::from(vec![false; num_rows]))
+                                }
+                            } else {
+                                // Otherwise fill-in a blank array
+                                new_null_array(data_type, num_rows)
+                            }
+                        }
+                    }
+                })
+                .collect();
+
+            Ok(RecordBatch::try_new(schema.clone(), columns)?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Now concatenate the batches
+    let batch = concat_batches(&schema, &batches)?;
+    let (column_descriptor, _, _): (Vec<ColumnDescriptor>, _, _) = col_desc_types
+        .into_iter()
+        .multiunzip::<(Vec<ColumnDescriptor>, Vec<_>, Vec<_>)>();
+    let sync_schema = SyncSchema::try_new(column_descriptor, schema)?;
+
+    Ok((sync_schema, batch))
+}
+
 // Generate a qualifier expression that, when applied to the table, will only return
 // rows whose primary keys are affected by the changes in `entry`. This is so that
 // we can only read the partitions from Delta Lake that we need to rewrite.
-pub(super) fn construct_qualifier(syncs: &[DataSyncItem]) -> Result<Expr> {
+pub(super) fn construct_qualifier(
+    sync_schema: &SyncSchema,
+    batch: &RecordBatch,
+) -> Result<Expr> {
     // Initialize the min/max accumulators for the primary key columns needed to prune the table
     // files.
     // The assumption here is that the primary key columns are the same across all syncs.
-    let mut min_max_values: Vec<(String, (MinAccumulator, MaxAccumulator))> = syncs
-        .first()
-        .expect("At least one sync item in the queue")
-        .sync_schema
+    let mut min_max_values: Vec<(String, (MinAccumulator, MaxAccumulator))> = sync_schema
         .columns()
         .iter()
         .filter(|col| col.role() == ColumnRole::OldPk)
@@ -238,34 +340,19 @@ pub(super) fn construct_qualifier(syncs: &[DataSyncItem]) -> Result<Expr> {
         .collect::<Result<_>>()?;
 
     // Collect all min/max stats for PK columns
-    for sync in syncs {
-        min_max_values
-            .iter_mut()
-            .try_for_each(|(pk_col, (min_value, max_value))| {
-                let old_field = sync
-                    .sync_schema
-                    .column(pk_col, ColumnRole::OldPk)
-                    .unwrap()
-                    .field();
+    min_max_values
+        .iter_mut()
+        .try_for_each(|(pk_col, (min_value, max_value))| {
+            for role in [ColumnRole::OldPk, ColumnRole::NewPk] {
+                let field = sync_schema.column(pk_col, role).unwrap().field();
 
-                if let Some(pk_array) = sync.batch.column_by_name(old_field.name()) {
+                if let Some(pk_array) = batch.column_by_name(field.name()) {
                     min_value.update_batch(&[pk_array.clone()])?;
                     max_value.update_batch(&[pk_array.clone()])?;
                 }
-
-                let new_field = sync
-                    .sync_schema
-                    .column(pk_col, ColumnRole::NewPk)
-                    .unwrap()
-                    .field();
-
-                if let Some(pk_array) = sync.batch.column_by_name(new_field.name()) {
-                    min_value.update_batch(&[pk_array.clone()])?;
-                    max_value.update_batch(&[pk_array.clone()])?;
-                }
-                Ok::<(), DataFusionError>(())
-            })?
-    }
+            }
+            Ok::<(), DataFusionError>(())
+        })?;
 
     // Combine the statistics into a single qualifier expression
     Ok(min_max_values
@@ -284,7 +371,6 @@ pub(super) fn construct_qualifier(syncs: &[DataSyncItem]) -> Result<Expr> {
 mod tests {
     use crate::frontend::flight::sync::schema::SyncSchema;
     use crate::frontend::flight::sync::utils::{compact_batches, construct_qualifier};
-    use crate::frontend::flight::sync::writer::DataSyncItem;
     use arrow::array::{
         BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray, UInt8Array,
     };
@@ -598,40 +684,22 @@ mod tests {
 
         let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
 
-        let batch_1 = RecordBatch::try_new(
+        let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from(vec![Some(1), None])),
-                Arc::new(Float64Array::from(vec![Some(1.1), None])),
-                Arc::new(Int32Array::from(vec![2, 6])),
-                Arc::new(Float64Array::from(vec![2.1, 2.2])),
+                Arc::new(Int32Array::from(vec![Some(1), None, Some(0), Some(4)])),
+                Arc::new(Float64Array::from(vec![
+                    Some(1.1),
+                    None,
+                    Some(3.1),
+                    Some(3.2),
+                ])),
+                Arc::new(Int32Array::from(vec![2, 6, 1, 3])),
+                Arc::new(Float64Array::from(vec![2.1, 2.2, 4.1, 0.1])),
             ],
         )?;
 
-        let batch_2 = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![0, 4])),
-                Arc::new(Float64Array::from(vec![3.1, 3.2])),
-                Arc::new(Int32Array::from(vec![1, 3])),
-                Arc::new(Float64Array::from(vec![4.1, 0.1])),
-            ],
-        )?;
-
-        let expr = construct_qualifier(&[
-            DataSyncItem {
-                origin: "0".to_string(),
-                sequence_number: 0,
-                sync_schema: sync_schema.clone(),
-                batch: batch_1,
-            },
-            DataSyncItem {
-                origin: "0".to_string(),
-                sequence_number: 0,
-                sync_schema,
-                batch: batch_2,
-            },
-        ])?;
+        let expr = construct_qualifier(&sync_schema, &batch)?;
 
         assert_eq!(
             expr,

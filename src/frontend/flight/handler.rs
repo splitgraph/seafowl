@@ -21,6 +21,7 @@ use url::Url;
 use crate::context::SeafowlContext;
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
+use crate::frontend::flight::sync::SyncResult;
 
 pub const SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER: &str = "sequence";
 pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
@@ -135,7 +136,7 @@ impl SeafowlFlightHandler {
         cmd: DataSyncCommand,
         sync_schema: Option<SyncSchema>,
         batches: Vec<RecordBatch>,
-    ) -> Result<DataSyncResult> {
+    ) -> SyncResult<DataSyncResult> {
         let log_store = match cmd.store {
             None => self.context.internal_object_store.get_log_store(&cmd.path),
             Some(store_loc) => {

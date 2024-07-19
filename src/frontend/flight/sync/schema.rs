@@ -115,6 +115,13 @@ impl SyncSchema {
             .map(f)
             .collect::<Vec<T>>()
     }
+
+    pub fn column_descriptors(&self) -> Vec<ColumnDescriptor> {
+        self.columns()
+            .iter()
+            .map(SyncColumn::column_descriptor)
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -142,5 +149,13 @@ impl SyncColumn {
     // Get the field from the arrow schema
     pub fn field(&self) -> &FieldRef {
         &self.field
+    }
+
+    // Get the `ColumnDescriptor` back from this sync column
+    pub fn column_descriptor(&self) -> ColumnDescriptor {
+        ColumnDescriptor {
+            role: i32::from(self.role),
+            name: self.name.clone(),
+        }
     }
 }

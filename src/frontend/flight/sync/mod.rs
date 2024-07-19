@@ -1,4 +1,7 @@
 use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
+use arrow_schema::ArrowError;
+use datafusion_common::DataFusionError;
+use deltalake::{DeltaTableError, ObjectStoreError};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -10,10 +13,25 @@ mod utils;
 pub(crate) mod writer;
 
 #[derive(Debug, thiserror::Error)]
+#[allow(clippy::enum_variant_names)]
 pub enum SyncError {
     #[error("Invalid sync schema: {reason}")]
     SchemaError { reason: String },
+
+    #[error(transparent)]
+    ArrowError(#[from] ArrowError),
+
+    #[error(transparent)]
+    DataFusionError(#[from] DataFusionError),
+
+    #[error(transparent)]
+    ObjectStoreError(#[from] ObjectStoreError),
+
+    #[error(transparent)]
+    DeltaTableError(#[from] DeltaTableError),
 }
+
+pub type SyncResult<T, E = SyncError> = Result<T, E>;
 
 pub async fn flush_task(
     interval: Duration,
