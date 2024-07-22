@@ -280,9 +280,8 @@ impl SeafowlDataSyncWriter {
     }
 
     pub async fn flush(&mut self) -> Result<()> {
-        while self.flush_ready() {
-            // TODO: do out-of-band
-            self.flush_syncs().await?;
+        while let Some(url) = self.flush_ready() {
+            self.flush_syncs(url).await?;
         }
 
         self.metrics.in_memory_oldest.set(
@@ -298,24 +297,35 @@ impl SeafowlDataSyncWriter {
     // Criteria for return the cached entry ready to be persisted to storage.
     // First flush any records that are explicitly beyond the configured max
     // lag, followed by further entries if we're still above max cache size.
-    fn flush_ready(&mut self) -> bool {
-        if let Some((_, sync)) = self.syncs.first()
+    fn flush_ready(&mut self) -> Option<String> {
+        if let Some((url, sync)) = self.syncs.first()
             && now() - sync.insertion_time
                 >= self.context.config.misc.sync_conf.max_replication_lag_s
         {
             // First flush any changes that are past the configured max duration
-            true
+            Some(url.clone())
         } else if self.size >= self.context.config.misc.sync_conf.max_in_memory_bytes {
             // Or if we're over the size limit flush the oldest entry
-            true
+            self.syncs.first().map(|kv| kv.0.clone())
+        } else if let Some((url, _)) = self.syncs.iter().find(|(_, entry)| {
+            entry.syncs.len() >= self.context.config.misc.sync_conf.max_syncs_per_url
+        }) {
+            // Otherwise if there are pending syncs with more than a predefined number of calls
+            // waiting to be flushed try to squash and flush them.
+            // This is a guard against hitting a stack overflow when applying syncs, since this
+            // results in deeply nested plan trees that are known to be problematic for now:
+            // - https://github.com/apache/datafusion/issues/9373
+            // - https://github.com/apache/datafusion/issues/9375
+            // TODO: Make inter-sync compaction work even in absence of sync schema match
+            Some(url.clone())
         } else {
-            false
+            None
         }
     }
 
     // Flush the table containing the oldest sync in memory
-    async fn flush_syncs(&mut self) -> Result<()> {
-        let (url, entry) = match self.syncs.first() {
+    async fn flush_syncs(&mut self, url: String) -> Result<()> {
+        let entry = match self.syncs.get(&url) {
             Some(table_syncs) => table_syncs,
             None => {
                 info!("No pending syncs to flush");
@@ -496,11 +506,7 @@ impl SeafowlDataSyncWriter {
             .unwrap();
 
         // Construct the sync dataframe out of the record batch
-        let sync_df = self
-            .context
-            .inner
-            .read_batch(data)?
-            .filter(old_pk_nulls.clone().and(new_pk_nulls.clone()).not())?;
+        let sync_df = self.context.inner.read_batch(data)?;
 
         // These differ since the physical column names are reflected in the ColumnDescriptor,
         // while logical column names are found in the arrow fields
@@ -833,7 +839,8 @@ mod tests {
         {
             if (*table_name, *origin, *sequence) == FLUSH {
                 // Flush and assert on the next expected durable sequence
-                sync_mgr.flush_syncs().await.unwrap();
+                let url = sync_mgr.syncs.first().unwrap().0.clone();
+                sync_mgr.flush_syncs(url).await.unwrap();
 
                 for (o, durs) in durable_sequences.iter_mut().enumerate() {
                     let origin = o.to_string();
