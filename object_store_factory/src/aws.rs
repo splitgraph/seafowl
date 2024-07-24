@@ -218,8 +218,8 @@ mod tests {
         assert!(debug_output.contains("region: \"us-west-2\""));
         assert!(debug_output.contains("bucket: \"my-bucket\""));
         assert!(debug_output.contains("endpoint: None"));
-        assert_eq!(debug_output.contains("key_id: \"\""), false);
-        assert_eq!(debug_output.contains("secret_key: \"\""), false);
-        assert_eq!(debug_output.contains("token: \"\""), false);
+        assert!(!debug_output.contains("key_id: \"\""));
+        assert!(!debug_output.contains("secret_key: \"\""));
+        assert!(!debug_output.contains("token: \"\""));
     }
 }
