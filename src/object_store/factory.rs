@@ -18,6 +18,7 @@ use object_store::{
     prefix::PrefixStore,
     ClientOptions, ObjectStore,
 };
+use object_store_factory;
 use tracing::info;
 use url::Url;
 
@@ -202,6 +203,9 @@ impl ObjectStoreFactory {
                         used_options.insert("region".to_string(), region.to_string());
                     };
 
+                    let env_variables =
+                        object_store_factory::parse_env_variables(&key.url);
+                    used_options.extend(env_variables.into_iter());
                     let mut store = parse_url_opts(&key.url, &used_options)?.0.into();
 
                     if !(key.url.scheme() == "file" || key.url.scheme() == "memory")

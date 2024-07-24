@@ -1,5 +1,5 @@
 [workspace]
-members = ["clade"]
+members = ["clade", "object_store_factory"]
 
 [workspace.dependencies]
 arrow = { version = "52.0.0", features = ["test_utils"] }
@@ -80,6 +80,7 @@ base64 = "0.21.0"
 bytes = "1.4.0"
 chrono = { version = "0.4", default-features = false }
 clade = { path = "clade" }
+object_store_factory = { path = "object_store_factory" }
 clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
 
