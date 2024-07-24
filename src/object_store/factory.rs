@@ -9,20 +9,11 @@ use deltalake::{
     storage::{FactoryRegistry, ObjectStoreRef, StorageOptions},
     DeltaResult, DeltaTableError, Path,
 };
-use object_store::{
-    aws::{resolve_bucket_region, AmazonS3Builder, AmazonS3ConfigKey},
-    gcp::GoogleCloudStorageBuilder,
-    local::LocalFileSystem,
-    memory::InMemory,
-    parse_url_opts,
-    prefix::PrefixStore,
-    ClientOptions, ObjectStore,
-};
+use object_store::{prefix::PrefixStore, ObjectStore, ObjectStoreScheme};
 use object_store_factory;
-use tracing::info;
 use url::Url;
 
-use crate::config::schema::{self, ObjectCacheProperties, SeafowlConfig, GCS, S3};
+use crate::config::schema::{self, ObjectCacheProperties, SeafowlConfig};
 
 use super::{cache::CachingObjectStore, wrapped::InternalObjectStore};
 
@@ -30,75 +21,22 @@ pub fn build_object_store(
     object_store_cfg: &schema::ObjectStore,
     cache_properties: &Option<ObjectCacheProperties>,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    Ok(match &object_store_cfg {
-        schema::ObjectStore::Local(schema::Local { data_dir }) => {
-            Arc::new(LocalFileSystem::new_with_prefix(data_dir)?)
-        }
-        schema::ObjectStore::InMemory(_) => Arc::new(InMemory::new()),
+    let scheme = match &object_store_cfg {
+        schema::ObjectStore::Local(_) => ObjectStoreScheme::Local,
+        schema::ObjectStore::InMemory(_) => ObjectStoreScheme::Memory,
         #[cfg(feature = "object-store-s3")]
-        schema::ObjectStore::S3(S3 {
-            region,
-            access_key_id,
-            secret_access_key,
-            session_token,
-            endpoint,
-            bucket,
-            ..
-        }) => {
-            let mut builder = AmazonS3Builder::new()
-                .with_region(region.clone().unwrap_or_default())
-                .with_bucket_name(bucket)
-                .with_allow_http(true);
-
-            if let Some(endpoint) = endpoint {
-                builder = builder.with_endpoint(endpoint);
-            }
-
-            if let (Some(access_key_id), Some(secret_access_key)) =
-                (&access_key_id, &secret_access_key)
-            {
-                builder = builder
-                    .with_access_key_id(access_key_id)
-                    .with_secret_access_key(secret_access_key);
-
-                if let Some(token) = session_token {
-                    builder = builder.with_token(token)
-                }
-            } else {
-                builder = builder.with_skip_signature(true)
-            }
-
-            let store = builder.build()?;
-
-            if let Some(props) = cache_properties {
-                Arc::new(CachingObjectStore::new_from_config(props, Arc::new(store)))
-            } else {
-                Arc::new(store)
-            }
-        }
+        schema::ObjectStore::S3(_) => ObjectStoreScheme::AmazonS3,
         #[cfg(feature = "object-store-gcs")]
-        schema::ObjectStore::GCS(GCS {
-            bucket,
-            google_application_credentials,
-            ..
-        }) => {
-            let gcs_builder: GoogleCloudStorageBuilder =
-                GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
+        schema::ObjectStore::GCS(_) => ObjectStoreScheme::GoogleCloudStorage,
+    };
 
-            let gcs_builder = if let Some(path) = google_application_credentials {
-                gcs_builder.with_service_account_path(path)
-            } else {
-                gcs_builder
-            };
+    let config = object_store_cfg.to_config();
+    let store = object_store_factory::build_object_store_from_config(scheme, config)?;
 
-            let store = gcs_builder.build()?;
-
-            if let Some(props) = cache_properties {
-                Arc::new(CachingObjectStore::new_from_config(props, Arc::new(store)))
-            } else {
-                Arc::new(store)
-            }
-        }
+    Ok(if let Some(props) = cache_properties {
+        Arc::new(CachingObjectStore::new_from_config(props, Arc::new(store)))
+    } else {
+        Arc::new(store)
     })
 }
 
@@ -164,7 +102,7 @@ impl ObjectStoreFactory {
         table_path: String,
     ) -> Result<Arc<dyn LogStore>, object_store::Error> {
         let store = {
-            let mut used_options = options.clone();
+            let used_options = options.clone();
             let key = StoreCacheKey {
                 url: url.clone(),
                 options,
@@ -173,40 +111,12 @@ impl ObjectStoreFactory {
             match self.custom_stores.get_mut(&key) {
                 Some(store) => store.clone(),
                 None => {
-                    if (key.url.scheme() == "s3" || key.url.scheme() == "s3a")
-                        && !used_options.contains_key(AmazonS3ConfigKey::Bucket.as_ref())
-                        && !used_options
-                            .contains_key(AmazonS3ConfigKey::Endpoint.as_ref())
-                    {
-                        // For "real" S3, if we don't have a region passed to us, we have to figure it out
-                        // ourselves (note this won't work with HTTP paths that are actually S3, but those
-                        // usually include the region already).
-
-                        let bucket =
-                            key.url.host_str().ok_or(object_store::Error::Generic {
-                                store: "parse_url",
-                                source: format!(
-                                    "Could not find a bucket in S3 path {0}",
-                                    key.url
-                                )
-                                .into(),
-                            })?;
-
-                        info!("Autodetecting region for bucket {}", bucket);
-                        let region =
-                            resolve_bucket_region(bucket, &ClientOptions::new()).await?;
-                        info!(
-                            "Using autodetected region {} for bucket {}",
-                            region, bucket
-                        );
-
-                        used_options.insert("region".to_string(), region.to_string());
-                    };
-
-                    let env_variables =
-                        object_store_factory::parse_env_variables(&key.url);
-                    used_options.extend(env_variables.into_iter());
-                    let mut store = parse_url_opts(&key.url, &used_options)?.0.into();
+                    let mut store = object_store_factory::build_object_store_from_opts(
+                        &url,
+                        used_options,
+                    )
+                    .await?
+                    .into();
 
                     if !(key.url.scheme() == "file" || key.url.scheme() == "memory")
                         && let Some(ref cache) = self.object_store_cache
