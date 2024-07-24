@@ -10,10 +10,26 @@ use std::collections::HashMap;
 use tracing::warn;
 use url::Url;
 
+/// Configuration for object storage, holding settings in a key-value format.
 pub struct Config {
     pub settings: HashMap<String, String>,
 }
 
+/// Builds an object store based on the specified scheme and configuration.
+///
+/// # Arguments
+///
+/// * `scheme` - The scheme to use for object storage, such as Memory, Local, AmazonS3, or GoogleCloudStorage.
+/// * `config` - A hash map containing configuration settings needed to build the object store.
+///
+/// # Returns
+///
+/// Returns a `Result` that, on success, contains a boxed `ObjectStore` trait object. On failure, it returns an `object_store::Error`
+/// indicating what went wrong, such as an unsupported scheme.
+///
+/// # Errors
+///
+/// * If the scheme is not supported or the configuration is invalid, an error is returned.
 pub fn build_object_store_from_config(
     scheme: ObjectStoreScheme,
     config: HashMap<String, String>,
@@ -42,6 +58,21 @@ pub fn build_object_store_from_config(
     }
 }
 
+/// Builds an object store based on the URL and options provided.
+///
+/// # Arguments
+///
+/// * `url` - The URL that determines the object store scheme and configuration.
+/// * `options` - A hash map containing configuration options for the object store, which may be modified based on the URL scheme.
+///
+/// # Returns
+///
+/// Returns a `Result` that, on success, contains a boxed `ObjectStore` trait object. On failure, it returns an `object_store::Error`
+/// indicating what went wrong, such as an unsupported URL scheme.
+///
+/// # Errors
+///
+/// * If the URL scheme is unsupported or there is an error parsing the URL or options, an error is returned.
 pub async fn build_object_store_from_opts(
     url: &Url,
     mut options: HashMap<String, String>,
