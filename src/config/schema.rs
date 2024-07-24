@@ -65,6 +65,17 @@ pub enum ObjectStore {
     GCS(GCS),
 }
 
+impl ObjectStore {
+    pub fn to_config(&self) -> HashMap<String, String> {
+        match self {
+            ObjectStore::Local(local) => local.to_config(),
+            ObjectStore::InMemory(memory) => memory.to_config(),
+            ObjectStore::S3(s3) => s3.to_config(),
+            ObjectStore::GCS(gcs) => gcs.to_config(),
+        }
+    }
+}
+
 /// Build a default config file and struct
 pub fn build_default_config() -> (String, SeafowlConfig) {
     let dsn = Path::new(DEFAULT_DATA_DIR)
@@ -119,8 +130,23 @@ pub struct Local {
     pub data_dir: String,
 }
 
+impl Local {
+    pub fn to_config(&self) -> HashMap<String, String> {
+        let mut config = HashMap::new();
+        config.insert("data_dir".to_string(), self.data_dir.clone());
+        config
+    }
+}
+
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct InMemory {}
+
+impl InMemory {
+    pub fn to_config(&self) -> HashMap<String, String> {
+        // InMemory does not have any specific configurations.
+        HashMap::new()
+    }
+}
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct S3 {
@@ -149,6 +175,30 @@ impl S3 {
             prefix: None,
         })
     }
+
+    pub fn to_config(&self) -> HashMap<String, String> {
+        let mut config = HashMap::new();
+        if let Some(region) = &self.region {
+            config.insert("region".to_string(), region.clone());
+        }
+        if let Some(access_key_id) = &self.access_key_id {
+            config.insert("access_key_id".to_string(), access_key_id.clone());
+        }
+        if let Some(secret_access_key) = &self.secret_access_key {
+            config.insert("secret_access_key".to_string(), secret_access_key.clone());
+        }
+        if let Some(session_token) = &self.session_token {
+            config.insert("session_token".to_string(), session_token.clone());
+        }
+        if let Some(endpoint) = &self.endpoint {
+            config.insert("endpoint".to_string(), endpoint.clone());
+        }
+        config.insert("bucket".to_string(), self.bucket.clone());
+        if let Some(prefix) = &self.prefix {
+            config.insert("prefix".to_string(), prefix.clone());
+        }
+        config
+    }
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -169,6 +219,21 @@ impl GCS {
             google_application_credentials: map
                 .remove("format.google_application_credentials"),
         }
+    }
+
+    pub fn to_config(&self) -> HashMap<String, String> {
+        let mut config = HashMap::new();
+        config.insert("bucket".to_string(), self.bucket.clone());
+        if let Some(prefix) = &self.prefix {
+            config.insert("prefix".to_string(), prefix.clone());
+        }
+        if let Some(credentials) = &self.google_application_credentials {
+            config.insert(
+                "google_application_credentials".to_string(),
+                credentials.clone(),
+            );
+        }
+        config
     }
 }
 
