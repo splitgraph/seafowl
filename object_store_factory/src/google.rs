@@ -26,7 +26,7 @@ pub fn build_google_cloud_storage_from_config(
     config: &Config,
 ) -> Result<Box<dyn ObjectStore>, object_store::Error> {
     let mut builder: GoogleCloudStorageBuilder =
-        GoogleCloudStorageBuilder::new().with_bucket_name(&config.bucket.clone());
+        GoogleCloudStorageBuilder::new().with_bucket_name(config.bucket.clone());
 
     builder = if let Some(path) = &config.google_application_credentials {
         builder.with_service_account_path(path.clone())

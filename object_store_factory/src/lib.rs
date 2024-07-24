@@ -50,10 +50,10 @@ pub fn build_object_store_from_config(
         }
         _ => {
             warn!("Unsupported scheme: {:?}", scheme);
-            return Err(object_store::Error::Generic {
+            Err(object_store::Error::Generic {
                 store: "unsupported_url_scheme",
                 source: format!("Unsupported scheme: {:?}", scheme).into(),
-            });
+            })
         }
     }
 }
@@ -77,7 +77,7 @@ pub async fn build_object_store_from_opts(
     url: &Url,
     mut options: HashMap<String, String>,
 ) -> Result<Box<dyn ObjectStore>, object_store::Error> {
-    let (scheme, _) = ObjectStoreScheme::parse(&url).unwrap();
+    let (scheme, _) = ObjectStoreScheme::parse(url).unwrap();
 
     match scheme {
         ObjectStoreScheme::AmazonS3 => {
@@ -96,6 +96,6 @@ pub async fn build_object_store_from_opts(
         }
     }
 
-    let store = parse_url_opts(&url, &options)?.0;
+    let store = parse_url_opts(url, &options)?.0;
     Ok(store)
 }
