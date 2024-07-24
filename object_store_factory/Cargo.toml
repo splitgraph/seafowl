@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 async-trait = "0.1.64"
 futures = "0.3.30"
-object_store = { version = "0.10.1", features = ["aws", "azure", "gcp"] }
+object_store = { version = "0.10.2", features = ["aws", "azure", "gcp"] }
 tempfile = "3.10.1"
 
 tracing = { workspace = true }
