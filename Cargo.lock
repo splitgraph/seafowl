@@ -1873,7 +1873,7 @@ dependencies = [
  "itertools 0.12.1",
  "log",
  "num_cpus",
- "object_store 0.10.1",
+ "object_store 0.10.2",
  "parking_lot",
  "parquet",
  "paste",
@@ -1905,7 +1905,7 @@ dependencies = [
  "instant",
  "libc",
  "num_cpus",
- "object_store 0.10.1",
+ "object_store 0.10.2",
  "parquet",
  "sqlparser 0.47.0",
 ]
@@ -1931,7 +1931,7 @@ dependencies = [
  "futures",
  "hashbrown 0.14.5",
  "log",
- "object_store 0.10.1",
+ "object_store 0.10.2",
  "parking_lot",
  "rand 0.8.5",
  "tempfile",
@@ -2164,7 +2164,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-proto-common",
- "object_store 0.10.1",
+ "object_store 0.10.2",
  "prost",
 ]
 
@@ -2337,7 +2337,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "num_cpus",
- "object_store 0.10.1",
+ "object_store 0.10.2",
  "once_cell",
  "parking_lot",
  "parquet",
@@ -4345,9 +4345,9 @@ dependencies = [
 
 [[package]]
 name = "object_store"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbebfd32c213ba1907fa7a9c9138015a8de2b43e30c5aa45b18f7deb46786ad6"
+checksum = "e6da452820c715ce78221e8202ccc599b4a52f3e1eb3eedb487b680c81a8e3f3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4356,7 +4356,7 @@ dependencies = [
  "futures",
  "humantime",
  "hyper 1.4.1",
- "itertools 0.12.1",
+ "itertools 0.13.0",
  "md-5",
  "parking_lot",
  "percent-encoding",
@@ -4534,7 +4534,7 @@ dependencies = [
  "lz4_flex",
  "num",
  "num-bigint",
- "object_store 0.10.1",
+ "object_store 0.10.2",
  "paste",
  "seq-macro",
  "snap",
@@ -5017,9 +5017,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.31.0"
+version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
+checksum = "96a05e2e8efddfa51a84ca47cec303fac86c8541b686d37cac5efc0e094417bc"
 dependencies = [
  "memchr",
  "serde",
@@ -5902,7 +5902,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "moka",
- "object_store 0.10.1",
+ "object_store 0.10.2",
  "percent-encoding",
  "prost",
  "rand 0.8.5",
