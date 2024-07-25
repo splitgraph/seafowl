@@ -1,8 +1,9 @@
 use object_store::{memory::InMemory, ObjectStore};
+use std::sync::Arc;
 
-pub fn build_in_memory_storage() -> Result<Box<dyn ObjectStore>, object_store::Error> {
+pub fn build_in_memory_storage() -> Result<Arc<dyn ObjectStore>, object_store::Error> {
     let store = InMemory::new();
-    Ok(Box::new(store))
+    Ok(Arc::new(store))
 }
 
 #[cfg(test)]

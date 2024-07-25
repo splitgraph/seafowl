@@ -1,6 +1,7 @@
 use object_store::{gcp::GoogleCloudStorageBuilder, ObjectStore};
 use std::collections::HashMap;
 use std::env;
+use std::sync::Arc;
 
 pub struct Config {
     pub bucket: String,
@@ -24,7 +25,7 @@ impl Config {
 
 pub fn build_google_cloud_storage_from_config(
     config: &Config,
-) -> Result<Box<dyn ObjectStore>, object_store::Error> {
+) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
     let mut builder: GoogleCloudStorageBuilder =
         GoogleCloudStorageBuilder::new().with_bucket_name(config.bucket.clone());
 
@@ -35,7 +36,7 @@ pub fn build_google_cloud_storage_from_config(
     };
 
     let store = builder.build()?;
-    Ok(Box::new(store))
+    Ok(Arc::new(store))
 }
 
 pub fn add_google_cloud_storage_environment_variables(

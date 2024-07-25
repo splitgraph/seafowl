@@ -4,6 +4,7 @@ use object_store::{
 };
 use std::collections::HashMap;
 use std::env;
+use std::sync::Arc;
 use tracing::info;
 use url::Url;
 
@@ -35,7 +36,7 @@ impl Config {
 
 pub fn build_amazon_s3_from_config(
     config: &Config,
-) -> Result<Box<dyn ObjectStore>, object_store::Error> {
+) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
     let mut builder = AmazonS3Builder::new()
         .with_region(config.region.clone().unwrap_or_default())
         .with_bucket_name(config.bucket.clone())
@@ -60,7 +61,7 @@ pub fn build_amazon_s3_from_config(
     }
 
     let store = builder.build()?;
-    Ok(Box::new(store))
+    Ok(Arc::new(store))
 }
 
 pub async fn add_amazon_s3_specific_options(

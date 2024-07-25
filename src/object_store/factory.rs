@@ -24,20 +24,21 @@ pub fn build_object_store(
     let scheme = match &object_store_cfg {
         schema::ObjectStore::Local(_) => ObjectStoreScheme::Local,
         schema::ObjectStore::InMemory(_) => ObjectStoreScheme::Memory,
-        #[cfg(feature = "object-store-s3")]
         schema::ObjectStore::S3(_) => ObjectStoreScheme::AmazonS3,
-        #[cfg(feature = "object-store-gcs")]
         schema::ObjectStore::GCS(_) => ObjectStoreScheme::GoogleCloudStorage,
     };
 
     let config = object_store_cfg.to_config();
-    let store = object_store_factory::build_object_store_from_config(scheme, config)?;
+    let store = object_store_factory::build_object_store_from_config(&scheme, config)?;
 
-    Ok(if let Some(props) = cache_properties {
-        Arc::new(CachingObjectStore::new_from_config(props, Arc::new(store)))
+    if matches!(scheme, ObjectStoreScheme::Local | ObjectStoreScheme::Memory) {
+        Ok(store)
     } else {
-        Arc::new(store)
-    })
+        Ok(match cache_properties {
+            Some(props) => Arc::new(CachingObjectStore::new_from_config(props, store)),
+            None => store,
+        })
+    }
 }
 
 #[derive(PartialEq, Eq)]

@@ -7,6 +7,7 @@ use object_store::parse_url_opts;
 use object_store::ObjectStore;
 use object_store::ObjectStoreScheme;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::warn;
 use url::Url;
 
@@ -24,16 +25,16 @@ pub struct Config {
 ///
 /// # Returns
 ///
-/// Returns a `Result` that, on success, contains a boxed `ObjectStore` trait object. On failure, it returns an `object_store::Error`
+/// Returns a `Result` that, on success, contains an Arc `ObjectStore` trait object. On failure, it returns an `object_store::Error`
 /// indicating what went wrong, such as an unsupported scheme.
 ///
 /// # Errors
 ///
 /// * If the scheme is not supported or the configuration is invalid, an error is returned.
 pub fn build_object_store_from_config(
-    scheme: ObjectStoreScheme,
+    scheme: &ObjectStoreScheme,
     config: HashMap<String, String>,
-) -> Result<Box<dyn ObjectStore>, object_store::Error> {
+) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
     match scheme {
         ObjectStoreScheme::Memory => memory::build_in_memory_storage(),
         ObjectStoreScheme::Local => {

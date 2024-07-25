@@ -1,5 +1,6 @@
 use object_store::{local::LocalFileSystem, ObjectStore};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct Config {
@@ -18,9 +19,9 @@ impl Config {
 
 pub fn build_local_storage(
     config: &Config,
-) -> Result<Box<dyn ObjectStore>, object_store::Error> {
+) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
     let store = LocalFileSystem::new_with_prefix(config.data_dir.clone())?;
-    Ok(Box::new(store))
+    Ok(Arc::new(store))
 }
 
 #[cfg(test)]
