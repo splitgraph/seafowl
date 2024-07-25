@@ -1,14 +1,16 @@
+use object_store::ClientConfigKey;
 use object_store::{
     aws::resolve_bucket_region, aws::AmazonS3Builder, aws::AmazonS3ConfigKey,
     ClientOptions, ObjectStore,
 };
 use std::collections::HashMap;
 use std::env;
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::info;
 use url::Url;
 
-pub struct Config {
+pub struct S3Config {
     pub region: Option<String>,
     pub access_key_id: Option<String>,
     pub secret_access_key: Option<String>,
@@ -18,7 +20,7 @@ pub struct Config {
     pub _prefix: Option<String>,
 }
 
-impl Config {
+impl S3Config {
     pub fn from_hashmap(
         map: &HashMap<String, String>,
     ) -> Result<Self, object_store::Error> {
@@ -35,7 +37,7 @@ impl Config {
 }
 
 pub fn build_amazon_s3_from_config(
-    config: &Config,
+    config: &S3Config,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
     let mut builder = AmazonS3Builder::new()
         .with_region(config.region.clone().unwrap_or_default())
@@ -64,48 +66,70 @@ pub fn build_amazon_s3_from_config(
     Ok(Arc::new(store))
 }
 
+pub fn map_options_into_amazon_s3_config_keys(
+    input_options: HashMap<String, String>,
+) -> Result<HashMap<AmazonS3ConfigKey, String>, object_store::Error> {
+    let mut mapped_keys = HashMap::new();
+
+    for (key, value) in input_options {
+        match AmazonS3ConfigKey::from_str(&key) {
+            Ok(config_key) => {
+                mapped_keys.insert(config_key, value);
+            }
+            Err(err) => {
+                return Err(err);
+            }
+        }
+    }
+
+    Ok(mapped_keys)
+}
+
 pub async fn add_amazon_s3_specific_options(
     url: &Url,
-    mut options: HashMap<String, String>,
-) -> HashMap<String, String> {
-    if !options.contains_key(AmazonS3ConfigKey::Bucket.as_ref())
-        && !options.contains_key(AmazonS3ConfigKey::Endpoint.as_ref())
+    options: &mut HashMap<AmazonS3ConfigKey, String>,
+) {
+    if !options.contains_key(&AmazonS3ConfigKey::Bucket)
+        && !options.contains_key(&AmazonS3ConfigKey::Endpoint)
     {
         let region = detect_region(url).await.unwrap();
-        options.insert("region".to_string(), region.to_string());
+        options.insert(AmazonS3ConfigKey::Region, region.to_string());
     }
-    options
 }
 
 pub fn add_amazon_s3_environment_variables(
-    mut options: HashMap<String, String>,
-) -> HashMap<String, String> {
+    options: &mut HashMap<AmazonS3ConfigKey, String>,
+) {
     let env_vars = &[
-        ("AWS_ACCESS_KEY_ID", "access_key_id"),
-        ("AWS_SECRET_ACCESS_KEY", "secret_access_key"),
-        ("AWS_DEFAULT_REGION", "region"),
-        ("AWS_ENDPOINT", "endpoint"),
-        ("AWS_SESSION_TOKEN", "session_token"),
-        ("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "credentials_uri"),
+        ("AWS_ACCESS_KEY_ID", AmazonS3ConfigKey::AccessKeyId),
+        ("AWS_SECRET_ACCESS_KEY", AmazonS3ConfigKey::SecretAccessKey),
+        ("AWS_DEFAULT_REGION", AmazonS3ConfigKey::Region),
+        ("AWS_ENDPOINT", AmazonS3ConfigKey::Endpoint),
+        ("AWS_SESSION_TOKEN", AmazonS3ConfigKey::Token),
+        (
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+            AmazonS3ConfigKey::ContainerCredentialsRelativeUri,
+        ),
     ];
 
     for &(env_var_name, config_key) in env_vars.iter() {
         if let Ok(val) = env::var(env_var_name) {
-            options.insert(config_key.to_string(), val);
+            options.insert(config_key, val);
         }
     }
 
     if env::var("AWS_ALLOW_HTTP") == Ok("true".to_string()) {
-        options.insert("allow_http".to_string(), "true".to_string());
+        options.insert(
+            AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp),
+            "true".to_string(),
+        );
     }
-
-    options
 }
 
 // For "real" S3, if we don't have a region passed to us, we have to figure it out
 // ourselves (note this won't work with HTTP paths that are actually S3, but those
 // usually include the region already).
-pub async fn detect_region(url: &Url) -> Result<String, object_store::Error> {
+async fn detect_region(url: &Url) -> Result<String, object_store::Error> {
     let bucket = url.host_str().ok_or(object_store::Error::Generic {
         store: "parse_url",
         source: format!("Could not find a bucket in S3 path {0}", url).into(),
@@ -136,7 +160,7 @@ mod tests {
         map.insert("prefix".to_string(), "my-prefix".to_string());
 
         let config =
-            Config::from_hashmap(&map).expect("Failed to create config from hashmap");
+            S3Config::from_hashmap(&map).expect("Failed to create config from hashmap");
         assert_eq!(config.region, Some("us-west-2".to_string()));
         assert_eq!(config.access_key_id, Some("access_key".to_string()));
         assert_eq!(config.secret_access_key, Some("secret_key".to_string()));
@@ -153,7 +177,7 @@ mod tests {
         map.insert("bucket".to_string(), "my-bucket".to_string());
 
         let config =
-            Config::from_hashmap(&map).expect("Failed to create config from hashmap");
+            S3Config::from_hashmap(&map).expect("Failed to create config from hashmap");
         assert_eq!(config.region, Some("us-west-2".to_string()));
         assert!(config.access_key_id.is_none());
         assert!(config.secret_access_key.is_none());
@@ -167,12 +191,12 @@ mod tests {
     #[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
     fn test_config_from_hashmap_without_required_fields() {
         let map = HashMap::new();
-        Config::from_hashmap(&map).unwrap(); // Missing "region" and "bucket"
+        S3Config::from_hashmap(&map).unwrap(); // Missing "region" and "bucket"
     }
 
     #[test]
     fn test_build_amazon_s3_from_config_with_all_fields() {
-        let config = Config {
+        let config = S3Config {
             region: Some("us-west-2".to_string()),
             access_key_id: Some("access_key".to_string()),
             secret_access_key: Some("secret_key".to_string()),
@@ -199,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_build_amazon_s3_from_config_with_missing_optional_fields() {
-        let config = Config {
+        let config = S3Config {
             region: Some("us-west-2".to_string()),
             access_key_id: None,
             secret_access_key: None,
@@ -222,5 +246,77 @@ mod tests {
         assert!(!debug_output.contains("key_id: \"\""));
         assert!(!debug_output.contains("secret_key: \"\""));
         assert!(!debug_output.contains("token: \"\""));
+    }
+
+    #[test]
+    fn test_map_options_into_amazon_s3_config_keys_with_valid_keys() {
+        let mut input_options = HashMap::new();
+        input_options.insert("access_key_id".to_string(), "ACCESS_KEY".to_string());
+        input_options.insert("secret_access_key".to_string(), "SECRET_KEY".to_string());
+        input_options.insert("region".to_string(), "us-west-2".to_string());
+        input_options.insert("bucket".to_string(), "my-bucket".to_string());
+
+        let result = map_options_into_amazon_s3_config_keys(input_options);
+        assert!(result.is_ok());
+
+        let mapped_keys = result.unwrap();
+        assert_eq!(
+            mapped_keys.get(&AmazonS3ConfigKey::AccessKeyId),
+            Some(&"ACCESS_KEY".to_string())
+        );
+        assert_eq!(
+            mapped_keys.get(&AmazonS3ConfigKey::SecretAccessKey),
+            Some(&"SECRET_KEY".to_string())
+        );
+        assert_eq!(
+            mapped_keys.get(&AmazonS3ConfigKey::Region),
+            Some(&"us-west-2".to_string())
+        );
+        assert_eq!(
+            mapped_keys.get(&AmazonS3ConfigKey::Bucket),
+            Some(&"my-bucket".to_string())
+        );
+    }
+
+    #[test]
+    fn test_map_options_into_amazon_s3_config_keys_with_invalid_key() {
+        let mut input_options = HashMap::new();
+        input_options.insert("invalid_key".to_string(), "some_value".to_string());
+
+        let result = map_options_into_amazon_s3_config_keys(input_options);
+        assert!(result.is_err());
+
+        let error = result.err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            "Configuration key: 'invalid_key' is not valid for store 'S3'."
+        )
+    }
+
+    #[test]
+    fn test_map_options_into_amazon_s3_config_keys_with_mixed_keys() {
+        let mut input_options = HashMap::new();
+        input_options.insert("access_key_id".to_string(), "ACCESS_KEY".to_string());
+        input_options.insert("invalid_key".to_string(), "some_value".to_string());
+        input_options.insert("bucket".to_string(), "my-bucket".to_string());
+
+        let result = map_options_into_amazon_s3_config_keys(input_options);
+        assert!(result.is_err());
+
+        let error = result.err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            "Configuration key: 'invalid_key' is not valid for store 'S3'."
+        )
+    }
+
+    #[test]
+    fn test_map_options_into_amazon_s3_config_keys_empty_input() {
+        let input_options = HashMap::new();
+        let result = map_options_into_amazon_s3_config_keys(input_options);
+        assert!(result.is_ok());
+
+        let mapped_keys = result.unwrap();
+        assert!(mapped_keys.is_empty());
     }
 }

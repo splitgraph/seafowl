@@ -1,15 +1,16 @@
-use object_store::{gcp::GoogleCloudStorageBuilder, ObjectStore};
+use object_store::{gcp::GoogleCloudStorageBuilder, gcp::GoogleConfigKey, ObjectStore};
 use std::collections::HashMap;
 use std::env;
+use std::str::FromStr;
 use std::sync::Arc;
 
-pub struct Config {
+pub struct GCSConfig {
     pub bucket: String,
     pub _prefix: Option<String>,
     pub google_application_credentials: Option<String>,
 }
 
-impl Config {
+impl GCSConfig {
     pub fn from_hashmap(
         map: &HashMap<String, String>,
     ) -> Result<Self, object_store::Error> {
@@ -24,7 +25,7 @@ impl Config {
 }
 
 pub fn build_google_cloud_storage_from_config(
-    config: &Config,
+    config: &GCSConfig,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
     let mut builder: GoogleCloudStorageBuilder =
         GoogleCloudStorageBuilder::new().with_bucket_name(config.bucket.clone());
@@ -39,25 +40,48 @@ pub fn build_google_cloud_storage_from_config(
     Ok(Arc::new(store))
 }
 
+pub fn map_options_into_google_config_keys(
+    input_options: HashMap<String, String>,
+) -> Result<HashMap<GoogleConfigKey, String>, object_store::Error> {
+    let mut mapped_keys = HashMap::new();
+
+    for (key, value) in input_options {
+        match GoogleConfigKey::from_str(&key) {
+            Ok(config_key) => {
+                mapped_keys.insert(config_key, value);
+            }
+            Err(err) => {
+                return Err(err);
+            }
+        }
+    }
+
+    Ok(mapped_keys)
+}
+
 pub fn add_google_cloud_storage_environment_variables(
-    mut options: HashMap<String, String>,
-) -> HashMap<String, String> {
+    options: &mut HashMap<GoogleConfigKey, String>,
+) {
     let env_vars = &[
-        ("GOOGLE_SERVICE_ACCOUNT", "service_account_file"),
-        ("GOOGLE_SERVICE_ACCOUNT_PATH", "service_account_path"),
-        ("SERVICE_ACCOUNT", "service_account_file"),
-        ("GOOGLE_SERVICE_ACCOUNT_KEY", "service_account_key"),
-        ("GOOGLE_BUCKET", "bucket"),
-        ("GOOGLE_BUCKET_NAME", "bucket"),
+        ("GOOGLE_SERVICE_ACCOUNT", GoogleConfigKey::ServiceAccount),
+        (
+            "GOOGLE_SERVICE_ACCOUNT_PATH",
+            GoogleConfigKey::ServiceAccount,
+        ),
+        ("SERVICE_ACCOUNT", GoogleConfigKey::ServiceAccount),
+        (
+            "GOOGLE_SERVICE_ACCOUNT_KEY",
+            GoogleConfigKey::ServiceAccountKey,
+        ),
+        ("GOOGLE_BUCKET", GoogleConfigKey::Bucket),
+        ("GOOGLE_BUCKET_NAME", GoogleConfigKey::Bucket),
     ];
 
     for &(env_var_name, config_key) in env_vars.iter() {
         if let Ok(val) = env::var(env_var_name) {
-            options.insert(config_key.to_string(), val);
+            options.insert(config_key, val);
         }
     }
-
-    options
 }
 
 #[cfg(test)]
@@ -78,7 +102,7 @@ mod tests {
         );
 
         let config =
-            Config::from_hashmap(&map).expect("Failed to create config from hashmap");
+            GCSConfig::from_hashmap(&map).expect("Failed to create config from hashmap");
         assert_eq!(config.bucket, "my-bucket");
         assert_eq!(config._prefix, Some("my-prefix".to_string()));
         assert_eq!(
@@ -93,7 +117,7 @@ mod tests {
         map.insert("bucket".to_string(), "my-bucket".to_string());
 
         let config =
-            Config::from_hashmap(&map).expect("Failed to create config from hashmap");
+            GCSConfig::from_hashmap(&map).expect("Failed to create config from hashmap");
         assert_eq!(config.bucket, "my-bucket");
         assert!(config._prefix.is_none());
         assert!(config.google_application_credentials.is_none());
@@ -103,7 +127,7 @@ mod tests {
     #[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
     fn test_config_from_hashmap_without_bucket() {
         let map = HashMap::new();
-        Config::from_hashmap(&map).unwrap();
+        GCSConfig::from_hashmap(&map).unwrap();
     }
 
     #[test]
@@ -128,7 +152,7 @@ mod tests {
         fs::write(temp_file.path(), credentials_content)
             .expect("Failed to write to temporary file");
 
-        let config = Config {
+        let config = GCSConfig {
             bucket: "my-bucket".to_string(),
             _prefix: Some("my-prefix".to_string()),
             google_application_credentials: Some(
@@ -143,15 +167,12 @@ mod tests {
         let store = result.unwrap();
         let debug_output = format!("{:?}", store);
 
-        println!("{:?}", debug_output);
-
-        // Check the configuration values
         assert!(debug_output.contains("bucket_name: \"my-bucket\""));
     }
 
     #[test]
     fn test_build_google_cloud_storage_from_config_with_missing_optional_fields() {
-        let config = Config {
+        let config = GCSConfig {
             bucket: "my-bucket".to_string(),
             _prefix: None,
             google_application_credentials: None,
@@ -164,7 +185,79 @@ mod tests {
         let store = result.unwrap();
         let debug_output = format!("{:?}", store);
 
-        // Check the configuration values
         assert!(debug_output.contains("bucket_name: \"my-bucket\""));
+    }
+
+    #[test]
+    fn test_map_options_into_google_config_keys_with_valid_keys() {
+        let mut input_options = HashMap::new();
+        input_options.insert(
+            "google_service_account".to_string(),
+            "my_google_service_account".to_string(),
+        );
+        input_options.insert("bucket".to_string(), "my-bucket".to_string());
+        input_options.insert(
+            "google_service_account_key".to_string(),
+            "my_google_service_account_key".to_string(),
+        );
+
+        let result = map_options_into_google_config_keys(input_options);
+        assert!(result.is_ok());
+
+        let mapped_keys = result.unwrap();
+        assert_eq!(
+            mapped_keys.get(&GoogleConfigKey::ServiceAccount),
+            Some(&"my_google_service_account".to_string())
+        );
+        assert_eq!(
+            mapped_keys.get(&GoogleConfigKey::Bucket),
+            Some(&"my-bucket".to_string())
+        );
+        assert_eq!(
+            mapped_keys.get(&GoogleConfigKey::ServiceAccountKey),
+            Some(&"my_google_service_account_key".to_string())
+        );
+    }
+
+    #[test]
+    fn test_map_options_into_google_config_keys_with_invalid_key() {
+        let mut input_options = HashMap::new();
+        input_options.insert("invalid_key".to_string(), "some_value".to_string());
+
+        let result = map_options_into_google_config_keys(input_options);
+        assert!(result.is_err());
+
+        let error = result.err().unwrap();
+        print!("ERROR1: {:?}", error.to_string());
+        assert_eq!(
+            error.to_string(),
+            "Configuration key: 'invalid_key' is not valid for store 'GCS'."
+        )
+    }
+
+    #[test]
+    fn test_map_options_into_google_config_keys_with_mixed_keys() {
+        let mut input_options = HashMap::new();
+        input_options.insert("invalid_key".to_string(), "some_value".to_string());
+        input_options.insert("bucket".to_string(), "my-bucket".to_string());
+
+        let result = map_options_into_google_config_keys(input_options);
+        assert!(result.is_err());
+
+        let error = result.err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            "Configuration key: 'invalid_key' is not valid for store 'GCS'."
+        )
+    }
+
+    #[test]
+    fn test_map_options_into_google_config_keys_empty_input() {
+        let input_options = HashMap::new();
+        let result = map_options_into_google_config_keys(input_options);
+        assert!(result.is_ok());
+
+        let mapped_keys = result.unwrap();
+        assert!(mapped_keys.is_empty());
     }
 }

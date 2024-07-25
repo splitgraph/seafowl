@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub struct Config {
+pub struct LocalConfig {
     pub data_dir: String,
 }
 
-impl Config {
+impl LocalConfig {
     pub fn from_hashmap(
         map: &HashMap<String, String>,
     ) -> Result<Self, object_store::Error> {
@@ -18,7 +18,7 @@ impl Config {
 }
 
 pub fn build_local_storage(
-    config: &Config,
+    config: &LocalConfig,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
     let store = LocalFileSystem::new_with_prefix(config.data_dir.clone())?;
     Ok(Arc::new(store))
@@ -34,8 +34,8 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("data_dir".to_string(), "/tmp/data".to_string());
 
-        let config =
-            Config::from_hashmap(&map).expect("Failed to create config from hashmap");
+        let config = LocalConfig::from_hashmap(&map)
+            .expect("Failed to create config from hashmap");
         assert_eq!(config.data_dir, "/tmp/data".to_string());
     }
 
@@ -44,7 +44,7 @@ mod tests {
     fn test_config_from_hashmap_without_data_dir() {
         let map = HashMap::new();
         // This test will panic because data_dir is missing, which causes unwrap() to panic.
-        Config::from_hashmap(&map).unwrap();
+        LocalConfig::from_hashmap(&map).unwrap();
     }
 
     #[test]
@@ -55,7 +55,7 @@ mod tests {
             .to_str()
             .expect("Failed to convert path to string");
 
-        let config = Config {
+        let config = LocalConfig {
             data_dir: data_dir.to_string(),
         };
 
@@ -65,7 +65,7 @@ mod tests {
 
     #[test]
     fn test_build_local_storage_with_invalid_path() {
-        let config = Config {
+        let config = LocalConfig {
             data_dir: "".to_string(),
         };
 

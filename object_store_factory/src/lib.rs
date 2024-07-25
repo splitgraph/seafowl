@@ -12,9 +12,7 @@ use tracing::warn;
 use url::Url;
 
 /// Configuration for object storage, holding settings in a key-value format.
-pub struct Config {
-    pub settings: HashMap<String, String>,
-}
+pub type StorageConfig = HashMap<String, String>;
 
 /// Builds an object store based on the specified scheme and configuration.
 ///
@@ -33,20 +31,20 @@ pub struct Config {
 /// * If the scheme is not supported or the configuration is invalid, an error is returned.
 pub fn build_object_store_from_config(
     scheme: &ObjectStoreScheme,
-    config: HashMap<String, String>,
+    config: StorageConfig,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
     match scheme {
         ObjectStoreScheme::Memory => memory::build_in_memory_storage(),
         ObjectStoreScheme::Local => {
-            let file_config = local::Config::from_hashmap(&config)?;
+            let file_config = local::LocalConfig::from_hashmap(&config)?;
             local::build_local_storage(&file_config)
         }
         ObjectStoreScheme::AmazonS3 => {
-            let aws_config = aws::Config::from_hashmap(&config)?;
+            let aws_config = aws::S3Config::from_hashmap(&config)?;
             aws::build_amazon_s3_from_config(&aws_config)
         }
         ObjectStoreScheme::GoogleCloudStorage => {
-            let google_config = google::Config::from_hashmap(&config)?;
+            let google_config = google::GCSConfig::from_hashmap(&config)?;
             google::build_google_cloud_storage_from_config(&google_config)
         }
         _ => {
@@ -76,17 +74,25 @@ pub fn build_object_store_from_config(
 /// * If the URL scheme is unsupported or there is an error parsing the URL or options, an error is returned.
 pub async fn build_object_store_from_opts(
     url: &Url,
-    mut options: HashMap<String, String>,
+    options: HashMap<String, String>,
 ) -> Result<Box<dyn ObjectStore>, object_store::Error> {
     let (scheme, _) = ObjectStoreScheme::parse(url).unwrap();
 
     match scheme {
         ObjectStoreScheme::AmazonS3 => {
-            options = aws::add_amazon_s3_specific_options(url, options).await;
-            options = aws::add_amazon_s3_environment_variables(options);
+            let mut s3_options = aws::map_options_into_amazon_s3_config_keys(options)?;
+            aws::add_amazon_s3_specific_options(url, &mut s3_options).await;
+            aws::add_amazon_s3_environment_variables(&mut s3_options);
+
+            let store = parse_url_opts(url, s3_options)?.0;
+            Ok(store)
         }
         ObjectStoreScheme::GoogleCloudStorage => {
-            options = google::add_google_cloud_storage_environment_variables(options);
+            let mut gcs_options = google::map_options_into_google_config_keys(options)?;
+            google::add_google_cloud_storage_environment_variables(&mut gcs_options);
+
+            let store = parse_url_opts(url, gcs_options)?.0;
+            Ok(store)
         }
         _ => {
             warn!("Unsupported URL scheme: {}", url);
@@ -96,7 +102,4 @@ pub async fn build_object_store_from_opts(
             });
         }
     }
-
-    let store = parse_url_opts(url, &options)?.0;
-    Ok(store)
 }
