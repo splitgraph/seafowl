@@ -621,13 +621,13 @@ mod tests {
         let expr = construct_qualifier(&[
             DataSyncItem {
                 origin: "0".to_string(),
-                sequence_number: 0,
+                sequence_number: Some(0),
                 sync_schema: sync_schema.clone(),
                 batch: batch_1,
             },
             DataSyncItem {
                 origin: "0".to_string(),
-                sequence_number: 0,
+                sequence_number: Some(0),
                 sync_schema,
                 batch: batch_2,
             },

@@ -5,7 +5,7 @@ use datafusion::datasource::{provider_as_source, TableProvider};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::prelude::DataFrame;
-use datafusion_common::{JoinType, Result, ScalarValue, ToDFSchema};
+use datafusion_common::{DataFusionError, JoinType, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, is_null, lit, when, LogicalPlanBuilder};
 use datafusion_expr::{is_true, Expr};
@@ -15,8 +15,7 @@ use deltalake::operations::create::CreateBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
 use indexmap::IndexMap;
-use itertools::Itertools;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::ops::Not;
 use std::sync::Arc;
@@ -26,7 +25,10 @@ use tracing::{debug, info};
 use crate::context::delta::plan_to_object_store;
 
 use crate::context::SeafowlContext;
-use crate::frontend::flight::handler::SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER;
+use crate::frontend::flight::handler::{
+    SYNC_COMMIT_FULL_ORIGIN, SYNC_COMMIT_FULL_SEQUENCE, SYNC_COMMIT_INFO,
+    SYNC_COMMIT_NEW_SEQUENCE,
+};
 use crate::frontend::flight::sync::metrics::SyncMetrics;
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::utils::{compact_batches, construct_qualifier};
@@ -76,8 +78,9 @@ const SYNC_JOIN_COLUMN: &str = "__sync_join";
 // durable sequence up to 3, since both it and 2 have now been completely persisted.
 pub(crate) struct SeafowlDataSyncWriter {
     context: Arc<SeafowlContext>,
-    // All sequences kept in memory, queued up by insertion order, per origin,
-    seqs: HashMap<Origin, IndexMap<SequenceNumber, DataSyncSequence>>,
+    // An indexed-queue of origin and sequence numbers, sorted by insertion order, each containing
+    // locations that have pending syncs
+    seqs: IndexMap<(Origin, Option<SequenceNumber>), HashSet<String>>,
     // An indexed queue of table URL => pending syncs with actual batches to
     // upsert/delete sorted by insertion order
     syncs: IndexMap<String, DataSyncCollection>,
@@ -89,16 +92,6 @@ pub(crate) struct SeafowlDataSyncWriter {
     origin_durable: HashMap<Origin, SequenceNumber>,
     // Keep track of various metrics for observability
     metrics: SyncMetrics,
-}
-
-// A struct tracking relevant information about a single transaction/sequence from a single origin
-// that may stretch across several sync commands.
-#[derive(Debug, Clone)]
-struct DataSyncSequence {
-    // Flag denoting whether we've seen the last sync command in this sequence
-    last: bool,
-    // Set of locations that need to be flushed to for this sequence
-    locs: HashSet<String>,
 }
 
 // An entry storing all pending in-memory data to replicate to a single table location,
@@ -122,8 +115,8 @@ pub(super) struct DataSyncCollection {
 pub(super) struct DataSyncItem {
     // Identifier of the origin where the change stems from
     pub(super) origin: Origin,
-    // Sequence number of this particular change and origin
-    pub(super) sequence_number: SequenceNumber,
+    // Sequence number of this particular change and origin if it's the last message in a transaction
+    pub(super) sequence_number: Option<SequenceNumber>,
     // Old and new primary keys, changed and value columns
     pub(super) sync_schema: SyncSchema,
     // Record batch to replicate
@@ -158,36 +151,45 @@ impl SeafowlDataSyncWriter {
     pub fn enqueue_sync(
         &mut self,
         log_store: Arc<dyn LogStore>,
-        sequence_number: SequenceNumber,
+        sequence_number: Option<SequenceNumber>,
         origin: Origin,
         sync_schema: SyncSchema,
-        last: bool,
         batches: Vec<RecordBatch>,
     ) -> Result<()> {
         let url = log_store.root_uri();
 
         // Upsert a sequence entry for this origin and sequence number
-        let sequence = DataSyncSequence {
-            last,
-            locs: HashSet::from([url.clone()]),
-        };
-        self
-            .seqs
-            .entry(origin.clone())
-            .and_modify(|origin_seqs| {
-                origin_seqs.entry(sequence_number).and_modify(|seq| {if !seq.locs.contains(&url) {
-                    debug!("Adding {url} as sync destination for {origin}, {sequence_number}");
-                    seq.locs.insert(url.clone());
-                }
+        if let Some(((o, None), _)) = self.seqs.last() {
+            if &origin != o {
+                return Err(DataFusionError::Execution(
+                    format!("Transaction from a new origin ({origin}) started without finishing the transaction from the previous one ({o})"))
+                );
+            }
 
-                    if last {
-                        debug!(
-                        "Received last sync for {url} from {origin}, {sequence_number}"
-                    );
-                        seq.last = true;
-                    }}).or_insert(sequence.clone());
-            })
-            .or_insert(IndexMap::from([(sequence_number, sequence)]));
+            // Merge the information for the pending transaction
+            if let Some(seq) = sequence_number {
+                // A sequence number was provided, denoting the end of the transaction
+                let (_, mut locations) = self.seqs.pop().unwrap();
+
+                locations.insert(url.clone());
+                debug!("Adding {url} as sync destination for {origin} for a transaction with sequence number {seq}");
+                self.seqs
+                    .insert((origin.clone(), sequence_number), locations);
+            } else {
+                // No sequence number yet, keep updating the pending table locations to flush for
+                // this transaction
+                debug!("Adding {url} as sync destination for {origin} in the pending transaction");
+                self.seqs[&(origin.clone(), None::<SequenceNumber>)].insert(url.clone());
+            }
+        } else {
+            // The previous message contains a definite sequence number, so this means this message
+            // belongs to a new transaction
+            debug!("Adding {url} as sync destination for {origin} in a new transaction");
+            self.seqs.insert(
+                (origin.clone(), sequence_number),
+                HashSet::from([url.clone()]),
+            );
+        }
 
         // Compactify the batches and measure the time it took and the reduction in rows/size
         let (old_size, old_rows) = batches.iter().fold((0, 0), |(size, rows), batch| {
@@ -245,12 +247,11 @@ impl SeafowlDataSyncWriter {
                 .unwrap_or(0.0),
         );
 
-        // Flag the sequence as volatile persisted for this origin if it is the last sync command
-        if last {
-            self.metrics.sequence_memory(&origin, sequence_number);
-            // TODO: (when) shsould we be removing the memory sequence number?
-
-            self.origin_memory.insert(origin, sequence_number);
+        // Flag the sequence as volatile persisted for this origin if it is the last message of the
+        // transaction
+        if let Some(seq) = sequence_number {
+            self.metrics.sequence_memory(&origin, seq);
+            self.origin_memory.insert(origin, seq);
         }
 
         Ok(())
@@ -352,30 +353,45 @@ impl SeafowlDataSyncWriter {
             .await?;
         }
 
-        let last_sequence_number = entry.syncs.last().unwrap().sequence_number;
-
         let mut table = DeltaTable::new(log_store.clone(), Default::default());
         table.load().await?;
 
-        if let Some(table_seq) = self.table_sequence(&table).await?
-            && table_seq > last_sequence_number
-        {
-            // TODO 1: partial skipping if only a subset of syncs older than the committed sequence
-            // TODO 2: persist the final flag to to enable >= comparison
+        let syncs = if let Some(table_seq) = self.table_sequence(&table).await? {
+            let mut start = 0;
+            for (ind, sn) in &sequence_numbers {
+                if table_seq == sn {
+                    // We've found a matching sequence in the pending syncs, we can skip everything
+                    // up to it
+                    start = ind + 1;
+                    break;
+                }
+            }
+            // The table already has everything up to the last complete transaction applied, so
+            // we only possibly need to apply the remaining items if any
             info!(
-                "Location at {url} already durable up to {table_seq}, skipping {}",
-                last_sequence_number
+                "Location at {url} already durable up to {table_seq}, skipping {} messages",
+                start + 1
             );
-            self.remove_sync(&url);
-            return Ok(());
-        }
+
+            if start == entry.syncs.len() - 1 {
+                // The last sync message corresponds to a full transaction that was already flushed.
+                self.remove_sync(&url);
+                return Ok(());
+            }
+
+            &entry.syncs[start..]
+        } else {
+            &entry.syncs
+        };
+
+        let syncs = &entry.syncs;
 
         // Use the schema from the object store as a source of truth, since it's not guaranteed
         // that any of the entries has the full column list.
         let full_schema = TableProvider::schema(&table);
 
         // Generate a qualifier expression for pruning partition files and filtering the base scan
-        let qualifier = construct_qualifier(&entry.syncs)?;
+        let qualifier = construct_qualifier(syncs)?;
 
         // Iterate through all syncs for this table and construct a full plan by applying each
         // individual sync
@@ -395,7 +411,7 @@ impl SeafowlDataSyncWriter {
             .with_optimizer_rules(vec![]);
         let mut sync_df = DataFrame::new(state, base_plan);
 
-        for sync in &entry.syncs {
+        for sync in syncs {
             sync_df = self.apply_sync(
                 full_schema.clone(),
                 sync_df,
@@ -432,8 +448,12 @@ impl SeafowlDataSyncWriter {
         // Append a special `CommitInfo` action to record new durable sequence number
         // tied to the commit.
         let info = HashMap::from([(
-            SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER.to_string(),
-            Value::Number(last_sequence_number.into()),
+            SYNC_COMMIT_INFO.to_string(),
+            json!({
+                SYNC_COMMIT_FULL_SEQUENCE: 123,
+                SYNC_COMMIT_FULL_ORIGIN: "origin",
+                SYNC_COMMIT_NEW_SEQUENCE: true,
+            }),
         )]);
         let commit_info = Action::commit_info(info);
         actions.push(commit_info);
@@ -448,13 +468,12 @@ impl SeafowlDataSyncWriter {
 
         // We've flushed all the presently accumulated batches for this location.
         // Modify our syncs and sequences maps to reflect this.
-        let orseq = entry
+        let orseqs = entry
             .syncs
             .iter()
-            .map(|s| (s.origin.clone(), s.sequence_number))
-            .unique()
-            .collect::<Vec<_>>();
-        self.remove_sequence_locations(url.clone(), orseq);
+            .map(|sync| (sync.origin.clone(), sync.sequence_number.clone()))
+            .collect();
+        self.remove_sequence_locations(url.clone(), orseqs);
         self.remove_sync(&url);
         self.advance_durable();
 
@@ -648,14 +667,12 @@ impl SeafowlDataSyncWriter {
     fn remove_sequence_locations(
         &mut self,
         url: String,
-        orseq: Vec<(Origin, SequenceNumber)>,
+        orseqs: Vec<(Origin, Option<SequenceNumber>)>,
     ) {
-        for (origin, seq_num) in orseq {
-            if let Some(origin_seqs) = self.seqs.get_mut(&origin) {
-                if let Some(seq) = origin_seqs.get_mut(&seq_num) {
-                    // Remove the pending location for this origin/sequence
-                    seq.locs.remove(&url);
-                }
+        for orseq in orseqs {
+            // Remove the pending location for this origin/sequence
+            if let Some(locations) = self.seqs.get_mut(&orseq) {
+                locations.remove(&url);
             }
         }
     }
@@ -669,47 +686,31 @@ impl SeafowlDataSyncWriter {
         }
     }
 
-    // Iterate through all origins and all sequences and:
+    // Iterate through all origin-sequences in the insertion order and:
     //    - mark as durable all flushed and final sequences up to the first one that is not
     //    - remove the durable sequences from the map
     fn advance_durable(&mut self) {
-        let mut origins_to_remove = HashSet::new();
+        let mut seqs_to_remove = HashSet::new();
 
-        for (origin, origin_seqs) in &mut self.seqs {
-            let mut remove_count = 0;
-            let mut new_durable = 0;
-
-            // Iteration is in order of insertion, so it's basically a FIFO queue
-            for (seq_num, seq) in origin_seqs.into_iter() {
-                if seq.locs.is_empty() && seq.last {
-                    // We've seen the last sync for this sequence, all pending locations
-                    // have been flushed to and there's no preceding sequence to be flushed,
-                    // so we're good to flag the sequence as durable
-                    self.origin_durable.insert(origin.clone(), *seq_num);
-
-                    remove_count += 1;
-                    new_durable = *seq_num;
-                    debug!("Set new durable sequence {new_durable} for {origin}");
-                } else {
-                    // We've run into a sequence that is either not last or still has locations
-                    // that need to be flushed
-                    break;
-                }
-            }
-
-            if remove_count == origin_seqs.len() {
-                // Remove the origin since there are no more sequences remaining
-                debug!("No more pending sequences for origin {origin}, removing");
-                origins_to_remove.insert(origin.clone());
-            } else if remove_count > 0 {
-                // Remove the durable sequences for this origin
-                debug!("Trimming pending sequences for {origin} up to {new_durable}");
-                origin_seqs.retain(|sn, _| sn > &new_durable);
+        // Iterate through all origins in order of insertion
+        for ((origin, sequence_number), locations) in &mut self.seqs {
+            if let Some(seq) = sequence_number
+                && locations.is_empty()
+            {
+                // We've seen the last sync for this transaction, and there are no more locations
+                // with pending flushes; it's safe to mark the sequence as durable for this origin.
+                self.origin_durable.insert(origin.clone(), *seq);
+                seqs_to_remove.insert((origin.clone(), sequence_number.clone()));
+                debug!("Set new durable sequence {seq} for {origin}");
+            } else {
+                // We either haven't seen the end of the transaction or some locations still have
+                // pending flushes; we can't advance the durable sequences anymore.
+                break;
             }
         }
 
-        for origin in origins_to_remove {
-            self.seqs.remove(&origin);
+        for orseq in seqs_to_remove {
+            self.seqs.shift_remove(&orseq);
         }
     }
 }
@@ -791,6 +792,13 @@ mod tests {
         vec![
             vec![Some(3), Some(3)],
             vec![None, Some(1001)],
+        ]
+    )]
+    #[case::race_2_origins(
+        &[(T1, O1, 1000), (T2, O1, 1000), (T1, O2, 2000), FLUSH, FLUSH],
+        vec![
+            vec![None, Some(1000)],
+            vec![None, Some(2000)],
         ]
     )]
     #[case::doc_example(
@@ -877,13 +885,14 @@ mod tests {
                 .skip(sync_no + 1)
                 .any(|&(_, o, s)| *sequence == s && o == origin);
 
+            let seq = if last { Some(*sequence) } else { None };
+
             sync_mgr
                 .enqueue_sync(
                     log_store,
-                    *sequence as SequenceNumber,
+                    *seq as SequenceNumber,
                     origin.clone(),
                     sync_schema.clone(),
-                    last,
                     random_batches(arrow_schema.clone()),
                 )
                 .unwrap();

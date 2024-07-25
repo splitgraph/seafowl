@@ -22,7 +22,13 @@ use crate::context::SeafowlContext;
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
 
-pub const SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER: &str = "sequence";
+pub const SYNC_COMMIT_INFO: &str = "sync_commit_info";
+// Denoted the last sequence number that was fully committed
+pub const SYNC_COMMIT_FULL_SEQUENCE: &str = "sequence";
+// Denotes the last origin that was fully committed
+pub const SYNC_COMMIT_FULL_ORIGIN: &str = "origin";
+// Denotes whether there have been any commits past the last sequence/origin that was fully committed
+pub const SYNC_COMMIT_NEW_SEQUENCE: &str = "new_sequence";
 pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
 
 lazy_static! {
@@ -185,7 +191,6 @@ impl SeafowlFlightHandler {
                     cmd.sequence_number,
                     cmd.origin.clone(),
                     sync_schema.expect("Schema available"),
-                    cmd.last,
                     batches,
                 )?;
 
