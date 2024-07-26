@@ -26,11 +26,18 @@ pub fn schemas() -> ListSchemaResponse {
         schemas: vec![
             SchemaObject {
                 name: "local".to_string(),
-                tables: vec![TableObject {
-                    name: "file".to_string(),
-                    path: "delta-0.8.0-partitioned".to_string(),
-                    store: None,
-                }],
+                tables: vec![
+                    TableObject {
+                        name: "file".to_string(),
+                        path: "delta-0.8.0-partitioned".to_string(),
+                        store: None,
+                    },
+                    TableObject {
+                        name: "file_with_store".to_string(),
+                        path: "delta-0.8.0-partitioned".to_string(),
+                        store: Some("local_fs".to_string()),
+                    },
+                ],
             },
             SchemaObject {
                 name: "s3".to_string(),
@@ -81,6 +88,14 @@ pub fn schemas() -> ListSchemaResponse {
                     GoogleConfigKey::ServiceAccount.as_ref().to_string(),
                     fake_gcs_creds(),
                 )]),
+            },
+            StorageLocation {
+                name: "local_fs".to_string(),
+                location: format!(
+                    "file://{}/tests/data/",
+                    std::env::current_dir().unwrap().display()
+                ),
+                options: HashMap::new(),
             },
         ],
     }
