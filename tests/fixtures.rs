@@ -93,7 +93,7 @@ pub fn schemas() -> ListSchemaResponse {
                 name: "local_fs".to_string(),
                 location: format!(
                     "file://{}/tests/data/",
-                    std::env::current_dir().unwrap().display()
+                    std::env::var("CARGO_MANIFEST_DIR").unwrap()
                 ),
                 options: HashMap::new(),
             },
