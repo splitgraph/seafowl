@@ -3,6 +3,7 @@ use crate::flight::*;
 #[rstest]
 #[should_panic(expected = "External error: Not a Delta table: no log files")]
 #[case("local.file", false)]
+#[case("local.file_with_store", false)]
 #[case("local.file", true)]
 #[case("s3.minio", true)]
 #[case("gcs.fake", true)]

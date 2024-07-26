@@ -1,5 +1,5 @@
 [workspace]
-members = ["clade"]
+members = ["clade", "object_store_factory"]
 
 [workspace.dependencies]
 arrow = { version = "52.0.0", features = ["test_utils"] }
@@ -18,9 +18,16 @@ datafusion = "39.0.0"
 datafusion-common = "39.0.0"
 datafusion-expr = "39.0.0"
 
+futures = "0.3"
+
 itertools = ">=0.10.0"
+object_store = { version = "0.10.2", features = ["aws", "azure", "gcp"] }
+tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
 tracing = { version = "0.1", features = ["log"] }
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
+url = "2.5"
 
 [patch.crates-io]
 # Pick up backport of https://github.com/apache/arrow-datafusion/pull/11386
@@ -105,7 +112,8 @@ lazy_static = ">=1.4.0"
 metrics = { version = "0.22.1" }
 metrics-exporter-prometheus = { version = "0.13.1" }
 moka = { version = "0.12.5", default-features = false, features = ["future", "atomic64", "quanta"] }
-object_store = "0.10.2"
+object_store = { version = "0.10.2", features = ["aws", "azure", "gcp"] }
+object_store_factory = { path = "object_store_factory" }
 percent-encoding = "2.2.0"
 prost = "0.12.1"
 

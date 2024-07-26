@@ -1,0 +1,15 @@
+[package]
+name = "object_store_factory"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = { workspace = true }
+futures = { workspace = true }
+object_store = { workspace = true }
+tempfile = { workspace = true }
+
+tracing = { workspace = true }
+tracing-log = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
