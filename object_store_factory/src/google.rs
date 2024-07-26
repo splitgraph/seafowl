@@ -62,24 +62,17 @@ pub fn map_options_into_google_config_keys(
 pub fn add_google_cloud_storage_environment_variables(
     options: &mut HashMap<GoogleConfigKey, String>,
 ) {
-    let env_vars = &[
-        ("GOOGLE_SERVICE_ACCOUNT", GoogleConfigKey::ServiceAccount),
-        (
-            "GOOGLE_SERVICE_ACCOUNT_PATH",
-            GoogleConfigKey::ServiceAccount,
-        ),
-        ("SERVICE_ACCOUNT", GoogleConfigKey::ServiceAccount),
-        (
-            "GOOGLE_SERVICE_ACCOUNT_KEY",
-            GoogleConfigKey::ServiceAccountKey,
-        ),
-        ("GOOGLE_BUCKET", GoogleConfigKey::Bucket),
-        ("GOOGLE_BUCKET_NAME", GoogleConfigKey::Bucket),
-    ];
+    if let Ok(service_account_path) = env::var("SERVICE_ACCOUNT") {
+        options.insert(GoogleConfigKey::ServiceAccount, service_account_path);
+    }
 
-    for &(env_var_name, config_key) in env_vars.iter() {
-        if let Ok(val) = env::var(env_var_name) {
-            options.insert(config_key, val);
+    for (os_key, os_value) in env::vars_os() {
+        if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+            if key.starts_with("GOOGLE_") {
+                if let Ok(config_key) = key.to_ascii_lowercase().parse() {
+                    options.insert(config_key, value.to_string());
+                }
+            }
         }
     }
 }

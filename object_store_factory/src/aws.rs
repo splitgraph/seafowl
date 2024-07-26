@@ -100,25 +100,22 @@ pub async fn add_amazon_s3_specific_options(
 pub fn add_amazon_s3_environment_variables(
     options: &mut HashMap<AmazonS3ConfigKey, String>,
 ) {
-    let env_vars = &[
-        ("AWS_ACCESS_KEY_ID", AmazonS3ConfigKey::AccessKeyId),
-        ("AWS_SECRET_ACCESS_KEY", AmazonS3ConfigKey::SecretAccessKey),
-        ("AWS_DEFAULT_REGION", AmazonS3ConfigKey::Region),
-        ("AWS_ENDPOINT", AmazonS3ConfigKey::Endpoint),
-        ("AWS_SESSION_TOKEN", AmazonS3ConfigKey::Token),
-        (
-            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-            AmazonS3ConfigKey::ContainerCredentialsRelativeUri,
-        ),
-    ];
-
-    for &(env_var_name, config_key) in env_vars.iter() {
-        if let Ok(val) = env::var(env_var_name) {
-            options.insert(config_key, val);
+    for (os_key, os_value) in std::env::vars_os() {
+        if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+            if key.starts_with("AWS_") {
+                if let Ok(config_key) = key.to_ascii_lowercase().parse() {
+                    options.insert(config_key, value.to_string());
+                }
+            }
         }
     }
 
-    if env::var("AWS_ALLOW_HTTP") == Ok("true".to_string()) {
+    if env::var(
+        AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp)
+            .as_ref()
+            .to_uppercase(),
+    ) == Ok("true".to_string())
+    {
         options.insert(
             AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp),
             "true".to_string(),
