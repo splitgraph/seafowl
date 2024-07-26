@@ -4,8 +4,10 @@ mod local;
 mod memory;
 
 use object_store::parse_url_opts;
+use object_store::prefix::PrefixStore;
 use object_store::ObjectStore;
 use object_store::ObjectStoreScheme;
+use object_store::{local::LocalFileSystem, memory::InMemory};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::warn;
@@ -79,6 +81,18 @@ pub async fn build_object_store_from_opts(
     let (scheme, _) = ObjectStoreScheme::parse(url).unwrap();
 
     match scheme {
+        // `parse_url_opts` will swallow the URL path for memory/local FS stores
+        ObjectStoreScheme::Memory => {
+            let mut store: Box<dyn ObjectStore> = Box::new(InMemory::new());
+            if !url.path().is_empty() {
+                store = Box::new(PrefixStore::new(store, url.path()));
+            }
+
+            Ok(store)
+        }
+        ObjectStoreScheme::Local => {
+            Ok(Box::new(LocalFileSystem::new_with_prefix(url.path())?))
+        }
         ObjectStoreScheme::AmazonS3 => {
             let mut s3_options = aws::map_options_into_amazon_s3_config_keys(options)?;
             aws::add_amazon_s3_specific_options(url, &mut s3_options).await;
