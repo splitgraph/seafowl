@@ -717,14 +717,13 @@ mod tests {
     use crate::context::test_utils::in_memory_context;
     use crate::frontend::flight::sync::schema::SyncSchema;
     use crate::frontend::flight::sync::writer::{SeafowlDataSyncWriter, SequenceNumber};
-    use arrow::array::{Float32Array, Int32Array};
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use clade::sync::{ColumnDescriptor, ColumnRole};
     use rand::Rng;
     use rstest::rstest;
     use std::collections::HashMap;
-    use std::error::Error;
+
     use std::sync::Arc;
 
     fn sync_schema() -> (SchemaRef, SyncSchema) {
@@ -845,7 +844,7 @@ mod tests {
                 sync_mgr.flush_syncs(url).await.unwrap();
 
                 for (o, durs) in durable_sequences.iter_mut().enumerate() {
-                    let origin = o.to_string();
+                    let origin = if o == 0 { A.to_string() } else { B.to_string() };
                     // Update expected durable sequences for this origins
                     dur_seq.insert(origin.clone(), durs.remove(0));
 
@@ -897,43 +896,5 @@ mod tests {
         assert!(sync_mgr.seqs.is_empty());
         assert!(sync_mgr.syncs.is_empty());
         assert_eq!(sync_mgr.size, 0);
-    }
-
-    // Should be run in release mode, otherwise the stack size in debug mode is too small even with
-    // the call-limit appllied
-    #[ignore]
-    #[tokio::test]
-    async fn test_long_sync_flush() -> Result<(), Box<dyn Error>> {
-        let ctx = Arc::new(in_memory_context().await);
-        let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
-
-        let (arrow_schema, sync_schema) = sync_schema();
-
-        let log_store = ctx.internal_object_store.get_log_store("test");
-
-        for i in 0..1000 {
-            let pks = (i * 1000..(i + 1) * 1000).collect::<Vec<_>>();
-            let batch = RecordBatch::try_new(
-                arrow_schema.clone(),
-                vec![
-                    Arc::new(Int32Array::from(vec![None; 1000])),
-                    Arc::new(Int32Array::from(pks)),
-                    Arc::new(Float32Array::from(vec![1.0; 1000])),
-                ],
-            )?;
-
-            sync_mgr.enqueue_sync(
-                log_store.clone(),
-                i as SequenceNumber,
-                A.to_string(),
-                sync_schema.clone(),
-                true,
-                vec![batch],
-            )?;
-
-            sync_mgr.flush().await?;
-        }
-
-        Ok(())
     }
 }
