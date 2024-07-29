@@ -280,9 +280,8 @@ impl SeafowlDataSyncWriter {
     }
 
     pub async fn flush(&mut self) -> Result<()> {
-        while self.flush_ready() {
-            // TODO: do out-of-band
-            self.flush_syncs().await?;
+        while let Some(url) = self.flush_ready() {
+            self.flush_syncs(url).await?;
         }
 
         self.metrics.in_memory_oldest.set(
@@ -298,24 +297,35 @@ impl SeafowlDataSyncWriter {
     // Criteria for return the cached entry ready to be persisted to storage.
     // First flush any records that are explicitly beyond the configured max
     // lag, followed by further entries if we're still above max cache size.
-    fn flush_ready(&mut self) -> bool {
-        if let Some((_, sync)) = self.syncs.first()
+    fn flush_ready(&mut self) -> Option<String> {
+        if let Some((url, sync)) = self.syncs.first()
             && now() - sync.insertion_time
                 >= self.context.config.misc.sync_conf.max_replication_lag_s
         {
             // First flush any changes that are past the configured max duration
-            true
+            Some(url.clone())
         } else if self.size >= self.context.config.misc.sync_conf.max_in_memory_bytes {
             // Or if we're over the size limit flush the oldest entry
-            true
+            self.syncs.first().map(|kv| kv.0.clone())
+        } else if let Some((url, _)) = self.syncs.iter().find(|(_, entry)| {
+            entry.syncs.len() >= self.context.config.misc.sync_conf.max_syncs_per_url
+        }) {
+            // Otherwise if there are pending syncs with more than a predefined number of calls
+            // waiting to be flushed flush them.
+            // This is a guard against hitting a stack overflow when applying syncs, since this
+            // results in deeply nested plan trees that are known to be problematic for now:
+            // - https://github.com/apache/datafusion/issues/9373
+            // - https://github.com/apache/datafusion/issues/9375
+            // TODO: Make inter-sync compaction work even when/in absence of sync schema match
+            Some(url.clone())
         } else {
-            false
+            None
         }
     }
 
     // Flush the table containing the oldest sync in memory
-    async fn flush_syncs(&mut self) -> Result<()> {
-        let (url, entry) = match self.syncs.first() {
+    async fn flush_syncs(&mut self, url: String) -> Result<()> {
+        let entry = match self.syncs.get(&url) {
             Some(table_syncs) => table_syncs,
             None => {
                 info!("No pending syncs to flush");
@@ -496,11 +506,7 @@ impl SeafowlDataSyncWriter {
             .unwrap();
 
         // Construct the sync dataframe out of the record batch
-        let sync_df = self
-            .context
-            .inner
-            .read_batch(data)?
-            .filter(old_pk_nulls.clone().and(new_pk_nulls.clone()).not())?;
+        let sync_df = self.context.inner.read_batch(data)?;
 
         // These differ since the physical column names are reflected in the ColumnDescriptor,
         // while logical column names are found in the arrow fields
@@ -717,6 +723,7 @@ mod tests {
     use rand::Rng;
     use rstest::rstest;
     use std::collections::HashMap;
+
     use std::sync::Arc;
 
     fn sync_schema() -> (SchemaRef, SyncSchema) {
@@ -761,33 +768,33 @@ mod tests {
     const T1: &str = "table_1";
     const T2: &str = "table_2";
     const T3: &str = "table_3";
-    static O1: &str = "0"; // first origin
-    static O2: &str = "1"; // second origin
+    static A: &str = "origin-A"; // first origin
+    static B: &str = "origin-B"; // second origin
     static FLUSH: (&str, &str, i64) = ("__flush", "-1", -1);
 
     #[rstest]
     #[case::basic(
-        &[(T1, O1, 1), (T2, O1, 2), (T1, O1, 3), FLUSH, FLUSH],
+        &[(T1, A, 1), (T2, A, 2), (T1, A, 3), FLUSH, FLUSH],
         vec![vec![Some(1), Some(3)]]
     )]
     #[case::basic_2_origins(
-        &[(T1, O1, 1), (T2, O2, 1001), (T1, O1, 3), FLUSH, FLUSH],
+        &[(T1, A, 1), (T2, B, 1001), (T1, A, 3), FLUSH, FLUSH],
         vec![
             vec![Some(3), Some(3)],
             vec![None, Some(1001)],
         ]
     )]
     #[case::doc_example(
-        &[(T1, O1, 1), (T2, O1, 1), (T3, O1, 2), (T1, O1, 3), (T2, O1, 3), FLUSH, FLUSH, FLUSH],
+        &[(T1, A, 1), (T2, A, 1), (T3, A, 2), (T1, A, 3), (T2, A, 3), FLUSH, FLUSH, FLUSH],
         vec![vec![None, Some(1), Some(3)]]
     )]
     #[case::staircase(
-        &[(T1, O1, 1), (T2, O1, 1), (T3, O1, 1), (T1, O1, 2), (T2, O1, 2), (T3, O1, 2),
+        &[(T1, A, 1), (T2, A, 1), (T3, A, 1), (T1, A, 2), (T2, A, 2), (T3, A, 2),
             FLUSH, FLUSH, FLUSH],
         vec![vec![None, None, Some(2)]]
     )]
     #[case::staircase_2_origins(
-        &[(T1, O1, 1), (T2, O1, 1), (T3, O2, 1001), (T1, O2, 1002), (T2, O1, 2), (T3, O1, 2),
+        &[(T1, A, 1), (T2, A, 1), (T3, B, 1001), (T1, B, 1002), (T2, A, 2), (T3, A, 2),
             FLUSH, FLUSH, FLUSH],
         vec![
             vec![None, Some(1), Some(2)],
@@ -795,16 +802,16 @@ mod tests {
         ]
         )]
     #[case::long_sequence(
-        &[(T1, O1, 1), (T1, O1, 1), (T1, O1, 1), (T1, O1, 1), (T2, O1, 1),
-            (T2, O1, 2), (T2, O1, 2), (T2, O1, 2), (T3, O1, 2), (T3, O1, 3),
-            (T3, O1, 3), (T1, O1, 4), (T3, O1, 4), (T1, O1, 4), (T3, O1, 4),
+        &[(T1, A, 1), (T1, A, 1), (T1, A, 1), (T1, A, 1), (T2, A, 1),
+            (T2, A, 2), (T2, A, 2), (T2, A, 2), (T3, A, 2), (T3, A, 3),
+            (T3, A, 3), (T1, A, 4), (T3, A, 4), (T1, A, 4), (T3, A, 4),
             FLUSH, FLUSH, FLUSH],
         vec![vec![None, Some(1), Some(4)]]
     )]
     #[case::long_sequence_mid_flush(
-        &[(T1, O1, 1), (T1, O1, 1), (T1, O1, 1), FLUSH, (T1, O1, 1), (T2, O1, 1),
-            (T2, O1, 2), (T2, O1, 2), FLUSH, (T2, O1, 2), (T3, O1, 2), FLUSH, (T3, O1, 3),
-            FLUSH, (T3, O1, 3), (T1, O1, 4), (T3, O1, 4), (T1, O1, 4), FLUSH, (T3, O1, 4),
+        &[(T1, A, 1), (T1, A, 1), (T1, A, 1), FLUSH, (T1, A, 1), (T2, A, 1),
+            (T2, A, 2), (T2, A, 2), FLUSH, (T2, A, 2), (T3, A, 2), FLUSH, (T3, A, 3),
+            FLUSH, (T3, A, 3), (T1, A, 4), (T3, A, 4), (T1, A, 4), FLUSH, (T3, A, 4),
             FLUSH, FLUSH],
         // Reasoning for the observed durable sequences:
         // - seq 1 not seen last sync
@@ -825,18 +832,19 @@ mod tests {
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
         let (arrow_schema, sync_schema) = sync_schema();
 
-        let mut mem_seq = HashMap::from([(O1.to_string(), None), (O2.to_string(), None)]);
-        let mut dur_seq = HashMap::from([(O1.to_string(), None), (O2.to_string(), None)]);
+        let mut mem_seq = HashMap::from([(A.to_string(), None), (B.to_string(), None)]);
+        let mut dur_seq = HashMap::from([(A.to_string(), None), (B.to_string(), None)]);
 
         // Start enqueueing syncs, flushing them and checking the memory sequence in-between
         for (sync_no, (table_name, origin, sequence)) in table_sequence.iter().enumerate()
         {
             if (*table_name, *origin, *sequence) == FLUSH {
                 // Flush and assert on the next expected durable sequence
-                sync_mgr.flush_syncs().await.unwrap();
+                let url = sync_mgr.syncs.first().unwrap().0.clone();
+                sync_mgr.flush_syncs(url).await.unwrap();
 
                 for (o, durs) in durable_sequences.iter_mut().enumerate() {
-                    let origin = o.to_string();
+                    let origin = if o == 0 { A.to_string() } else { B.to_string() };
                     // Update expected durable sequences for this origins
                     dur_seq.insert(origin.clone(), durs.remove(0));
 
