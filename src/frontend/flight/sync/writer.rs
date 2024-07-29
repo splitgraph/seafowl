@@ -311,12 +311,12 @@ impl SeafowlDataSyncWriter {
             entry.syncs.len() >= self.context.config.misc.sync_conf.max_syncs_per_url
         }) {
             // Otherwise if there are pending syncs with more than a predefined number of calls
-            // waiting to be flushed try to squash and flush them.
+            // waiting to be flushed flush them.
             // This is a guard against hitting a stack overflow when applying syncs, since this
             // results in deeply nested plan trees that are known to be problematic for now:
             // - https://github.com/apache/datafusion/issues/9373
             // - https://github.com/apache/datafusion/issues/9375
-            // TODO: Make inter-sync compaction work even in absence of sync schema match
+            // TODO: Make inter-sync compaction work even when/in absence of sync schema match
             Some(url.clone())
         } else {
             None
@@ -717,12 +717,14 @@ mod tests {
     use crate::context::test_utils::in_memory_context;
     use crate::frontend::flight::sync::schema::SyncSchema;
     use crate::frontend::flight::sync::writer::{SeafowlDataSyncWriter, SequenceNumber};
+    use arrow::array::{Float32Array, Int32Array};
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use clade::sync::{ColumnDescriptor, ColumnRole};
     use rand::Rng;
     use rstest::rstest;
     use std::collections::HashMap;
+    use std::error::Error;
     use std::sync::Arc;
 
     fn sync_schema() -> (SchemaRef, SyncSchema) {
@@ -767,33 +769,33 @@ mod tests {
     const T1: &str = "table_1";
     const T2: &str = "table_2";
     const T3: &str = "table_3";
-    static O1: &str = "0"; // first origin
-    static O2: &str = "1"; // second origin
+    static A: &str = "origin-A"; // first origin
+    static B: &str = "origin-B"; // second origin
     static FLUSH: (&str, &str, i64) = ("__flush", "-1", -1);
 
     #[rstest]
     #[case::basic(
-        &[(T1, O1, 1), (T2, O1, 2), (T1, O1, 3), FLUSH, FLUSH],
+        &[(T1, A, 1), (T2, A, 2), (T1, A, 3), FLUSH, FLUSH],
         vec![vec![Some(1), Some(3)]]
     )]
     #[case::basic_2_origins(
-        &[(T1, O1, 1), (T2, O2, 1001), (T1, O1, 3), FLUSH, FLUSH],
+        &[(T1, A, 1), (T2, B, 1001), (T1, A, 3), FLUSH, FLUSH],
         vec![
             vec![Some(3), Some(3)],
             vec![None, Some(1001)],
         ]
     )]
     #[case::doc_example(
-        &[(T1, O1, 1), (T2, O1, 1), (T3, O1, 2), (T1, O1, 3), (T2, O1, 3), FLUSH, FLUSH, FLUSH],
+        &[(T1, A, 1), (T2, A, 1), (T3, A, 2), (T1, A, 3), (T2, A, 3), FLUSH, FLUSH, FLUSH],
         vec![vec![None, Some(1), Some(3)]]
     )]
     #[case::staircase(
-        &[(T1, O1, 1), (T2, O1, 1), (T3, O1, 1), (T1, O1, 2), (T2, O1, 2), (T3, O1, 2),
+        &[(T1, A, 1), (T2, A, 1), (T3, A, 1), (T1, A, 2), (T2, A, 2), (T3, A, 2),
             FLUSH, FLUSH, FLUSH],
         vec![vec![None, None, Some(2)]]
     )]
     #[case::staircase_2_origins(
-        &[(T1, O1, 1), (T2, O1, 1), (T3, O2, 1001), (T1, O2, 1002), (T2, O1, 2), (T3, O1, 2),
+        &[(T1, A, 1), (T2, A, 1), (T3, B, 1001), (T1, B, 1002), (T2, A, 2), (T3, A, 2),
             FLUSH, FLUSH, FLUSH],
         vec![
             vec![None, Some(1), Some(2)],
@@ -801,16 +803,16 @@ mod tests {
         ]
         )]
     #[case::long_sequence(
-        &[(T1, O1, 1), (T1, O1, 1), (T1, O1, 1), (T1, O1, 1), (T2, O1, 1),
-            (T2, O1, 2), (T2, O1, 2), (T2, O1, 2), (T3, O1, 2), (T3, O1, 3),
-            (T3, O1, 3), (T1, O1, 4), (T3, O1, 4), (T1, O1, 4), (T3, O1, 4),
+        &[(T1, A, 1), (T1, A, 1), (T1, A, 1), (T1, A, 1), (T2, A, 1),
+            (T2, A, 2), (T2, A, 2), (T2, A, 2), (T3, A, 2), (T3, A, 3),
+            (T3, A, 3), (T1, A, 4), (T3, A, 4), (T1, A, 4), (T3, A, 4),
             FLUSH, FLUSH, FLUSH],
         vec![vec![None, Some(1), Some(4)]]
     )]
     #[case::long_sequence_mid_flush(
-        &[(T1, O1, 1), (T1, O1, 1), (T1, O1, 1), FLUSH, (T1, O1, 1), (T2, O1, 1),
-            (T2, O1, 2), (T2, O1, 2), FLUSH, (T2, O1, 2), (T3, O1, 2), FLUSH, (T3, O1, 3),
-            FLUSH, (T3, O1, 3), (T1, O1, 4), (T3, O1, 4), (T1, O1, 4), FLUSH, (T3, O1, 4),
+        &[(T1, A, 1), (T1, A, 1), (T1, A, 1), FLUSH, (T1, A, 1), (T2, A, 1),
+            (T2, A, 2), (T2, A, 2), FLUSH, (T2, A, 2), (T3, A, 2), FLUSH, (T3, A, 3),
+            FLUSH, (T3, A, 3), (T1, A, 4), (T3, A, 4), (T1, A, 4), FLUSH, (T3, A, 4),
             FLUSH, FLUSH],
         // Reasoning for the observed durable sequences:
         // - seq 1 not seen last sync
@@ -831,8 +833,8 @@ mod tests {
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
         let (arrow_schema, sync_schema) = sync_schema();
 
-        let mut mem_seq = HashMap::from([(O1.to_string(), None), (O2.to_string(), None)]);
-        let mut dur_seq = HashMap::from([(O1.to_string(), None), (O2.to_string(), None)]);
+        let mut mem_seq = HashMap::from([(A.to_string(), None), (B.to_string(), None)]);
+        let mut dur_seq = HashMap::from([(A.to_string(), None), (B.to_string(), None)]);
 
         // Start enqueueing syncs, flushing them and checking the memory sequence in-between
         for (sync_no, (table_name, origin, sequence)) in table_sequence.iter().enumerate()
@@ -895,5 +897,43 @@ mod tests {
         assert!(sync_mgr.seqs.is_empty());
         assert!(sync_mgr.syncs.is_empty());
         assert_eq!(sync_mgr.size, 0);
+    }
+
+    // Should be run in release mode, otherwise the stack size in debug mode is too small even with
+    // the call-limit appllied
+    #[ignore]
+    #[tokio::test]
+    async fn test_long_sync_flush() -> Result<(), Box<dyn Error>> {
+        let ctx = Arc::new(in_memory_context().await);
+        let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
+
+        let (arrow_schema, sync_schema) = sync_schema();
+
+        let log_store = ctx.internal_object_store.get_log_store("test");
+
+        for i in 0..1000 {
+            let pks = (i * 1000..(i + 1) * 1000).collect::<Vec<_>>();
+            let batch = RecordBatch::try_new(
+                arrow_schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(vec![None; 1000])),
+                    Arc::new(Int32Array::from(pks)),
+                    Arc::new(Float32Array::from(vec![1.0; 1000])),
+                ],
+            )?;
+
+            sync_mgr.enqueue_sync(
+                log_store.clone(),
+                i as SequenceNumber,
+                A.to_string(),
+                sync_schema.clone(),
+                true,
+                vec![batch],
+            )?;
+
+            sync_mgr.flush().await?;
+        }
+
+        Ok(())
     }
 }
