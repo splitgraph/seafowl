@@ -853,38 +853,45 @@ mod tests {
     const T3: &str = "table_3";
     static A: &str = "origin-A"; // first origin
     static B: &str = "origin-B"; // second origin
-    static FLUSH: (&str, &str, i64) = ("__flush", "-1", -1);
+    static FLUSH: (&str, &str, Option<i64>) = ("__flush", "-1", None);
 
     #[rstest]
     #[case::basic(
-        &[(T1, A, 1), (T2, A, 2), (T1, A, 3), FLUSH, FLUSH],
-        vec![vec![Some(1), Some(3)]]
+        &[(T1, A, Some(100)), (T2, A, Some(200)), (T1, A, Some(300)), FLUSH, FLUSH],
+        vec![vec![Some(100), Some(300)]]
     )]
     #[case::basic_2_origins(
-        &[(T1, A, 1), (T2, B, 1001), (T1, A, 3), FLUSH, FLUSH],
+        &[(T1, A, Some(100)), (T2, B, Some(200)), (T1, A, Some(300)), FLUSH, FLUSH],
         vec![
-            vec![Some(1), Some(3)],
-            vec![None, Some(1001)],
+            vec![Some(100), Some(300)],
+            vec![None, Some(200)],
         ]
     )]
+    #[should_panic(
+        expected = "Transaction from a new origin (origin-B) started without finishing the transaction from the previous one (origin-A)"
+    )]
+    #[case::incomplete_transaction(
+        &[(T1, A, None), (T2, B, Some(100)), FLUSH],
+        vec![],
+    )]
     #[case::race_2_origins(
-        &[(T1, A, 1000), (T2, A, 1000), (T1, B, 2000), FLUSH, FLUSH],
+        &[(T1, A, None), (T2, A, Some(100)), (T1, B, Some(200)), FLUSH, FLUSH],
         vec![
-            vec![None, Some(1000)],
-            vec![None, Some(2000)],
+            vec![None, Some(100)],
+            vec![None, Some(200)],
         ]
     )]
     #[case::doc_example(
-        &[(T1, A, 1), (T2, A, 1), (T3, A, 2), (T1, A, 3), (T2, A, 3), FLUSH, FLUSH, FLUSH],
+        &[(T1, A, None), (T2, A, Some(1)), (T3, A, Some(2)), (T1, A, None), (T2, A, Some(3)), FLUSH, FLUSH, FLUSH],
         vec![vec![None, Some(1), Some(3)]]
     )]
     #[case::staircase(
-        &[(T1, A, 1), (T2, A, 1), (T3, A, 1), (T1, A, 2), (T2, A, 2), (T3, A, 2),
+        &[(T1, A, None), (T2, A, None), (T3, A, Some(1)), (T1, A, None), (T2, A, None), (T3, A, Some(2)),
             FLUSH, FLUSH, FLUSH],
         vec![vec![None, None, Some(2)]]
     )]
     #[case::staircase_2_origins(
-        &[(T1, A, 1), (T2, A, 1), (T3, B, 1001), (T1, B, 1002), (T2, A, 2), (T3, A, 2),
+        &[(T1, A, None), (T2, A, Some(1)), (T3, B, Some(1001)), (T1, B, Some(1002)), (T2, A, None), (T3, A, Some(2)),
             FLUSH, FLUSH, FLUSH],
         vec![
             vec![None, Some(1), Some(2)],
@@ -892,16 +899,16 @@ mod tests {
         ]
         )]
     #[case::long_sequence(
-        &[(T1, A, 1), (T1, A, 1), (T1, A, 1), (T1, A, 1), (T2, A, 1),
-            (T2, A, 2), (T2, A, 2), (T2, A, 2), (T3, A, 2), (T3, A, 3),
-            (T3, A, 3), (T1, A, 4), (T3, A, 4), (T1, A, 4), (T3, A, 4),
+        &[(T1, A, None), (T1, A, None), (T1, A, None), (T1, A, None), (T2, A, Some(1)),
+            (T2, A, None), (T2, A, None), (T2, A, None), (T3, A, Some(2)), (T3, A, None),
+            (T3, A, Some(3)), (T1, A, None), (T3, A, None), (T1, A, None), (T3, A, Some(4)),
             FLUSH, FLUSH, FLUSH],
         vec![vec![None, Some(1), Some(4)]]
     )]
     #[case::long_sequence_mid_flush(
-        &[(T1, A, 1), (T1, A, 1), (T1, A, 1), FLUSH, (T1, A, 1), (T2, A, 1),
-            (T2, A, 2), (T2, A, 2), FLUSH, (T2, A, 2), (T3, A, 2), FLUSH, (T3, A, 3),
-            FLUSH, (T3, A, 3), (T1, A, 4), (T3, A, 4), (T1, A, 4), FLUSH, (T3, A, 4),
+        &[(T1, A, None), (T1, A, None), (T1, A, None), FLUSH, (T1, A, None), (T2, A, Some(1)),
+            (T2, A, None), (T2, A, None), FLUSH, (T2, A, None), (T3, A, Some(2)), FLUSH, (T3, A, None),
+            FLUSH, (T3, A, Some(3)), (T1, A, None), (T3, A,None), (T1, A, None), FLUSH, (T3, A, Some(4)),
             FLUSH, FLUSH],
         // Reasoning for the observed durable sequences:
         // - seq 1 not seen last sync
@@ -915,7 +922,7 @@ mod tests {
     )]
     #[tokio::test]
     async fn test_sync_flush(
-        #[case] table_sequence: &[(&str, &str, i64)],
+        #[case] table_sequence: &[(&str, &str, Option<i64>)],
         #[case] mut durable_sequences: Vec<Vec<Option<u64>>>,
     ) {
         let ctx = Arc::new(in_memory_context().await);
@@ -926,8 +933,7 @@ mod tests {
         let mut dur_seq = HashMap::from([(A.to_string(), None), (B.to_string(), None)]);
 
         // Start enqueueing syncs, flushing them and checking the memory sequence in-between
-        for (sync_no, (table_name, origin, sequence)) in table_sequence.iter().enumerate()
-        {
+        for (table_name, origin, sequence) in table_sequence {
             if (*table_name, *origin, *sequence) == FLUSH {
                 // Flush and assert on the next expected durable sequence
                 let url = sync_mgr.syncs.first().unwrap().0.clone();
@@ -951,23 +957,10 @@ mod tests {
             let log_store = ctx.internal_object_store.get_log_store(table_name);
             let origin: String = (*origin).to_owned();
 
-            // Determine whether this is the last sync of the sequence, i.e. are there no upcoming
-            // syncs with the same sequence number from this origin?
-            let last = !table_sequence
-                .iter()
-                .skip(sync_no + 1)
-                .any(|&(_, o, s)| *sequence == s && o == origin);
-
-            let seq = if last {
-                Some(*sequence as SequenceNumber)
-            } else {
-                None
-            };
-
             sync_mgr
                 .enqueue_sync(
                     log_store,
-                    seq,
+                    sequence.map(|seq| seq as SequenceNumber),
                     origin.clone(),
                     sync_schema.clone(),
                     random_batches(arrow_schema.clone()),
@@ -975,8 +968,8 @@ mod tests {
                 .unwrap();
 
             // If this is the last sync in the sequence then it should be reported as in-memory
-            if last {
-                mem_seq.insert(origin.clone(), Some(*sequence as SequenceNumber));
+            if let Some(seq) = sequence {
+                mem_seq.insert(origin.clone(), Some(*seq as SequenceNumber));
             }
 
             assert_eq!(
