@@ -14,6 +14,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
+use object_store_factory::aws::S3Config;
+use object_store_factory::google::GCSConfig;
 use object_store_factory::ObjectStoreConfig;
 
 /// Wrapper around the object_store crate that holds on to the original config
@@ -85,15 +87,16 @@ impl InternalObjectStore {
     // Get the table prefix relative to the root of the internal object store.
     // This is either just a UUID, or potentially UUID prepended by some path.
     pub fn table_prefix(&self, table_prefix: &str) -> Path {
-        let prefix = match self.config.clone() {
-            ObjectStoreConfig::AmazonS3(aws_config) => aws_config.prefix,
-            ObjectStoreConfig::GoogleCloudStorage(google_config) => google_config.prefix,
-            _ => None,
-        };
-
-        match prefix {
-            Some(prefix) => Path::from(format!("{prefix}/{table_prefix}")),
-            None => Path::from(table_prefix),
+        match self.config.clone() {
+            ObjectStoreConfig::AmazonS3(S3Config {
+                prefix: Some(prefix),
+                ..
+            })
+            | ObjectStoreConfig::GoogleCloudStorage(GCSConfig {
+                prefix: Some(prefix),
+                ..
+            }) => Path::from(format!("{prefix}/{table_prefix}")),
+            _ => Path::from(table_prefix),
         }
     }
 

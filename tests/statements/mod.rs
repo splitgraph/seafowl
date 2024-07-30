@@ -26,7 +26,6 @@ use uuid::Uuid;
 use rstest::rstest;
 use tempfile::TempDir;
 
-#[cfg(feature = "object-store-gcs")]
 use crate::fixtures::{fake_gcs_creds, FAKE_GCS_CREDS_PATH};
 use seafowl::config::context::build_context;
 use seafowl::config::schema::load_config_from_string;

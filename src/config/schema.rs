@@ -581,7 +581,6 @@ cache_control = "private, max-age=86400"
     type = "clade"
     dsn = "http://localhost:54321""#;
 
-    #[cfg(feature = "object-store-s3")]
     #[rstest]
     #[case::basic_s3(TEST_CONFIG_S3, None)]
     #[case::basic_s3_with_cache(
@@ -786,7 +785,6 @@ cache_control = "private, max-age=86400"
     fn test_parse_config_invalid_s3() {
         let error =
             load_config_from_string(TEST_CONFIG_INVALID_S3, false, None).unwrap_err();
-        println!("##### ERROR: {:?}", error.to_string());
         assert!(error.to_string().contains(
             "You need to supply either the region or the endpoint of the S3 object store"
         ))

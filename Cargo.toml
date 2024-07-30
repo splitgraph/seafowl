@@ -31,6 +31,8 @@ tracing-log = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 url = "2.5"
 
+
+
 [patch.crates-io]
 # Pick up backport of https://github.com/apache/arrow-datafusion/pull/11386
 datafusion = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
@@ -65,11 +67,9 @@ include = [
 
 [features]
 catalog-postgres = ["sqlx/postgres"]
-default = ["catalog-postgres", "frontend-arrow-flight", "frontend-postgres", "object-store-s3", "object-store-gcs", "remote-tables"]
+default = ["catalog-postgres", "frontend-arrow-flight", "frontend-postgres", "remote-tables"]
 frontend-arrow-flight = ["dep:tonic", "dep:arrow-flight", "arrow-flight/flight-sql-experimental"]
 frontend-postgres = ["convergence", "convergence-arrow"]
-object-store-gcs = ["object_store/gcp"]
-object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
