@@ -118,10 +118,10 @@ impl SeafowlContext {
                 // 2. Otherwise use the object store credentials from the config if it matches
                 //    the object store kind.
                 let table_path = ListingTableUrl::parse(&cmd.location)?;
-
+                
                 let url: &Url = table_path.as_ref();
-                let (scheme, _) = ObjectStoreScheme::parse(url).unwrap();
-                if matches!(
+                let parsed_result = ObjectStoreScheme::parse(url);
+                if let Ok((scheme, _)) = parsed_result && matches!(
                     scheme,
                     ObjectStoreScheme::AmazonS3 | ObjectStoreScheme::GoogleCloudStorage
                 ) {
