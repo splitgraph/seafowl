@@ -154,7 +154,10 @@ impl SeafowlContext {
                                     ));
                                 }
                             } else {
-                                S3Config::from_bucket_and_options(bucket, &mut cmd.options)?
+                                S3Config::from_bucket_and_options(
+                                    bucket,
+                                    &mut cmd.options,
+                                )?
                             };
                             ObjectStoreConfig::AmazonS3(s3_config)
                         }
@@ -173,7 +176,10 @@ impl SeafowlContext {
                                     ));
                                 }
                             } else {
-                                GCSConfig::from_bucket_and_options(bucket, &mut cmd.options)?
+                                GCSConfig::from_bucket_and_options(
+                                    bucket,
+                                    &mut cmd.options,
+                                )?
                             };
                             ObjectStoreConfig::GoogleCloudStorage(gcs_config)
                         }
