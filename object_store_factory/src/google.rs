@@ -24,6 +24,18 @@ impl GCSConfig {
                 .map(|s| s.to_string()),
         })
     }
+
+    pub fn from_bucket_and_options(
+        bucket: String,
+        map: &mut HashMap<String, String>,
+    ) -> Result<Self, object_store::Error> {
+        Ok(Self {
+            bucket,
+            prefix: None,
+            google_application_credentials: map
+                .remove("format.google_application_credentials"),
+        })
+    }
 }
 
 pub fn build_google_cloud_storage_from_config(

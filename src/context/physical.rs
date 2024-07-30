@@ -154,9 +154,7 @@ impl SeafowlContext {
                                     ));
                                 }
                             } else {
-                                let mut options = cmd.options.clone();
-                                options.insert("bucket".to_string(), bucket.clone());
-                                S3Config::from_hashmap(&options)?
+                                S3Config::from_bucket_and_options(bucket, &mut cmd.options)?
                             };
                             ObjectStoreConfig::AmazonS3(s3_config)
                         }
@@ -175,9 +173,7 @@ impl SeafowlContext {
                                     ));
                                 }
                             } else {
-                                let mut options = cmd.options.clone();
-                                options.insert("bucket".to_string(), bucket.clone());
-                                GCSConfig::from_hashmap(&options)?
+                                GCSConfig::from_bucket_and_options(bucket, &mut cmd.options)?
                             };
                             ObjectStoreConfig::GoogleCloudStorage(gcs_config)
                         }

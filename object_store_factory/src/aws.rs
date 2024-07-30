@@ -36,6 +36,21 @@ impl S3Config {
             prefix: map.get("prefix").map(|s| s.to_string()),
         })
     }
+
+    pub fn from_bucket_and_options(
+        bucket: String,
+        map: &mut HashMap<String, String>,
+    ) -> Result<Self, object_store::Error> {
+        Ok(Self {
+            region: map.remove("format.region"),
+            access_key_id: map.remove("format.access_key_id"),
+            secret_access_key: map.remove("format.secret_access_key"),
+            session_token: map.remove("format.session_token"),
+            endpoint: map.remove("format.endpoint"),
+            bucket,
+            prefix: None,
+        })
+    }
 }
 
 pub fn build_amazon_s3_from_config(
