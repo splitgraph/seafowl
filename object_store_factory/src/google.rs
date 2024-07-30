@@ -1,12 +1,14 @@
 use object_store::{gcp::GoogleCloudStorageBuilder, gcp::GoogleConfigKey, ObjectStore};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
 use std::str::FromStr;
 use std::sync::Arc;
 
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct GCSConfig {
     pub bucket: String,
-    pub _prefix: Option<String>,
+    pub prefix: Option<String>,
     pub google_application_credentials: Option<String>,
 }
 
@@ -16,10 +18,22 @@ impl GCSConfig {
     ) -> Result<Self, object_store::Error> {
         Ok(Self {
             bucket: map.get("bucket").unwrap().clone(),
-            _prefix: map.get("prefix").map(|s| s.to_string()),
+            prefix: map.get("prefix").map(|s| s.to_string()),
             google_application_credentials: map
                 .get("google_application_credentials")
                 .map(|s| s.to_string()),
+        })
+    }
+
+    pub fn from_bucket_and_options(
+        bucket: String,
+        map: &mut HashMap<String, String>,
+    ) -> Result<Self, object_store::Error> {
+        Ok(Self {
+            bucket,
+            prefix: None,
+            google_application_credentials: map
+                .remove("format.google_application_credentials"),
         })
     }
 }
@@ -97,7 +111,7 @@ mod tests {
         let config =
             GCSConfig::from_hashmap(&map).expect("Failed to create config from hashmap");
         assert_eq!(config.bucket, "my-bucket");
-        assert_eq!(config._prefix, Some("my-prefix".to_string()));
+        assert_eq!(config.prefix, Some("my-prefix".to_string()));
         assert_eq!(
             config.google_application_credentials,
             Some("/path/to/credentials.json".to_string())
@@ -112,7 +126,7 @@ mod tests {
         let config =
             GCSConfig::from_hashmap(&map).expect("Failed to create config from hashmap");
         assert_eq!(config.bucket, "my-bucket");
-        assert!(config._prefix.is_none());
+        assert!(config.prefix.is_none());
         assert!(config.google_application_credentials.is_none());
     }
 
@@ -147,7 +161,7 @@ mod tests {
 
         let config = GCSConfig {
             bucket: "my-bucket".to_string(),
-            _prefix: Some("my-prefix".to_string()),
+            prefix: Some("my-prefix".to_string()),
             google_application_credentials: Some(
                 temp_file.path().to_str().unwrap().to_string(),
             ),
@@ -167,7 +181,7 @@ mod tests {
     fn test_build_google_cloud_storage_from_config_with_missing_optional_fields() {
         let config = GCSConfig {
             bucket: "my-bucket".to_string(),
-            _prefix: None,
+            prefix: None,
             google_application_credentials: None,
         };
 

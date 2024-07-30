@@ -1,7 +1,5 @@
 use super::delta::CreateDeltaTableDetails;
 use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
-use crate::config::schema;
-use crate::config::schema::{GCS, S3};
 use crate::context::delta::plan_to_object_store;
 use crate::context::SeafowlContext;
 use crate::nodes::{
@@ -59,6 +57,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::info;
 use url::Url;
 
+use object_store::ObjectStoreScheme;
+use object_store_factory::aws::S3Config;
+use object_store_factory::google::GCSConfig;
+use object_store_factory::ObjectStoreConfig;
+
 /// Create an ExecutionPlan that doesn't produce any results.
 /// This is used for queries that are actually run before we produce the plan,
 /// since they have to manipulate catalog metadata or use async to write to it.
@@ -115,40 +118,72 @@ impl SeafowlContext {
                 // 2. Otherwise use the object store credentials from the config if it matches
                 //    the object store kind.
                 let table_path = ListingTableUrl::parse(&cmd.location)?;
-                let scheme = table_path.scheme();
+
                 let url: &Url = table_path.as_ref();
-                if matches!(scheme, "s3" | "gs" | "gcs") {
+                let parsed_result = ObjectStoreScheme::parse(url);
+                if let Ok((scheme, _)) = parsed_result
+                    && matches!(
+                        scheme,
+                        ObjectStoreScheme::AmazonS3
+                            | ObjectStoreScheme::GoogleCloudStorage
+                    )
+                {
                     let bucket = url
                         .host_str()
                         .ok_or_else(|| {
                             DataFusionError::Execution(format!(
-                                "Not able to parse bucket name from url: {}",
+                                "Unable to parse bucket name from URL: {}",
                                 url.as_str()
                             ))
                         })?
                         .to_string();
 
-                    let config = if scheme == "s3" {
-                        let s3 = if cmd.options.is_empty()
-                            && let schema::ObjectStore::S3(s3) =
-                                self.internal_object_store.config.clone()
-                        {
-                            S3 { bucket, ..s3 }
-                        } else {
-                            S3::from_bucket_and_options(bucket, &mut cmd.options)
-                                .map_err(|e| DataFusionError::Execution(e.to_string()))?
-                        };
-                        schema::ObjectStore::S3(s3)
-                    } else {
-                        let gcs = if cmd.options.is_empty()
-                            && let schema::ObjectStore::GCS(gcs) =
-                                self.internal_object_store.config.clone()
-                        {
-                            GCS { bucket, ..gcs }
-                        } else {
-                            GCS::from_bucket_and_options(bucket, &mut cmd.options)
-                        };
-                        schema::ObjectStore::GCS(gcs)
+                    let config = match scheme {
+                        ObjectStoreScheme::AmazonS3 => {
+                            let s3_config = if cmd.options.is_empty() {
+                                if let ObjectStoreConfig::AmazonS3(s3) =
+                                    &self.internal_object_store.config
+                                {
+                                    S3Config {
+                                        bucket: bucket.clone(),
+                                        ..s3.clone()
+                                    }
+                                } else {
+                                    return Err(DataFusionError::Execution(
+                                        "Expected AmazonS3 config".into(),
+                                    ));
+                                }
+                            } else {
+                                S3Config::from_bucket_and_options(
+                                    bucket,
+                                    &mut cmd.options,
+                                )?
+                            };
+                            ObjectStoreConfig::AmazonS3(s3_config)
+                        }
+                        ObjectStoreScheme::GoogleCloudStorage => {
+                            let gcs_config = if cmd.options.is_empty() {
+                                if let ObjectStoreConfig::GoogleCloudStorage(gcs) =
+                                    &self.internal_object_store.config
+                                {
+                                    GCSConfig {
+                                        bucket: bucket.clone(),
+                                        ..gcs.clone()
+                                    }
+                                } else {
+                                    return Err(DataFusionError::Execution(
+                                        "Expected GoogleCloudStorage config".into(),
+                                    ));
+                                }
+                            } else {
+                                GCSConfig::from_bucket_and_options(
+                                    bucket,
+                                    &mut cmd.options,
+                                )?
+                            };
+                            ObjectStoreConfig::GoogleCloudStorage(gcs_config)
+                        }
+                        _ => unreachable!(),
                     };
 
                     let object_store = build_object_store(

@@ -3,6 +3,7 @@ use object_store::{
     aws::resolve_bucket_region, aws::AmazonS3Builder, aws::AmazonS3ConfigKey,
     ClientOptions, ObjectStore,
 };
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
 use std::str::FromStr;
@@ -10,6 +11,7 @@ use std::sync::Arc;
 use tracing::info;
 use url::Url;
 
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct S3Config {
     pub region: Option<String>,
     pub access_key_id: Option<String>,
@@ -17,7 +19,7 @@ pub struct S3Config {
     pub session_token: Option<String>,
     pub endpoint: Option<String>,
     pub bucket: String,
-    pub _prefix: Option<String>,
+    pub prefix: Option<String>,
 }
 
 impl S3Config {
@@ -31,7 +33,22 @@ impl S3Config {
             session_token: map.get("session_token").map(|s| s.to_string()),
             endpoint: map.get("endpoint").map(|s| s.to_string()),
             bucket: map.get("bucket").unwrap().clone(),
-            _prefix: map.get("prefix").map(|s| s.to_string()),
+            prefix: map.get("prefix").map(|s| s.to_string()),
+        })
+    }
+
+    pub fn from_bucket_and_options(
+        bucket: String,
+        map: &mut HashMap<String, String>,
+    ) -> Result<Self, object_store::Error> {
+        Ok(Self {
+            region: map.remove("format.region"),
+            access_key_id: map.remove("format.access_key_id"),
+            secret_access_key: map.remove("format.secret_access_key"),
+            session_token: map.remove("format.session_token"),
+            endpoint: map.remove("format.endpoint"),
+            bucket,
+            prefix: None,
         })
     }
 }
@@ -164,7 +181,7 @@ mod tests {
         assert_eq!(config.session_token, Some("session_token".to_string()));
         assert_eq!(config.endpoint, Some("http://localhost:9000".to_string()));
         assert_eq!(config.bucket, "my-bucket".to_string());
-        assert_eq!(config._prefix, Some("my-prefix".to_string()));
+        assert_eq!(config.prefix, Some("my-prefix".to_string()));
     }
 
     #[test]
@@ -181,7 +198,7 @@ mod tests {
         assert!(config.session_token.is_none());
         assert!(config.endpoint.is_none());
         assert_eq!(config.bucket, "my-bucket".to_string());
-        assert!(config._prefix.is_none());
+        assert!(config.prefix.is_none());
     }
 
     #[test]
@@ -200,7 +217,7 @@ mod tests {
             session_token: Some("session_token".to_string()),
             endpoint: Some("http://localhost:9000".to_string()),
             bucket: "my-bucket".to_string(),
-            _prefix: Some("my-prefix".to_string()),
+            prefix: Some("my-prefix".to_string()),
         };
 
         let result = build_amazon_s3_from_config(&config);
@@ -227,7 +244,7 @@ mod tests {
             session_token: None,
             endpoint: None,
             bucket: "my-bucket".to_string(),
-            _prefix: None,
+            prefix: None,
         };
 
         let result = build_amazon_s3_from_config(&config);

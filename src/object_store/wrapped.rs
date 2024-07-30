@@ -1,5 +1,3 @@
-use crate::config::schema;
-use crate::config::schema::{Local, GCS, S3};
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt};
 use object_store::{
@@ -16,6 +14,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
+use object_store_factory::aws::S3Config;
+use object_store_factory::google::GCSConfig;
+use object_store_factory::ObjectStoreConfig;
+
 /// Wrapper around the object_store crate that holds on to the original config
 /// in order to provide a more efficient "upload" for the local object store (since it's
 /// stored on the local filesystem, we can just move the file to it instead).
@@ -23,39 +25,35 @@ use url::Url;
 pub struct InternalObjectStore {
     pub inner: Arc<dyn ObjectStore>,
     pub root_uri: Url,
-    pub config: schema::ObjectStore,
+    pub config: ObjectStoreConfig,
 }
 
 impl InternalObjectStore {
-    pub fn new(inner: Arc<dyn ObjectStore>, config: schema::ObjectStore) -> Self {
+    pub fn new(inner: Arc<dyn ObjectStore>, config: ObjectStoreConfig) -> Self {
         let mut root_uri = match config.clone() {
-            schema::ObjectStore::Local(Local { data_dir }) => {
-                let canonical_path = StdPath::new(&data_dir).canonicalize().unwrap();
+            ObjectStoreConfig::Local(local_config) => {
+                let canonical_path =
+                    StdPath::new(&local_config.data_dir).canonicalize().unwrap();
                 Url::from_directory_path(canonical_path).unwrap()
             }
-            schema::ObjectStore::InMemory(_) => Url::from_str("memory://").unwrap(),
-            schema::ObjectStore::S3(S3 {
-                bucket,
-                endpoint,
-                prefix,
-                ..
-            }) => {
-                let mut base_url = if let Some(endpoint) = endpoint {
+            ObjectStoreConfig::Memory => Url::from_str("memory://").unwrap(),
+            ObjectStoreConfig::AmazonS3(aws_config) => {
+                let mut base_url = if let Some(endpoint) = aws_config.endpoint {
                     // We're assuming here that the bucket isn't contained in the endpoint itself
-                    format!("{endpoint}/{bucket}")
+                    format!("{endpoint}/{}", aws_config.bucket)
                 } else {
-                    format!("s3://{bucket}")
+                    format!("s3://{}", aws_config.bucket)
                 };
 
-                if let Some(prefix) = prefix {
+                if let Some(prefix) = aws_config.prefix {
                     base_url = format!("{base_url}/{prefix}");
                 }
 
                 Url::from_str(&base_url).unwrap()
             }
-            schema::ObjectStore::GCS(GCS { bucket, prefix, .. }) => {
-                let mut base_url = format!("gs://{bucket}");
-                if let Some(prefix) = prefix {
+            ObjectStoreConfig::GoogleCloudStorage(google_config) => {
+                let mut base_url = format!("gs://{}", google_config.bucket);
+                if let Some(prefix) = google_config.prefix {
                     base_url = format!("{base_url}/{prefix}");
                 }
 
@@ -79,8 +77,8 @@ impl InternalObjectStore {
     // the full path to the table dir
     pub fn local_table_dir(&self, table_prefix: &str) -> Option<String> {
         match &self.config {
-            schema::ObjectStore::Local(Local { data_dir }) => {
-                Some(format!("{data_dir}/{table_prefix}"))
+            ObjectStoreConfig::Local(local_config) => {
+                Some(format!("{}/{table_prefix}", local_config.data_dir))
             }
             _ => None,
         }
@@ -90,11 +88,11 @@ impl InternalObjectStore {
     // This is either just a UUID, or potentially UUID prepended by some path.
     pub fn table_prefix(&self, table_prefix: &str) -> Path {
         match self.config.clone() {
-            schema::ObjectStore::S3(S3 {
+            ObjectStoreConfig::AmazonS3(S3Config {
                 prefix: Some(prefix),
                 ..
             })
-            | schema::ObjectStore::GCS(GCS {
+            | ObjectStoreConfig::GoogleCloudStorage(GCSConfig {
                 prefix: Some(prefix),
                 ..
             }) => Path::from(format!("{prefix}/{table_prefix}")),
@@ -247,7 +245,7 @@ impl ObjectStore for InternalObjectStore {
     ///
     /// Will return an error if the destination already has an object.
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        if let schema::ObjectStore::S3(_) = self.config {
+        if let ObjectStoreConfig::AmazonS3(_) = self.config {
             // TODO: AWS object store doesn't provide `copy_if_not_exists`, which gets called by the
             // the default implementation of this method, since it requires dynamodb lock to be
             // handled properly, so just do the unsafe thing for now.
@@ -261,11 +259,13 @@ impl ObjectStore for InternalObjectStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::schema::{ObjectStore, S3};
     use crate::object_store::factory::build_object_store;
     use crate::object_store::wrapped::InternalObjectStore;
     use datafusion::common::Result;
     use rstest::rstest;
+
+    use object_store_factory::aws::S3Config;
+    use object_store_factory::ObjectStoreConfig;
 
     #[rstest]
     #[case::bucket_root("test-bucket", None, "6bb9913e-0341-446d-bb58-b865803ce0ff")]
@@ -288,7 +288,7 @@ mod tests {
             String,
         >,
     ) -> Result<()> {
-        let config = ObjectStore::S3(S3 {
+        let config = ObjectStoreConfig::AmazonS3(S3Config {
             region: None,
             access_key_id: Some("access_key_id".to_string()),
             secret_access_key: Some("secret_access_key".to_string()),

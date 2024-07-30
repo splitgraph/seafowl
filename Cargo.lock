@@ -4381,6 +4381,7 @@ dependencies = [
  "async-trait",
  "futures",
  "object_store 0.10.2",
+ "serde",
  "tempfile",
  "tracing",
  "tracing-log",

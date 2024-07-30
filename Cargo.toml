@@ -22,12 +22,16 @@ futures = "0.3"
 
 itertools = ">=0.10.0"
 object_store = { version = "0.10.2", features = ["aws", "azure", "gcp"] }
+
+serde = "1.0.156"
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "signal", "process"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 url = "2.5"
+
+
 
 [patch.crates-io]
 # Pick up backport of https://github.com/apache/arrow-datafusion/pull/11386
@@ -63,11 +67,9 @@ include = [
 
 [features]
 catalog-postgres = ["sqlx/postgres"]
-default = ["catalog-postgres", "frontend-arrow-flight", "frontend-postgres", "object-store-s3", "object-store-gcs", "remote-tables"]
+default = ["catalog-postgres", "frontend-arrow-flight", "frontend-postgres", "remote-tables"]
 frontend-arrow-flight = ["dep:tonic", "dep:arrow-flight", "arrow-flight/flight-sql-experimental"]
 frontend-postgres = ["convergence", "convergence-arrow"]
-object-store-gcs = ["object_store/gcp"]
-object-store-s3 = ["object_store/aws"]
 remote-tables = ["dep:datafusion-remote-tables"]
 
 [dependencies]
@@ -126,7 +128,7 @@ rmp = "0.8.11"
 rmp-serde = "1.1.1"
 rmpv = { version = "1.0.0", features = ["with-serde"] }
 rustyline = "13.0"
-serde = "1.0.156"
+serde = { workspace = true }
 serde_json = "1.0.93"
 sha2 = ">=0.10.1"
 sqlparser = { version = "0.47", features = ["visitor"] }

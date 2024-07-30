@@ -1,7 +1,11 @@
-mod aws;
-mod google;
-mod local;
+pub mod aws;
+pub mod google;
+pub mod local;
 mod memory;
+
+use aws::S3Config;
+use google::GCSConfig;
+use local::LocalConfig;
 
 use object_store::parse_url_opts;
 use object_store::prefix::PrefixStore;
@@ -13,48 +17,64 @@ use std::sync::Arc;
 use tracing::warn;
 use url::Url;
 
-/// Configuration for object storage, holding settings in a key-value format.
-pub type StorageConfig = HashMap<String, String>;
+use serde::Deserialize;
 
-/// Builds an object store based on the specified scheme and configuration.
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ObjectStoreConfig {
+    Local(LocalConfig),
+    Memory,
+    #[serde(rename = "s3")]
+    AmazonS3(S3Config),
+    #[serde(rename = "gcs")]
+    GoogleCloudStorage(GCSConfig),
+}
+
+/// Creates an `ObjectStore` instance based on the provided configuration.
+///
+/// This function takes an `ObjectStoreConfig` reference and returns a `Result` containing
+/// an `Arc` to a dynamically-dispatched `ObjectStore` trait object. It matches on the
+/// provided configuration to determine the type of object store to create, and then calls
+/// the appropriate builder function to instantiate the store.
 ///
 /// # Arguments
 ///
-/// * `scheme` - The scheme to use for object storage, such as Memory, Local, AmazonS3, or GoogleCloudStorage.
-/// * `config` - A hash map containing configuration settings needed to build the object store.
+/// * `config` - A reference to an `ObjectStoreConfig` enum variant that specifies the
+///   type and configuration details of the object store to be created.
 ///
 /// # Returns
 ///
-/// Returns a `Result` that, on success, contains an Arc `ObjectStore` trait object. On failure, it returns an `object_store::Error`
-/// indicating what went wrong, such as an unsupported scheme.
+/// * `Result<Arc<dyn ObjectStore>, object_store::Error>` - A result containing an `Arc`
+///   pointing to the created object store on success, or an error if the creation fails.
+///
+/// # Supported Object Stores
+///
+/// * `ObjectStoreConfig::Memory` - Builds an in-memory object store.
+/// * `ObjectStoreConfig::Local` - Builds a local filesystem-backed object store using
+///   the provided local configuration.
+/// * `ObjectStoreConfig::AmazonS3` - Builds an Amazon S3 object store using the provided
+///   AWS configuration.
+/// * `ObjectStoreConfig::GoogleCloudStorage` - Builds a Google Cloud Storage object store
+///   using the provided Google Cloud configuration.
 ///
 /// # Errors
 ///
-/// * If the scheme is not supported or the configuration is invalid, an error is returned.
-pub fn build_object_store_from_config(
-    scheme: &ObjectStoreScheme,
-    config: StorageConfig,
+/// This function returns an error if the specified object store cannot be created,
+/// which might happen due to misconfiguration, invalid credentials, or other issues
+/// specific to the object store's backend.
+pub fn build_object_store(
+    config: &ObjectStoreConfig,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    match scheme {
-        ObjectStoreScheme::Memory => memory::build_in_memory_storage(),
-        ObjectStoreScheme::Local => {
-            let file_config = local::LocalConfig::from_hashmap(&config)?;
-            local::build_local_storage(&file_config)
+    match config {
+        ObjectStoreConfig::Memory => memory::build_in_memory_storage(),
+        ObjectStoreConfig::Local(local_config) => {
+            local::build_local_storage(local_config)
         }
-        ObjectStoreScheme::AmazonS3 => {
-            let aws_config = aws::S3Config::from_hashmap(&config)?;
-            aws::build_amazon_s3_from_config(&aws_config)
+        ObjectStoreConfig::AmazonS3(aws_config) => {
+            aws::build_amazon_s3_from_config(aws_config)
         }
-        ObjectStoreScheme::GoogleCloudStorage => {
-            let google_config = google::GCSConfig::from_hashmap(&config)?;
-            google::build_google_cloud_storage_from_config(&google_config)
-        }
-        _ => {
-            warn!("Unsupported scheme: {:?}", scheme);
-            Err(object_store::Error::Generic {
-                store: "unsupported_url_scheme",
-                source: format!("Unsupported scheme: {:?}", scheme).into(),
-            })
+        ObjectStoreConfig::GoogleCloudStorage(google_config) => {
+            google::build_google_cloud_storage_from_config(google_config)
         }
     }
 }

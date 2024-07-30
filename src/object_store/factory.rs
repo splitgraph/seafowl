@@ -9,35 +9,33 @@ use deltalake::{
     storage::{FactoryRegistry, ObjectStoreRef, StorageOptions},
     DeltaResult, DeltaTableError, Path,
 };
-use object_store::{prefix::PrefixStore, ObjectStore, ObjectStoreScheme};
+use object_store::{prefix::PrefixStore, ObjectStore};
 use object_store_factory;
 use url::Url;
 
-use crate::config::schema::{self, ObjectCacheProperties, SeafowlConfig};
+use object_store_factory::ObjectStoreConfig;
+
+use crate::config::schema::{ObjectCacheProperties, SeafowlConfig};
 
 use super::{cache::CachingObjectStore, wrapped::InternalObjectStore};
 
 pub fn build_object_store(
-    object_store_cfg: &schema::ObjectStore,
+    object_store_cfg: &ObjectStoreConfig,
     cache_properties: &Option<ObjectCacheProperties>,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    let scheme = match &object_store_cfg {
-        schema::ObjectStore::Local(_) => ObjectStoreScheme::Local,
-        schema::ObjectStore::InMemory(_) => ObjectStoreScheme::Memory,
-        schema::ObjectStore::S3(_) => ObjectStoreScheme::AmazonS3,
-        schema::ObjectStore::GCS(_) => ObjectStoreScheme::GoogleCloudStorage,
-    };
+    let store = object_store_factory::build_object_store(object_store_cfg)?;
 
-    let config = object_store_cfg.to_config();
-    let store = object_store_factory::build_object_store_from_config(&scheme, config)?;
-
-    if matches!(scheme, ObjectStoreScheme::Local | ObjectStoreScheme::Memory) {
-        Ok(store)
-    } else {
-        Ok(match cache_properties {
-            Some(props) => Arc::new(CachingObjectStore::new_from_config(props, store)),
-            None => store,
-        })
+    match object_store_cfg {
+        ObjectStoreConfig::Local(_) | ObjectStoreConfig::Memory => Ok(store),
+        _ => {
+            let cached_store = match cache_properties {
+                Some(props) => {
+                    Arc::new(CachingObjectStore::new_from_config(props, store))
+                }
+                None => store,
+            };
+            Ok(cached_store)
+        }
     }
 }
 
