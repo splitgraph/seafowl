@@ -474,7 +474,6 @@ impl SeafowlContext {
 #[cfg(test)]
 mod tests {
     use super::super::test_utils::{in_memory_context, in_memory_context_with_test_db};
-    use crate::config::schema;
     use crate::context::delta::plan_to_object_store;
     use crate::object_store::wrapped::InternalObjectStore;
     use crate::testutils::assert_uploaded_objects;
@@ -487,6 +486,9 @@ mod tests {
     use std::sync::Arc;
     use tempfile::TempDir;
     use uuid::Uuid;
+
+    use object_store_factory::local::LocalConfig;
+    use object_store_factory::ObjectStoreConfig;
 
     const PART_0_FILE_NAME: &str =
         "part-00000-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
@@ -522,7 +524,7 @@ mod tests {
             (
                 InternalObjectStore::new(
                     Arc::new(LocalFileSystem::new_with_prefix(tmp_dir.path()).unwrap()),
-                    schema::ObjectStore::Local(schema::Local {
+                    ObjectStoreConfig::Local(LocalConfig {
                         data_dir: tmp_dir.path().to_string_lossy().to_string(),
                     }),
                 ),
@@ -532,7 +534,7 @@ mod tests {
             (
                 InternalObjectStore::new(
                     Arc::new(InMemory::new()),
-                    schema::ObjectStore::InMemory(schema::InMemory {}),
+                    ObjectStoreConfig::Memory,
                 ),
                 None,
             )
@@ -695,7 +697,7 @@ mod tests {
 
         let object_store = Arc::new(InternalObjectStore::new(
             Arc::new(InMemory::new()),
-            schema::ObjectStore::InMemory(schema::InMemory {}),
+            ObjectStoreConfig::Memory,
         ));
         let adds = plan_to_object_store(
             &ctx.inner.state(),

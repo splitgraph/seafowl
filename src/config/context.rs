@@ -182,6 +182,7 @@ pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext>
 
 #[cfg(test)]
 mod tests {
+    use object_store_factory::ObjectStoreConfig;
     use sqlx::sqlite::SqliteJournalMode;
 
     use super::*;
@@ -189,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn test_config_to_context() {
         let config = schema::SeafowlConfig {
-            object_store: Some(schema::ObjectStore::InMemory(schema::InMemory {})),
+            object_store: Some(ObjectStoreConfig::Memory),
             catalog: schema::Catalog::Sqlite(schema::Sqlite {
                 dsn: "sqlite::memory:".to_string(),
                 journal_mode: SqliteJournalMode::Wal,

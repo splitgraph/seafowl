@@ -217,8 +217,8 @@ impl SeafowlContext {
 #[cfg(test)]
 pub mod test_utils {
     use crate::config::context::build_context;
-    use crate::config::schema;
     use crate::config::schema::{Catalog, Sqlite};
+    use object_store_factory::ObjectStoreConfig;
     use sqlx::sqlite::SqliteJournalMode;
 
     use super::*;
@@ -226,7 +226,7 @@ pub mod test_utils {
     /// Build a real (not mocked) in-memory context that uses SQLite
     pub async fn in_memory_context() -> SeafowlContext {
         let config = SeafowlConfig {
-            object_store: Some(schema::ObjectStore::InMemory(schema::InMemory {})),
+            object_store: Some(ObjectStoreConfig::Memory),
             catalog: Catalog::Sqlite(Sqlite {
                 dsn: "sqlite://:memory:".to_string(),
                 journal_mode: SqliteJournalMode::Wal,

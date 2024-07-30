@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use std::{
     fmt::{self, Display},
     path::{Path, PathBuf},
@@ -11,6 +9,9 @@ use crate::object_store::cache::{
 };
 use config::{Config, ConfigError, Environment, File, FileFormat, Map};
 use hex::encode;
+use object_store_factory::aws::S3Config;
+use object_store_factory::google::GCSConfig;
+use object_store_factory::ObjectStoreConfig;
 
 use rand::distributions::{Alphanumeric, DistString};
 use serde::Deserialize;
@@ -41,7 +42,7 @@ pub const MEBIBYTES: u64 = 1024 * 1024;
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct SeafowlConfig {
-    pub object_store: Option<ObjectStore>,
+    pub object_store: Option<object_store_factory::ObjectStoreConfig>,
     #[serde(default)]
     pub catalog: Catalog,
     #[serde(default)]
@@ -50,30 +51,6 @@ pub struct SeafowlConfig {
     pub runtime: Runtime,
     #[serde(default)]
     pub misc: Misc,
-}
-
-#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ObjectStore {
-    Local(Local),
-    #[serde(rename = "memory")]
-    InMemory(InMemory),
-    #[cfg(feature = "object-store-s3")]
-    S3(S3),
-    #[cfg(feature = "object-store-gcs")]
-    #[serde(rename = "gcs")]
-    GCS(GCS),
-}
-
-impl ObjectStore {
-    pub fn to_config(&self) -> HashMap<String, String> {
-        match self {
-            ObjectStore::Local(local) => local.to_config(),
-            ObjectStore::InMemory(memory) => memory.to_config(),
-            ObjectStore::S3(s3) => s3.to_config(),
-            ObjectStore::GCS(gcs) => gcs.to_config(),
-        }
-    }
 }
 
 /// Build a default config file and struct
@@ -123,118 +100,6 @@ write_access = "{}"
     let config = load_config_from_string(&config_str, false, None).unwrap();
 
     (config_str, config)
-}
-
-#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
-pub struct Local {
-    pub data_dir: String,
-}
-
-impl Local {
-    pub fn to_config(&self) -> HashMap<String, String> {
-        let mut config = HashMap::new();
-        config.insert("data_dir".to_string(), self.data_dir.clone());
-        config
-    }
-}
-
-#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
-pub struct InMemory {}
-
-impl InMemory {
-    pub fn to_config(&self) -> HashMap<String, String> {
-        // InMemory does not have any specific configurations.
-        HashMap::new()
-    }
-}
-
-#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
-pub struct S3 {
-    pub region: Option<String>,
-    pub access_key_id: Option<String>,
-    pub secret_access_key: Option<String>,
-    pub session_token: Option<String>,
-    pub endpoint: Option<String>,
-    pub bucket: String,
-    pub prefix: Option<String>,
-}
-
-impl S3 {
-    pub fn from_bucket_and_options(
-        bucket: String,
-        map: &mut HashMap<String, String>,
-    ) -> Result<Self, ConfigError> {
-        // TODO: This is a bit of a hack. We should probably use a pre-defined config struct.
-        Ok(S3 {
-            region: map.remove("format.region"),
-            access_key_id: map.remove("format.access_key_id"),
-            secret_access_key: map.remove("format.secret_access_key"),
-            session_token: map.remove("format.session_token"),
-            endpoint: map.remove("format.endpoint"),
-            bucket,
-            prefix: None,
-        })
-    }
-
-    pub fn to_config(&self) -> HashMap<String, String> {
-        let mut config = HashMap::new();
-        if let Some(region) = &self.region {
-            config.insert("region".to_string(), region.clone());
-        }
-        if let Some(access_key_id) = &self.access_key_id {
-            config.insert("access_key_id".to_string(), access_key_id.clone());
-        }
-        if let Some(secret_access_key) = &self.secret_access_key {
-            config.insert("secret_access_key".to_string(), secret_access_key.clone());
-        }
-        if let Some(session_token) = &self.session_token {
-            config.insert("session_token".to_string(), session_token.clone());
-        }
-        if let Some(endpoint) = &self.endpoint {
-            config.insert("endpoint".to_string(), endpoint.clone());
-        }
-        config.insert("bucket".to_string(), self.bucket.clone());
-        if let Some(prefix) = &self.prefix {
-            config.insert("prefix".to_string(), prefix.clone());
-        }
-        config
-    }
-}
-
-#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
-pub struct GCS {
-    pub bucket: String,
-    pub prefix: Option<String>,
-    pub google_application_credentials: Option<String>,
-}
-
-impl GCS {
-    pub fn from_bucket_and_options(
-        bucket: String,
-        map: &mut HashMap<String, String>,
-    ) -> Self {
-        GCS {
-            bucket,
-            prefix: None,
-            google_application_credentials: map
-                .remove("format.google_application_credentials"),
-        }
-    }
-
-    pub fn to_config(&self) -> HashMap<String, String> {
-        let mut config = HashMap::new();
-        config.insert("bucket".to_string(), self.bucket.clone());
-        if let Some(prefix) = &self.prefix {
-            config.insert("prefix".to_string(), prefix.clone());
-        }
-        if let Some(credentials) = &self.google_application_credentials {
-            config.insert(
-                "google_application_credentials".to_string(),
-                credentials.clone(),
-            );
-        }
-        config
-    }
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -505,7 +370,7 @@ pub struct Runtime {
 pub fn validate_config(mut config: SeafowlConfig) -> Result<SeafowlConfig, ConfigError> {
     let in_memory_catalog = matches!(config.catalog, Catalog::Sqlite(Sqlite { ref dsn, journal_mode: _, read_only: _ }) if dsn.contains(":memory:"));
     let in_memory_object_store =
-        matches!(config.object_store, Some(ObjectStore::InMemory(_)));
+        matches!(config.object_store, Some(ObjectStoreConfig::Memory));
 
     if in_memory_catalog ^ in_memory_object_store {
         return Err(ConfigError::Message(
@@ -517,7 +382,7 @@ pub fn validate_config(mut config: SeafowlConfig) -> Result<SeafowlConfig, Confi
     }
 
     match config.object_store {
-        Some(ObjectStore::S3(S3 {
+        Some(ObjectStoreConfig::AmazonS3(S3Config {
             region: None,
             endpoint: None,
             ..
@@ -527,14 +392,14 @@ pub fn validate_config(mut config: SeafowlConfig) -> Result<SeafowlConfig, Confi
                     .to_string(),
             ))
         }
-        Some(ObjectStore::GCS(GCS {
+        Some(ObjectStoreConfig::GoogleCloudStorage(GCSConfig {
             google_application_credentials: None,
             ..
         })) => warn!(
             "You are trying to connect to a GCS bucket without providing credentials.
 If Seafowl is running on GCP a token should be fetched using the GCP metadata endpoint."
         ),
-        Some(ObjectStore::Local(_)) | Some(ObjectStore::InMemory(_))
+        Some(ObjectStoreConfig::Local(_)) | Some(ObjectStoreConfig::Memory)
             if config.misc.object_store_cache.is_some() =>
         {
             warn!(
@@ -549,7 +414,7 @@ If Seafowl is running on GCP a token should be fetched using the GCP metadata en
         }
         // When no object_store section present, default to using in-memory one internally
         None if matches!(config.catalog, Catalog::Clade(Clade { dsn: _ })) => {
-            config.object_store = Some(ObjectStore::InMemory(InMemory {}))
+            config.object_store = Some(ObjectStoreConfig::Memory)
         }
         _ => {}
     };
@@ -600,10 +465,11 @@ pub fn load_config_from_string(
 mod tests {
     use super::{
         build_default_config, load_config_from_string, AccessSettings, Catalog, Frontend,
-        HttpFrontend, InMemory, Local, ObjectStore, Postgres, Runtime, SeafowlConfig, S3,
+        HttpFrontend, ObjectStoreConfig, Postgres, Runtime, S3Config, SeafowlConfig,
     };
     use crate::config::schema::{Misc, ObjectCacheProperties, Sqlite};
     use crate::object_store::cache::DEFAULT_CACHE_CAPACITY;
+    use object_store_factory::local::LocalConfig;
     use sqlx::sqlite::SqliteJournalMode;
     use std::{collections::HashMap, path::PathBuf};
 
@@ -737,7 +603,7 @@ cache_control = "private, max-age=86400"
 
         assert_eq!(
             config.object_store,
-            Some(ObjectStore::S3(S3 {
+            Some(ObjectStoreConfig::AmazonS3(S3Config {
                 region: None,
                 access_key_id: None,
                 secret_access_key: None,
@@ -754,10 +620,7 @@ cache_control = "private, max-age=86400"
         let config =
             load_config_from_string(TEST_CONFIG_VALID_CLADE, false, None).unwrap();
 
-        assert_eq!(
-            config.object_store,
-            Some(ObjectStore::InMemory(InMemory {}))
-        );
+        assert_eq!(config.object_store, Some(ObjectStoreConfig::Memory));
     }
 
     #[test]
@@ -767,7 +630,7 @@ cache_control = "private, max-age=86400"
         assert_eq!(
             config,
             SeafowlConfig {
-                object_store: Some(ObjectStore::Local(Local {
+                object_store: Some(ObjectStoreConfig::Local(LocalConfig {
                     data_dir: "./seafowl-data".to_string(),
                 })),
                 catalog: Catalog::Postgres(Postgres {
@@ -862,7 +725,7 @@ cache_control = "private, max-age=86400"
         assert_eq!(
             config,
             SeafowlConfig {
-                object_store: Some(ObjectStore::Local(Local {
+                object_store: Some(ObjectStoreConfig::Local(LocalConfig {
                     data_dir: "some_other_path".to_string(),
                 })),
                 catalog: Catalog::Sqlite(Sqlite {
@@ -923,6 +786,7 @@ cache_control = "private, max-age=86400"
     fn test_parse_config_invalid_s3() {
         let error =
             load_config_from_string(TEST_CONFIG_INVALID_S3, false, None).unwrap_err();
+        println!("##### ERROR: {:?}", error.to_string());
         assert!(error.to_string().contains(
             "You need to supply either the region or the endpoint of the S3 object store"
         ))

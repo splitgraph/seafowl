@@ -1,8 +1,9 @@
 use object_store::{local::LocalFileSystem, ObjectStore};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Debug)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct LocalConfig {
     pub data_dir: String,
 }
