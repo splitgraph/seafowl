@@ -62,13 +62,6 @@ pub enum ObjectStoreConfig {
 /// This function returns an error if the specified object store cannot be created,
 /// which might happen due to misconfiguration, invalid credentials, or other issues
 /// specific to the object store's backend.
-///
-/// # Examples
-///
-/// ```
-/// let config = ObjectStoreConfig::AmazonS3(s3_config);
-/// let object_store = build_object_store(&config)?;
-/// ```
 pub fn build_object_store(
     config: &ObjectStoreConfig,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
