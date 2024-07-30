@@ -21,14 +21,10 @@ use url::Url;
 use crate::context::SeafowlContext;
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
+use crate::frontend::flight::sync::SyncResult;
 
 pub const SYNC_COMMIT_INFO: &str = "sync_commit_info";
 // Denoted the last sequence number that was fully committed
-pub const SYNC_COMMIT_FULL_SEQUENCE: &str = "sequence";
-// Denotes the last origin that was fully committed
-pub const SYNC_COMMIT_FULL_ORIGIN: &str = "origin";
-// Denotes whether there have been any commits past the last sequence/origin that was fully committed
-pub const SYNC_COMMIT_NEW_SEQUENCE: &str = "new_sequence";
 pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
 
 lazy_static! {
@@ -141,7 +137,7 @@ impl SeafowlFlightHandler {
         cmd: DataSyncCommand,
         sync_schema: Option<SyncSchema>,
         batches: Vec<RecordBatch>,
-    ) -> Result<DataSyncResult> {
+    ) -> SyncResult<DataSyncResult> {
         let log_store = match cmd.store {
             None => self.context.internal_object_store.get_log_store(&cmd.path),
             Some(store_loc) => {

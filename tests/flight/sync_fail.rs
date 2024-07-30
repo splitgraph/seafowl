@@ -35,8 +35,7 @@ async fn test_sync_errors() -> std::result::Result<(), Box<dyn std::error::Error
         store: None,
         column_descriptors: vec![],
         origin: "1".to_string(),
-        sequence_number: 42,
-        last: true,
+        sequence_number: Some(42),
     };
 
     // No column descriptors provided

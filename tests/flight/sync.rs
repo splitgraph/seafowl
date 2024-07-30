@@ -111,8 +111,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         store: None,
         column_descriptors,
         origin: "42".to_string(),
-        sequence_number: 1234,
-        last: false,
+        sequence_number: None,
     };
 
     // Changes are still in memory
@@ -167,7 +166,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         cd1.clone(),
         cd6.clone(),
     ];
-    cmd.last = true;
+    cmd.sequence_number = Some(1234);
 
     // Update row 1 such that we omit the float column and so it should inherit the old value from
     // the previous sync.
@@ -260,8 +259,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     // Sync #3; this will be held in memory
     //
 
-    cmd.sequence_number = 5600;
-    cmd.last = true;
+    cmd.sequence_number = Some(5600);
     cmd.column_descriptors = vec![
         cd5.clone(),
         cd4.clone(),
@@ -303,8 +301,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     // Sync #4
     //
 
-    cmd.sequence_number = 78910;
-    cmd.last = false;
+    cmd.sequence_number = None;
     cmd.column_descriptors = vec![
         cd1.clone(),
         cd2.clone(),
@@ -383,7 +380,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     // Sync #5 to flush the previous 2 syncs due to max size threshold
     //
 
-    cmd.last = true;
+    cmd.sequence_number = Some(78910);
     cmd.column_descriptors = vec![
         cd2.clone(),
         cd1.clone(),
