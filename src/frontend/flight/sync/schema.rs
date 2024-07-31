@@ -13,7 +13,7 @@ impl SyncSchema {
         column_descriptors: Vec<ColumnDescriptor>,
         schema: SchemaRef,
     ) -> Result<Self, SyncError> {
-        if column_descriptors.len() != schema.all_fields().len() {
+        if column_descriptors.len() != schema.flattened_fields().len() {
             return Err(SyncError::SchemaError {
                 reason: "Column descriptors do not match the schema".to_string(),
             });

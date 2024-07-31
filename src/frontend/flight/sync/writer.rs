@@ -520,7 +520,7 @@ impl SeafowlDataSyncWriter {
         // Normalize the schema, by ordering columns according to the full table schema and
         // projecting the sync data accordingly.
         let projection = full_schema
-            .all_fields()
+            .flattened_fields()
             .iter()
             .map(|f| {
                 let name = f.name();
