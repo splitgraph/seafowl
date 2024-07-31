@@ -3,7 +3,7 @@ use arrow_schema::{DataType, FieldRef, SchemaRef};
 use clade::sync::{ColumnDescriptor, ColumnRole};
 use std::collections::HashSet;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SyncSchema {
     columns: Vec<SyncColumn>,
 }
@@ -117,7 +117,7 @@ impl SyncSchema {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SyncColumn {
     role: ColumnRole,
     name: String,

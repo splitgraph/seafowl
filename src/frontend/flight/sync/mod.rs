@@ -39,7 +39,7 @@ pub enum SyncError {
 
 pub type SyncResult<T, E = SyncError> = Result<T, E>;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub(super) struct SyncCommitInfo {
     // Internal version number
     version: u8,
@@ -50,6 +50,25 @@ pub(super) struct SyncCommitInfo {
     // Flag denoting whether we've started flushing changes from a new (in-complete)
     // transaction
     new_tx: bool,
+}
+
+impl SyncCommitInfo {
+    pub(super) fn new(
+        origin: impl Into<Origin>,
+        sequence: impl Into<SequenceNumber>,
+    ) -> Self {
+        SyncCommitInfo {
+            version: 0,
+            origin: origin.into(),
+            sequence: sequence.into(),
+            new_tx: false,
+        }
+    }
+
+    pub(super) fn with_new_tx(mut self, new_tx: bool) -> Self {
+        self.new_tx = new_tx;
+        self
+    }
 }
 
 pub async fn flush_task(

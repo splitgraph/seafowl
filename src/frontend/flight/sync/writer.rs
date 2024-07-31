@@ -122,7 +122,7 @@ pub(super) struct DataSyncCollection {
 }
 
 // An object corresponding to a single `do_put` call.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct DataSyncItem {
     // The (internal) id of the transaction that this change belongs to; for now it corresponds to
     // a random v4 UUID generated for the first message received in this transaction.
@@ -571,21 +571,15 @@ impl SeafowlDataSyncWriter {
                     ..
                 }) = self.txs.get(&sync.tx_id)
                 {
-                    Some(SyncCommitInfo {
-                        version: 1,
-                        origin: origin.clone(),
-                        sequence: *seq,
-                        new_tx,
-                    })
+                    Some(SyncCommitInfo::new(origin, *seq).with_new_tx(new_tx))
                 } else {
                     None
                 }
             })
-            .or(last_sync_commit.clone().map(|mut sync_commit| {
+            .or(last_sync_commit.clone().map(|sync_commit| {
                 // Inherit the previous full commit identifiers, but update the fact that we're now
                 // starting a new transaction too.
-                sync_commit.new_tx = new_tx;
-                sync_commit
+                sync_commit.with_new_tx(new_tx)
             }));
 
         (syncs, new_sync_commit)
@@ -807,6 +801,7 @@ mod tests {
     use rstest::rstest;
     use std::collections::HashMap;
 
+    use crate::frontend::flight::sync::SyncCommitInfo;
     use std::sync::Arc;
 
     fn sync_schema() -> (SchemaRef, SyncSchema) {
@@ -853,7 +848,7 @@ mod tests {
     const T3: &str = "table_3";
     static A: &str = "origin-A"; // first origin
     static B: &str = "origin-B"; // second origin
-    static FLUSH: (&str, &str, Option<i64>) = ("__flush", "-1", None);
+    static FLUSH: (&str, &str, Option<i64>) = ("__flush", "", None);
 
     #[rstest]
     #[case::basic(
@@ -984,5 +979,99 @@ mod tests {
         assert!(sync_mgr.txs.is_empty());
         assert!(sync_mgr.syncs.is_empty());
         assert_eq!(sync_mgr.size, 0);
+    }
+
+    #[rstest]
+    #[case::no_old_no_new(
+        &[(T1, A, None), (T2, A, None)],
+        None,
+        0,
+        None,
+    )]
+    #[case::no_old_some_new(
+        &[(T1, A, None), (T2, A, None), (T3, A, Some(10))],
+        None,
+        0,
+        Some(SyncCommitInfo::new(A, 10u64)),
+    )]
+    #[case::some_old_new(
+        &[(T1, A, None), (T2, A, None)],
+        Some(SyncCommitInfo::new(A, 5u64)),
+        0,
+        Some(SyncCommitInfo::new(A, 5u64).with_new_tx(true)),
+    )]
+    #[case::some_old_full_tx(
+        &[(T1, A, None), (T2, A, None), (T3, A, Some(10))],
+        Some(SyncCommitInfo::new(A, 5u64)),
+        0,
+        Some(SyncCommitInfo::new(A, 10u64)),
+    )]
+    #[case::some_old_full_and_new_tx(
+        &[(T1, A, None), (T2, A, None), (T3, A, Some(10)), (T1, A, None)],
+        Some(SyncCommitInfo::new(A, 5u64)),
+        0,
+        Some(SyncCommitInfo::new(A, 10u64).with_new_tx(true)),
+    )]
+    #[case::some_old_full_tx_skip(
+        &[(T1, A, None), (T2, A, None), (T3, A, Some(10))],
+        Some(SyncCommitInfo::new(A, 10u64)),
+        1,
+        Some(SyncCommitInfo::new(A, 10u64)),
+    )]
+    #[case::some_old_full_and_new_tx_skip(
+        &[(T1, A, None), (T2, A, None), (T3, A, Some(10)), (T1, A, None)],
+        Some(SyncCommitInfo::new(A, 10u64)),
+        1,
+        Some(SyncCommitInfo::new(A, 10u64).with_new_tx(true)),
+    )]
+    #[case::some_old_multiple_txs(
+        &[(T1, A, None), (T2, A, None), (T3, A, Some(10)),
+            (T1, B, None), (T2, B, None), (T3, B, Some(20)),
+            (T1, A, None), (T2, A, None), (T3, A, Some(30))],
+        Some(SyncCommitInfo::new(A, 5u64)),
+        0,
+        Some(SyncCommitInfo::new(A, 30u64)),
+    )]
+    #[case::some_old_multiple_txs_skip(
+        &[(T1, A, None), (T2, A, None), (T3, A, Some(10)),
+            (T1, B, None), (T2, B, None), (T3, B, Some(20)),
+            (T1, A, None), (T2, A, None), (T3, A, Some(30))],
+        Some(SyncCommitInfo::new(B, 20u64)),
+        2,
+        Some(SyncCommitInfo::new(A, 30u64)),
+    )]
+    #[tokio::test]
+    async fn test_sync_skipping(
+        #[case] syncs: &[(&str, &str, Option<i64>)],
+        #[case] last_sync_commit: Option<SyncCommitInfo>,
+        #[case] skip_ind: usize,
+        #[case] expected_sync_commit: Option<SyncCommitInfo>,
+    ) {
+        let ctx = Arc::new(in_memory_context().await);
+        let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
+        let (arrow_schema, sync_schema) = sync_schema();
+
+        // Enqueue all syncs
+        for (table_name, origin, sequence) in syncs {
+            let log_store = ctx.internal_object_store.get_log_store(table_name);
+
+            sync_mgr
+                .enqueue_sync(
+                    log_store,
+                    sequence.map(|seq| seq as SequenceNumber),
+                    origin.to_string(),
+                    sync_schema.clone(),
+                    random_batches(arrow_schema.clone()),
+                )
+                .unwrap();
+        }
+
+        let in_syncs = &sync_mgr.syncs.first().unwrap().1.syncs;
+        let (out_syncs, new_sync_commit) =
+            sync_mgr.skip_syncs(&last_sync_commit, in_syncs);
+
+        assert_eq!(expected_sync_commit, new_sync_commit);
+        assert_eq!(in_syncs[skip_ind..].len(), out_syncs.len());
+        assert_eq!(in_syncs[skip_ind..].to_vec(), out_syncs.to_vec());
     }
 }
