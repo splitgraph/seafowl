@@ -19,7 +19,6 @@ use datafusion::datasource::DefaultTableSource;
 
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::FileType;
 use datafusion_expr::logical_plan::{LogicalPlan, TableScan};
 use deltalake::parquet::data_type::AsBytes;
 use deltalake::DeltaTable;
@@ -441,14 +440,13 @@ pub async fn upload(
         return Err(ApiError::UploadMissingFile);
     }
 
-    let file_type = match filename
+    let file_type = filename
         .split('.')
         .last()
-        .ok_or_else(|| ApiError::UploadMissingFilenameExtension(filename.clone()))?
-    {
-        "csv" => FileType::CSV,
-        "parquet" => FileType::PARQUET,
-        _ => return Err(ApiError::UploadUnsupportedFileFormat(filename)),
+        .ok_or_else(|| ApiError::UploadMissingFilenameExtension(filename.clone()))?;
+
+    if file_type != "csv" && file_type != "parquet" {
+        return Err(ApiError::UploadUnsupportedFileFormat(filename));
     };
 
     // Execute the plan and persist objects as well as table/partition metadata

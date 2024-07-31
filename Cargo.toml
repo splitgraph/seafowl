@@ -2,21 +2,21 @@
 members = ["clade", "object_store_factory"]
 
 [workspace.dependencies]
-arrow = { version = "52.0.0", features = ["test_utils"] }
-arrow-buffer = "52.0.0"
-arrow-csv = "52.0.0"
-arrow-flight = "52.0.0"
+arrow = { version = "52.1.0", features = ["test_utils"] }
+arrow-buffer = "52.1.0"
+arrow-csv = "52.1.0"
+arrow-flight = "52.1.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "52.0.0"
-arrow-row = "52.0.0"
-arrow-schema = "52.0.0"
+arrow-integration-test = "52.1.0"
+arrow-row = "52.1.0"
+arrow-schema = "52.1.0"
 async-trait = "0.1.64"
 
-datafusion = "39.0.0"
-datafusion-common = "39.0.0"
-datafusion-expr = "39.0.0"
+datafusion = "40.0.0"
+datafusion-common = "40.0.0"
+datafusion-expr = "40.0.0"
 
 futures = "0.3"
 
@@ -34,16 +34,16 @@ url = "2.5"
 
 
 [patch.crates-io]
-# Pick up backport of https://github.com/apache/arrow-datafusion/pull/11386
-datafusion = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
-datafusion-common = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
-datafusion-execution = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
-datafusion-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
-datafusion-optimizer = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
-datafusion-physical-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
-datafusion-physical-plan = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
-datafusion-proto = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
-datafusion-sql = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11386" }
+# Pick up fix for https://github.com/apache/arrow-datafusion/pull/11386
+datafusion = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
+datafusion-common = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
+datafusion-execution = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
+datafusion-expr = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
+datafusion-optimizer = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
+datafusion-physical-plan = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
+datafusion-proto = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
+datafusion-sql = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
 
 [package]
 name = "seafowl"
@@ -93,8 +93,8 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.13.3"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-39-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-39-upgrade", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-40-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-40-upgrade", optional = true }
 
 dashmap = "5.4.0"
 
@@ -104,7 +104,7 @@ datafusion-expr = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "d9605eafdf03d346277f167ce5cf3886db0e1bc5", features = ["datafusion"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "e75a0b49b40f35ed361444bbea0e5720f359d732", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"

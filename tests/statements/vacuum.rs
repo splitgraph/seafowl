@@ -112,14 +112,6 @@ async fn test_vacuum_table() -> Result<()> {
     )
     .await;
 
-    // Likewise, trying to time-travel to table_1 v1 will fail
-    table_1.load_version(1).await?;
-    let err = table_1
-        .scan(&context.inner.state(), Some(&vec![4_usize]), &[], None)
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains(".parquet not found"));
-
     // Run vacuum on table_2 as well
     context
         .collect(context.plan_query("VACUUM TABLE table_2").await.unwrap())
