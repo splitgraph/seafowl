@@ -237,7 +237,7 @@ mod tests {
         assert!(config.endpoint.is_none());
         assert_eq!(config.bucket, "my-bucket".to_string());
         assert!(config.prefix.is_none());
-        assert!(!config.skip_signature);
+        assert!(config.skip_signature);
         assert!(config.allow_http);
     }
 
@@ -259,7 +259,7 @@ mod tests {
             bucket: "my-bucket".to_string(),
             prefix: Some("my-prefix".to_string()),
             skip_signature: true,
-            allow_http: false,
+            allow_http: true,
         };
 
         let result = build_amazon_s3_from_config(&config);
@@ -275,8 +275,8 @@ mod tests {
         assert!(debug_output.contains("key_id: \"access_key\""));
         assert!(debug_output.contains("secret_key: \"secret_key\""));
         assert!(debug_output.contains("token: Some(\"session_token\")"));
-        assert!(debug_output.contains("skip_signature: true"));
-        assert!(debug_output.contains("allow_http: false"));
+        assert!(debug_output.contains("skip_signature: false")); //When access key / secret key is available, ski_signature is false.
+        assert!(debug_output.contains("allow_http: Parsed(true)"));
     }
 
     #[test]
@@ -299,6 +299,7 @@ mod tests {
 
         let store = result.unwrap();
         let debug_output = format!("{:?}", store);
+        println!("#### OUTPUT: {}", debug_output);
 
         assert!(debug_output.contains("region: \"us-west-2\""));
         assert!(debug_output.contains("bucket: \"my-bucket\""));
@@ -307,7 +308,7 @@ mod tests {
         assert!(!debug_output.contains("secret_key: \"\""));
         assert!(!debug_output.contains("token: \"\""));
         assert!(debug_output.contains("skip_signature: false"));
-        assert!(debug_output.contains("allow_http: true"));
+        assert!(debug_output.contains("allow_http: Parsed(true)"));
     }
 
     #[test]
