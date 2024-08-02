@@ -243,6 +243,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     // Check empty payload shows the first flush
     //
 
+    cmd.sequence_number = None;
     cmd.column_descriptors = vec![];
     let sync_result =
         do_put_sync(cmd.clone(), RecordBatch::new_empty(schema), &mut client).await?;

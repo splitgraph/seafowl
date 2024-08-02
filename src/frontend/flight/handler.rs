@@ -162,7 +162,7 @@ impl SeafowlFlightHandler {
             .iter()
             .fold(0, |rows, batch| rows + batch.num_rows());
 
-        if num_rows == 0 {
+        if num_rows == 0 && cmd.sequence_number.is_none() {
             // Get the current volatile and durable sequence numbers
             debug!("Received empty batches, returning current sequence numbers");
             let (mem_seq, dur_seq) =
