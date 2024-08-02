@@ -1851,7 +1851,7 @@ checksum = "e8566979429cf69b49a5c740c60791108e86440e8be149bbea4fe54d2c32d6e2"
 [[package]]
 name = "datafusion"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -1868,12 +1868,12 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions 40.0.0 (git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e)",
- "datafusion-functions-aggregate 40.0.0 (git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e)",
- "datafusion-functions-array 40.0.0 (git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e)",
+ "datafusion-functions 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
+ "datafusion-functions-aggregate 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
+ "datafusion-functions-array 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
  "datafusion-optimizer",
  "datafusion-physical-expr",
- "datafusion-physical-expr-common 40.0.0 (git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e)",
+ "datafusion-physical-expr-common 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
  "datafusion-physical-plan",
  "datafusion-sql",
  "flate2",
@@ -1904,7 +1904,7 @@ dependencies = [
 [[package]]
 name = "datafusion-common"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -1925,7 +1925,7 @@ dependencies = [
 [[package]]
 name = "datafusion-common-runtime"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "tokio",
 ]
@@ -1933,7 +1933,7 @@ dependencies = [
 [[package]]
 name = "datafusion-execution"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "arrow",
  "chrono",
@@ -1953,7 +1953,7 @@ dependencies = [
 [[package]]
 name = "datafusion-expr"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -1993,7 +1993,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "arrow",
  "base64 0.22.1",
@@ -2036,7 +2036,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-aggregate"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2044,7 +2044,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-physical-expr-common 40.0.0 (git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e)",
+ "datafusion-physical-expr-common 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
  "log",
  "paste",
  "sqlparser 0.47.0",
@@ -2074,7 +2074,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-array"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -2084,8 +2084,8 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions 40.0.0 (git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e)",
- "datafusion-functions-aggregate 40.0.0 (git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e)",
+ "datafusion-functions 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
+ "datafusion-functions-aggregate 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
  "itertools 0.12.1",
  "log",
  "paste",
@@ -2094,7 +2094,7 @@ dependencies = [
 [[package]]
 name = "datafusion-optimizer"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2113,7 +2113,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-expr"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2127,7 +2127,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-physical-expr-common 40.0.0 (git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e)",
+ "datafusion-physical-expr-common 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
  "half",
  "hashbrown 0.14.5",
  "hex",
@@ -2156,7 +2156,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-expr-common"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2169,7 +2169,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-plan"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2183,9 +2183,9 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions-aggregate 40.0.0 (git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e)",
+ "datafusion-functions-aggregate 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
  "datafusion-physical-expr",
- "datafusion-physical-expr-common 40.0.0 (git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e)",
+ "datafusion-physical-expr-common 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
  "futures",
  "half",
  "hashbrown 0.14.5",
@@ -2202,7 +2202,7 @@ dependencies = [
 [[package]]
 name = "datafusion-proto"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "arrow",
  "chrono",
@@ -2217,7 +2217,7 @@ dependencies = [
 [[package]]
 name = "datafusion-proto-common"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "arrow",
  "chrono",
@@ -2247,7 +2247,7 @@ dependencies = [
 [[package]]
 name = "datafusion-sql"
 version = "40.0.0"
-source = "git+https://github.com/apache/datafusion?rev=d314ced8090cb599fd7808d7df41699e46ac956e#d314ced8090cb599fd7808d7df41699e46ac956e"
+source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
 dependencies = [
  "arrow",
  "arrow-array",
