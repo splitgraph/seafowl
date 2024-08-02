@@ -333,6 +333,8 @@ impl SeafowlDataSyncWriter {
             }
         };
 
+        info!("Flushing {} syncs for url {url}", entry.syncs.len());
+
         let start = Instant::now();
         let insertion_time = entry.insertion_time;
         let rows = entry.rows;
@@ -384,7 +386,14 @@ impl SeafowlDataSyncWriter {
             vec![qualifier.clone()],
         )?
         .build()?;
-        let mut sync_df = DataFrame::new(self.context.inner.state(), base_plan);
+
+        let state = self
+            .context
+            .inner
+            .state()
+            .with_analyzer_rules(vec![])
+            .with_optimizer_rules(vec![]);
+        let mut sync_df = DataFrame::new(state, base_plan);
 
         for sync in &entry.syncs {
             sync_df = self.apply_sync(

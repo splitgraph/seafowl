@@ -34,16 +34,16 @@ url = "2.5"
 
 
 [patch.crates-io]
-# Pick up fix for https://github.com/apache/arrow-datafusion/pull/11386
-datafusion = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
-datafusion-common = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
-datafusion-execution = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
-datafusion-expr = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
-datafusion-optimizer = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
-datafusion-physical-expr = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
-datafusion-physical-plan = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
-datafusion-proto = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
-datafusion-sql = { git = "https://github.com/apache/datafusion", rev = "d314ced8090cb599fd7808d7df41699e46ac956e" }
+# Pick up fix for https://github.com/apache/arrow-datafusion/pull/11386 and backport for https://github.com/apache/datafusion/pull/11765
+datafusion = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
+datafusion-common = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
+datafusion-execution = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
+datafusion-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
+datafusion-optimizer = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
+datafusion-physical-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
+datafusion-physical-plan = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
+datafusion-proto = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
+datafusion-sql = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
 
 [package]
 name = "seafowl"
