@@ -299,7 +299,6 @@ mod tests {
 
         let store = result.unwrap();
         let debug_output = format!("{:?}", store);
-        println!("#### OUTPUT: {}", debug_output);
 
         assert!(debug_output.contains("region: \"us-west-2\""));
         assert!(debug_output.contains("bucket: \"my-bucket\""));
