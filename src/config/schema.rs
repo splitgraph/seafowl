@@ -612,6 +612,8 @@ cache_control = "private, max-age=86400"
                 endpoint: Some("https://s3.amazonaws.com:9000".to_string()),
                 bucket: "seafowl".to_string(),
                 prefix: None,
+                skip_signature: false,
+                allow_http: false,
             }))
         );
     }

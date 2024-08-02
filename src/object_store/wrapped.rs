@@ -296,6 +296,8 @@ mod tests {
             bucket: bucket.to_string(),
             prefix: prefix.map(|p| p.to_string()),
             endpoint: endpoint.clone(),
+            skip_signature: true,
+            allow_http: true,
         });
         // In principle for this test we could use any object store since we only exercise the
         // prefix/log store uri logic

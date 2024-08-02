@@ -20,6 +20,28 @@ pub struct S3Config {
     pub endpoint: Option<String>,
     pub bucket: String,
     pub prefix: Option<String>,
+
+    #[serde(default)]
+    pub skip_signature: bool,
+
+    #[serde(default)]
+    pub allow_http: bool,
+}
+
+impl Default for S3Config {
+    fn default() -> Self {
+        S3Config {
+            region: None,
+            access_key_id: None,
+            secret_access_key: None,
+            session_token: None,
+            endpoint: None,
+            bucket: "".to_string(),
+            prefix: None,
+            skip_signature: true,
+            allow_http: true,
+        }
+    }
 }
 
 impl S3Config {
@@ -34,6 +56,12 @@ impl S3Config {
             endpoint: map.get("endpoint").map(|s| s.to_string()),
             bucket: map.get("bucket").unwrap().clone(),
             prefix: map.get("prefix").map(|s| s.to_string()),
+            skip_signature: map
+                .get("skip_signature")
+                .map_or(true, |s| s.parse().unwrap_or(true)),
+            allow_http: map
+                .get("allow_http")
+                .map_or(true, |s| s.parse().unwrap_or(true)),
         })
     }
 
@@ -49,6 +77,12 @@ impl S3Config {
             endpoint: map.remove("format.endpoint"),
             bucket,
             prefix: None,
+            skip_signature: map
+                .remove("format.skip_signature")
+                .map_or(true, |s| s.parse().unwrap_or(true)),
+            allow_http: map
+                .remove("format.allow_http")
+                .map_or(true, |s| s.parse().unwrap_or(true)),
         })
     }
 }
@@ -59,7 +93,7 @@ pub fn build_amazon_s3_from_config(
     let mut builder = AmazonS3Builder::new()
         .with_region(config.region.clone().unwrap_or_default())
         .with_bucket_name(config.bucket.clone())
-        .with_allow_http(true);
+        .with_allow_http(config.allow_http);
 
     if let Some(endpoint) = &config.endpoint {
         builder = builder.with_endpoint(endpoint.clone());
@@ -76,7 +110,7 @@ pub fn build_amazon_s3_from_config(
             builder = builder.with_token(token.clone())
         }
     } else {
-        builder = builder.with_skip_signature(true)
+        builder = builder.with_skip_signature(config.skip_signature)
     }
 
     let store = builder.build()?;
@@ -172,6 +206,8 @@ mod tests {
         map.insert("endpoint".to_string(), "http://localhost:9000".to_string());
         map.insert("bucket".to_string(), "my-bucket".to_string());
         map.insert("prefix".to_string(), "my-prefix".to_string());
+        map.insert("skip_signature".to_string(), "true".to_string());
+        map.insert("allow_http".to_string(), "false".to_string());
 
         let config =
             S3Config::from_hashmap(&map).expect("Failed to create config from hashmap");
@@ -182,6 +218,8 @@ mod tests {
         assert_eq!(config.endpoint, Some("http://localhost:9000".to_string()));
         assert_eq!(config.bucket, "my-bucket".to_string());
         assert_eq!(config.prefix, Some("my-prefix".to_string()));
+        assert!(config.skip_signature);
+        assert!(!config.allow_http);
     }
 
     #[test]
@@ -199,6 +237,8 @@ mod tests {
         assert!(config.endpoint.is_none());
         assert_eq!(config.bucket, "my-bucket".to_string());
         assert!(config.prefix.is_none());
+        assert!(!config.skip_signature);
+        assert!(config.allow_http);
     }
 
     #[test]
@@ -218,6 +258,8 @@ mod tests {
             endpoint: Some("http://localhost:9000".to_string()),
             bucket: "my-bucket".to_string(),
             prefix: Some("my-prefix".to_string()),
+            skip_signature: true,
+            allow_http: false,
         };
 
         let result = build_amazon_s3_from_config(&config);
@@ -233,6 +275,8 @@ mod tests {
         assert!(debug_output.contains("key_id: \"access_key\""));
         assert!(debug_output.contains("secret_key: \"secret_key\""));
         assert!(debug_output.contains("token: Some(\"session_token\")"));
+        assert!(debug_output.contains("skip_signature: true"));
+        assert!(debug_output.contains("allow_http: false"));
     }
 
     #[test]
@@ -245,6 +289,8 @@ mod tests {
             endpoint: None,
             bucket: "my-bucket".to_string(),
             prefix: None,
+            skip_signature: false,
+            allow_http: true,
         };
 
         let result = build_amazon_s3_from_config(&config);
@@ -260,6 +306,8 @@ mod tests {
         assert!(!debug_output.contains("key_id: \"\""));
         assert!(!debug_output.contains("secret_key: \"\""));
         assert!(!debug_output.contains("token: \"\""));
+        assert!(debug_output.contains("skip_signature: false"));
+        assert!(debug_output.contains("allow_http: true"));
     }
 
     #[test]
