@@ -7,11 +7,10 @@ use aws::S3Config;
 use google::GCSConfig;
 use local::LocalConfig;
 
-use object_store::parse_url_opts;
-use object_store::prefix::PrefixStore;
-use object_store::ObjectStore;
-use object_store::ObjectStoreScheme;
-use object_store::{local::LocalFileSystem, memory::InMemory};
+use object_store::{
+    local::LocalFileSystem, memory::InMemory, parse_url_opts, prefix::PrefixStore,
+    DynObjectStore, ObjectStore, ObjectStoreScheme,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::warn;
@@ -136,4 +135,13 @@ pub async fn build_object_store_from_opts(
             })
         }
     }
+}
+
+pub struct StorageLocationInfo {
+    // Actual object store for this location
+    pub object_store: Arc<DynObjectStore>,
+
+    // Options used to construct the object store (for gRPC consumers)
+    pub options: HashMap<String, String>,
+    pub url: String,
 }
