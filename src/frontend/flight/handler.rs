@@ -174,7 +174,9 @@ impl SeafowlFlightHandler {
             });
         }
 
-        debug!("Processing data change with {num_rows} rows for url {url}");
+        debug!("Processing data change with {num_rows} rows for url {url} from origin {:?} at position {:?}",
+	       cmd.origin,
+	       cmd.sequence_number);
         match tokio::time::timeout(
             Duration::from_secs(self.context.config.misc.sync_conf.write_lock_timeout_s),
             self.sync_writer.write(),
