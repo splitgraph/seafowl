@@ -298,6 +298,7 @@ mod tests {
     use rand::Rng;
     use std::collections::HashSet;
     use std::sync::Arc;
+    use uuid::Uuid;
 
     #[test]
     fn test_batch_compaction() -> Result<(), Box<dyn std::error::Error>> {
@@ -620,14 +621,12 @@ mod tests {
 
         let expr = construct_qualifier(&[
             DataSyncItem {
-                origin: "0".to_string(),
-                sequence_number: 0,
+                tx_id: Uuid::new_v4(),
                 sync_schema: sync_schema.clone(),
                 batch: batch_1,
             },
             DataSyncItem {
-                origin: "0".to_string(),
-                sequence_number: 0,
+                tx_id: Uuid::new_v4(),
                 sync_schema,
                 batch: batch_2,
             },
