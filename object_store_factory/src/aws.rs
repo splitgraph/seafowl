@@ -45,28 +45,19 @@ impl S3Config {
     pub fn from_hashmap(
         map: &HashMap<String, String>,
     ) -> Result<Self, object_store::Error> {
-        let access_key_id = map.get("access_key_id").map(|s| s.to_string());
-        let secret_access_key = map.get("secret_access_key").map(|s| s.to_string());
-
-        // Determine skip_signature based on the presence of access_key_id and secret_access_key
-        let skip_signature = if access_key_id.is_some() && secret_access_key.is_some() {
-            false
-        } else {
-            map.get("skip_signature")
-                .map(|s| s == "true")
-                .unwrap_or(true)
-        };
-
         Ok(Self {
             region: map.get("region").map(|s| s.to_string()),
-            access_key_id,
-            secret_access_key,
+            access_key_id: map.get("access_key_id").map(|s| s.to_string()),
+            secret_access_key: map.get("secret_access_key").map(|s| s.to_string()),
             session_token: map.get("session_token").map(|s| s.to_string()),
             endpoint: map.get("endpoint").map(|s| s.to_string()),
             bucket: map.get("bucket").unwrap().clone(),
             prefix: map.get("prefix").map(|s| s.to_string()),
-            allow_http: map.get("allow_http").map(|s| s == "true").unwrap_or(false),
-            skip_signature,
+            allow_http: map.get("allow_http").map(|s| s == "true").unwrap_or(true),
+            skip_signature: map
+                .get("skip_signature")
+                .map(|s| s == "true")
+                .unwrap_or(true),
         })
     }
 
@@ -74,22 +65,10 @@ impl S3Config {
         bucket: String,
         map: &mut HashMap<String, String>,
     ) -> Result<Self, object_store::Error> {
-        let access_key_id = map.remove("format.access_key_id");
-        let secret_access_key = map.remove("format.secret_access_key");
-
-        // Determine skip_signature based on the presence of access_key_id and secret_access_key
-        let skip_signature = if access_key_id.is_some() && secret_access_key.is_some() {
-            false
-        } else {
-            map.remove("skip_signature")
-                .map(|s| s == "true")
-                .unwrap_or(true)
-        };
-
         Ok(Self {
             region: map.remove("format.region"),
-            access_key_id,
-            secret_access_key,
+            access_key_id: map.remove("format.access_key_id"),
+            secret_access_key: map.remove("format.secret_access_key"),
             session_token: map.remove("format.session_token"),
             endpoint: map.remove("format.endpoint"),
             bucket,
@@ -98,7 +77,10 @@ impl S3Config {
                 .remove("allow_http")
                 .map(|s| s == "true")
                 .unwrap_or(true),
-            skip_signature,
+            skip_signature: map
+                .remove("skip_signature")
+                .map(|s| s == "true")
+                .unwrap_or(true),
         })
     }
 
@@ -162,6 +144,8 @@ impl S3Config {
 pub fn build_amazon_s3_from_config(
     config: &S3Config,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+    assert!(config.allow_http, "allow_http must be true for S3");
+
     let mut builder = AmazonS3Builder::new()
         .with_region(config.region.clone().unwrap_or_default())
         .with_bucket_name(config.bucket.clone())
@@ -182,6 +166,10 @@ pub fn build_amazon_s3_from_config(
             builder = builder.with_token(token.clone())
         }
     } else {
+        assert!(
+            config.skip_signature,
+            "Access key and secret key must be provided if skip_signature is false"
+        );
         builder = builder.with_skip_signature(config.skip_signature)
     }
 
@@ -319,73 +307,6 @@ mod tests {
     fn test_config_from_hashmap_without_required_fields() {
         let map = HashMap::new();
         S3Config::from_hashmap(&map).unwrap(); // Missing "region" and "bucket"
-    }
-
-    #[test]
-    fn test_from_hashmap_with_keys() {
-        let mut map = HashMap::new();
-        map.insert("region".to_string(), "us-west-1".to_string());
-        map.insert("access_key_id".to_string(), "AKIA...".to_string());
-        map.insert("secret_access_key".to_string(), "SECRET...".to_string());
-        map.insert("bucket".to_string(), "my-bucket".to_string());
-
-        let config = S3Config::from_hashmap(&map).unwrap();
-
-        assert_eq!(config.region, Some("us-west-1".to_string()));
-        assert_eq!(config.access_key_id, Some("AKIA...".to_string()));
-        assert_eq!(config.secret_access_key, Some("SECRET...".to_string()));
-        assert_eq!(config.bucket, "my-bucket".to_string());
-        assert!(!config.skip_signature);
-    }
-
-    #[test]
-    fn test_from_hashmap_without_keys() {
-        let mut map = HashMap::new();
-        map.insert("region".to_string(), "us-west-1".to_string());
-        map.insert("bucket".to_string(), "my-bucket".to_string());
-
-        let config = S3Config::from_hashmap(&map).unwrap();
-
-        assert_eq!(config.region, Some("us-west-1".to_string()));
-        assert_eq!(config.access_key_id, None);
-        assert_eq!(config.secret_access_key, None);
-        assert_eq!(config.bucket, "my-bucket".to_string());
-        assert!(config.skip_signature);
-    }
-
-    #[test]
-    fn test_from_bucket_and_options_with_keys() {
-        let mut map = HashMap::new();
-        map.insert("format.region".to_string(), "us-west-1".to_string());
-        map.insert("format.access_key_id".to_string(), "AKIA...".to_string());
-        map.insert(
-            "format.secret_access_key".to_string(),
-            "SECRET...".to_string(),
-        );
-
-        let config =
-            S3Config::from_bucket_and_options("my-bucket".to_string(), &mut map).unwrap();
-
-        assert_eq!(config.region, Some("us-west-1".to_string()));
-        assert_eq!(config.access_key_id, Some("AKIA...".to_string()));
-        assert_eq!(config.secret_access_key, Some("SECRET...".to_string()));
-        assert_eq!(config.bucket, "my-bucket".to_string());
-        assert!(!config.skip_signature);
-    }
-
-    #[test]
-    fn test_from_bucket_and_options_without_keys() {
-        let mut map = HashMap::new();
-        map.insert("format.region".to_string(), "us-west-1".to_string());
-
-        let config =
-            S3Config::from_bucket_and_options("my-bucket".to_string(), &mut map).unwrap();
-
-        assert_eq!(config.region, Some("us-west-1".to_string()));
-        assert_eq!(config.access_key_id, None);
-        assert_eq!(config.secret_access_key, None);
-        assert_eq!(config.bucket, "my-bucket".to_string());
-        assert!(config.skip_signature);
     }
 
     #[test]
