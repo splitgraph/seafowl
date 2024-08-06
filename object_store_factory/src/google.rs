@@ -117,7 +117,10 @@ pub fn add_google_cloud_storage_environment_variables(
 }
 
 pub fn get_base_url(config: &GCSConfig) -> Option<Path> {
-    config.prefix.as_ref().map(|prefix| Path::from(prefix.as_ref()))
+    config
+        .prefix
+        .as_ref()
+        .map(|prefix| Path::from(prefix.as_ref()))
 }
 
 #[cfg(test)]
