@@ -205,10 +205,7 @@ async fn detect_region(url: &Url) -> Result<String, object_store::Error> {
 }
 
 pub fn get_base_url(config: &S3Config) -> Option<Path> {
-    match &config.prefix {
-        Some(prefix) => Some(Path::from(prefix.as_ref())),
-        None => None,
-    }
+    config.prefix.as_ref().map(|prefix| Path::from(prefix.as_ref()))
 }
 
 #[cfg(test)]
