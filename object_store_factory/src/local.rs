@@ -16,6 +16,12 @@ impl LocalConfig {
             data_dir: map.get("data_dir").unwrap().clone(),
         })
     }
+
+    pub fn to_hashmap(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        map.insert("data_dir".to_string(), self.data_dir.clone());
+        map
+    }
 }
 
 pub fn build_local_storage(
@@ -72,5 +78,16 @@ mod tests {
 
         let result = build_local_storage(&config);
         assert!(result.is_err(), "Expected Err due to invalid path, got Ok");
+    }
+
+    #[test]
+    fn test_to_hashmap() {
+        let local_config = LocalConfig {
+            data_dir: "path/to/data".to_string(),
+        };
+
+        let hashmap = local_config.to_hashmap();
+
+        assert_eq!(hashmap.get("data_dir"), Some(&"path/to/data".to_string()));
     }
 }

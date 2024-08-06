@@ -1,7 +1,6 @@
-use object_store::ClientConfigKey;
 use object_store::{
-    aws::resolve_bucket_region, aws::AmazonS3Builder, aws::AmazonS3ConfigKey,
-    ClientOptions, ObjectStore,
+    aws::resolve_bucket_region, aws::AmazonS3Builder, aws::AmazonS3ConfigKey, path::Path,
+    ClientConfigKey, ClientOptions, ObjectStore,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -20,6 +19,8 @@ pub struct S3Config {
     pub endpoint: Option<String>,
     pub bucket: String,
     pub prefix: Option<String>,
+    // pub allow_http: bool,
+    // pub skip_signature: bool,
 }
 
 impl S3Config {
@@ -50,6 +51,52 @@ impl S3Config {
             bucket,
             prefix: None,
         })
+    }
+
+    pub fn to_hashmap(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        if let Some(region) = &self.region {
+            map.insert(
+                AmazonS3ConfigKey::Region.as_ref().to_string(),
+                region.clone(),
+            );
+        }
+        if let Some(access_key_id) = &self.access_key_id {
+            map.insert(
+                AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
+                access_key_id.clone(),
+            );
+        }
+        if let Some(secret_access_key) = &self.secret_access_key {
+            map.insert(
+                AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
+                secret_access_key.clone(),
+            );
+        }
+        if let Some(session_token) = &self.session_token {
+            map.insert(
+                AmazonS3ConfigKey::Token.as_ref().to_string(),
+                session_token.clone(),
+            );
+        }
+        if let Some(endpoint) = &self.endpoint {
+            map.insert(
+                AmazonS3ConfigKey::Endpoint.as_ref().to_string(),
+                endpoint.clone(),
+            );
+        }
+        map.insert(
+            AmazonS3ConfigKey::Bucket.as_ref().to_string(),
+            self.bucket.clone(),
+        );
+        if let Some(prefix) = &self.prefix {
+            map.insert("prefix".to_string(), prefix.clone());
+        }
+        map
+    }
+
+    pub fn bucket_to_url(&self) -> String {
+        format!("s3://{}", &self.bucket)
     }
 }
 
@@ -155,6 +202,13 @@ async fn detect_region(url: &Url) -> Result<String, object_store::Error> {
     info!("Using autodetected region {} for bucket {}", region, bucket);
 
     Ok(region)
+}
+
+pub fn get_base_url(config: &S3Config) -> Option<Path> {
+    match &config.prefix {
+        Some(prefix) => Some(Path::from(prefix.as_ref())),
+        None => None,
+    }
 }
 
 #[cfg(test)]
@@ -332,5 +386,141 @@ mod tests {
 
         let mapped_keys = result.unwrap();
         assert!(mapped_keys.is_empty());
+    }
+
+    #[test]
+    fn test_get_base_url_with_prefix() {
+        let s3_config = S3Config {
+            region: Some("us-west-1".to_string()),
+            access_key_id: Some("ACCESS_KEY".to_string()),
+            secret_access_key: Some("SECRET_KEY".to_string()),
+            session_token: None,
+            endpoint: Some("https://s3.amazonaws.com".to_string()),
+            bucket: "my_bucket".to_string(),
+            prefix: Some("my_prefix".to_string()),
+        };
+
+        let base_url = get_base_url(&s3_config);
+        assert!(base_url.is_some());
+        assert_eq!(base_url.unwrap(), Path::from("my_prefix"));
+    }
+
+    #[test]
+    fn test_get_base_url_without_prefix() {
+        let s3_config = S3Config {
+            region: Some("us-west-1".to_string()),
+            access_key_id: Some("ACCESS_KEY".to_string()),
+            secret_access_key: Some("SECRET_KEY".to_string()),
+            session_token: None,
+            endpoint: Some("https://s3.amazonaws.com".to_string()),
+            bucket: "my_bucket".to_string(),
+            prefix: None,
+        };
+
+        let base_url = get_base_url(&s3_config);
+        assert!(base_url.is_none());
+    }
+
+    #[test]
+    fn test_get_base_url_with_empty_prefix() {
+        let s3_config = S3Config {
+            region: Some("us-west-1".to_string()),
+            access_key_id: Some("ACCESS_KEY".to_string()),
+            secret_access_key: Some("SECRET_KEY".to_string()),
+            session_token: None,
+            endpoint: Some("https://s3.amazonaws.com".to_string()),
+            bucket: "my_bucket".to_string(),
+            prefix: Some("".to_string()),
+        };
+
+        let base_url = get_base_url(&s3_config);
+        assert!(base_url.is_some());
+        assert_eq!(base_url.unwrap(), Path::from(""));
+    }
+
+    #[test]
+    fn test_to_hashmap() {
+        let s3_config = S3Config {
+            region: Some("us-west-1".to_string()),
+            access_key_id: Some("ACCESS_KEY".to_string()),
+            secret_access_key: Some("SECRET_KEY".to_string()),
+            session_token: Some("SESSION_TOKEN".to_string()),
+            endpoint: Some("https://s3.amazonaws.com".to_string()),
+            bucket: "my_bucket".to_string(),
+            prefix: Some("my_prefix".to_string()),
+        };
+
+        let hashmap = s3_config.to_hashmap();
+
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Region.as_ref()),
+            Some(&"us-west-1".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::AccessKeyId.as_ref()),
+            Some(&"ACCESS_KEY".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::SecretAccessKey.as_ref()),
+            Some(&"SECRET_KEY".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Token.as_ref()),
+            Some(&"SESSION_TOKEN".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Endpoint.as_ref()),
+            Some(&"https://s3.amazonaws.com".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Bucket.as_ref()),
+            Some(&"my_bucket".to_string())
+        );
+        assert_eq!(hashmap.get("prefix"), Some(&"my_prefix".to_string()));
+    }
+
+    #[test]
+    fn test_to_hashmap_with_none_fields() {
+        let s3_config = S3Config {
+            region: None,
+            access_key_id: None,
+            secret_access_key: None,
+            session_token: None,
+            endpoint: None,
+            bucket: "my_bucket".to_string(),
+            prefix: None,
+        };
+
+        let hashmap = s3_config.to_hashmap();
+
+        assert_eq!(hashmap.get(AmazonS3ConfigKey::Region.as_ref()), None);
+        assert_eq!(hashmap.get(AmazonS3ConfigKey::AccessKeyId.as_ref()), None);
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::SecretAccessKey.as_ref()),
+            None
+        );
+        assert_eq!(hashmap.get(AmazonS3ConfigKey::Token.as_ref()), None);
+        assert_eq!(hashmap.get(AmazonS3ConfigKey::Endpoint.as_ref()), None);
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Bucket.as_ref()),
+            Some(&"my_bucket".to_string())
+        );
+        assert_eq!(hashmap.get("prefix"), None);
+    }
+
+    #[test]
+    fn test_bucket_to_url() {
+        let config = S3Config {
+            region: Some("us-west-1".to_string()),
+            access_key_id: Some("ACCESS_KEY".to_string()),
+            secret_access_key: Some("SECRET_KEY".to_string()),
+            session_token: Some("SESSION_TOKEN".to_string()),
+            endpoint: Some("https://s3.amazonaws.com".to_string()),
+            bucket: "my_bucket".to_string(),
+            prefix: Some("my_prefix".to_string()),
+        };
+
+        let url = config.bucket_to_url();
+        assert_eq!(url, "s3://my_bucket");
     }
 }

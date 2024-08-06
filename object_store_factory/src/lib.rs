@@ -8,8 +8,8 @@ use google::GCSConfig;
 use local::LocalConfig;
 
 use object_store::{
-    local::LocalFileSystem, memory::InMemory, parse_url_opts, prefix::PrefixStore,
-    DynObjectStore, ObjectStore, ObjectStoreScheme,
+    local::LocalFileSystem, memory::InMemory, parse_url_opts, path::Path,
+    prefix::PrefixStore, DynObjectStore, ObjectStore, ObjectStoreScheme,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,6 +27,17 @@ pub enum ObjectStoreConfig {
     AmazonS3(S3Config),
     #[serde(rename = "gcs")]
     GoogleCloudStorage(GCSConfig),
+}
+
+impl ObjectStoreConfig {
+    pub fn to_hashmap(&self) -> HashMap<String, String> {
+        match self {
+            ObjectStoreConfig::Local(config) => config.to_hashmap(),
+            ObjectStoreConfig::AmazonS3(config) => config.to_hashmap(),
+            ObjectStoreConfig::GoogleCloudStorage(config) => config.to_hashmap(),
+            ObjectStoreConfig::Memory => HashMap::new(), // Memory config has no associated data
+        }
+    }
 }
 
 /// Creates an `ObjectStore` instance based on the provided configuration.
@@ -144,4 +155,34 @@ pub struct StorageLocationInfo {
     // Options used to construct the object store (for gRPC consumers)
     pub options: HashMap<String, String>,
     pub url: String,
+}
+
+pub fn build_storage_location_info(
+    config: &ObjectStoreConfig,
+) -> Result<StorageLocationInfo, object_store::Error> {
+    match config {
+        ObjectStoreConfig::AmazonS3(aws_config) => Ok(StorageLocationInfo {
+            object_store: aws::build_amazon_s3_from_config(aws_config)?,
+            options: aws_config.to_hashmap(),
+            url: aws_config.bucket_to_url(),
+        }),
+        ObjectStoreConfig::GoogleCloudStorage(google_config) => Ok(StorageLocationInfo {
+            object_store: google::build_google_cloud_storage_from_config(google_config)?,
+            options: google_config.to_hashmap(),
+            url: google_config.bucket_to_url(),
+        }),
+        _ => {
+            unimplemented!();
+        }
+    }
+}
+
+pub fn get_base_url(config: &ObjectStoreConfig) -> Option<Path> {
+    match config {
+        ObjectStoreConfig::AmazonS3(aws_config) => aws::get_base_url(aws_config),
+        ObjectStoreConfig::GoogleCloudStorage(google_config) => {
+            google::get_base_url(google_config)
+        }
+        _ => None,
+    }
 }
