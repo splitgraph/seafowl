@@ -144,7 +144,13 @@ impl S3Config {
 pub fn build_amazon_s3_from_config(
     config: &S3Config,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    assert!(config.allow_http, "allow_http must be true for S3");
+    if !config.allow_http {
+        println!(
+            "Custom backtrace: {}",
+            std::backtrace::Backtrace::force_capture()
+        );
+        assert!(config.allow_http, "allow_http must be true for S3");
+    }
 
     let mut builder = AmazonS3Builder::new()
         .with_region(config.region.clone().unwrap_or_default())
