@@ -53,10 +53,10 @@ impl S3Config {
             endpoint: map.get("endpoint").map(|s| s.to_string()),
             bucket: map.get("bucket").unwrap().clone(),
             prefix: map.get("prefix").map(|s| s.to_string()),
-            allow_http: map.get("allow_http").map(|s| s == "true").unwrap_or(true),
+            allow_http: map.get("allow_http").map(|s| s != "false").unwrap_or(true),
             skip_signature: map
                 .get("skip_signature")
-                .map(|s| s == "true")
+                .map(|s| s != "false")
                 .unwrap_or(true),
         })
     }
@@ -74,12 +74,12 @@ impl S3Config {
             bucket,
             prefix: None,
             allow_http: map
-                .remove("allow_http")
-                .map(|s| s == "true")
+                .remove("format.allow_http")
+                .map(|s| s != "false")
                 .unwrap_or(true),
             skip_signature: map
-                .remove("skip_signature")
-                .map(|s| s == "true")
+                .remove("format.skip_signature")
+                .map(|s| s != "false")
                 .unwrap_or(true),
         })
     }
