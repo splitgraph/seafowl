@@ -10,9 +10,9 @@ const IN_MEMORY_BYTES: &str = "seafowl_changeset_writer_in_memory_bytes_current"
 const IN_MEMORY_ROWS: &str = "seafowl_changeset_writer_in_memory_rows_current";
 const IN_MEMORY_OLDEST: &str =
     "seafowl_changeset_writer_in_memory_oldest_timestamp_seconds";
-const COMPACTION_TIME: &str = "seafowl_changeset_writer_compaction_time_seconds";
-const COMPACTED_BYTES: &str = "seafowl_changeset_writer_compacted_bytes_total";
-const COMPACTED_ROWS: &str = "seafowl_changeset_writer_compacted_rows_total";
+const SQUASH_TIME: &str = "seafowl_changeset_writer_squash_time_seconds";
+const SQUASHED_BYTES: &str = "seafowl_changeset_writer_squashed_bytes_total";
+const SQUASHED_ROWS: &str = "seafowl_changeset_writer_squashed_rows_total";
 const FLUSH_TIME: &str = "seafowl_changeset_writer_flush_time_seconds";
 const FLUSH_BYTES: &str = "seafowl_changeset_writer_flush_bytes_total";
 const FLUSH_ROWS: &str = "seafowl_changeset_writer_flush_rows_total";
@@ -29,9 +29,9 @@ pub struct SyncMetrics {
     pub in_memory_bytes: Gauge,
     pub in_memory_rows: Gauge,
     pub in_memory_oldest: Gauge,
-    pub compaction_time: Histogram,
-    pub compacted_bytes: Counter,
-    pub compacted_rows: Counter,
+    pub squash_time: Histogram,
+    pub squashed_bytes: Counter,
+    pub squashed_rows: Counter,
     pub flush_time: Histogram,
     pub flush_bytes: Counter,
     pub flush_rows: Counter,
@@ -68,16 +68,16 @@ impl SyncMetrics {
             "The timestamp of the oldest pending change set in memory"
         );
         describe_histogram!(
-            COMPACTION_TIME,
-            "The time taken to compact a single sync message"
+            SQUASH_TIME,
+            "The time taken to squash a single sync message"
         );
         describe_counter!(
-            COMPACTED_BYTES,
-            "The reduction in byte size due to batch compaction"
+            SQUASHED_BYTES,
+            "The reduction in byte size due to batch squashing"
         );
         describe_counter!(
-            COMPACTED_ROWS,
-            "The reduction in row count due to batch compaction"
+            SQUASHED_ROWS,
+            "The reduction in row count due to batch squashing"
         );
         describe_histogram!(FLUSH_TIME, "The time taken to flush a collections of syncs");
         describe_counter!(FLUSH_BYTES, "The total byte size flushed");
@@ -96,9 +96,9 @@ impl SyncMetrics {
             in_memory_bytes: gauge!(IN_MEMORY_BYTES),
             in_memory_rows: gauge!(IN_MEMORY_ROWS),
             in_memory_oldest: gauge!(IN_MEMORY_OLDEST),
-            compaction_time: histogram!(COMPACTION_TIME),
-            compacted_bytes: counter!(COMPACTED_BYTES),
-            compacted_rows: counter!(COMPACTED_ROWS),
+            squash_time: histogram!(SQUASH_TIME),
+            squashed_bytes: counter!(SQUASHED_BYTES),
+            squashed_rows: counter!(SQUASHED_ROWS),
             flush_time: histogram!(FLUSH_TIME),
             flush_bytes: counter!(FLUSH_BYTES),
             flush_rows: counter!(FLUSH_ROWS),

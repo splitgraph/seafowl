@@ -93,6 +93,10 @@ impl SyncSchema {
         Ok(Self { columns })
     }
 
+    pub fn empty() -> Self {
+        SyncSchema { columns: vec![] }
+    }
+
     pub fn column(&self, name: &str, role: ColumnRole) -> Option<&SyncColumn> {
         self.columns()
             .iter()

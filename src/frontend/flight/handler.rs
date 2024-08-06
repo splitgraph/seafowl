@@ -135,7 +135,7 @@ impl SeafowlFlightHandler {
     pub async fn process_sync_cmd(
         &self,
         cmd: DataSyncCommand,
-        sync_schema: Option<SyncSchema>,
+        sync_schema: SyncSchema,
         batches: Vec<RecordBatch>,
     ) -> SyncResult<DataSyncResult> {
         let log_store = match cmd.store {
@@ -188,7 +188,7 @@ impl SeafowlFlightHandler {
                     log_store,
                     cmd.sequence_number,
                     cmd.origin.clone(),
-                    sync_schema.expect("Schema available"),
+                    sync_schema,
                     batches,
                 )?;
 

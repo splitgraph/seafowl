@@ -28,7 +28,7 @@ use crate::context::SeafowlContext;
 use crate::frontend::flight::handler::SYNC_COMMIT_INFO;
 use crate::frontend::flight::sync::metrics::SyncMetrics;
 use crate::frontend::flight::sync::schema::SyncSchema;
-use crate::frontend::flight::sync::utils::{compact_batches, construct_qualifier};
+use crate::frontend::flight::sync::utils::{construct_qualifier, squash_batches};
 use crate::frontend::flight::sync::{
     Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult,
 };
@@ -168,6 +168,14 @@ impl SeafowlDataSyncWriter {
     ) -> SyncResult<()> {
         let url = log_store.root_uri();
 
+        let (sync_size, sync_rows) =
+            batches.iter().fold((0, 0), |(size, rows), batch| {
+                (
+                    size + batch.get_array_memory_size(),
+                    rows + batch.num_rows(),
+                )
+            });
+
         // Upsert a sequence entry for this origin and sequence number
         let tx_id = if let Some((tx_id, tx)) = self.txs.last_mut()
             && tx.sequence.is_none()
@@ -184,19 +192,30 @@ impl SeafowlDataSyncWriter {
             // Merge the information for the pending transaction
             if let Some(seq) = sequence_number {
                 // A sequence number was provided, denoting the end of the transaction
-                debug!("Adding {url} as sync destination for {origin} for tx ({tx_id}) with sequence number {seq}");
-                tx.locations.insert(url.clone());
+                debug!("Received sequence number {seq} for {origin} of the pending tx ({tx_id})");
                 tx.sequence = sequence_number;
-            } else {
-                // No sequence number yet, keep updating only the pending table locations to flush
-                // for this transaction
+            }
+
+            if sync_rows > 0 {
                 debug!("Adding {url} as sync destination for {origin} in the pending tx ({tx_id})");
                 tx.locations.insert(url.clone());
             }
+
             *tx_id
         } else {
             // The previous message contains a definite sequence number (or there are no entries at
             // all), so this means this message belongs to a new transaction
+            if sync_rows == 0
+                && let Some(seq) = sequence_number
+            {
+                // We received an empty transaction, this isn't supported
+                return Err(SyncError::InvalidMessage {
+                    reason: format!(
+                        "Received empty transaction for origin {origin} with sequence number {seq}",
+                    )
+                });
+            }
+
             let tx_id = Uuid::new_v4();
             debug!("Adding {url} as sync destination for {origin} in a new tx {tx_id}");
             self.txs.insert(
@@ -210,60 +229,56 @@ impl SeafowlDataSyncWriter {
             tx_id
         };
 
-        // Compactify the batches and measure the time it took and the reduction in rows/size
-        let (old_size, old_rows) = batches.iter().fold((0, 0), |(size, rows), batch| {
-            (
-                size + batch.get_array_memory_size(),
-                rows + batch.num_rows(),
-            )
-        });
-        self.metrics.request_bytes.increment(old_size as u64);
-        self.metrics.request_rows.increment(old_rows as u64);
-        let start = Instant::now();
-        let batch = compact_batches(&sync_schema, batches)?;
-        let duration = start.elapsed().as_secs();
+        if sync_rows > 0 {
+            // Squash the batches and measure the time it took and the reduction in rows/size
+            self.metrics.request_bytes.increment(sync_size as u64);
+            self.metrics.request_rows.increment(sync_rows as u64);
+            let start = Instant::now();
+            let batch = squash_batches(&sync_schema, batches)?;
+            let duration = start.elapsed().as_secs();
 
-        // Get new size and row count
-        let size = batch.get_array_memory_size();
-        let rows = batch.num_rows();
+            // Get new size and row count
+            let size = batch.get_array_memory_size();
+            let rows = batch.num_rows();
 
-        let item = DataSyncItem {
-            tx_id,
-            sync_schema,
-            batch,
-        };
-        self.syncs
-            .entry(url)
-            .and_modify(|entry| {
-                entry.syncs.push(item.clone());
-                entry.size += size;
-                entry.rows += rows;
-            })
-            .or_insert(DataSyncCollection {
-                size,
-                rows,
-                insertion_time: now(),
-                log_store,
-                syncs: vec![item],
-            });
-
-        // Update the total size and metrics
-        self.size += size;
-        self.metrics.in_memory_bytes.increment(size as f64);
-        self.metrics.in_memory_rows.increment(rows as f64);
-        self.metrics.compaction_time.record(duration as f64);
-        self.metrics
-            .compacted_bytes
-            .increment((old_size - size) as u64);
-        self.metrics
-            .compacted_rows
-            .increment((old_rows - rows) as u64);
-        self.metrics.in_memory_oldest.set(
+            let item = DataSyncItem {
+                tx_id,
+                sync_schema,
+                batch,
+            };
             self.syncs
-                .first()
-                .map(|(_, v)| v.insertion_time as f64)
-                .unwrap_or(0.0),
-        );
+                .entry(url)
+                .and_modify(|entry| {
+                    entry.syncs.push(item.clone());
+                    entry.size += size;
+                    entry.rows += rows;
+                })
+                .or_insert(DataSyncCollection {
+                    size,
+                    rows,
+                    insertion_time: now(),
+                    log_store,
+                    syncs: vec![item],
+                });
+
+            // Update the total size and metrics
+            self.size += size;
+            self.metrics.in_memory_bytes.increment(size as f64);
+            self.metrics.in_memory_rows.increment(rows as f64);
+            self.metrics.squash_time.record(duration as f64);
+            self.metrics
+                .squashed_bytes
+                .increment((sync_size - size) as u64);
+            self.metrics
+                .squashed_rows
+                .increment((sync_rows - rows) as u64);
+            self.metrics.in_memory_oldest.set(
+                self.syncs
+                    .first()
+                    .map(|(_, v)| v.insertion_time as f64)
+                    .unwrap_or(0.0),
+            );
+        }
 
         // Flag the sequence as volatile persisted for this origin if it is the last message of the
         // transaction
@@ -341,7 +356,7 @@ impl SeafowlDataSyncWriter {
             // results in deeply nested plan trees that are known to be problematic for now:
             // - https://github.com/apache/datafusion/issues/9373
             // - https://github.com/apache/datafusion/issues/9375
-            // TODO: Make inter-sync compaction work when/even in absence of sync schema match
+            // TODO: Make inter-sync squashing work when/even in absence of sync schema match
             info!(
                 "Flushing due to max-sync messages criteria ({}): {url}",
                 entry.syncs.len()
@@ -1073,5 +1088,60 @@ mod tests {
         assert_eq!(expected_sync_commit, new_sync_commit);
         assert_eq!(in_syncs[skip_ind..].len(), out_syncs.len());
         assert_eq!(in_syncs[skip_ind..].to_vec(), out_syncs.to_vec());
+    }
+
+    #[tokio::test]
+    async fn test_empty_sync() {
+        let ctx = Arc::new(in_memory_context().await);
+        let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
+        let (arrow_schema, sync_schema) = sync_schema();
+
+        // Enqueue all syncs
+        let log_store = ctx.internal_object_store.get_log_store("test_table");
+
+        // Add first non-empty sync
+        sync_mgr
+            .enqueue_sync(
+                log_store.clone(),
+                None,
+                A.to_string(),
+                sync_schema.clone(),
+                random_batches(arrow_schema.clone()),
+            )
+            .unwrap();
+
+        // Add empty sync with an explicit sequence number denoting the end of the transaction
+        sync_mgr
+            .enqueue_sync(
+                log_store.clone(),
+                Some(100),
+                A.to_string(),
+                SyncSchema::empty(),
+                vec![],
+            )
+            .unwrap();
+
+        // Adding a new empty sync with `Some` sequence number amounts to an empty transaction which
+        // isn't supported
+        let err = sync_mgr
+            .enqueue_sync(
+                log_store,
+                Some(200),
+                A.to_string(),
+                SyncSchema::empty(),
+                vec![],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains(
+            "Received empty transaction for origin origin-A with sequence number 200"
+        ),);
+
+        // Ensure the tx is marked as durable after flushing
+        let url = sync_mgr.syncs.first().unwrap().0.clone();
+        sync_mgr.flush_syncs(url).await.unwrap();
+        assert_eq!(
+            sync_mgr.stored_sequences(&A.to_string()),
+            (Some(100), Some(100))
+        );
     }
 }
