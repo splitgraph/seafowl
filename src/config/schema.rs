@@ -607,6 +607,8 @@ cache_control = "private, max-age=86400"
             Some(ObjectStoreConfig::AmazonS3(S3Config {
                 endpoint: Some("https://s3.amazonaws.com:9000".to_string()),
                 bucket: "seafowl".to_string(),
+                allow_http: false,
+                skip_signature: false,
                 ..Default::default()
             }))
         );

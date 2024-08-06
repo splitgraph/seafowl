@@ -35,8 +35,8 @@ impl Default for S3Config {
             endpoint: None,
             bucket: "".to_string(),
             prefix: None,
-            allow_http: false,
-            skip_signature: false,
+            allow_http: true,
+            skip_signature: true,
         }
     }
 }
