@@ -605,13 +605,9 @@ cache_control = "private, max-age=86400"
         assert_eq!(
             config.object_store,
             Some(ObjectStoreConfig::AmazonS3(S3Config {
-                region: None,
-                access_key_id: None,
-                secret_access_key: None,
-                session_token: None,
                 endpoint: Some("https://s3.amazonaws.com:9000".to_string()),
                 bucket: "seafowl".to_string(),
-                prefix: None,
+                ..Default::default()
             }))
         );
     }

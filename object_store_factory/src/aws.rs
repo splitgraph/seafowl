@@ -19,22 +19,54 @@ pub struct S3Config {
     pub endpoint: Option<String>,
     pub bucket: String,
     pub prefix: Option<String>,
-    // pub allow_http: bool,
-    // pub skip_signature: bool,
+    #[serde(default)]
+    pub allow_http: bool,
+    #[serde(default)]
+    pub skip_signature: bool,
+}
+
+impl Default for S3Config {
+    fn default() -> Self {
+        Self {
+            region: None,
+            access_key_id: None,
+            secret_access_key: None,
+            session_token: None,
+            endpoint: None,
+            bucket: "".to_string(),
+            prefix: None,
+            allow_http: false,
+            skip_signature: false,
+        }
+    }
 }
 
 impl S3Config {
     pub fn from_hashmap(
         map: &HashMap<String, String>,
     ) -> Result<Self, object_store::Error> {
+        let access_key_id = map.get("access_key_id").map(|s| s.to_string());
+        let secret_access_key = map.get("secret_access_key").map(|s| s.to_string());
+
+        // Determine skip_signature based on the presence of access_key_id and secret_access_key
+        let skip_signature = if access_key_id.is_some() && secret_access_key.is_some() {
+            false
+        } else {
+            map.get("skip_signature")
+                .map(|s| s == "true")
+                .unwrap_or(true)
+        };
+
         Ok(Self {
             region: map.get("region").map(|s| s.to_string()),
-            access_key_id: map.get("access_key_id").map(|s| s.to_string()),
-            secret_access_key: map.get("secret_access_key").map(|s| s.to_string()),
+            access_key_id,
+            secret_access_key,
             session_token: map.get("session_token").map(|s| s.to_string()),
             endpoint: map.get("endpoint").map(|s| s.to_string()),
             bucket: map.get("bucket").unwrap().clone(),
             prefix: map.get("prefix").map(|s| s.to_string()),
+            allow_http: map.get("allow_http").map(|s| s == "true").unwrap_or(false),
+            skip_signature,
         })
     }
 
@@ -42,14 +74,31 @@ impl S3Config {
         bucket: String,
         map: &mut HashMap<String, String>,
     ) -> Result<Self, object_store::Error> {
+        let access_key_id = map.remove("format.access_key_id");
+        let secret_access_key = map.remove("format.secret_access_key");
+
+        // Determine skip_signature based on the presence of access_key_id and secret_access_key
+        let skip_signature = if access_key_id.is_some() && secret_access_key.is_some() {
+            false
+        } else {
+            map.remove("skip_signature")
+                .map(|s| s == "true")
+                .unwrap_or(true)
+        };
+
         Ok(Self {
             region: map.remove("format.region"),
-            access_key_id: map.remove("format.access_key_id"),
-            secret_access_key: map.remove("format.secret_access_key"),
+            access_key_id,
+            secret_access_key,
             session_token: map.remove("format.session_token"),
             endpoint: map.remove("format.endpoint"),
             bucket,
             prefix: None,
+            allow_http: map
+                .remove("allow_http")
+                .map(|s| s == "true")
+                .unwrap_or(true),
+            skip_signature,
         })
     }
 
@@ -92,6 +141,16 @@ impl S3Config {
         if let Some(prefix) = &self.prefix {
             map.insert("prefix".to_string(), prefix.clone());
         }
+        map.insert(
+            AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp)
+                .as_ref()
+                .to_string(),
+            self.allow_http.to_string(),
+        );
+        map.insert(
+            AmazonS3ConfigKey::SkipSignature.as_ref().to_string(),
+            self.skip_signature.to_string(),
+        );
         map
     }
 
@@ -106,7 +165,7 @@ pub fn build_amazon_s3_from_config(
     let mut builder = AmazonS3Builder::new()
         .with_region(config.region.clone().unwrap_or_default())
         .with_bucket_name(config.bucket.clone())
-        .with_allow_http(true);
+        .with_allow_http(config.allow_http);
 
     if let Some(endpoint) = &config.endpoint {
         builder = builder.with_endpoint(endpoint.clone());
@@ -123,7 +182,7 @@ pub fn build_amazon_s3_from_config(
             builder = builder.with_token(token.clone())
         }
     } else {
-        builder = builder.with_skip_signature(true)
+        builder = builder.with_skip_signature(config.skip_signature)
     }
 
     let store = builder.build()?;
@@ -263,6 +322,73 @@ mod tests {
     }
 
     #[test]
+    fn test_from_hashmap_with_keys() {
+        let mut map = HashMap::new();
+        map.insert("region".to_string(), "us-west-1".to_string());
+        map.insert("access_key_id".to_string(), "AKIA...".to_string());
+        map.insert("secret_access_key".to_string(), "SECRET...".to_string());
+        map.insert("bucket".to_string(), "my-bucket".to_string());
+
+        let config = S3Config::from_hashmap(&map).unwrap();
+
+        assert_eq!(config.region, Some("us-west-1".to_string()));
+        assert_eq!(config.access_key_id, Some("AKIA...".to_string()));
+        assert_eq!(config.secret_access_key, Some("SECRET...".to_string()));
+        assert_eq!(config.bucket, "my-bucket".to_string());
+        assert!(!config.skip_signature);
+    }
+
+    #[test]
+    fn test_from_hashmap_without_keys() {
+        let mut map = HashMap::new();
+        map.insert("region".to_string(), "us-west-1".to_string());
+        map.insert("bucket".to_string(), "my-bucket".to_string());
+
+        let config = S3Config::from_hashmap(&map).unwrap();
+
+        assert_eq!(config.region, Some("us-west-1".to_string()));
+        assert_eq!(config.access_key_id, None);
+        assert_eq!(config.secret_access_key, None);
+        assert_eq!(config.bucket, "my-bucket".to_string());
+        assert!(config.skip_signature);
+    }
+
+    #[test]
+    fn test_from_bucket_and_options_with_keys() {
+        let mut map = HashMap::new();
+        map.insert("format.region".to_string(), "us-west-1".to_string());
+        map.insert("format.access_key_id".to_string(), "AKIA...".to_string());
+        map.insert(
+            "format.secret_access_key".to_string(),
+            "SECRET...".to_string(),
+        );
+
+        let config =
+            S3Config::from_bucket_and_options("my-bucket".to_string(), &mut map).unwrap();
+
+        assert_eq!(config.region, Some("us-west-1".to_string()));
+        assert_eq!(config.access_key_id, Some("AKIA...".to_string()));
+        assert_eq!(config.secret_access_key, Some("SECRET...".to_string()));
+        assert_eq!(config.bucket, "my-bucket".to_string());
+        assert!(!config.skip_signature);
+    }
+
+    #[test]
+    fn test_from_bucket_and_options_without_keys() {
+        let mut map = HashMap::new();
+        map.insert("format.region".to_string(), "us-west-1".to_string());
+
+        let config =
+            S3Config::from_bucket_and_options("my-bucket".to_string(), &mut map).unwrap();
+
+        assert_eq!(config.region, Some("us-west-1".to_string()));
+        assert_eq!(config.access_key_id, None);
+        assert_eq!(config.secret_access_key, None);
+        assert_eq!(config.bucket, "my-bucket".to_string());
+        assert!(config.skip_signature);
+    }
+
+    #[test]
     fn test_build_amazon_s3_from_config_with_all_fields() {
         let config = S3Config {
             region: Some("us-west-2".to_string()),
@@ -272,6 +398,8 @@ mod tests {
             endpoint: Some("http://localhost:9000".to_string()),
             bucket: "my-bucket".to_string(),
             prefix: Some("my-prefix".to_string()),
+            allow_http: true,
+            skip_signature: true,
         };
 
         let result = build_amazon_s3_from_config(&config);
@@ -287,6 +415,8 @@ mod tests {
         assert!(debug_output.contains("key_id: \"access_key\""));
         assert!(debug_output.contains("secret_key: \"secret_key\""));
         assert!(debug_output.contains("token: Some(\"session_token\")"));
+        assert!(debug_output.contains("allow_http: Parsed(true)"));
+        assert!(debug_output.contains("skip_signature: false")); //Expected false as access_key_id and secret_access_key are provided
     }
 
     #[test]
@@ -299,6 +429,8 @@ mod tests {
             endpoint: None,
             bucket: "my-bucket".to_string(),
             prefix: None,
+            allow_http: true,
+            skip_signature: true,
         };
 
         let result = build_amazon_s3_from_config(&config);
@@ -314,6 +446,9 @@ mod tests {
         assert!(!debug_output.contains("key_id: \"\""));
         assert!(!debug_output.contains("secret_key: \"\""));
         assert!(!debug_output.contains("token: \"\""));
+        assert!(!debug_output.contains("prefix: \"\""));
+        assert!(debug_output.contains("allow_http: Parsed(true)"));
+        assert!(debug_output.contains("skip_signature: true"));
     }
 
     #[test]
@@ -398,6 +533,8 @@ mod tests {
             endpoint: Some("https://s3.amazonaws.com".to_string()),
             bucket: "my_bucket".to_string(),
             prefix: Some("my_prefix".to_string()),
+            allow_http: true,
+            skip_signature: true,
         };
 
         let base_url = get_base_url(&s3_config);
@@ -415,6 +552,8 @@ mod tests {
             endpoint: Some("https://s3.amazonaws.com".to_string()),
             bucket: "my_bucket".to_string(),
             prefix: None,
+            allow_http: true,
+            skip_signature: true,
         };
 
         let base_url = get_base_url(&s3_config);
@@ -431,6 +570,8 @@ mod tests {
             endpoint: Some("https://s3.amazonaws.com".to_string()),
             bucket: "my_bucket".to_string(),
             prefix: Some("".to_string()),
+            allow_http: true,
+            skip_signature: true,
         };
 
         let base_url = get_base_url(&s3_config);
@@ -448,6 +589,8 @@ mod tests {
             endpoint: Some("https://s3.amazonaws.com".to_string()),
             bucket: "my_bucket".to_string(),
             prefix: Some("my_prefix".to_string()),
+            allow_http: true,
+            skip_signature: true,
         };
 
         let hashmap = s3_config.to_hashmap();
@@ -477,6 +620,14 @@ mod tests {
             Some(&"my_bucket".to_string())
         );
         assert_eq!(hashmap.get("prefix"), Some(&"my_prefix".to_string()));
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::SkipSignature.as_ref()),
+            Some(&"true".to_string())
+        );
     }
 
     #[test]
@@ -489,6 +640,8 @@ mod tests {
             endpoint: None,
             bucket: "my_bucket".to_string(),
             prefix: None,
+            allow_http: true,
+            skip_signature: true,
         };
 
         let hashmap = s3_config.to_hashmap();
@@ -506,6 +659,14 @@ mod tests {
             Some(&"my_bucket".to_string())
         );
         assert_eq!(hashmap.get("prefix"), None);
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::SkipSignature.as_ref()),
+            Some(&"true".to_string())
+        );
     }
 
     #[test]
@@ -518,6 +679,8 @@ mod tests {
             endpoint: Some("https://s3.amazonaws.com".to_string()),
             bucket: "my_bucket".to_string(),
             prefix: Some("my_prefix".to_string()),
+            allow_http: true,
+            skip_signature: true,
         };
 
         let url = config.bucket_to_url();
