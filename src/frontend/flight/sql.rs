@@ -3,6 +3,7 @@ use crate::frontend::flight::handler::{
     SeafowlFlightHandler, SEAFOWL_SQL_DATA, SEAFOWL_SYNC_CALL_MAX_ROWS,
 };
 use crate::frontend::flight::sync::schema::SyncSchema;
+use crate::frontend::flight::sync::SyncError;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
@@ -211,27 +212,30 @@ impl FlightSqlService for SeafowlFlightHandler {
                 return Err(Status::invalid_argument(err));
             }
 
-            Some(
-                SyncSchema::try_new(
-                    cmd.column_descriptors.clone(),
-                    batches.first().unwrap().schema(),
-                )
-                .map_err(|err| {
-                    warn!("{err}");
-                    Status::invalid_argument(err.to_string())
-                })?,
+            SyncSchema::try_new(
+                cmd.column_descriptors.clone(),
+                batches.first().unwrap().schema(),
             )
+            .map_err(|err| {
+                warn!("{err}");
+                Status::invalid_argument(err.to_string())
+            })?
         } else {
-            None
+            SyncSchema::empty()
         };
 
         let put_result = self
             .process_sync_cmd(cmd.clone(), sync_schema, batches)
             .await
-            .map_err(|err| {
-                let err = format!("Failed processing DoPut for {}: {err}", cmd.path);
+            .map_err(|e| {
+                let err = format!("Failed processing DoPut for {}: {e}", cmd.path);
                 warn!(err);
-                Status::internal(err)
+                match e {
+                    SyncError::InvalidMessage { reason } => {
+                        Status::invalid_argument(reason)
+                    }
+                    _ => Status::internal(err),
+                }
             })?;
 
         Ok(Response::new(Box::pin(futures::stream::iter(vec![Ok(
