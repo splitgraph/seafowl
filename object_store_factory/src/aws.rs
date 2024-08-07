@@ -19,10 +19,14 @@ pub struct S3Config {
     pub endpoint: Option<String>,
     pub bucket: String,
     pub prefix: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub allow_http: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub skip_signature: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for S3Config {
@@ -144,13 +148,7 @@ impl S3Config {
 pub fn build_amazon_s3_from_config(
     config: &S3Config,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    if !config.allow_http {
-        println!(
-            "Custom backtrace: {}",
-            std::backtrace::Backtrace::force_capture()
-        );
-        assert!(config.allow_http, "allow_http must be true for S3");
-    }
+    assert!(config.allow_http, "allow_http must be true for S3");
 
     let mut builder = AmazonS3Builder::new()
         .with_region(config.region.clone().unwrap_or_default())
@@ -268,6 +266,7 @@ pub fn get_base_url(config: &S3Config) -> Option<Path> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use toml;
 
     #[test]
     fn test_config_from_hashmap_with_all_fields() {
@@ -612,5 +611,24 @@ mod tests {
 
         let url = config.bucket_to_url();
         assert_eq!(url, "s3://my_bucket");
+    }
+
+    #[test]
+    fn test_deserialize_s3_config_with_defaults() {
+        let toml_str = r#"
+        region = "us-east-1"
+        access_key_id = "my_access_key"
+        secret_access_key = "my_secret_key"
+        bucket = "my_bucket"
+        "#;
+
+        let config: S3Config = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(config.region, Some("us-east-1".to_string()));
+        assert_eq!(config.access_key_id, Some("my_access_key".to_string()));
+        assert_eq!(config.secret_access_key, Some("my_secret_key".to_string()));
+        assert_eq!(config.bucket, "my_bucket".to_string());
+        assert!(config.allow_http); // Default value should be true
+        assert!(config.skip_signature); // Default value should be true
     }
 }
