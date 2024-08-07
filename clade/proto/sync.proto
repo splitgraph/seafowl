@@ -40,7 +40,7 @@ message DataSyncCommand {
   optional uint64 sequence_number = 5;
 }
 
-message DataSyncResult {
+message DataSyncResponse {
   // If false, Seafowl is overloaded and can't accept the change (e.g.
   // can't flush fast enough). The client should wait and retry.
   // TODO: also schema mismatch errors
@@ -51,4 +51,8 @@ message DataSyncResult {
 
   // Sequence number up to which the changes are in Delta Lake.
   optional uint64 durable_sequence_number = 3;
+
+  // Flag denoting whether this is the first response, and thus indicating
+  // that Seafowl has just (re)started.
+  bool first = 4;
 }
