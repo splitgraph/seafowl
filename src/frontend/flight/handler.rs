@@ -48,7 +48,7 @@ pub(super) struct SeafowlFlightHandler {
     pub context: Arc<SeafowlContext>,
     pub results: Arc<DashMap<String, Mutex<SendableRecordBatchStream>>>,
     sync_writer: Arc<RwLock<SeafowlDataSyncWriter>>,
-    // Denotes whether we're past the first sync reponse, thus indicating Seafowl (re)starts
+    // Denotes whether we're past the first sync response, thus indicating Seafowl (re)starts
     first_sync: Arc<AtomicBool>,
 }
 
