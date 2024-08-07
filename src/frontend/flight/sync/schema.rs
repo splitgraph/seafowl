@@ -3,7 +3,7 @@ use arrow_schema::{DataType, FieldRef, SchemaRef};
 use clade::sync::{ColumnDescriptor, ColumnRole};
 use std::collections::HashSet;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SyncSchema {
     columns: Vec<SyncColumn>,
 }
@@ -13,7 +13,7 @@ impl SyncSchema {
         column_descriptors: Vec<ColumnDescriptor>,
         schema: SchemaRef,
     ) -> Result<Self, SyncError> {
-        if column_descriptors.len() != schema.all_fields().len() {
+        if column_descriptors.len() != schema.flattened_fields().len() {
             return Err(SyncError::SchemaError {
                 reason: "Column descriptors do not match the schema".to_string(),
             });
@@ -93,6 +93,10 @@ impl SyncSchema {
         Ok(Self { columns })
     }
 
+    pub fn empty() -> Self {
+        SyncSchema { columns: vec![] }
+    }
+
     pub fn column(&self, name: &str, role: ColumnRole) -> Option<&SyncColumn> {
         self.columns()
             .iter()
@@ -117,7 +121,7 @@ impl SyncSchema {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SyncColumn {
     role: ColumnRole,
     name: String,

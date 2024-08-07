@@ -13,7 +13,7 @@ use crate::utils::gc_databases;
 
 use arrow_schema::{DataType, Schema, TimeUnit};
 use chrono::TimeDelta;
-use datafusion::common::{DFSchema, FileType};
+use datafusion::common::DFSchema;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -845,7 +845,7 @@ impl SeafowlContext {
     pub async fn file_to_table(
         &self,
         file_path: String,
-        file_type: FileType,
+        file_type: &str,
         file_schema: Option<SchemaRef>,
         has_header: bool,
         schema_name: String,
@@ -891,8 +891,8 @@ impl SeafowlContext {
         // Create a `ListingTable` that points to the specified file
         let table_path = ListingTableUrl::parse(file_path)?;
         let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::CSV => Arc::new(CsvFormat::default().with_has_header(has_header)),
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            "csv" => Arc::new(CsvFormat::default().with_has_header(has_header)),
+            "parquet" => Arc::new(ParquetFormat::default()),
             _ => {
                 return Err(Error::Plan(format!(
                     "File type {file_type:?} not supported!"

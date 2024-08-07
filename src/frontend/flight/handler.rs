@@ -21,8 +21,10 @@ use url::Url;
 use crate::context::SeafowlContext;
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
+use crate::frontend::flight::sync::SyncResult;
 
-pub const SEAFOWL_SYNC_DATA_SEQUENCE_NUMBER: &str = "sequence";
+pub const SYNC_COMMIT_INFO: &str = "sync_commit_info";
+// Denoted the last sequence number that was fully committed
 pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
 
 lazy_static! {
@@ -133,9 +135,9 @@ impl SeafowlFlightHandler {
     pub async fn process_sync_cmd(
         &self,
         cmd: DataSyncCommand,
-        sync_schema: Option<SyncSchema>,
+        sync_schema: SyncSchema,
         batches: Vec<RecordBatch>,
-    ) -> Result<DataSyncResult> {
+    ) -> SyncResult<DataSyncResult> {
         let log_store = match cmd.store {
             None => self.context.internal_object_store.get_log_store(&cmd.path),
             Some(store_loc) => {
@@ -160,7 +162,7 @@ impl SeafowlFlightHandler {
             .iter()
             .fold(0, |rows, batch| rows + batch.num_rows());
 
-        if num_rows == 0 {
+        if num_rows == 0 && cmd.sequence_number.is_none() {
             // Get the current volatile and durable sequence numbers
             debug!("Received empty batches, returning current sequence numbers");
             let (mem_seq, dur_seq) =
@@ -172,7 +174,9 @@ impl SeafowlFlightHandler {
             });
         }
 
-        debug!("Processing data change with {num_rows} rows for url {url}");
+        debug!("Processing data change with {num_rows} rows for url {url} from origin {:?} at position {:?}",
+	       cmd.origin,
+	       cmd.sequence_number);
         match tokio::time::timeout(
             Duration::from_secs(self.context.config.misc.sync_conf.write_lock_timeout_s),
             self.sync_writer.write(),
@@ -184,8 +188,7 @@ impl SeafowlFlightHandler {
                     log_store,
                     cmd.sequence_number,
                     cmd.origin.clone(),
-                    sync_schema.expect("Schema available"),
-                    cmd.last,
+                    sync_schema,
                     batches,
                 )?;
 

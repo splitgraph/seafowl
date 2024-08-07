@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 // This means that if a row is changed multiple times, only the last change will be reflected in the
 // output batch (meaning the last NewPk and Value role columns and the last Value column where the
 // accompanying Changed field was `true`).
-pub(super) fn compact_batches(
+pub(super) fn squash_batches(
     sync_schema: &SyncSchema,
     data: Vec<RecordBatch>,
 ) -> Result<RecordBatch> {
@@ -283,7 +283,7 @@ pub(super) fn construct_qualifier(syncs: &[DataSyncItem]) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use crate::frontend::flight::sync::schema::SyncSchema;
-    use crate::frontend::flight::sync::utils::{compact_batches, construct_qualifier};
+    use crate::frontend::flight::sync::utils::{construct_qualifier, squash_batches};
     use crate::frontend::flight::sync::writer::DataSyncItem;
     use arrow::array::{
         BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray, UInt8Array,
@@ -298,9 +298,10 @@ mod tests {
     use rand::Rng;
     use std::collections::HashSet;
     use std::sync::Arc;
+    use uuid::Uuid;
 
     #[test]
-    fn test_batch_compaction() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_batch_squashing() -> Result<(), Box<dyn std::error::Error>> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("old_c1", DataType::Int32, true),
             Field::new("new_c1", DataType::Int32, true),
@@ -374,7 +375,7 @@ mod tests {
             ],
         )?;
 
-        let compacted = compact_batches(&sync_schema, vec![batch.clone()])?;
+        let squashed = squash_batches(&sync_schema, vec![batch.clone()])?;
 
         let expected = [
             "+--------+--------+----------+------------+----------+",
@@ -386,13 +387,13 @@ mod tests {
             "| 5      |        |          | false      | five     |",
             "+--------+--------+----------+------------+----------+",
         ];
-        assert_batches_eq!(expected, &[compacted]);
+        assert_batches_eq!(expected, &[squashed]);
 
         Ok(())
     }
 
     #[test]
-    fn fuzz_batch_compaction() -> Result<(), Box<dyn std::error::Error>> {
+    fn fuzz_batch_squashing() -> Result<(), Box<dyn std::error::Error>> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("old_c1", DataType::UInt8, true),
             Field::new("old_c2", DataType::UInt8, true),
@@ -554,16 +555,16 @@ mod tests {
             ],
         )?;
 
-        let compacted = compact_batches(&sync_schema, vec![batch.clone()])?;
+        let squashed = squash_batches(&sync_schema, vec![batch.clone()])?;
         println!(
-            "Compacted PKs from {row_count} to {} rows",
-            compacted.num_rows()
+            "Squashed PKs from {row_count} to {} rows",
+            squashed.num_rows()
         );
 
         // Since we only ever UPDATE or DELETE rows that were already inserted in the test batch,
         // the number of chains, and thus the expected row count is equal to the difference between
         // INSERT and DELETE count.
-        assert_eq!(compacted.num_rows(), insert_count - delete_count);
+        assert_eq!(squashed.num_rows(), insert_count - delete_count);
 
         Ok(())
     }
@@ -620,14 +621,12 @@ mod tests {
 
         let expr = construct_qualifier(&[
             DataSyncItem {
-                origin: "0".to_string(),
-                sequence_number: 0,
+                tx_id: Uuid::new_v4(),
                 sync_schema: sync_schema.clone(),
                 batch: batch_1,
             },
             DataSyncItem {
-                origin: "0".to_string(),
-                sequence_number: 0,
+                tx_id: Uuid::new_v4(),
                 sync_schema,
                 batch: batch_2,
             },
