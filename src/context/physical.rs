@@ -246,13 +246,19 @@ impl SeafowlContext {
             LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
                 name,
                 input,
-                if_not_exists: _,
+                if_not_exists,
                 or_replace: _,
                 ..
             })) => {
                 // This is actually CREATE TABLE AS
                 let plan = self.inner.state().create_physical_plan(input).await?;
                 let plan = self.coerce_plan(plan).await?;
+
+                if *if_not_exists && self.try_get_delta_table(name.clone()).await.is_ok()
+                {
+                    // Table already exists
+                    return Ok(make_dummy_exec());
+                }
 
                 // First create the table and then insert the data from the subquery
                 // TODO: this means we'll have 2 table versions at the end, 1st from the create
@@ -1080,5 +1086,32 @@ mod tests {
             err.to_string(),
             "Arrow error: Cast error: Cannot cast string 'abc' to value of Date32 type"
         );
+    }
+
+    #[tokio::test]
+    async fn test_create_table_if_not_exists() -> Result<()> {
+        let context = Arc::new(in_memory_context().await);
+
+        context
+            .plan_query("CREATE TABLE test_table AS VALUES (1, 'one'), (2, 'two')")
+            .await?;
+
+        // Ensure it errors out first without the `IF NOT EXISTS` clause
+        let err = context
+            .plan_query("CREATE TABLE test_table AS VALUES (1, 'one'), (2, 'two')")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Error during planning: Table \"test_table\" already exists"
+        );
+
+        context
+            .plan_query(
+                "CREATE TABLE IF NOT EXISTS test_table AS VALUES (1, 'one'), (2, 'two')",
+            )
+            .await?;
+
+        Ok(())
     }
 }
