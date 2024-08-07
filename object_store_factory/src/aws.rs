@@ -145,8 +145,6 @@ impl S3Config {
     }
 
     pub fn build_amazon_s3(&self) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-        assert!(self.allow_http, "allow_http must be true for Amazon S3");
-
         let mut builder = AmazonS3Builder::new()
             .with_region(self.region.clone().unwrap_or_default())
             .with_bucket_name(self.bucket.clone())
