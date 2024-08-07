@@ -1,4 +1,6 @@
-use object_store::{gcp::GoogleCloudStorageBuilder, gcp::GoogleConfigKey, ObjectStore};
+use object_store::{
+    gcp::GoogleCloudStorageBuilder, gcp::GoogleConfigKey, path::Path, ObjectStore,
+};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
@@ -36,22 +38,51 @@ impl GCSConfig {
                 .remove("format.google_application_credentials"),
         })
     }
-}
 
-pub fn build_google_cloud_storage_from_config(
-    config: &GCSConfig,
-) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    let mut builder: GoogleCloudStorageBuilder =
-        GoogleCloudStorageBuilder::new().with_bucket_name(config.bucket.clone());
+    pub fn to_hashmap(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        map.insert(
+            GoogleConfigKey::Bucket.as_ref().to_string(),
+            self.bucket.clone(),
+        );
+        if let Some(prefix) = &self.prefix {
+            map.insert("prefix".to_string(), prefix.clone());
+        }
+        if let Some(google_application_credentials) = &self.google_application_credentials
+        {
+            map.insert(
+                GoogleConfigKey::ApplicationCredentials.as_ref().to_string(),
+                google_application_credentials.clone(),
+            );
+        }
+        map
+    }
 
-    builder = if let Some(path) = &config.google_application_credentials {
-        builder.with_service_account_path(path.clone())
-    } else {
-        builder
-    };
+    pub fn bucket_to_url(&self) -> String {
+        format!("gs://{}", &self.bucket)
+    }
 
-    let store = builder.build()?;
-    Ok(Arc::new(store))
+    pub fn build_google_cloud_storage(
+        &self,
+    ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+        let mut builder: GoogleCloudStorageBuilder =
+            GoogleCloudStorageBuilder::new().with_bucket_name(self.bucket.clone());
+
+        builder = if let Some(path) = &self.google_application_credentials {
+            builder.with_service_account_path(path.clone())
+        } else {
+            builder
+        };
+
+        let store = builder.build()?;
+        Ok(Arc::new(store))
+    }
+
+    pub fn get_base_url(&self) -> Option<Path> {
+        self.prefix
+            .as_ref()
+            .map(|prefix| Path::from(prefix.as_ref()))
+    }
 }
 
 pub fn map_options_into_google_config_keys(
@@ -159,15 +190,14 @@ mod tests {
         fs::write(temp_file.path(), credentials_content)
             .expect("Failed to write to temporary file");
 
-        let config = GCSConfig {
+        let result = GCSConfig {
             bucket: "my-bucket".to_string(),
             prefix: Some("my-prefix".to_string()),
             google_application_credentials: Some(
                 temp_file.path().to_str().unwrap().to_string(),
             ),
-        };
-
-        let result = build_google_cloud_storage_from_config(&config);
+        }
+        .build_google_cloud_storage();
 
         assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result);
 
@@ -179,13 +209,12 @@ mod tests {
 
     #[test]
     fn test_build_google_cloud_storage_from_config_with_missing_optional_fields() {
-        let config = GCSConfig {
+        let result = GCSConfig {
             bucket: "my-bucket".to_string(),
             prefix: None,
             google_application_credentials: None,
-        };
-
-        let result = build_google_cloud_storage_from_config(&config);
+        }
+        .build_google_cloud_storage();
 
         assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result);
 
@@ -266,5 +295,97 @@ mod tests {
 
         let mapped_keys = result.unwrap();
         assert!(mapped_keys.is_empty());
+    }
+
+    #[test]
+    fn test_get_base_url_with_prefix() {
+        let gcs_config = GCSConfig {
+            bucket: "my_bucket".to_string(),
+            prefix: Some("my_prefix".to_string()),
+            google_application_credentials: Some("path/to/credentials.json".to_string()),
+        };
+
+        let base_url = gcs_config.get_base_url();
+        assert!(base_url.is_some());
+        assert_eq!(base_url.unwrap(), Path::from("my_prefix"));
+    }
+
+    #[test]
+    fn test_get_base_url_without_prefix() {
+        let gcs_config = GCSConfig {
+            bucket: "my_bucket".to_string(),
+            prefix: None,
+            google_application_credentials: Some("path/to/credentials.json".to_string()),
+        };
+
+        let base_url = gcs_config.get_base_url();
+        assert!(base_url.is_none());
+    }
+
+    #[test]
+    fn test_get_base_url_with_empty_prefix() {
+        let gcs_config = GCSConfig {
+            bucket: "my_bucket".to_string(),
+            prefix: Some("".to_string()),
+            google_application_credentials: Some("path/to/credentials.json".to_string()),
+        };
+
+        let base_url = gcs_config.get_base_url();
+        assert!(base_url.is_some());
+        assert_eq!(base_url.unwrap(), Path::from(""));
+    }
+
+    #[test]
+    fn test_to_hashmap() {
+        let gcs_config = GCSConfig {
+            bucket: "my_bucket".to_string(),
+            prefix: Some("my_prefix".to_string()),
+            google_application_credentials: Some("path/to/credentials.json".to_string()),
+        };
+
+        let hashmap = gcs_config.to_hashmap();
+
+        assert_eq!(
+            hashmap.get(GoogleConfigKey::Bucket.as_ref()),
+            Some(&"my_bucket".to_string())
+        );
+        assert_eq!(hashmap.get("prefix"), Some(&"my_prefix".to_string()));
+        assert_eq!(
+            hashmap.get(GoogleConfigKey::ApplicationCredentials.as_ref()),
+            Some(&"path/to/credentials.json".to_string())
+        );
+    }
+
+    #[test]
+    fn test_to_hashmap_with_none_fields() {
+        let gcs_config = GCSConfig {
+            bucket: "my_bucket".to_string(),
+            prefix: None,
+            google_application_credentials: None,
+        };
+
+        let hashmap = gcs_config.to_hashmap();
+
+        assert_eq!(
+            hashmap.get(GoogleConfigKey::Bucket.as_ref()),
+            Some(&"my_bucket".to_string())
+        );
+        assert_eq!(hashmap.get("prefix"), None);
+        assert_eq!(
+            hashmap.get(GoogleConfigKey::ApplicationCredentials.as_ref()),
+            None
+        );
+    }
+
+    #[test]
+    fn test_bucket_to_url() {
+        let config = GCSConfig {
+            bucket: "my_bucket".to_string(),
+            prefix: Some("my_prefix".to_string()),
+            google_application_credentials: Some("path/to/credentials.json".to_string()),
+        };
+
+        let url = config.bucket_to_url();
+        assert_eq!(url, "gs://my_bucket");
     }
 }

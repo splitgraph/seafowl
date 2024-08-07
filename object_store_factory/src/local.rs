@@ -16,13 +16,19 @@ impl LocalConfig {
             data_dir: map.get("data_dir").unwrap().clone(),
         })
     }
-}
 
-pub fn build_local_storage(
-    config: &LocalConfig,
-) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    let store = LocalFileSystem::new_with_prefix(config.data_dir.clone())?;
-    Ok(Arc::new(store))
+    pub fn to_hashmap(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        map.insert("data_dir".to_string(), self.data_dir.clone());
+        map
+    }
+
+    pub fn build_local_storage(
+        &self,
+    ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+        let store = LocalFileSystem::new_with_prefix(self.data_dir.clone())?;
+        Ok(Arc::new(store))
+    }
 }
 
 #[cfg(test)]
@@ -56,21 +62,30 @@ mod tests {
             .to_str()
             .expect("Failed to convert path to string");
 
-        let config = LocalConfig {
+        let result = LocalConfig {
             data_dir: data_dir.to_string(),
-        };
-
-        let result = build_local_storage(&config);
+        }
+        .build_local_storage();
         assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result);
     }
 
     #[test]
     fn test_build_local_storage_with_invalid_path() {
-        let config = LocalConfig {
+        let result = LocalConfig {
             data_dir: "".to_string(),
+        }
+        .build_local_storage();
+        assert!(result.is_err(), "Expected Err due to invalid path, got Ok");
+    }
+
+    #[test]
+    fn test_to_hashmap() {
+        let local_config = LocalConfig {
+            data_dir: "path/to/data".to_string(),
         };
 
-        let result = build_local_storage(&config);
-        assert!(result.is_err(), "Expected Err due to invalid path, got Ok");
+        let hashmap = local_config.to_hashmap();
+
+        assert_eq!(hashmap.get("data_dir"), Some(&"path/to/data".to_string()));
     }
 }

@@ -8,9 +8,12 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
-
+toml = "0.8.19"
 tracing = { workspace = true }
 tracing-log = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+
+

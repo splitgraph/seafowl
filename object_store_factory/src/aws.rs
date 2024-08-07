@@ -1,7 +1,6 @@
-use object_store::ClientConfigKey;
 use object_store::{
-    aws::resolve_bucket_region, aws::AmazonS3Builder, aws::AmazonS3ConfigKey,
-    ClientOptions, ObjectStore,
+    aws::resolve_bucket_region, aws::AmazonS3Builder, aws::AmazonS3ConfigKey, path::Path,
+    ClientConfigKey, ClientOptions, ObjectStore,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -20,6 +19,30 @@ pub struct S3Config {
     pub endpoint: Option<String>,
     pub bucket: String,
     pub prefix: Option<String>,
+    #[serde(default = "default_true")]
+    pub allow_http: bool,
+    #[serde(default = "default_true")]
+    pub skip_signature: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for S3Config {
+    fn default() -> Self {
+        Self {
+            region: None,
+            access_key_id: None,
+            secret_access_key: None,
+            session_token: None,
+            endpoint: None,
+            bucket: "".to_string(),
+            prefix: None,
+            allow_http: true,
+            skip_signature: true,
+        }
+    }
 }
 
 impl S3Config {
@@ -34,6 +57,11 @@ impl S3Config {
             endpoint: map.get("endpoint").map(|s| s.to_string()),
             bucket: map.get("bucket").unwrap().clone(),
             prefix: map.get("prefix").map(|s| s.to_string()),
+            allow_http: map.get("allow_http").map(|s| s != "false").unwrap_or(true),
+            skip_signature: map
+                .get("skip_signature")
+                .map(|s| s != "false")
+                .unwrap_or(true),
         })
     }
 
@@ -49,38 +77,114 @@ impl S3Config {
             endpoint: map.remove("format.endpoint"),
             bucket,
             prefix: None,
+            allow_http: map
+                .remove("format.allow_http")
+                .map(|s| s != "false")
+                .unwrap_or(true),
+            skip_signature: map
+                .remove("format.skip_signature")
+                .map(|s| s != "false")
+                .unwrap_or(true),
         })
     }
-}
 
-pub fn build_amazon_s3_from_config(
-    config: &S3Config,
-) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    let mut builder = AmazonS3Builder::new()
-        .with_region(config.region.clone().unwrap_or_default())
-        .with_bucket_name(config.bucket.clone())
-        .with_allow_http(true);
-
-    if let Some(endpoint) = &config.endpoint {
-        builder = builder.with_endpoint(endpoint.clone());
-    }
-
-    if let (Some(access_key_id), Some(secret_access_key)) =
-        (&config.access_key_id, &config.secret_access_key)
-    {
-        builder = builder
-            .with_access_key_id(access_key_id.clone())
-            .with_secret_access_key(secret_access_key.clone());
-
-        if let Some(token) = &config.session_token {
-            builder = builder.with_token(token.clone())
+    pub fn to_hashmap(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        if let Some(region) = &self.region {
+            map.insert(
+                AmazonS3ConfigKey::Region.as_ref().to_string(),
+                region.clone(),
+            );
         }
-    } else {
-        builder = builder.with_skip_signature(true)
+        if let Some(access_key_id) = &self.access_key_id {
+            map.insert(
+                AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
+                access_key_id.clone(),
+            );
+        }
+        if let Some(secret_access_key) = &self.secret_access_key {
+            map.insert(
+                AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
+                secret_access_key.clone(),
+            );
+        }
+        if let Some(session_token) = &self.session_token {
+            map.insert(
+                AmazonS3ConfigKey::Token.as_ref().to_string(),
+                session_token.clone(),
+            );
+        }
+        if let Some(endpoint) = &self.endpoint {
+            map.insert(
+                AmazonS3ConfigKey::Endpoint.as_ref().to_string(),
+                endpoint.clone(),
+            );
+        }
+        map.insert(
+            AmazonS3ConfigKey::Bucket.as_ref().to_string(),
+            self.bucket.clone(),
+        );
+        if let Some(prefix) = &self.prefix {
+            map.insert("prefix".to_string(), prefix.clone());
+        }
+        map.insert(
+            AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp)
+                .as_ref()
+                .to_string(),
+            self.allow_http.to_string(),
+        );
+        map.insert(
+            AmazonS3ConfigKey::SkipSignature.as_ref().to_string(),
+            self.skip_signature.to_string(),
+        );
+        map
     }
 
-    let store = builder.build()?;
-    Ok(Arc::new(store))
+    pub fn bucket_to_url(&self) -> String {
+        format!("s3://{}", &self.bucket)
+    }
+
+    pub fn build_amazon_s3(&self) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+        let mut builder = AmazonS3Builder::new()
+            .with_region(self.region.clone().unwrap_or_default())
+            .with_bucket_name(self.bucket.clone())
+            .with_allow_http(self.allow_http);
+
+        if let Some(endpoint) = &self.endpoint {
+            builder = builder.with_endpoint(endpoint.clone());
+        }
+
+        if let (Some(access_key_id), Some(secret_access_key)) =
+            (&self.access_key_id, &self.secret_access_key)
+        {
+            builder = builder
+                .with_access_key_id(access_key_id.clone())
+                .with_secret_access_key(secret_access_key.clone());
+
+            if let Some(token) = &self.session_token {
+                builder = builder.with_token(token.clone())
+            }
+        } else {
+            assert!(
+                self.skip_signature,
+                "Access key and secret key must be provided if skip_signature is false"
+            );
+            builder = builder.with_skip_signature(self.skip_signature)
+        }
+
+        let store = builder.build()?;
+        Ok(Arc::new(store))
+    }
+
+    pub fn get_base_url(&self) -> Option<Path> {
+        self.prefix
+            .as_ref()
+            .map(|prefix| Path::from(prefix.as_ref()))
+    }
+
+    pub fn get_allow_http(&self) -> bool {
+        self.allow_http
+    }
 }
 
 pub fn map_options_into_amazon_s3_config_keys(
@@ -161,6 +265,7 @@ async fn detect_region(url: &Url) -> Result<String, object_store::Error> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use toml;
 
     #[test]
     fn test_config_from_hashmap_with_all_fields() {
@@ -210,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_build_amazon_s3_from_config_with_all_fields() {
-        let config = S3Config {
+        let result = S3Config {
             region: Some("us-west-2".to_string()),
             access_key_id: Some("access_key".to_string()),
             secret_access_key: Some("secret_key".to_string()),
@@ -218,9 +323,10 @@ mod tests {
             endpoint: Some("http://localhost:9000".to_string()),
             bucket: "my-bucket".to_string(),
             prefix: Some("my-prefix".to_string()),
-        };
-
-        let result = build_amazon_s3_from_config(&config);
+            allow_http: true,
+            skip_signature: true,
+        }
+        .build_amazon_s3();
 
         assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result);
 
@@ -233,11 +339,13 @@ mod tests {
         assert!(debug_output.contains("key_id: \"access_key\""));
         assert!(debug_output.contains("secret_key: \"secret_key\""));
         assert!(debug_output.contains("token: Some(\"session_token\")"));
+        assert!(debug_output.contains("allow_http: Parsed(true)"));
+        assert!(debug_output.contains("skip_signature: false")); //Expected false as access_key_id and secret_access_key are provided
     }
 
     #[test]
     fn test_build_amazon_s3_from_config_with_missing_optional_fields() {
-        let config = S3Config {
+        let result = S3Config {
             region: Some("us-west-2".to_string()),
             access_key_id: None,
             secret_access_key: None,
@@ -245,9 +353,10 @@ mod tests {
             endpoint: None,
             bucket: "my-bucket".to_string(),
             prefix: None,
-        };
-
-        let result = build_amazon_s3_from_config(&config);
+            allow_http: true,
+            skip_signature: true,
+        }
+        .build_amazon_s3();
 
         assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result);
 
@@ -260,6 +369,9 @@ mod tests {
         assert!(!debug_output.contains("key_id: \"\""));
         assert!(!debug_output.contains("secret_key: \"\""));
         assert!(!debug_output.contains("token: \"\""));
+        assert!(!debug_output.contains("prefix: \"\""));
+        assert!(debug_output.contains("allow_http: Parsed(true)"));
+        assert!(debug_output.contains("skip_signature: true"));
     }
 
     #[test]
@@ -332,5 +444,188 @@ mod tests {
 
         let mapped_keys = result.unwrap();
         assert!(mapped_keys.is_empty());
+    }
+
+    #[test]
+    fn test_get_base_url_with_prefix() {
+        let s3_config = S3Config {
+            region: Some("us-west-1".to_string()),
+            access_key_id: Some("ACCESS_KEY".to_string()),
+            secret_access_key: Some("SECRET_KEY".to_string()),
+            session_token: None,
+            endpoint: Some("https://s3.amazonaws.com".to_string()),
+            bucket: "my_bucket".to_string(),
+            prefix: Some("my_prefix".to_string()),
+            allow_http: true,
+            skip_signature: true,
+        };
+
+        let base_url = s3_config.get_base_url();
+        assert!(base_url.is_some());
+        assert_eq!(base_url.unwrap(), Path::from("my_prefix"));
+    }
+
+    #[test]
+    fn test_get_base_url_without_prefix() {
+        let s3_config = S3Config {
+            region: Some("us-west-1".to_string()),
+            access_key_id: Some("ACCESS_KEY".to_string()),
+            secret_access_key: Some("SECRET_KEY".to_string()),
+            session_token: None,
+            endpoint: Some("https://s3.amazonaws.com".to_string()),
+            bucket: "my_bucket".to_string(),
+            prefix: None,
+            allow_http: true,
+            skip_signature: true,
+        };
+
+        let base_url = s3_config.get_base_url();
+        assert!(base_url.is_none());
+    }
+
+    #[test]
+    fn test_get_base_url_with_empty_prefix() {
+        let s3_config = S3Config {
+            region: Some("us-west-1".to_string()),
+            access_key_id: Some("ACCESS_KEY".to_string()),
+            secret_access_key: Some("SECRET_KEY".to_string()),
+            session_token: None,
+            endpoint: Some("https://s3.amazonaws.com".to_string()),
+            bucket: "my_bucket".to_string(),
+            prefix: Some("".to_string()),
+            allow_http: true,
+            skip_signature: true,
+        };
+
+        let base_url = s3_config.get_base_url();
+        assert!(base_url.is_some());
+        assert_eq!(base_url.unwrap(), Path::from(""));
+    }
+
+    #[test]
+    fn test_to_hashmap() {
+        let s3_config = S3Config {
+            region: Some("us-west-1".to_string()),
+            access_key_id: Some("ACCESS_KEY".to_string()),
+            secret_access_key: Some("SECRET_KEY".to_string()),
+            session_token: Some("SESSION_TOKEN".to_string()),
+            endpoint: Some("https://s3.amazonaws.com".to_string()),
+            bucket: "my_bucket".to_string(),
+            prefix: Some("my_prefix".to_string()),
+            allow_http: true,
+            skip_signature: true,
+        };
+
+        let hashmap = s3_config.to_hashmap();
+
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Region.as_ref()),
+            Some(&"us-west-1".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::AccessKeyId.as_ref()),
+            Some(&"ACCESS_KEY".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::SecretAccessKey.as_ref()),
+            Some(&"SECRET_KEY".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Token.as_ref()),
+            Some(&"SESSION_TOKEN".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Endpoint.as_ref()),
+            Some(&"https://s3.amazonaws.com".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Bucket.as_ref()),
+            Some(&"my_bucket".to_string())
+        );
+        assert_eq!(hashmap.get("prefix"), Some(&"my_prefix".to_string()));
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::SkipSignature.as_ref()),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[test]
+    fn test_to_hashmap_with_none_fields() {
+        let s3_config = S3Config {
+            region: None,
+            access_key_id: None,
+            secret_access_key: None,
+            session_token: None,
+            endpoint: None,
+            bucket: "my_bucket".to_string(),
+            prefix: None,
+            allow_http: true,
+            skip_signature: true,
+        };
+
+        let hashmap = s3_config.to_hashmap();
+
+        assert_eq!(hashmap.get(AmazonS3ConfigKey::Region.as_ref()), None);
+        assert_eq!(hashmap.get(AmazonS3ConfigKey::AccessKeyId.as_ref()), None);
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::SecretAccessKey.as_ref()),
+            None
+        );
+        assert_eq!(hashmap.get(AmazonS3ConfigKey::Token.as_ref()), None);
+        assert_eq!(hashmap.get(AmazonS3ConfigKey::Endpoint.as_ref()), None);
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Bucket.as_ref()),
+            Some(&"my_bucket".to_string())
+        );
+        assert_eq!(hashmap.get("prefix"), None);
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            hashmap.get(AmazonS3ConfigKey::SkipSignature.as_ref()),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[test]
+    fn test_bucket_to_url() {
+        let config = S3Config {
+            region: Some("us-west-1".to_string()),
+            access_key_id: Some("ACCESS_KEY".to_string()),
+            secret_access_key: Some("SECRET_KEY".to_string()),
+            session_token: Some("SESSION_TOKEN".to_string()),
+            endpoint: Some("https://s3.amazonaws.com".to_string()),
+            bucket: "my_bucket".to_string(),
+            prefix: Some("my_prefix".to_string()),
+            allow_http: true,
+            skip_signature: true,
+        };
+
+        let url = config.bucket_to_url();
+        assert_eq!(url, "s3://my_bucket");
+    }
+
+    #[test]
+    fn test_deserialize_s3_config_with_defaults() {
+        let toml_str = r#"
+        region = "us-east-1"
+        access_key_id = "my_access_key"
+        secret_access_key = "my_secret_key"
+        bucket = "my_bucket"
+        "#;
+
+        let config: S3Config = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(config.region, Some("us-east-1".to_string()));
+        assert_eq!(config.access_key_id, Some("my_access_key".to_string()));
+        assert_eq!(config.secret_access_key, Some("my_secret_key".to_string()));
+        assert_eq!(config.bucket, "my_bucket".to_string());
+        assert!(config.allow_http); // Default value should be true
+        assert!(config.skip_signature); // Default value should be true
     }
 }
