@@ -251,14 +251,14 @@ impl SeafowlContext {
                 ..
             })) => {
                 // This is actually CREATE TABLE AS
-                let plan = self.inner.state().create_physical_plan(input).await?;
-                let plan = self.coerce_plan(plan).await?;
-
                 if *if_not_exists && self.try_get_delta_table(name.clone()).await.is_ok()
                 {
                     // Table already exists
                     return Ok(make_dummy_exec());
                 }
+
+                let plan = self.inner.state().create_physical_plan(input).await?;
+                let plan = self.coerce_plan(plan).await?;
 
                 // First create the table and then insert the data from the subquery
                 // TODO: this means we'll have 2 table versions at the end, 1st from the create
@@ -560,9 +560,14 @@ impl SeafowlContext {
             }
             LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
                 name,
-                if_exists: _,
+                if_exists,
                 schema: _,
             })) => {
+                if *if_exists && self.try_get_delta_table(name.clone()).await.is_err() {
+                    // The table doesn't exist
+                    return Ok(make_dummy_exec());
+                }
+
                 let resolved_ref = self.resolve_table_ref(name.clone());
 
                 if resolved_ref.schema.as_ref() == STAGING_SCHEMA {
@@ -1110,6 +1115,27 @@ mod tests {
             .plan_query(
                 "CREATE TABLE IF NOT EXISTS test_table AS VALUES (1, 'one'), (2, 'two')",
             )
+            .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drop_table_if_exists() -> Result<()> {
+        let context = Arc::new(in_memory_context().await);
+
+        // Ensure it errors out first without the `IF NOT EXISTS` clause
+        let err = context
+            .plan_query("DROP TABLE test_table")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Error during planning: Table \"test_table\" doesn't exist"
+        );
+
+        context
+            .plan_query("DROP TABLE IF EXISTS test_table")
             .await?;
 
         Ok(())
