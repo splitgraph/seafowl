@@ -39,6 +39,8 @@
 //   ```
 //
 //   (maybe we need a recover for every route to minimize the amount of back and forth with Warp?)
+use std::string::FromUtf8Error;
+
 use datafusion::error::DataFusionError;
 
 use warp::hyper::{Body, Response, StatusCode};
@@ -63,8 +65,8 @@ pub enum ApiError {
     UploadMissingFile,
     UploadMissingFilename,
     UploadMissingFilenameExtension(String),
-    UploadSchemaDeserializationError(serde_json::Error),
-    UploadSchemaParseError(arrow::error::ArrowError),
+    UploadSchemaDeserializationError(FromUtf8Error),
+    UploadSchemaParseError(serde_json::Error),
     UploadFileLoadError(Box<dyn std::error::Error + Send + Sync>),
     UploadBodyLoadError(warp::Error),
     UploadHasHeaderParseError,

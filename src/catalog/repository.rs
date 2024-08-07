@@ -27,11 +27,12 @@ pub struct RepositoryStore {
 
 impl From<RepositoryError> for CatalogError {
     fn from(err: RepositoryError) -> CatalogError {
-        CatalogError::SqlxError(match err {
-            RepositoryError::UniqueConstraintViolation(e) => e,
-            RepositoryError::FKConstraintViolation(e) => e,
-            RepositoryError::SqlxError(e) => e,
-        })
+        match err {
+            RepositoryError::UniqueConstraintViolation(e) => CatalogError::SqlxError(e),
+            RepositoryError::FKConstraintViolation(e) => CatalogError::SqlxError(e),
+            RepositoryError::SqlxError(e) => CatalogError::SqlxError(e),
+            RepositoryError::SerdeJsonError(e) => CatalogError::SerdeJsonError(e),
+        }
     }
 }
 
@@ -212,6 +213,7 @@ impl TableStore for RepositoryStore {
                     }
                 }
                 RepositoryError::SqlxError(e) => CatalogError::SqlxError(e),
+                RepositoryError::SerdeJsonError(e) => CatalogError::SerdeJsonError(e),
             })
     }
 

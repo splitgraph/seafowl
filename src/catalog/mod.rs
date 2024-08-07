@@ -73,6 +73,9 @@ pub enum CatalogError {
     #[error("Internal SQL error: {0:?}")]
     SqlxError(sqlx::Error),
 
+    #[error("Failed parsing JSON: {0}")]
+    SerdeJsonError(#[from] serde_json::Error),
+
     #[error(transparent)]
     TonicStatus(#[from] Status),
 

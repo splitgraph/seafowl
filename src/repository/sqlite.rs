@@ -1,6 +1,5 @@
 use std::{fmt::Debug, str::FromStr};
 
-use arrow_integration_test::field_to_json;
 use arrow_schema::Schema;
 use async_trait::async_trait;
 use futures::TryStreamExt;

@@ -98,13 +98,19 @@ pub struct AllDatabaseFunctionsResult {
 }
 
 /// Wrapper for conversion of database-specific error codes into actual errors
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
     UniqueConstraintViolation(sqlx::Error),
+    #[error(transparent)]
     FKConstraintViolation(sqlx::Error),
 
     // All other errors
+    #[error(transparent)]
     SqlxError(sqlx::Error),
+
+    #[error("Failed parsing JSON: {0}")]
+    SerdeJsonError(#[from] serde_json::Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -317,7 +323,7 @@ pub mod tests {
                 table_uuid: Some(Uuid::default()),
                 table_version_id: Some(version),
                 column_name: Some("date".to_string()),
-                column_type: Some("{\"children\":[],\"name\":\"date\",\"nullable\":false,\"type\":{\"name\":\"date\",\"unit\":\"MILLISECOND\"}}".to_string()),
+                column_type: Some("{\"name\":\"date\",\"data_type\":\"Date64\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false,\"metadata\":{}}".to_string()),
             },
             AllDatabaseColumnsResult {
                 database_name,
@@ -327,8 +333,7 @@ pub mod tests {
                 table_uuid: Some(Uuid::default()),
                 table_version_id: Some(version),
                 column_name: Some("value".to_string()),
-                column_type: Some("{\"children\":[],\"name\":\"value\",\"nullable\":false,\"type\":{\"name\":\"floatingpoint\",\"precision\":\"DOUBLE\"}}"
-                    .to_string()),
+                column_type: Some("{\"name\":\"value\",\"data_type\":\"Float64\",\"nullable\":false,\"dict_id\":0,\"dict_is_ordered\":false,\"metadata\":{}}".to_string()),
             },
         ]
     }

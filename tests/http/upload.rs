@@ -28,7 +28,7 @@ async fn test_upload_base(
 
     // For CSV uploads we can supply the schema as another part of the multipart request, to
     // remove the ambiguity resulting from automatic schema inference
-    let schema_json = schema_to_json(schema.as_ref()).to_string();
+    let schema_json = serde_json::to_string(&schema).unwrap();
 
     let range = 0..2000;
     let mut input_batch = RecordBatch::try_new(

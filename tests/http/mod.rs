@@ -28,7 +28,6 @@ use arrow::array::{
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_integration_test::schema_to_json;
 use arrow_schema::TimeUnit;
 use datafusion::assert_batches_eq;
 use datafusion::parquet::arrow::ArrowWriter;
