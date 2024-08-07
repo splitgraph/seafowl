@@ -29,6 +29,15 @@ pub enum ObjectStoreConfig {
     GoogleCloudStorage(GCSConfig),
 }
 
+pub struct StorageLocationInfo {
+    // Actual object store for this location
+    pub object_store: Arc<DynObjectStore>,
+
+    // Options used to construct the object store (for gRPC consumers)
+    pub options: HashMap<String, String>,
+    pub url: String,
+}
+
 impl ObjectStoreConfig {
     pub fn to_hashmap(&self) -> HashMap<String, String> {
         match self {
@@ -38,72 +47,61 @@ impl ObjectStoreConfig {
             ObjectStoreConfig::Memory => HashMap::new(), // Memory config has no associated data
         }
     }
-}
 
-/// Creates an `ObjectStore` instance based on the provided configuration.
-///
-/// This function takes an `ObjectStoreConfig` reference and returns a `Result` containing
-/// an `Arc` to a dynamically-dispatched `ObjectStore` trait object. It matches on the
-/// provided configuration to determine the type of object store to create, and then calls
-/// the appropriate builder function to instantiate the store.
-///
-/// # Arguments
-///
-/// * `config` - A reference to an `ObjectStoreConfig` enum variant that specifies the
-///   type and configuration details of the object store to be created.
-///
-/// # Returns
-///
-/// * `Result<Arc<dyn ObjectStore>, object_store::Error>` - A result containing an `Arc`
-///   pointing to the created object store on success, or an error if the creation fails.
-///
-/// # Supported Object Stores
-///
-/// * `ObjectStoreConfig::Memory` - Builds an in-memory object store.
-/// * `ObjectStoreConfig::Local` - Builds a local filesystem-backed object store using
-///   the provided local configuration.
-/// * `ObjectStoreConfig::AmazonS3` - Builds an Amazon S3 object store using the provided
-///   AWS configuration.
-/// * `ObjectStoreConfig::GoogleCloudStorage` - Builds a Google Cloud Storage object store
-///   using the provided Google Cloud configuration.
-///
-/// # Errors
-///
-/// This function returns an error if the specified object store cannot be created,
-/// which might happen due to misconfiguration, invalid credentials, or other issues
-/// specific to the object store's backend.
-pub fn build_object_store(
-    config: &ObjectStoreConfig,
-) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    match config {
-        ObjectStoreConfig::Memory => memory::build_in_memory_storage(),
-        ObjectStoreConfig::Local(local_config) => {
-            local::build_local_storage(local_config)
+    pub fn build_object_store(self) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+        match self {
+            ObjectStoreConfig::Memory => memory::build_in_memory_storage(),
+            ObjectStoreConfig::Local(local_config) => local_config.build_local_storage(),
+            ObjectStoreConfig::AmazonS3(aws_config) => aws_config.build_amazon_s3(),
+            ObjectStoreConfig::GoogleCloudStorage(google_config) => {
+                google_config.build_google_cloud_storage()
+            }
         }
-        ObjectStoreConfig::AmazonS3(aws_config) => {
-            aws::build_amazon_s3_from_config(aws_config)
+    }
+
+    pub fn build_storage_location_info(
+        &self,
+    ) -> Result<StorageLocationInfo, object_store::Error> {
+        match self {
+            ObjectStoreConfig::AmazonS3(aws_config) => Ok(StorageLocationInfo {
+                object_store: aws_config.build_amazon_s3()?,
+                options: aws_config.to_hashmap(),
+                url: aws_config.bucket_to_url(),
+            }),
+            ObjectStoreConfig::GoogleCloudStorage(google_config) => {
+                Ok(StorageLocationInfo {
+                    object_store: google_config.build_google_cloud_storage()?,
+                    options: google_config.to_hashmap(),
+                    url: google_config.bucket_to_url(),
+                })
+            }
+            _ => {
+                unimplemented!();
+            }
         }
-        ObjectStoreConfig::GoogleCloudStorage(google_config) => {
-            google::build_google_cloud_storage_from_config(google_config)
+    }
+
+    pub fn get_base_url(&self) -> Option<Path> {
+        match self {
+            ObjectStoreConfig::AmazonS3(aws_config) => aws_config.get_base_url(),
+            ObjectStoreConfig::GoogleCloudStorage(google_config) => {
+                google_config.get_base_url()
+            }
+            _ => None,
+        }
+    }
+
+    pub fn get_allow_http(&self) -> Result<bool, object_store::Error> {
+        match self {
+            ObjectStoreConfig::AmazonS3(aws_config) => Ok(aws_config.get_allow_http()),
+            _ => Err(object_store::Error::Generic {
+                store: "unsupported_object_store",
+                source: "Only Amazon S3 is supported".into(),
+            }),
         }
     }
 }
 
-/// Builds an object store based on the URL and options provided.
-///
-/// # Arguments
-///
-/// * `url` - The URL that determines the object store scheme and configuration.
-/// * `options` - A hash map containing configuration options for the object store, which may be modified based on the URL scheme.
-///
-/// # Returns
-///
-/// Returns a `Result` that, on success, contains a boxed `ObjectStore` trait object. On failure, it returns an `object_store::Error`
-/// indicating what went wrong, such as an unsupported URL scheme.
-///
-/// # Errors
-///
-/// * If the URL scheme is unsupported or there is an error parsing the URL or options, an error is returned.
 pub async fn build_object_store_from_opts(
     url: &Url,
     options: HashMap<String, String>,
@@ -145,44 +143,5 @@ pub async fn build_object_store_from_opts(
                 source: format!("Unsupported URL scheme: {}", url).into(),
             })
         }
-    }
-}
-
-pub struct StorageLocationInfo {
-    // Actual object store for this location
-    pub object_store: Arc<DynObjectStore>,
-
-    // Options used to construct the object store (for gRPC consumers)
-    pub options: HashMap<String, String>,
-    pub url: String,
-}
-
-pub fn build_storage_location_info(
-    config: &ObjectStoreConfig,
-) -> Result<StorageLocationInfo, object_store::Error> {
-    match config {
-        ObjectStoreConfig::AmazonS3(aws_config) => Ok(StorageLocationInfo {
-            object_store: aws::build_amazon_s3_from_config(aws_config)?,
-            options: aws_config.to_hashmap(),
-            url: aws_config.bucket_to_url(),
-        }),
-        ObjectStoreConfig::GoogleCloudStorage(google_config) => Ok(StorageLocationInfo {
-            object_store: google::build_google_cloud_storage_from_config(google_config)?,
-            options: google_config.to_hashmap(),
-            url: google_config.bucket_to_url(),
-        }),
-        _ => {
-            unimplemented!();
-        }
-    }
-}
-
-pub fn get_base_url(config: &ObjectStoreConfig) -> Option<Path> {
-    match config {
-        ObjectStoreConfig::AmazonS3(aws_config) => aws::get_base_url(aws_config),
-        ObjectStoreConfig::GoogleCloudStorage(google_config) => {
-            google::get_base_url(google_config)
-        }
-        _ => None,
     }
 }

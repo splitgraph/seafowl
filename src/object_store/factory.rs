@@ -23,7 +23,7 @@ pub fn build_object_store(
     object_store_cfg: &ObjectStoreConfig,
     cache_properties: &Option<ObjectCacheProperties>,
 ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    let store = object_store_factory::build_object_store(object_store_cfg)?;
+    let store = object_store_cfg.clone().build_object_store()?;
 
     match object_store_cfg {
         ObjectStoreConfig::Local(_) | ObjectStoreConfig::Memory => Ok(store),

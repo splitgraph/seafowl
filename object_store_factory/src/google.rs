@@ -61,22 +61,28 @@ impl GCSConfig {
     pub fn bucket_to_url(&self) -> String {
         format!("gs://{}", &self.bucket)
     }
-}
 
-pub fn build_google_cloud_storage_from_config(
-    config: &GCSConfig,
-) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    let mut builder: GoogleCloudStorageBuilder =
-        GoogleCloudStorageBuilder::new().with_bucket_name(config.bucket.clone());
+    pub fn build_google_cloud_storage(
+        &self,
+    ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+        let mut builder: GoogleCloudStorageBuilder =
+            GoogleCloudStorageBuilder::new().with_bucket_name(self.bucket.clone());
 
-    builder = if let Some(path) = &config.google_application_credentials {
-        builder.with_service_account_path(path.clone())
-    } else {
-        builder
-    };
+        builder = if let Some(path) = &self.google_application_credentials {
+            builder.with_service_account_path(path.clone())
+        } else {
+            builder
+        };
 
-    let store = builder.build()?;
-    Ok(Arc::new(store))
+        let store = builder.build()?;
+        Ok(Arc::new(store))
+    }
+
+    pub fn get_base_url(&self) -> Option<Path> {
+        self.prefix
+            .as_ref()
+            .map(|prefix| Path::from(prefix.as_ref()))
+    }
 }
 
 pub fn map_options_into_google_config_keys(
@@ -114,13 +120,6 @@ pub fn add_google_cloud_storage_environment_variables(
             }
         }
     }
-}
-
-pub fn get_base_url(config: &GCSConfig) -> Option<Path> {
-    config
-        .prefix
-        .as_ref()
-        .map(|prefix| Path::from(prefix.as_ref()))
 }
 
 #[cfg(test)]
@@ -191,15 +190,14 @@ mod tests {
         fs::write(temp_file.path(), credentials_content)
             .expect("Failed to write to temporary file");
 
-        let config = GCSConfig {
+        let result = GCSConfig {
             bucket: "my-bucket".to_string(),
             prefix: Some("my-prefix".to_string()),
             google_application_credentials: Some(
                 temp_file.path().to_str().unwrap().to_string(),
             ),
-        };
-
-        let result = build_google_cloud_storage_from_config(&config);
+        }
+        .build_google_cloud_storage();
 
         assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result);
 
@@ -211,13 +209,12 @@ mod tests {
 
     #[test]
     fn test_build_google_cloud_storage_from_config_with_missing_optional_fields() {
-        let config = GCSConfig {
+        let result = GCSConfig {
             bucket: "my-bucket".to_string(),
             prefix: None,
             google_application_credentials: None,
-        };
-
-        let result = build_google_cloud_storage_from_config(&config);
+        }
+        .build_google_cloud_storage();
 
         assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result);
 
@@ -308,7 +305,7 @@ mod tests {
             google_application_credentials: Some("path/to/credentials.json".to_string()),
         };
 
-        let base_url = get_base_url(&gcs_config);
+        let base_url = gcs_config.get_base_url();
         assert!(base_url.is_some());
         assert_eq!(base_url.unwrap(), Path::from("my_prefix"));
     }
@@ -321,7 +318,7 @@ mod tests {
             google_application_credentials: Some("path/to/credentials.json".to_string()),
         };
 
-        let base_url = get_base_url(&gcs_config);
+        let base_url = gcs_config.get_base_url();
         assert!(base_url.is_none());
     }
 
@@ -333,7 +330,7 @@ mod tests {
             google_application_credentials: Some("path/to/credentials.json".to_string()),
         };
 
-        let base_url = get_base_url(&gcs_config);
+        let base_url = gcs_config.get_base_url();
         assert!(base_url.is_some());
         assert_eq!(base_url.unwrap(), Path::from(""));
     }

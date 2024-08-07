@@ -143,42 +143,50 @@ impl S3Config {
     pub fn bucket_to_url(&self) -> String {
         format!("s3://{}", &self.bucket)
     }
-}
 
-pub fn build_amazon_s3_from_config(
-    config: &S3Config,
-) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-    assert!(config.allow_http, "allow_http must be true for S3");
+    pub fn build_amazon_s3(&self) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+        assert!(self.allow_http, "allow_http must be true for Amazon S3");
 
-    let mut builder = AmazonS3Builder::new()
-        .with_region(config.region.clone().unwrap_or_default())
-        .with_bucket_name(config.bucket.clone())
-        .with_allow_http(config.allow_http);
+        let mut builder = AmazonS3Builder::new()
+            .with_region(self.region.clone().unwrap_or_default())
+            .with_bucket_name(self.bucket.clone())
+            .with_allow_http(self.allow_http);
 
-    if let Some(endpoint) = &config.endpoint {
-        builder = builder.with_endpoint(endpoint.clone());
-    }
-
-    if let (Some(access_key_id), Some(secret_access_key)) =
-        (&config.access_key_id, &config.secret_access_key)
-    {
-        builder = builder
-            .with_access_key_id(access_key_id.clone())
-            .with_secret_access_key(secret_access_key.clone());
-
-        if let Some(token) = &config.session_token {
-            builder = builder.with_token(token.clone())
+        if let Some(endpoint) = &self.endpoint {
+            builder = builder.with_endpoint(endpoint.clone());
         }
-    } else {
-        assert!(
-            config.skip_signature,
-            "Access key and secret key must be provided if skip_signature is false"
-        );
-        builder = builder.with_skip_signature(config.skip_signature)
+
+        if let (Some(access_key_id), Some(secret_access_key)) =
+            (&self.access_key_id, &self.secret_access_key)
+        {
+            builder = builder
+                .with_access_key_id(access_key_id.clone())
+                .with_secret_access_key(secret_access_key.clone());
+
+            if let Some(token) = &self.session_token {
+                builder = builder.with_token(token.clone())
+            }
+        } else {
+            assert!(
+                self.skip_signature,
+                "Access key and secret key must be provided if skip_signature is false"
+            );
+            builder = builder.with_skip_signature(self.skip_signature)
+        }
+
+        let store = builder.build()?;
+        Ok(Arc::new(store))
     }
 
-    let store = builder.build()?;
-    Ok(Arc::new(store))
+    pub fn get_base_url(&self) -> Option<Path> {
+        self.prefix
+            .as_ref()
+            .map(|prefix| Path::from(prefix.as_ref()))
+    }
+
+    pub fn get_allow_http(&self) -> bool {
+        self.allow_http
+    }
 }
 
 pub fn map_options_into_amazon_s3_config_keys(
@@ -255,13 +263,6 @@ async fn detect_region(url: &Url) -> Result<String, object_store::Error> {
     Ok(region)
 }
 
-pub fn get_base_url(config: &S3Config) -> Option<Path> {
-    config
-        .prefix
-        .as_ref()
-        .map(|prefix| Path::from(prefix.as_ref()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_build_amazon_s3_from_config_with_all_fields() {
-        let config = S3Config {
+        let result = S3Config {
             region: Some("us-west-2".to_string()),
             access_key_id: Some("access_key".to_string()),
             secret_access_key: Some("secret_key".to_string()),
@@ -326,9 +327,8 @@ mod tests {
             prefix: Some("my-prefix".to_string()),
             allow_http: true,
             skip_signature: true,
-        };
-
-        let result = build_amazon_s3_from_config(&config);
+        }
+        .build_amazon_s3();
 
         assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result);
 
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn test_build_amazon_s3_from_config_with_missing_optional_fields() {
-        let config = S3Config {
+        let result = S3Config {
             region: Some("us-west-2".to_string()),
             access_key_id: None,
             secret_access_key: None,
@@ -357,9 +357,8 @@ mod tests {
             prefix: None,
             allow_http: true,
             skip_signature: true,
-        };
-
-        let result = build_amazon_s3_from_config(&config);
+        }
+        .build_amazon_s3();
 
         assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result);
 
@@ -463,7 +462,7 @@ mod tests {
             skip_signature: true,
         };
 
-        let base_url = get_base_url(&s3_config);
+        let base_url = s3_config.get_base_url();
         assert!(base_url.is_some());
         assert_eq!(base_url.unwrap(), Path::from("my_prefix"));
     }
@@ -482,7 +481,7 @@ mod tests {
             skip_signature: true,
         };
 
-        let base_url = get_base_url(&s3_config);
+        let base_url = s3_config.get_base_url();
         assert!(base_url.is_none());
     }
 
@@ -500,7 +499,7 @@ mod tests {
             skip_signature: true,
         };
 
-        let base_url = get_base_url(&s3_config);
+        let base_url = s3_config.get_base_url();
         assert!(base_url.is_some());
         assert_eq!(base_url.unwrap(), Path::from(""));
     }
