@@ -59,6 +59,39 @@ macro_rules! implement_repository {
 #[async_trait]
 impl Repository for $repo {
     async fn setup(&self) {
+        // TODO remove the entire block a couple of releases past 0.5.7
+        {
+            // Migrate the old field JSON format to the canonical one
+            #[derive(sqlx::FromRow)]
+            struct ColumnSchema {
+                id: i64,
+                r#type: String,
+            }
+
+            // Fetch all rows from the table
+            let maybe_rows: Result<Vec<ColumnSchema>, sqlx::Error> = sqlx::query_as::<_, ColumnSchema>("SELECT id, type FROM table_column")
+                .fetch_all(&self.executor)
+                .await;
+            if let Ok(rows) = maybe_rows {
+                for row in rows {
+                    // Load the `type` value using `arrow_integration_test::field_from_json`
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(row.r#type.as_str()) {
+                        if let Ok(field) = arrow_integration_test::field_from_json(&value) {
+                            // Convert the `Field` to a `serde_json` representation
+                            if let Ok(field_json) = serde_json::to_string(&field) {
+                                // Update the table with the new `type` value
+                                let _ = sqlx::query("UPDATE table_column SET type = $1 WHERE id = $2")
+                                    .bind(field_json)
+                                    .bind(row.id)
+                                    .execute(&self.executor)
+                                    .await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         $repo::MIGRATOR
             .run(&self.executor)
             .await
@@ -219,8 +252,8 @@ impl Repository for $repo {
 
             let fields: Vec<(String, String)> = schema.fields()
                 .iter()
-                .map(|f| (f.name().clone(), field_to_json(f).to_string()))
-                .collect();
+                .map(|f| Ok((f.name().clone(), serde_json::to_string(&f)?)))
+                .collect::<Result<_>>()?;
 
             builder.push_values(fields, |mut b, col| {
                 b.push_bind(new_version_id)

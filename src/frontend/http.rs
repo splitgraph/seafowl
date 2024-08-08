@@ -11,7 +11,6 @@ use arrow::record_batch::RecordBatch;
 #[cfg(feature = "frontend-arrow-flight")]
 use arrow_flight::flight_service_client::FlightServiceClient;
 
-use arrow_integration_test::{schema_from_json, schema_to_json};
 use arrow_schema::SchemaRef;
 use bytes::Buf;
 
@@ -107,7 +106,7 @@ fn plan_to_etag(plan: &LogicalPlan) -> String {
 
 // Construct a content-type header value that also includes schema information.
 fn content_type_with_schema(schema: SchemaRef) -> HeaderValue {
-    let schema_string = schema_to_json(schema.as_ref()).to_string();
+    let schema_string = serde_json::to_string(&schema).unwrap();
     let output = utf8_percent_encode(&schema_string, NON_ALPHANUMERIC);
 
     HeaderValue::from_str(format!("application/json; arrow-schema={output}").as_str())
@@ -415,8 +414,8 @@ pub async fn upload(
             let value_bytes = load_part(part).await?;
 
             schema = Some(Arc::new(
-                schema_from_json(
-                    &serde_json::from_slice::<serde_json::Value>(value_bytes.as_slice())
+                serde_json::from_str(
+                    &String::from_utf8(value_bytes)
                         .map_err(ApiError::UploadSchemaDeserializationError)?,
                 )
                 .map_err(ApiError::UploadSchemaParseError)?,

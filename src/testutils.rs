@@ -6,7 +6,6 @@ use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 
 use arrow::record_batch::RecordBatch;
-use arrow_integration_test::schema_from_json;
 use datafusion::parquet::arrow::ArrowWriter;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -155,10 +154,7 @@ pub fn schema_from_header(headers: &HeaderMap<HeaderValue>) -> Schema {
         .decode_utf8()
         .expect("escaped schema decodable")
         .to_string();
-    let schema_json = serde_json::from_str::<serde_json::Value>(schema_str.as_str())
-        .expect("decoded schema is valid JSON");
-
-    schema_from_json(&schema_json).expect("arrow schema reconstructable from JSON")
+    serde_json::from_str(schema_str.as_str()).expect("decoded schema is valid JSON")
 }
 
 pub fn assert_header_is_float(header: &HeaderValue) -> bool {
