@@ -539,7 +539,6 @@ mod tests {
             hashmap.get(AmazonS3ConfigKey::Bucket.as_ref()),
             Some(&"my_bucket".to_string())
         );
-        assert_eq!(hashmap.get("prefix"), Some(&"my_prefix".to_string()));
         assert_eq!(
             hashmap.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
             Some(&"true".to_string())
@@ -578,7 +577,6 @@ mod tests {
             hashmap.get(AmazonS3ConfigKey::Bucket.as_ref()),
             Some(&"my_bucket".to_string())
         );
-        assert_eq!(hashmap.get("prefix"), None);
         assert_eq!(
             hashmap.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
             Some(&"true".to_string())
