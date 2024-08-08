@@ -21,7 +21,7 @@ use uuid::Uuid;
 use warp::hyper::Client;
 
 use clade::schema::{InlineMetastoreCommandStatementQuery, ListSchemaResponse};
-use clade::sync::{DataSyncCommand, DataSyncResult};
+use clade::sync::{DataSyncCommand, DataSyncResponse};
 
 use crate::fixtures::schemas;
 use crate::http::{get_metrics, response_text};

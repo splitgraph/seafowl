@@ -4,13 +4,14 @@ use arrow::record_batch::RecordBatch;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::{ProstMessageExt, SqlInfo, TicketStatementQuery};
 use arrow_flight::{FlightDescriptor, FlightEndpoint, FlightInfo, Ticket};
-use clade::sync::{DataSyncCommand, DataSyncResult};
+use clade::sync::{DataSyncCommand, DataSyncResponse};
 use dashmap::DashMap;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::DataFusionError;
 use lazy_static::lazy_static;
 use prost::Message;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
@@ -47,6 +48,8 @@ pub(super) struct SeafowlFlightHandler {
     pub context: Arc<SeafowlContext>,
     pub results: Arc<DashMap<String, Mutex<SendableRecordBatchStream>>>,
     sync_writer: Arc<RwLock<SeafowlDataSyncWriter>>,
+    // Denotes whether we're past the first sync response, thus indicating Seafowl (re)starts
+    first_sync: Arc<AtomicBool>,
 }
 
 impl SeafowlFlightHandler {
@@ -58,6 +61,7 @@ impl SeafowlFlightHandler {
             context: context.clone(),
             results: Arc::new(Default::default()),
             sync_writer,
+            first_sync: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -137,7 +141,31 @@ impl SeafowlFlightHandler {
         cmd: DataSyncCommand,
         sync_schema: SyncSchema,
         batches: Vec<RecordBatch>,
-    ) -> SyncResult<DataSyncResult> {
+    ) -> SyncResult<DataSyncResponse> {
+        let first = self.first_sync.load(Ordering::SeqCst);
+        if first {
+            // We're past first response
+            self.first_sync.store(false, Ordering::SeqCst);
+        }
+
+        let num_rows = batches
+            .iter()
+            .fold(0, |rows, batch| rows + batch.num_rows());
+
+        // Short-circuit the "probing" request
+        if num_rows == 0 && cmd.sequence_number.is_none() {
+            // Get the current volatile and durable sequence numbers
+            debug!("Received empty batches with no sequence number, returning current sequence numbers");
+            let (mem_seq, dur_seq) =
+                self.sync_writer.read().await.stored_sequences(&cmd.origin);
+            return Ok(DataSyncResponse {
+                accepted: true,
+                memory_sequence_number: mem_seq,
+                durable_sequence_number: dur_seq,
+                first,
+            });
+        }
+
         let log_store = match cmd.store {
             None => self.context.internal_object_store.get_log_store(&cmd.path),
             Some(store_loc) => {
@@ -156,23 +184,7 @@ impl SeafowlFlightHandler {
                     .await?
             }
         };
-
         let url = log_store.root_uri();
-        let num_rows = batches
-            .iter()
-            .fold(0, |rows, batch| rows + batch.num_rows());
-
-        if num_rows == 0 && cmd.sequence_number.is_none() {
-            // Get the current volatile and durable sequence numbers
-            debug!("Received empty batches, returning current sequence numbers");
-            let (mem_seq, dur_seq) =
-                self.sync_writer.read().await.stored_sequences(&cmd.origin);
-            return Ok(DataSyncResult {
-                accepted: true,
-                memory_sequence_number: mem_seq,
-                durable_sequence_number: dur_seq,
-            });
-        }
 
         debug!("Processing data change with {num_rows} rows for url {url} from origin {:?} at position {:?}",
 	       cmd.origin,
@@ -195,18 +207,20 @@ impl SeafowlFlightHandler {
                 sync_writer.flush().await?;
 
                 let (mem_seq, dur_seq) = sync_writer.stored_sequences(&cmd.origin);
-                Ok(DataSyncResult {
+                Ok(DataSyncResponse {
                     accepted: true,
                     memory_sequence_number: mem_seq,
                     durable_sequence_number: dur_seq,
+                    first,
                 })
             }
             Err(_) => {
                 debug!("Timeout waiting for data sync write lock for url {url}");
-                Ok(DataSyncResult {
+                Ok(DataSyncResponse {
                     accepted: false,
                     memory_sequence_number: None,
                     durable_sequence_number: None,
+                    first,
                 })
             }
         }

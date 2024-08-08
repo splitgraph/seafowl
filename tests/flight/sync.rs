@@ -15,11 +15,11 @@ async fn do_put_sync(
     cmd: DataSyncCommand,
     batch: RecordBatch,
     client: &mut FlightClient,
-) -> Result<DataSyncResult> {
+) -> Result<DataSyncResponse> {
     let flight_data = sync_cmd_to_flight_data(cmd.clone(), batch);
     let response = client.do_put(flight_data).await?.next().await.unwrap()?;
 
-    Ok(DataSyncResult::decode(response.app_metadata).expect("DataSyncResult"))
+    Ok(DataSyncResponse::decode(response.app_metadata).expect("DataSyncResponse"))
 }
 
 #[tokio::test]
@@ -118,10 +118,11 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
         sync_result,
-        DataSyncResult {
+        DataSyncResponse {
             accepted: true,
             memory_sequence_number: None, // sequence not in memory because of  `last: false`
             durable_sequence_number: None,
+            first: true,
         }
     );
 
@@ -211,10 +212,11 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
         sync_result,
-        DataSyncResult {
+        DataSyncResponse {
             accepted: true,
             memory_sequence_number: Some(1234),
             durable_sequence_number: None,
+            first: false,
         }
     );
 
@@ -249,10 +251,11 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         do_put_sync(cmd.clone(), RecordBatch::new_empty(schema), &mut client).await?;
     assert_eq!(
         sync_result,
-        DataSyncResult {
+        DataSyncResponse {
             accepted: true,
             memory_sequence_number: Some(1234),
             durable_sequence_number: Some(1234),
+            first: false,
         }
     );
 
@@ -291,10 +294,11 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
         sync_result,
-        DataSyncResult {
+        DataSyncResponse {
             accepted: true,
             memory_sequence_number: Some(5600),
             durable_sequence_number: Some(1234),
+            first: false,
         }
     );
 
@@ -354,10 +358,11 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
         sync_result,
-        DataSyncResult {
+        DataSyncResponse {
             accepted: true,
             memory_sequence_number: Some(5600), // again 78910 not in memory since `last = false`
             durable_sequence_number: Some(1234),
+            first: false,
         }
     );
 
@@ -370,10 +375,11 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         do_put_sync(cmd.clone(), RecordBatch::new_empty(schema), &mut client).await?;
     assert_eq!(
         sync_result,
-        DataSyncResult {
+        DataSyncResponse {
             accepted: true,
             memory_sequence_number: Some(5600),
             durable_sequence_number: Some(1234),
+            first: false,
         }
     );
 
@@ -444,10 +450,11 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
         sync_result,
-        DataSyncResult {
+        DataSyncResponse {
             accepted: true,
             memory_sequence_number: Some(78910),
             durable_sequence_number: Some(78910),
+            first: false,
         }
     );
 
