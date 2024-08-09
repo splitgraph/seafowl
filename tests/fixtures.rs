@@ -1,6 +1,7 @@
 use clade::schema::{ListSchemaResponse, SchemaObject, StorageLocation, TableObject};
 use object_store::aws::AmazonS3ConfigKey;
 use object_store::gcp::GoogleConfigKey;
+use object_store::ClientConfigKey;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;
@@ -76,7 +77,9 @@ pub fn schemas() -> ListSchemaResponse {
                     (
                         // This has been removed from the config enum, but it can
                         // still be picked up via `AmazonS3ConfigKey::from_str`
-                        "aws_allow_http".to_string(),
+                        AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp)
+                            .as_ref()
+                            .to_string(),
                         "true".to_string(),
                     ),
                 ]),
