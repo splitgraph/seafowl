@@ -140,7 +140,7 @@ strum_macros = ">=0.24"
 tempfile = "3"
 thiserror = "1"
 tokio = { workspace = true }
-tokio-graceful-shutdown = { version = "0.15" }
+tokio-graceful-shutdown = { version = "0.14" }
 tonic = { version = "0.11.0", optional = true }
 tower = "0.4"
 tracing = { workspace = true }
