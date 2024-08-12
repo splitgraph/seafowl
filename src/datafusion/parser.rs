@@ -298,9 +298,11 @@ impl<'a> DFParser<'a> {
             Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
             Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
             Token::Number(ref n, l) => {
-                let n = n.parse().expect("Token::Number should always contain a valid number");
+                let n = n
+                    .parse()
+                    .expect("Token::Number should always contain a valid number");
                 Ok(Value::Number(n, l))
-            },
+            }
             _ => self.parser.expected("string or numeric value", next_token),
         }
     }
