@@ -121,10 +121,6 @@ impl S3Config {
             );
         }
         map.insert(
-            AmazonS3ConfigKey::Bucket.as_ref().to_string(),
-            self.bucket.clone(),
-        );
-        map.insert(
             AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp)
                 .as_ref()
                 .to_string(),
@@ -536,10 +532,6 @@ mod tests {
             Some(&"https://s3.amazonaws.com".to_string())
         );
         assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::Bucket.as_ref()),
-            Some(&"my_bucket".to_string())
-        );
-        assert_eq!(
             hashmap.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
             Some(&"true".to_string())
         );
@@ -573,10 +565,6 @@ mod tests {
         );
         assert_eq!(hashmap.get(AmazonS3ConfigKey::Token.as_ref()), None);
         assert_eq!(hashmap.get(AmazonS3ConfigKey::Endpoint.as_ref()), None);
-        assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::Bucket.as_ref()),
-            Some(&"my_bucket".to_string())
-        );
         assert_eq!(
             hashmap.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
             Some(&"true".to_string())
