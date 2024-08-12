@@ -129,7 +129,7 @@ reqwest = { version = "0.11.14", features = [ "stream" ] }
 rmp = "0.8.11"
 rmp-serde = "1.1.1"
 rmpv = { version = "1.0.0", features = ["with-serde"] }
-rustyline = "13.0"
+rustyline = "14.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = ">=0.10.1"
