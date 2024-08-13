@@ -109,6 +109,7 @@ pub async fn plan_to_object_store(
 
     // Iterate over Datafusion partitions and re-chunk them, since we want to enforce a pre-defined
     // partition size limit, which is not guaranteed by DF.
+    info!("Persisting data into temporary partition objects on disk");
     for i in 0..plan.output_partitioning().partition_count() {
         let task_ctx = Arc::new(TaskContext::from(state));
         let mut stream = plan.execute(i, task_ctx)?;

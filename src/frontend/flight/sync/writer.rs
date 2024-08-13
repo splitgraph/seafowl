@@ -418,8 +418,20 @@ impl SeafowlDataSyncWriter {
         // that any of the entries has the full column list.
         let full_schema = TableProvider::schema(&table);
 
-        // Generate a qualifier expression for pruning partition files and filtering the base scan
-        let qualifier = construct_qualifier(syncs)?;
+        // Generate a qualifier expression for pruning partition files and filtering the base scan.
+        // First construct the qualifier for old PKs; we definitely need to overwrite those in case
+        // of PK-changing UPDATEs or DELETEs. Note that this can be `None` if it's an all-INSERT
+        // syncs vec.
+        let old_pk_qualifier = construct_qualifier(syncs, ColumnRole::OldPk)?;
+        // Next construct the qualifier for new PKs; these are only needed for idempotence.
+        let new_pk_qualifier = construct_qualifier(syncs, ColumnRole::NewPk)?;
+        let qualifier = match (old_pk_qualifier, new_pk_qualifier) {
+            (Some(old_pk_q), Some(new_pk_q)) => old_pk_q.or(new_pk_q),
+            (Some(old_pk_q), None) => old_pk_q,
+            (None, Some(new_pk_q)) => new_pk_q,
+            _ => panic!("There can be no situation without either old or new PKs"),
+        };
+        info!("Generated qualifier {qualifier}");
 
         // Iterate through all syncs for this table and construct a full plan by applying each
         // individual sync
@@ -471,7 +483,14 @@ impl SeafowlDataSyncWriter {
         let mut actions: Vec<Action> = adds.into_iter().map(Action::Add).collect();
 
         // Prune away files that are refuted by the qualifier
-        actions.extend(self.get_removes(&qualifier, full_schema.clone(), &table)?);
+        let removes = self.get_removes(&qualifier, full_schema.clone(), &table)?;
+        info!(
+            "Removing {} out of {} files from state and adding {} new one(s)",
+            removes.len(),
+            table.get_files_count(),
+            actions.len(),
+        );
+        actions.extend(removes);
 
         // Append a special `CommitInfo` action to record latest durable sequence number
         // tied to the commit from this origin if any.
