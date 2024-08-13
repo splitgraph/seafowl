@@ -361,7 +361,8 @@ async fn test_create_table_drop_schema(
     for table_uuid in [table_1_uuid, table_2_uuid, table_3_uuid] {
         testutils::assert_uploaded_objects(
             context
-                .internal_object_store
+                .get_internal_object_store()
+                .unwrap()
                 .get_log_store(&table_uuid.to_string())
                 .object_store(),
             vec![],
@@ -381,7 +382,8 @@ async fn test_create_table_drop_schema(
 
         testutils::assert_uploaded_objects(
             context
-                .internal_object_store
+                .get_internal_object_store()
+                .unwrap()
                 .get_log_store(&table_uuid.to_string())
                 .object_store(),
             vec![

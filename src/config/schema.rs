@@ -42,9 +42,11 @@ pub const MEBIBYTES: u64 = 1024 * 1024;
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct SeafowlConfig {
+    // If the object store and the catalog aren't specified, we expect
+    // the caller to provide them as part of the Flight request
     pub object_store: Option<object_store_factory::ObjectStoreConfig>,
     #[serde(default)]
-    pub catalog: Catalog,
+    pub catalog: Option<Catalog>,
     #[serde(default)]
     pub frontend: Frontend,
     #[serde(default)]
@@ -369,8 +371,8 @@ pub struct Runtime {
     pub temp_dir: Option<PathBuf>,
 }
 
-pub fn validate_config(mut config: SeafowlConfig) -> Result<SeafowlConfig, ConfigError> {
-    let in_memory_catalog = matches!(config.catalog, Catalog::Sqlite(Sqlite { ref dsn, journal_mode: _, read_only: _ }) if dsn.contains(":memory:"));
+pub fn validate_config(config: SeafowlConfig) -> Result<SeafowlConfig, ConfigError> {
+    let in_memory_catalog = matches!(config.catalog, Some(Catalog::Sqlite(Sqlite { ref dsn, journal_mode: _, read_only: _ })) if dsn.contains(":memory:"));
     let in_memory_object_store =
         matches!(config.object_store, Some(ObjectStoreConfig::Memory));
 
@@ -407,16 +409,6 @@ If Seafowl is running on GCP a token should be fetched using the GCP metadata en
             warn!(
             "The provided caching properties take no effect on local and in-memory object stores"
         )
-        }
-        None if !matches!(config.catalog, Catalog::Clade(Clade { dsn: _ })) => {
-            return Err(ConfigError::Message(
-                "Cannot omit the object_store section unless Clade catalog is configured"
-                    .to_string(),
-            ))
-        }
-        // When no object_store section present, default to using in-memory one internally
-        None if matches!(config.catalog, Catalog::Clade(Clade { dsn: _ })) => {
-            config.object_store = Some(ObjectStoreConfig::Memory)
         }
         _ => {}
     };
@@ -583,6 +575,10 @@ cache_control = "private, max-age=86400"
     type = "clade"
     dsn = "http://localhost:54321""#;
 
+    // Completely empty config: assumes inline metastore
+    // passed in Flight requests
+    const TEST_CONFIG_EMPTY_INLINE_METASTORE: &str = "";
+
     #[rstest]
     #[case::basic_s3(TEST_CONFIG_S3, None)]
     #[case::basic_s3_with_cache(
@@ -619,7 +615,17 @@ cache_control = "private, max-age=86400"
         let config =
             load_config_from_string(TEST_CONFIG_VALID_CLADE, false, None).unwrap();
 
-        assert_eq!(config.object_store, Some(ObjectStoreConfig::Memory));
+        assert_eq!(config.object_store, None);
+    }
+
+    #[test]
+    fn test_parse_empty_inline_metastore() {
+        let config =
+            load_config_from_string(TEST_CONFIG_EMPTY_INLINE_METASTORE, false, None)
+                .unwrap();
+
+        assert_eq!(config.object_store, None);
+        assert_eq!(config.catalog, None);
     }
 
     #[test]
@@ -632,10 +638,10 @@ cache_control = "private, max-age=86400"
                 object_store: Some(ObjectStoreConfig::Local(LocalConfig {
                     data_dir: "./seafowl-data".to_string(),
                 })),
-                catalog: Catalog::Postgres(Postgres {
+                catalog: Some(Catalog::Postgres(Postgres {
                     dsn: "postgresql://user:pass@localhost:5432/somedb".to_string(),
                     schema: "public".to_string()
-                }),
+                })),
                 frontend: Frontend {
                     #[cfg(feature = "frontend-arrow-flight")]
                     flight: None,
@@ -727,11 +733,11 @@ cache_control = "private, max-age=86400"
                 object_store: Some(ObjectStoreConfig::Local(LocalConfig {
                     data_dir: "some_other_path".to_string(),
                 })),
-                catalog: Catalog::Sqlite(Sqlite {
+                catalog: Some(Catalog::Sqlite(Sqlite {
                     dsn: "sqlite://file.sqlite".to_string(),
                     journal_mode: SqliteJournalMode::Wal,
                     read_only: false,
-                }),
+                })),
                 frontend: Frontend {
                     #[cfg(feature = "frontend-arrow-flight")]
                     flight: None,

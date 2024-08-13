@@ -293,6 +293,8 @@ impl SeafowlContext {
         let resolved_ref = self.resolve_table_ref(name);
         let schema_name = resolved_ref.schema.clone();
         let table_name = resolved_ref.table.clone();
+        // Only supported if Seafowl has been configured with a default object store
+        let internal_object_store = self.get_internal_object_store()?;
 
         let _ = self
             .metastore
@@ -312,9 +314,8 @@ impl SeafowlContext {
                 // with the returned uuid (and delete the catalog entry if the object store creation fails).
                 // On the other hand that would complicate etag testing logic.
                 let table_uuid = get_uuid();
-                let table_log_store = self
-                    .internal_object_store
-                    .get_log_store(&table_uuid.to_string());
+                let table_log_store =
+                    internal_object_store.get_log_store(&table_uuid.to_string());
                 let delta_schema = DeltaSchema::try_from(&schema)?;
 
                 let table = CreateBuilder::new()
@@ -336,9 +337,8 @@ impl SeafowlContext {
                         "Unable to parse the UUID path of the table: {e}"
                     ))
                 })?;
-                let table_log_store = self
-                    .internal_object_store
-                    .get_log_store(&table_uuid.to_string());
+                let table_log_store =
+                    internal_object_store.get_log_store(&table_uuid.to_string());
 
                 let table = match ConvertToDeltaBuilder::new()
                     .with_log_store(table_log_store.clone())
@@ -400,8 +400,9 @@ impl SeafowlContext {
     ) -> Result<DeltaTable> {
         let table_uuid = self.get_table_uuid(name).await?;
         let prefix = table_uuid.to_string();
-        let table_log_store = self.internal_object_store.get_log_store(&prefix);
-        let local_table_dir = self.internal_object_store.local_table_dir(&prefix);
+        let internal_object_store = self.get_internal_object_store()?;
+        let table_log_store = internal_object_store.get_log_store(&prefix);
+        let local_table_dir = internal_object_store.local_table_dir(&prefix);
 
         // Upload partition files to table's root directory
         let adds = plan_to_object_store(

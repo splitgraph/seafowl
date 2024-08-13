@@ -28,7 +28,7 @@ pub struct SeafowlContext {
     pub config: SeafowlConfig,
     pub inner: SessionContext,
     pub metastore: Arc<Metastore>,
-    pub internal_object_store: Arc<InternalObjectStore>,
+    pub internal_object_store: Option<Arc<InternalObjectStore>>,
     pub default_catalog: String,
     pub default_schema: String,
 }
@@ -227,11 +227,11 @@ pub mod test_utils {
     pub async fn in_memory_context() -> SeafowlContext {
         let config = SeafowlConfig {
             object_store: Some(ObjectStoreConfig::Memory),
-            catalog: Catalog::Sqlite(Sqlite {
+            catalog: Some(Catalog::Sqlite(Sqlite {
                 dsn: "sqlite://:memory:".to_string(),
                 journal_mode: SqliteJournalMode::Wal,
                 read_only: false,
-            }),
+            })),
             frontend: Default::default(),
             runtime: Default::default(),
             misc: Default::default(),

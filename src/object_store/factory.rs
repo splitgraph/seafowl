@@ -57,7 +57,7 @@ impl Hash for StoreCacheKey {
 }
 
 pub struct ObjectStoreFactory {
-    default_store: Arc<InternalObjectStore>,
+    default_store: Option<Arc<InternalObjectStore>>,
     custom_stores: DashMap<StoreCacheKey, Arc<dyn ObjectStore>>,
     object_store_cache: Option<ObjectCacheProperties>,
 }
@@ -65,16 +65,17 @@ pub struct ObjectStoreFactory {
 impl ObjectStoreFactory {
     pub fn new_from_config(config: &SeafowlConfig) -> Result<Self, object_store::Error> {
         // Build internal object store
-        let object_store_cfg = config
-            .object_store
-            .clone()
-            .expect("guaranteed by config validation that this is Some");
-        let object_store =
-            build_object_store(&object_store_cfg, &config.misc.object_store_cache)?;
-        let internal_object_store = Arc::new(InternalObjectStore::new(
-            object_store.clone(),
-            object_store_cfg,
-        ));
+        let internal_object_store = match &config.object_store {
+            Some(cfg) => {
+                let object_store =
+                    build_object_store(cfg, &config.misc.object_store_cache)?;
+                Some(Arc::new(InternalObjectStore::new(
+                    object_store.clone(),
+                    cfg.clone(),
+                )))
+            }
+            None => None,
+        };
 
         Ok(Self {
             default_store: internal_object_store,
@@ -88,7 +89,9 @@ impl ObjectStoreFactory {
     pub fn register(self: &Arc<Self>, factories: FactoryRegistry) {
         // NB: this never actually gets used, it serves only to fetch the known schemes
         // inside delta-rs in `resolve_uri_type`
-        factories.insert(self.default_store.root_uri.clone(), self.clone());
+        if let Some(store) = &self.default_store {
+            factories.insert(store.root_uri.clone(), self.clone());
+        }
         for url in ["s3://", "gs://"] {
             let url = Url::parse(url).unwrap();
             factories.insert(url, self.clone());
@@ -145,11 +148,11 @@ impl ObjectStoreFactory {
         ))
     }
 
-    pub fn get_default_log_store(&self, path: &str) -> Arc<dyn LogStore> {
-        self.default_store.get_log_store(path)
+    pub fn get_default_log_store(&self, path: &str) -> Option<Arc<dyn LogStore>> {
+        self.default_store.as_ref().map(|s| s.get_log_store(path))
     }
 
-    pub fn get_internal_store(&self) -> Arc<InternalObjectStore> {
+    pub fn get_internal_store(&self) -> Option<Arc<InternalObjectStore>> {
         self.default_store.clone()
     }
 }

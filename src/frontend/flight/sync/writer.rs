@@ -964,7 +964,10 @@ mod tests {
                 continue;
             }
 
-            let log_store = ctx.internal_object_store.get_log_store(table_name);
+            let log_store = ctx
+                .get_internal_object_store()
+                .unwrap()
+                .get_log_store(table_name);
             let origin: String = (*origin).to_owned();
 
             sync_mgr
@@ -1068,7 +1071,10 @@ mod tests {
 
         // Enqueue all syncs
         for (table_name, origin, sequence) in syncs {
-            let log_store = ctx.internal_object_store.get_log_store(table_name);
+            let log_store = ctx
+                .get_internal_object_store()
+                .unwrap()
+                .get_log_store(table_name);
 
             sync_mgr
                 .enqueue_sync(
@@ -1097,7 +1103,10 @@ mod tests {
         let (arrow_schema, sync_schema) = sync_schema();
 
         // Enqueue all syncs
-        let log_store = ctx.internal_object_store.get_log_store("test_table");
+        let log_store = ctx
+            .get_internal_object_store()
+            .unwrap()
+            .get_log_store("test_table");
 
         // Add first non-empty sync
         sync_mgr

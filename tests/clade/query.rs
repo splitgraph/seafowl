@@ -1,7 +1,9 @@
 use crate::clade::*;
 
 #[rstest]
-#[should_panic(expected = "External(NotATable(\"no log files\"))")]
+#[should_panic(
+    expected = "Plan(\"Object store not configured and no object store for table \\\"file\\\" passed in\")"
+)]
 #[case("local.file", false)]
 #[case("local.file", true)]
 #[case("s3.minio", true)]

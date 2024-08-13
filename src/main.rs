@@ -165,8 +165,10 @@ async fn main() {
 
     let context = Arc::new(build_context(config).await.unwrap());
 
-    // Temporary, remove once migrations drop the `dropped_table` catalog table
-    gc_databases(context.as_ref(), None).await;
+    if let Some(internal_object_store) = context.internal_object_store.as_ref() {
+        // Temporary, remove once migrations drop the `dropped_table` catalog table
+        gc_databases(context.as_ref(), internal_object_store.clone(), None).await;
+    }
 
     if let Some(one_off_cmd) = args.one_off {
         run_one_off_command(context, &one_off_cmd, io::stdout()).await;
@@ -251,12 +253,17 @@ async fn main() {
                 (context.config.misc.gc_interval * 3600) as u64,
             ));
 
-            s.start::<Infallible, _, _>(SubsystemBuilder::new("Table garbage collection", move |_h| async move {
-                loop {
-                    interval.tick().await;
-                    gc_databases(&context, None).await;
-                };
-            }));
+            if let Some(internal_object_store) = context.internal_object_store.as_ref() {
+                let internal_object_store = internal_object_store.clone();
+                s.start::<Infallible, _, _>(SubsystemBuilder::new("Table garbage collection", move |_h| async move {
+                    loop {
+                        interval.tick().await;
+                        gc_databases(&context, internal_object_store.clone(), None).await;
+                    };
+                }));
+            } else {
+                warn!("Default object store not configured, not starting the GC task")
+            }
         };
     })
     .catch_signals()

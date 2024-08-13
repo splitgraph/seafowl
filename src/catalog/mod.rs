@@ -11,6 +11,7 @@ use datafusion_common::DataFusionError;
 use tonic::Status;
 use uuid::Uuid;
 
+mod empty;
 pub mod external;
 pub mod memory;
 pub mod metastore;
@@ -81,6 +82,14 @@ pub enum CatalogError {
 
     #[error("Failed parsing URL: {0}")]
     UrlParseError(#[from] url::ParseError),
+
+    #[error(
+        "Object store not configured and no object store for table {name:?} passed in"
+    )]
+    NoTableStoreInInlineMetastore { name: String },
+
+    #[error("No inline metastore passed in")]
+    NoInlineMetastore,
 }
 
 /// Implement a global converter into a DataFusionError from the catalog error type.

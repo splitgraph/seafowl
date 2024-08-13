@@ -22,23 +22,26 @@ pub fn fake_gcs_creds() -> String {
 }
 
 // Return a list of schemas with actual tables and object store configs that are used in testing
-pub fn schemas() -> ListSchemaResponse {
+pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
+    let mut local_schema_tables = vec![TableObject {
+        name: "file_with_store".to_string(),
+        path: "delta-0.8.0-partitioned".to_string(),
+        store: Some("local_fs".to_string()),
+    }];
+
+    if include_file_without_store {
+        local_schema_tables.push(TableObject {
+            name: "file".to_string(),
+            path: "delta-0.8.0-partitioned".to_string(),
+            store: None,
+        })
+    }
+
     ListSchemaResponse {
         schemas: vec![
             SchemaObject {
                 name: "local".to_string(),
-                tables: vec![
-                    TableObject {
-                        name: "file".to_string(),
-                        path: "delta-0.8.0-partitioned".to_string(),
-                        store: None,
-                    },
-                    TableObject {
-                        name: "file_with_store".to_string(),
-                        path: "delta-0.8.0-partitioned".to_string(),
-                        store: Some("local_fs".to_string()),
-                    },
-                ],
+                tables: local_schema_tables,
             },
             SchemaObject {
                 name: "s3".to_string(),

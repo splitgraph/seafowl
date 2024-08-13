@@ -16,8 +16,8 @@ use tracing::{info, warn};
 #[cfg(test)]
 use metrics_exporter_prometheus::PrometheusRecorder;
 
-use crate::context::SeafowlContext;
 use crate::repository::interface::DroppedTableDeletionStatus;
+use crate::{context::SeafowlContext, object_store::wrapped::InternalObjectStore};
 
 // Run a one-off command and output its results to a writer
 pub async fn run_one_off_command<W>(
@@ -47,7 +47,11 @@ pub async fn run_one_off_command<W>(
 }
 
 // Physically delete dropped tables for a given context
-pub async fn gc_databases(context: &SeafowlContext, database_name: Option<String>) {
+pub async fn gc_databases(
+    context: &SeafowlContext,
+    internal_object_store: Arc<InternalObjectStore>,
+    database_name: Option<String>,
+) {
     let mut dropped_tables = context
         .metastore
         .tables
@@ -68,13 +72,8 @@ pub async fn gc_databases(context: &SeafowlContext, database_name: Option<String
             dt.database_name, dt.collection_name, dt.table_name, dt.uuid,
         );
 
-        let table_prefix = context
-            .internal_object_store
-            .table_prefix(&dt.uuid.to_string());
-        let result = context
-            .internal_object_store
-            .delete_in_prefix(&table_prefix)
-            .await;
+        let table_prefix = internal_object_store.table_prefix(&dt.uuid.to_string());
+        let result = internal_object_store.delete_in_prefix(&table_prefix).await;
 
         if let Err(err) = result {
             warn!(
