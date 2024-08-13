@@ -26,6 +26,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
+use super::empty::EmptyStore;
+
 // Root URL for a storage location alongside client connection options
 type LocationAndOptions = (String, HashMap<String, String>);
 
@@ -85,6 +87,19 @@ impl Metastore {
             schemas: memory_store.clone(),
             tables: memory_store.clone(),
             functions: memory_store,
+            staging_schema,
+            object_stores,
+        }
+    }
+
+    pub fn new_empty(object_stores: Arc<ObjectStoreFactory>) -> Self {
+        let staging_schema = Arc::new(MemorySchemaProvider::new());
+        let empty_store = Arc::new(EmptyStore {});
+        Self {
+            catalogs: empty_store.clone(),
+            schemas: empty_store.clone(),
+            tables: empty_store.clone(),
+            functions: empty_store,
             staging_schema,
             object_stores,
         }
@@ -170,7 +185,12 @@ impl Metastore {
                     .await?
             }
             // Use the configured, default, object store
-            None => self.object_stores.get_default_log_store(&table.path),
+            None => self
+                .object_stores
+                .get_default_log_store(&table.path)
+                .ok_or(CatalogError::NoTableStoreInInlineMetastore {
+                    name: table.name.clone(),
+                })?,
         };
 
         let delta_table = DeltaTable::new(table_log_store, Default::default());

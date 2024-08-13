@@ -8,6 +8,7 @@ use crate::nodes::{
 };
 use crate::object_store::factory::build_object_store;
 use crate::object_store::http::try_prepare_http_url;
+use crate::object_store::wrapped::InternalObjectStore;
 use crate::provider::project_expressions;
 use crate::utils::gc_databases;
 
@@ -70,6 +71,15 @@ fn make_dummy_exec() -> Arc<dyn ExecutionPlan> {
 }
 
 impl SeafowlContext {
+    /// Get the default object store used for writes, or error out if it's not configured.
+    pub fn get_internal_object_store(&self) -> Result<Arc<InternalObjectStore>> {
+        self.internal_object_store
+            .clone()
+            .ok_or(DataFusionError::Plan(
+            "Internal object store isn't configured, CREATE EXTERNAL TABLE not supported"
+                .to_string(),
+        ))
+    }
     pub async fn plan_query(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.create_logical_plan(sql).await?;
         self.create_physical_plan(&logical_plan).await
@@ -94,106 +104,11 @@ impl SeafowlContext {
             // abstraction (URL: scheme://some-path.to.file.parquet) and it's easier to reuse this
             // mechanism in our case too.
             LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                cmd @ CreateExternalTable {
-                    ref name,
-                    ref location,
-                    ..
-                },
+                cmd @ CreateExternalTable { .. },
             )) => {
-                // Replace the table name with the fully qualified one that has our staging schema
-                let mut cmd = cmd.clone();
-                cmd.name = self.resolve_staging_ref(name)?;
-
-                // try_prepare_http_url changes the url in case of the HTTP object store
-                // (to route _all_ HTTP URLs to our object store, not just specific hosts),
-                // so inject it into the CreateExternalTable command as well.
-                cmd.location = match try_prepare_http_url(location) {
-                    Some(new_loc) => new_loc,
-                    None => location.into(),
-                };
-
-                // If the referenced table is in a cloud object store then register a new
-                // corresponding object store dynamically:
-                // 1. Using cmd.options if provided,
-                // 2. Otherwise use the object store credentials from the config if it matches
-                //    the object store kind.
-                let table_path = ListingTableUrl::parse(&cmd.location)?;
-
-                let url: &Url = table_path.as_ref();
-                let parsed_result = ObjectStoreScheme::parse(url);
-                if let Ok((scheme, _)) = parsed_result
-                    && matches!(
-                        scheme,
-                        ObjectStoreScheme::AmazonS3
-                            | ObjectStoreScheme::GoogleCloudStorage
-                    )
-                {
-                    let bucket = url
-                        .host_str()
-                        .ok_or_else(|| {
-                            DataFusionError::Execution(format!(
-                                "Unable to parse bucket name from URL: {}",
-                                url.as_str()
-                            ))
-                        })?
-                        .to_string();
-
-                    let config = match scheme {
-                        ObjectStoreScheme::AmazonS3 => {
-                            let s3_config = if cmd.options.is_empty() {
-                                if let ObjectStoreConfig::AmazonS3(s3) =
-                                    &self.internal_object_store.config
-                                {
-                                    S3Config {
-                                        bucket: bucket.clone(),
-                                        ..s3.clone()
-                                    }
-                                } else {
-                                    return Err(DataFusionError::Execution(
-                                        "Expected AmazonS3 config".into(),
-                                    ));
-                                }
-                            } else {
-                                S3Config::from_bucket_and_options(
-                                    bucket,
-                                    &mut cmd.options,
-                                )?
-                            };
-                            ObjectStoreConfig::AmazonS3(s3_config)
-                        }
-                        ObjectStoreScheme::GoogleCloudStorage => {
-                            let gcs_config = if cmd.options.is_empty() {
-                                if let ObjectStoreConfig::GoogleCloudStorage(gcs) =
-                                    &self.internal_object_store.config
-                                {
-                                    GCSConfig {
-                                        bucket: bucket.clone(),
-                                        ..gcs.clone()
-                                    }
-                                } else {
-                                    return Err(DataFusionError::Execution(
-                                        "Expected GoogleCloudStorage config".into(),
-                                    ));
-                                }
-                            } else {
-                                GCSConfig::from_bucket_and_options(
-                                    bucket,
-                                    &mut cmd.options,
-                                )?
-                            };
-                            ObjectStoreConfig::GoogleCloudStorage(gcs_config)
-                        }
-                        _ => unreachable!(),
-                    };
-
-                    let object_store = build_object_store(
-                        &config,
-                        &self.config.misc.object_store_cache,
-                    )?;
-                    self.inner
-                        .runtime_env()
-                        .register_object_store(url, object_store);
-                }
+                let internal_object_store = self.get_internal_object_store()?;
+                let cmd =
+                    self.prepare_create_external_table(cmd, internal_object_store)?;
 
                 self.inner
                     .execute_logical_plan(LogicalPlan::Ddl(
@@ -292,6 +207,7 @@ impl SeafowlContext {
                 input,
                 ..
             }) => {
+                let internal_object_store = self.get_internal_object_store()?;
                 // Destructure input into projection expressions and the upstream scan/filter plan
                 let LogicalPlan::Projection(Projection { expr, input, .. }) = &**input
                 else {
@@ -388,13 +304,11 @@ impl SeafowlContext {
                     );
 
                     // Write the new files with updated data
-                    let object_store = self
-                        .internal_object_store
+                    let object_store = internal_object_store
                         .get_log_store(&uuid.to_string())
                         .object_store();
-                    let local_table_dir = self
-                        .internal_object_store
-                        .local_table_dir(&uuid.to_string());
+                    let local_table_dir =
+                        internal_object_store.local_table_dir(&uuid.to_string());
                     let adds = plan_to_object_store(
                         &state,
                         &update_plan,
@@ -448,6 +362,7 @@ impl SeafowlContext {
                 input,
                 ..
             }) => {
+                let internal_object_store = self.get_internal_object_store()?;
                 let uuid = self.get_table_uuid(table_name.clone()).await?;
 
                 let mut table = self.try_get_delta_table(table_name.clone()).await?;
@@ -501,13 +416,11 @@ impl SeafowlContext {
                                 Arc::new(FilterExec::try_new(filter_expr, base_scan)?);
 
                             // Write the filtered out data
-                            let object_store = self
-                                .internal_object_store
+                            let object_store = internal_object_store
                                 .get_log_store(&uuid.to_string())
                                 .object_store();
-                            let local_table_dir = self
-                                .internal_object_store
-                                .local_table_dir(&uuid.to_string());
+                            let local_table_dir =
+                                internal_object_store.local_table_dir(&uuid.to_string());
                             let adds = plan_to_object_store(
                                 &state,
                                 &filter_plan,
@@ -744,7 +657,14 @@ impl SeafowlContext {
                             ..
                         }) => {
                             if database.is_some() {
-                                gc_databases(self, database.clone()).await;
+                                let internal_object_store =
+                                    self.get_internal_object_store()?;
+                                gc_databases(
+                                    self,
+                                    internal_object_store,
+                                    database.clone(),
+                                )
+                                .await;
                             } else if let Some(table_name) = table_name {
                                 let resolved_ref = self.resolve_table_ref(table_name);
 
@@ -801,6 +721,87 @@ impl SeafowlContext {
             }
             _ => self.inner.state().create_physical_plan(plan).await,
         }
+    }
+
+    fn prepare_create_external_table(
+        &self,
+        cmd: &CreateExternalTable,
+        internal_object_store: Arc<InternalObjectStore>,
+    ) -> Result<CreateExternalTable> {
+        let mut cmd = cmd.clone();
+        cmd.name = self.resolve_staging_ref(&cmd.name)?;
+        cmd.location = match try_prepare_http_url(&cmd.location) {
+            Some(new_loc) => new_loc,
+            None => cmd.location,
+        };
+        let table_path = ListingTableUrl::parse(&cmd.location)?;
+        let url: &Url = table_path.as_ref();
+        let parsed_result = ObjectStoreScheme::parse(url);
+        if let Ok((scheme, _)) = parsed_result
+            && matches!(
+                scheme,
+                ObjectStoreScheme::AmazonS3 | ObjectStoreScheme::GoogleCloudStorage
+            )
+        {
+            let bucket = url
+                .host_str()
+                .ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Unable to parse bucket name from URL: {}",
+                        url.as_str()
+                    ))
+                })?
+                .to_string();
+
+            let config = match scheme {
+                ObjectStoreScheme::AmazonS3 => {
+                    let s3_config = if cmd.options.is_empty() {
+                        if let ObjectStoreConfig::AmazonS3(s3) =
+                            &internal_object_store.config
+                        {
+                            S3Config {
+                                bucket: bucket.clone(),
+                                ..s3.clone()
+                            }
+                        } else {
+                            return Err(DataFusionError::Execution(
+                                "Expected AmazonS3 config".into(),
+                            ));
+                        }
+                    } else {
+                        S3Config::from_bucket_and_options(bucket, &mut cmd.options)?
+                    };
+                    ObjectStoreConfig::AmazonS3(s3_config)
+                }
+                ObjectStoreScheme::GoogleCloudStorage => {
+                    let gcs_config = if cmd.options.is_empty() {
+                        if let ObjectStoreConfig::GoogleCloudStorage(gcs) =
+                            &internal_object_store.config
+                        {
+                            GCSConfig {
+                                bucket: bucket.clone(),
+                                ..gcs.clone()
+                            }
+                        } else {
+                            return Err(DataFusionError::Execution(
+                                "Expected GoogleCloudStorage config".into(),
+                            ));
+                        }
+                    } else {
+                        GCSConfig::from_bucket_and_options(bucket, &mut cmd.options)?
+                    };
+                    ObjectStoreConfig::GoogleCloudStorage(gcs_config)
+                }
+                _ => unreachable!(),
+            };
+
+            let object_store =
+                build_object_store(&config, &self.config.misc.object_store_cache)?;
+            self.inner
+                .runtime_env()
+                .register_object_store(url, object_store);
+        }
+        Ok(cmd)
     }
 
     // Project incompatible data types if any to delta-rs compatible ones (for now ns -> us)

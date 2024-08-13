@@ -41,44 +41,53 @@ async fn build_metastore(
     config: &schema::SeafowlConfig,
     object_stores: Arc<ObjectStoreFactory>,
 ) -> Metastore {
-    // Initialize the repository
-    let repository: Arc<dyn Repository> = match &config.catalog {
-        #[cfg(feature = "catalog-postgres")]
-        schema::Catalog::Postgres(schema::Postgres { dsn, schema }) => Arc::new(
-            PostgresRepository::try_new(dsn.to_string(), schema.to_string())
-                .await
-                .expect("Error setting up the database"),
-        ),
-        schema::Catalog::Sqlite(schema::Sqlite {
-            dsn,
-            journal_mode,
-            read_only: false,
-        }) => Arc::new(
-            SqliteRepository::try_new(dsn.to_string(), *journal_mode)
-                .await
-                .expect("Error setting up the database"),
-        ),
-        schema::Catalog::Sqlite(schema::Sqlite {
-            dsn,
-            journal_mode,
-            read_only: true,
-        }) => Arc::new(
-            SqliteRepository::try_new_read_only(dsn.to_string(), *journal_mode)
-                .await
-                .expect("Error setting up the database"),
-        ),
-        schema::Catalog::Clade(schema::Clade { dsn }) => {
-            let external = Arc::new(
-                ExternalStore::new(dsn.clone())
-                    .await
-                    .expect("Error setting up remote store"),
-            );
+    match &config.catalog {
+        Some(catalog) => {
+            // Initialize the repository
+            let repository: Arc<dyn Repository> = match catalog {
+                #[cfg(feature = "catalog-postgres")]
+                schema::Catalog::Postgres(schema::Postgres { dsn, schema }) => Arc::new(
+                    PostgresRepository::try_new(dsn.to_string(), schema.to_string())
+                        .await
+                        .expect("Error setting up the database"),
+                ),
+                schema::Catalog::Sqlite(schema::Sqlite {
+                    dsn,
+                    journal_mode,
+                    read_only: false,
+                }) => Arc::new(
+                    SqliteRepository::try_new(dsn.to_string(), *journal_mode)
+                        .await
+                        .expect("Error setting up the database"),
+                ),
+                schema::Catalog::Sqlite(schema::Sqlite {
+                    dsn,
+                    journal_mode,
+                    read_only: true,
+                }) => Arc::new(
+                    SqliteRepository::try_new_read_only(dsn.to_string(), *journal_mode)
+                        .await
+                        .expect("Error setting up the database"),
+                ),
+                schema::Catalog::Clade(schema::Clade { dsn }) => {
+                    let external = Arc::new(
+                        ExternalStore::new(dsn.clone())
+                            .await
+                            .expect("Error setting up remote store"),
+                    );
 
-            return Metastore::new_from_external(external, object_stores);
+                    return Metastore::new_from_external(external, object_stores);
+                }
+            };
+
+            Metastore::new_from_repository(repository, object_stores)
         }
-    };
-
-    Metastore::new_from_repository(repository, object_stores)
+        // If there's no metastore configured by default, we expect the API user to pass
+        // in an inline metastore with every Flight call, but we don't want the Seafowl
+        // context to have an Option<Metastore>, so instead we use a stub metastore that
+        // errors out if we try to access tables through it.
+        None => Metastore::new_empty(object_stores),
+    }
 }
 
 // Construct the session state and register additional table factories besides the default ones for
@@ -191,11 +200,11 @@ mod tests {
     async fn test_config_to_context() {
         let config = schema::SeafowlConfig {
             object_store: Some(ObjectStoreConfig::Memory),
-            catalog: schema::Catalog::Sqlite(schema::Sqlite {
+            catalog: Some(schema::Catalog::Sqlite(schema::Sqlite {
                 dsn: "sqlite::memory:".to_string(),
                 journal_mode: SqliteJournalMode::Wal,
                 read_only: false,
-            }),
+            })),
             frontend: schema::Frontend {
                 #[cfg(feature = "frontend-arrow-flight")]
                 flight: None,

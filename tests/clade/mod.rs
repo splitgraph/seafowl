@@ -74,7 +74,7 @@ async fn run_clade_server(addr: SocketAddr) {
     // Setup a test metastore with some fake tables in test object stores.
     let metastore = TestCladeMetastore {
         catalog: DEFAULT_DB.to_string(),
-        schemas: schemas(),
+        schemas: schemas(true),
     };
 
     let svc = SchemaStoreServiceServer::new(metastore);

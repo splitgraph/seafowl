@@ -3,7 +3,7 @@ use crate::flight::*;
 #[tokio::test]
 async fn test_default_schema_override(
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let (context, mut client) = flight_server(false).await;
+    let (context, mut client) = flight_server(TestServerType::Memory).await;
 
     context.plan_query("CREATE SCHEMA some_schema").await?;
     create_table_and_insert(context.as_ref(), "some_schema.flight_table").await;

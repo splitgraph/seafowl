@@ -167,7 +167,10 @@ impl SeafowlFlightHandler {
         }
 
         let log_store = match cmd.store {
-            None => self.context.internal_object_store.get_log_store(&cmd.path),
+            None => self
+                .context
+                .get_internal_object_store()?
+                .get_log_store(&cmd.path),
             Some(store_loc) => {
                 self.context
                     .metastore

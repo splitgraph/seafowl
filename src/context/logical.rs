@@ -357,7 +357,7 @@ impl SeafowlContext {
             // We only support datetime DeltaTable version specification for start
             let table_uuid = self.get_table_uuid(resolved_ref.clone()).await?;
             let table_log_store = self
-                .internal_object_store
+                .get_internal_object_store()?
                 .get_log_store(&table_uuid.to_string());
             let datetime = TableVersionProcessor::version_to_datetime(version)?;
 

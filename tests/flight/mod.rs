@@ -40,18 +40,32 @@ mod search_path;
 mod sync;
 mod sync_fail;
 
-async fn make_test_context(local_store: bool) -> Arc<SeafowlContext> {
+async fn make_test_context(server_type: TestServerType) -> Arc<SeafowlContext> {
     // let OS choose a free port
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let object_store_section = if local_store {
-        r#"[object_store]
+    let object_store_section = match server_type {
+        TestServerType::Memory => {
+            r#"[object_store]
+type = "memory"
+
+[catalog]
+type = "sqlite"
+dsn = ":memory:"
+"#
+        }
+        TestServerType::LocalWithData => {
+            r#"[object_store]
 type = "local"
-data_dir = "tests/data""#
-    } else {
-        r#"[object_store]
-type = "memory""#
+data_dir = "tests/data"
+
+[catalog]
+type = "sqlite"
+dsn = ":memory:"
+"#
+        }
+        TestServerType::InlineOnly => "",
     };
 
     let config_text = format!(
@@ -74,8 +88,16 @@ flush_task_interval_s = 1"#,
     Arc::from(build_context(config).await.unwrap())
 }
 
-async fn flight_server(local_store: bool) -> (Arc<SeafowlContext>, FlightClient) {
-    let context = make_test_context(local_store).await;
+pub enum TestServerType {
+    Memory,
+    LocalWithData,
+    InlineOnly,
+}
+
+async fn flight_server(
+    server_type: TestServerType,
+) -> (Arc<SeafowlContext>, FlightClient) {
+    let context = make_test_context(server_type).await;
 
     let flight_cfg = context
         .config
