@@ -492,9 +492,9 @@ mod tests {
     use object_store_factory::ObjectStoreConfig;
 
     const PART_0_FILE_NAME: &str =
-        "part-00000-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
+        "part-00000-00000000-0000-0000-0000-000000000001-c000.snappy.parquet";
     const PART_1_FILE_NAME: &str =
-        "part-00001-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
+        "part-00001-00000000-0000-0000-0000-000000000001-c000.snappy.parquet";
 
     #[rstest]
     #[case::in_memory_object_store_standard(false)]

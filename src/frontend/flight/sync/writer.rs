@@ -852,7 +852,11 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::frontend::flight::sync::SyncCommitInfo;
+    use arrow::array::{Float32Array, Int32Array};
+    use datafusion_common::assert_batches_eq;
+    use itertools::Itertools;
     use std::sync::Arc;
+    use uuid::Uuid;
 
     fn sync_schema() -> (SchemaRef, SyncSchema) {
         let schema = Arc::new(Schema::new(vec![
@@ -1178,5 +1182,138 @@ mod tests {
             sync_mgr.stored_sequences(&A.to_string()),
             (Some(100), Some(100))
         );
+    }
+
+    #[rstest]
+    #[case(100, 50)]
+    #[case(50, 100)]
+    #[case(100, 100)]
+    #[tokio::test]
+    async fn test_bulk_insert_update(
+        #[case] insert_batch_rows: i32,
+        #[case] update_batch_rows: i32,
+    ) {
+        let ctx = Arc::new(in_memory_context().await);
+        let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
+        let (arrow_schema, sync_schema) = sync_schema();
+
+        // Enqueue all syncs
+        let table_uuid = Uuid::new_v4();
+        let log_store = ctx
+            .internal_object_store
+            .get_log_store(&table_uuid.to_string());
+        // The sync mechanism doesn't register the table, so for the sake of testing do it here
+        ctx.metastore
+            .tables
+            .create(
+                &ctx.default_catalog,
+                &ctx.default_schema,
+                "test_table",
+                arrow_schema.as_ref(),
+                table_uuid,
+            )
+            .await
+            .unwrap();
+
+        // INSERT 10K rows in batches of `insert_batch_rows` rows
+        let batch_rows = insert_batch_rows as usize;
+        for (seq, new_pks) in (0..1000).chunks(batch_rows).into_iter().enumerate() {
+            let batch = RecordBatch::try_new(
+                arrow_schema.clone(),
+                vec![
+                    Arc::new(Int32Array::new_null(batch_rows)),
+                    Arc::new(Int32Array::from(new_pks.collect::<Vec<i32>>())),
+                    Arc::new(Float32Array::new_null(batch_rows)),
+                ],
+            )
+            .unwrap();
+
+            sync_mgr
+                .enqueue_sync(
+                    log_store.clone(),
+                    Some(seq as SequenceNumber),
+                    A.to_string(),
+                    sync_schema.clone(),
+                    vec![batch],
+                )
+                .unwrap();
+
+            if (seq + 1) % 5 == 0 {
+                // Flush after every 5th sync
+                sync_mgr.flush_syncs(log_store.root_uri()).await.unwrap();
+            }
+        }
+
+        // Check row count, min and max directly:
+        let results = ctx
+            .collect(
+                ctx.plan_query("SELECT COUNT(*), MIN(c1), MAX(c1) FROM test_table")
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let expected = [
+            "+----------+--------------------+--------------------+",
+            "| count(*) | MIN(test_table.c1) | MAX(test_table.c1) |",
+            "+----------+--------------------+--------------------+",
+            "| 1000     | 0                  | 999                |",
+            "+----------+--------------------+--------------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        // Now UPDATE each row by shifting the PK over by 1000 in batches of `update_batch_rows`` rows
+        let start_seq = 10_000;
+        let batch_rows = update_batch_rows as usize;
+        for (seq, (old_pks, new_pks)) in (0..1000)
+            .chunks(batch_rows)
+            .into_iter()
+            .zip((1000..2000).chunks(batch_rows).into_iter())
+            .enumerate()
+        {
+            let batch = RecordBatch::try_new(
+                arrow_schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(old_pks.collect::<Vec<i32>>())),
+                    Arc::new(Int32Array::from(new_pks.collect::<Vec<i32>>())),
+                    Arc::new(Float32Array::new_null(batch_rows)),
+                ],
+            )
+            .unwrap();
+
+            sync_mgr
+                .enqueue_sync(
+                    log_store.clone(),
+                    Some(start_seq + seq as SequenceNumber),
+                    A.to_string(),
+                    sync_schema.clone(),
+                    vec![batch],
+                )
+                .unwrap();
+
+            if (seq + 1) % 5 == 0 {
+                // Flush after every 5th sync
+                sync_mgr.flush_syncs(log_store.root_uri()).await.unwrap();
+            }
+        }
+
+        // Check row count, min and max directly again:
+        let results = ctx
+            .collect(
+                ctx.plan_query("SELECT COUNT(*), MIN(c1), MAX(c1) FROM test_table")
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let expected = [
+            "+----------+--------------------+--------------------+",
+            "| count(*) | MIN(test_table.c1) | MAX(test_table.c1) |",
+            "+----------+--------------------+--------------------+",
+            "| 1000     | 1000               | 1999               |",
+            "+----------+--------------------+--------------------+",
+        ];
+        assert_batches_eq!(expected, &results);
     }
 }
