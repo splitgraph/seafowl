@@ -9,7 +9,8 @@ use datafusion_common::{JoinType, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, is_null, lit, when, LogicalPlanBuilder};
 use datafusion_expr::{is_true, Expr};
-use deltalake::kernel::{Action, Remove, Schema};
+use deltalake::delta_datafusion::DeltaTableProvider;
+use deltalake::kernel::{Action, Add, Remove, Schema};
 use deltalake::logstore::LogStore;
 use deltalake::operations::create::CreateBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
@@ -418,7 +419,7 @@ impl SeafowlDataSyncWriter {
         // that any of the entries has the full column list.
         let full_schema = TableProvider::schema(&table);
 
-        // Generate a qualifier expression for pruning partition files and filtering the base scan.
+        // Generate a qualifier expression for pruning partition files to include in the base scan.
         // First construct the qualifier for old PKs; we definitely need to overwrite those in case
         // of PK-changing UPDATEs or DELETEs. Note that this can be `None` if it's an all-INSERT
         // syncs vec.
@@ -433,16 +434,48 @@ impl SeafowlDataSyncWriter {
         };
         info!("Generated qualifier {qualifier}");
 
-        // Iterate through all syncs for this table and construct a full plan by applying each
-        // individual sync
+        // Gather previous Add files that (might) need to be re-written.
+        let files = self.get_partitions(&qualifier, full_schema.clone(), &table)?;
+        // Create removes to prune away files that are refuted by the qualifier
+        let removes = files
+            .iter()
+            .map(|add| {
+                Action::Remove(Remove {
+                    path: add.path.clone(),
+                    deletion_timestamp: Some(now() as i64),
+                    data_change: true,
+                    extended_file_metadata: Some(true),
+                    partition_values: Some(add.partition_values.clone()),
+                    size: Some(add.size),
+                    tags: None,
+                    deletion_vector: None,
+                    base_row_id: None,
+                    default_row_commit_version: None,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        // Create a special Delta table provider that will only hit the above partition files
+        let base_scan = Arc::new(
+            DeltaTableProvider::try_new(
+                table.snapshot()?.clone(),
+                log_store.clone(),
+                Default::default(),
+            )?
+            .with_files(files),
+        );
+
+        // Convert the custom Delta table provider into a base logical plan
         let base_plan = LogicalPlanBuilder::scan_with_filters(
             SYNC_REF,
-            provider_as_source(Arc::new(table.clone())),
+            provider_as_source(base_scan),
             None,
             vec![qualifier.clone()],
         )?
         .build()?;
 
+        // Construct a state for physical planning; we omit all analyzer/optimizer rules to increase
+        // the stack overflow threshold that occurs during recursive plan tree traversal in DF.
         let state = self
             .context
             .inner
@@ -451,6 +484,8 @@ impl SeafowlDataSyncWriter {
             .with_optimizer_rules(vec![]);
         let mut sync_df = DataFrame::new(state, base_plan);
 
+        // Iterate through all syncs for this table and construct a full plan by applying each
+        // individual sync
         for sync in syncs {
             sync_df = self.apply_sync(
                 full_schema.clone(),
@@ -481,9 +516,6 @@ impl SeafowlDataSyncWriter {
         .await?;
 
         let mut actions: Vec<Action> = adds.into_iter().map(Action::Add).collect();
-
-        // Prune away files that are refuted by the qualifier
-        let removes = self.get_removes(&qualifier, full_schema.clone(), &table)?;
         info!(
             "Removing {} out of {} files from state and adding {} new one(s)",
             removes.len(),
@@ -491,6 +523,7 @@ impl SeafowlDataSyncWriter {
             actions.len(),
         );
         actions.extend(removes);
+        debug!("Actions to commit:\n{actions:?}");
 
         // Append a special `CommitInfo` action to record latest durable sequence number
         // tied to the commit from this origin if any.
@@ -728,13 +761,13 @@ impl SeafowlDataSyncWriter {
         Ok(input_df)
     }
 
-    // Get a list of files that will be scanned and removed based on the pruning qualifier.
-    fn get_removes(
+    // Get a list of files that need to be scanned and removed based on the pruning qualifier.
+    fn get_partitions(
         &self,
         predicate: &Expr,
         full_schema: SchemaRef,
         table: &DeltaTable,
-    ) -> Result<Vec<Action>> {
+    ) -> Result<Vec<Add>> {
         let prune_expr = create_physical_expr(
             predicate,
             &full_schema.clone().to_dfschema()?,
@@ -749,25 +782,8 @@ impl SeafowlDataSyncWriter {
             .file_actions()?
             .iter()
             .zip(prune_map)
-            .filter_map(|(add, keep)| {
-                if keep {
-                    Some(Action::Remove(Remove {
-                        path: add.path.clone(),
-                        deletion_timestamp: Some(now() as i64),
-                        data_change: true,
-                        extended_file_metadata: Some(true),
-                        partition_values: Some(add.partition_values.clone()),
-                        size: Some(add.size),
-                        tags: None,
-                        deletion_vector: None,
-                        base_row_id: None,
-                        default_row_commit_version: None,
-                    }))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<Action>>())
+            .filter_map(|(add, keep)| if keep { Some(add.clone()) } else { None })
+            .collect::<Vec<Add>>())
     }
 
     // Remove the pending location from a sequence for all syncs in the collection
