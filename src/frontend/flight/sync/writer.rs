@@ -9,7 +9,8 @@ use datafusion_common::{JoinType, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, is_null, lit, when, LogicalPlanBuilder};
 use datafusion_expr::{is_true, Expr};
-use deltalake::kernel::{Action, Remove, Schema};
+use deltalake::delta_datafusion::DeltaTableProvider;
+use deltalake::kernel::{Action, Add, Remove, Schema};
 use deltalake::logstore::LogStore;
 use deltalake::operations::create::CreateBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
@@ -418,19 +419,63 @@ impl SeafowlDataSyncWriter {
         // that any of the entries has the full column list.
         let full_schema = TableProvider::schema(&table);
 
-        // Generate a qualifier expression for pruning partition files and filtering the base scan
-        let qualifier = construct_qualifier(syncs)?;
+        // Generate a qualifier expression for pruning partition files to include in the base scan.
+        // First construct the qualifier for old PKs; we definitely need to overwrite those in case
+        // of PK-changing UPDATEs or DELETEs. Note that this can be `None` if it's an all-INSERT
+        // syncs vec.
+        let old_pk_qualifier = construct_qualifier(syncs, ColumnRole::OldPk)?;
+        // Next construct the qualifier for new PKs; these are only needed for idempotence.
+        let new_pk_qualifier = construct_qualifier(syncs, ColumnRole::NewPk)?;
+        let qualifier = match (old_pk_qualifier, new_pk_qualifier) {
+            (Some(old_pk_q), Some(new_pk_q)) => old_pk_q.or(new_pk_q),
+            (Some(old_pk_q), None) => old_pk_q,
+            (None, Some(new_pk_q)) => new_pk_q,
+            _ => panic!("There can be no situation without either old or new PKs"),
+        };
+        info!("Generated qualifier {qualifier}");
 
-        // Iterate through all syncs for this table and construct a full plan by applying each
-        // individual sync
+        // Gather previous Add files that (might) need to be re-written.
+        let files = self.get_partitions(&qualifier, full_schema.clone(), &table)?;
+        // Create removes to prune away files that are refuted by the qualifier
+        let removes = files
+            .iter()
+            .map(|add| {
+                Action::Remove(Remove {
+                    path: add.path.clone(),
+                    deletion_timestamp: Some(now() as i64),
+                    data_change: true,
+                    extended_file_metadata: Some(true),
+                    partition_values: Some(add.partition_values.clone()),
+                    size: Some(add.size),
+                    tags: None,
+                    deletion_vector: None,
+                    base_row_id: None,
+                    default_row_commit_version: None,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        // Create a special Delta table provider that will only hit the above partition files
+        let base_scan = Arc::new(
+            DeltaTableProvider::try_new(
+                table.snapshot()?.clone(),
+                log_store.clone(),
+                Default::default(),
+            )?
+            .with_files(files),
+        );
+
+        // Convert the custom Delta table provider into a base logical plan
         let base_plan = LogicalPlanBuilder::scan_with_filters(
             SYNC_REF,
-            provider_as_source(Arc::new(table.clone())),
+            provider_as_source(base_scan),
             None,
             vec![qualifier.clone()],
         )?
         .build()?;
 
+        // Construct a state for physical planning; we omit all analyzer/optimizer rules to increase
+        // the stack overflow threshold that occurs during recursive plan tree traversal in DF.
         let state = self
             .context
             .inner
@@ -439,6 +484,8 @@ impl SeafowlDataSyncWriter {
             .with_optimizer_rules(vec![]);
         let mut sync_df = DataFrame::new(state, base_plan);
 
+        // Iterate through all syncs for this table and construct a full plan by applying each
+        // individual sync
         for sync in syncs {
             sync_df = self.apply_sync(
                 full_schema.clone(),
@@ -469,9 +516,14 @@ impl SeafowlDataSyncWriter {
         .await?;
 
         let mut actions: Vec<Action> = adds.into_iter().map(Action::Add).collect();
-
-        // Prune away files that are refuted by the qualifier
-        actions.extend(self.get_removes(&qualifier, full_schema.clone(), &table)?);
+        info!(
+            "Removing {} out of {} files from state and adding {} new one(s)",
+            removes.len(),
+            table.get_files_count(),
+            actions.len(),
+        );
+        actions.extend(removes);
+        debug!("Actions to commit:\n{actions:?}");
 
         // Append a special `CommitInfo` action to record latest durable sequence number
         // tied to the commit from this origin if any.
@@ -709,13 +761,13 @@ impl SeafowlDataSyncWriter {
         Ok(input_df)
     }
 
-    // Get a list of files that will be scanned and removed based on the pruning qualifier.
-    fn get_removes(
+    // Get a list of files that need to be scanned and removed based on the pruning qualifier.
+    fn get_partitions(
         &self,
         predicate: &Expr,
         full_schema: SchemaRef,
         table: &DeltaTable,
-    ) -> Result<Vec<Action>> {
+    ) -> Result<Vec<Add>> {
         let prune_expr = create_physical_expr(
             predicate,
             &full_schema.clone().to_dfschema()?,
@@ -730,25 +782,8 @@ impl SeafowlDataSyncWriter {
             .file_actions()?
             .iter()
             .zip(prune_map)
-            .filter_map(|(add, keep)| {
-                if keep {
-                    Some(Action::Remove(Remove {
-                        path: add.path.clone(),
-                        deletion_timestamp: Some(now() as i64),
-                        data_change: true,
-                        extended_file_metadata: Some(true),
-                        partition_values: Some(add.partition_values.clone()),
-                        size: Some(add.size),
-                        tags: None,
-                        deletion_vector: None,
-                        base_row_id: None,
-                        default_row_commit_version: None,
-                    }))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<Action>>())
+            .filter_map(|(add, keep)| if keep { Some(add.clone()) } else { None })
+            .collect::<Vec<Add>>())
     }
 
     // Remove the pending location from a sequence for all syncs in the collection
@@ -817,7 +852,11 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::frontend::flight::sync::SyncCommitInfo;
+    use arrow::array::{Float32Array, Int32Array};
+    use datafusion_common::assert_batches_eq;
+    use itertools::Itertools;
     use std::sync::Arc;
+    use uuid::Uuid;
 
     fn sync_schema() -> (SchemaRef, SyncSchema) {
         let schema = Arc::new(Schema::new(vec![
@@ -1152,5 +1191,138 @@ mod tests {
             sync_mgr.stored_sequences(&A.to_string()),
             (Some(100), Some(100))
         );
+    }
+
+    #[rstest]
+    #[case(100, 50)]
+    #[case(50, 100)]
+    #[case(100, 100)]
+    #[tokio::test]
+    async fn test_bulk_insert_update(
+        #[case] insert_batch_rows: i32,
+        #[case] update_batch_rows: i32,
+    ) {
+        let ctx = Arc::new(in_memory_context().await);
+        let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
+        let (arrow_schema, sync_schema) = sync_schema();
+
+        // Enqueue all syncs
+        let table_uuid = Uuid::new_v4();
+        let log_store = ctx
+            .internal_object_store
+            .get_log_store(&table_uuid.to_string());
+        // The sync mechanism doesn't register the table, so for the sake of testing do it here
+        ctx.metastore
+            .tables
+            .create(
+                &ctx.default_catalog,
+                &ctx.default_schema,
+                "test_table",
+                arrow_schema.as_ref(),
+                table_uuid,
+            )
+            .await
+            .unwrap();
+
+        // INSERT 10K rows in batches of `insert_batch_rows` rows
+        let batch_rows = insert_batch_rows as usize;
+        for (seq, new_pks) in (0..1000).chunks(batch_rows).into_iter().enumerate() {
+            let batch = RecordBatch::try_new(
+                arrow_schema.clone(),
+                vec![
+                    Arc::new(Int32Array::new_null(batch_rows)),
+                    Arc::new(Int32Array::from(new_pks.collect::<Vec<i32>>())),
+                    Arc::new(Float32Array::new_null(batch_rows)),
+                ],
+            )
+            .unwrap();
+
+            sync_mgr
+                .enqueue_sync(
+                    log_store.clone(),
+                    Some(seq as SequenceNumber),
+                    A.to_string(),
+                    sync_schema.clone(),
+                    vec![batch],
+                )
+                .unwrap();
+
+            if (seq + 1) % 5 == 0 {
+                // Flush after every 5th sync
+                sync_mgr.flush_syncs(log_store.root_uri()).await.unwrap();
+            }
+        }
+
+        // Check row count, min and max directly:
+        let results = ctx
+            .collect(
+                ctx.plan_query("SELECT COUNT(*), MIN(c1), MAX(c1) FROM test_table")
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let expected = [
+            "+----------+--------------------+--------------------+",
+            "| count(*) | MIN(test_table.c1) | MAX(test_table.c1) |",
+            "+----------+--------------------+--------------------+",
+            "| 1000     | 0                  | 999                |",
+            "+----------+--------------------+--------------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        // Now UPDATE each row by shifting the PK over by 1000 in batches of `update_batch_rows`` rows
+        let start_seq = 10_000;
+        let batch_rows = update_batch_rows as usize;
+        for (seq, (old_pks, new_pks)) in (0..1000)
+            .chunks(batch_rows)
+            .into_iter()
+            .zip((1000..2000).chunks(batch_rows).into_iter())
+            .enumerate()
+        {
+            let batch = RecordBatch::try_new(
+                arrow_schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(old_pks.collect::<Vec<i32>>())),
+                    Arc::new(Int32Array::from(new_pks.collect::<Vec<i32>>())),
+                    Arc::new(Float32Array::new_null(batch_rows)),
+                ],
+            )
+            .unwrap();
+
+            sync_mgr
+                .enqueue_sync(
+                    log_store.clone(),
+                    Some(start_seq + seq as SequenceNumber),
+                    A.to_string(),
+                    sync_schema.clone(),
+                    vec![batch],
+                )
+                .unwrap();
+
+            if (seq + 1) % 5 == 0 {
+                // Flush after every 5th sync
+                sync_mgr.flush_syncs(log_store.root_uri()).await.unwrap();
+            }
+        }
+
+        // Check row count, min and max directly again:
+        let results = ctx
+            .collect(
+                ctx.plan_query("SELECT COUNT(*), MIN(c1), MAX(c1) FROM test_table")
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let expected = [
+            "+----------+--------------------+--------------------+",
+            "| count(*) | MIN(test_table.c1) | MAX(test_table.c1) |",
+            "+----------+--------------------+--------------------+",
+            "| 1000     | 1000               | 1999               |",
+            "+----------+--------------------+--------------------+",
+        ];
+        assert_batches_eq!(expected, &results);
     }
 }

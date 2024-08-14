@@ -109,6 +109,7 @@ pub async fn plan_to_object_store(
 
     // Iterate over Datafusion partitions and re-chunk them, since we want to enforce a pre-defined
     // partition size limit, which is not guaranteed by DF.
+    info!("Persisting data into temporary partition objects on disk");
     for i in 0..plan.output_partitioning().partition_count() {
         let task_ctx = Arc::new(TaskContext::from(state));
         let mut stream = plan.execute(i, task_ctx)?;
@@ -492,9 +493,9 @@ mod tests {
     use object_store_factory::ObjectStoreConfig;
 
     const PART_0_FILE_NAME: &str =
-        "part-00000-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
+        "part-00000-00000000-0000-0000-0000-000000000001-c000.snappy.parquet";
     const PART_1_FILE_NAME: &str =
-        "part-00001-01020304-0506-4708-890a-0b0c0d0e0f10-c000.snappy.parquet";
+        "part-00001-00000000-0000-0000-0000-000000000001-c000.snappy.parquet";
 
     #[rstest]
     #[case::in_memory_object_store_standard(false)]
