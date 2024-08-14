@@ -1209,7 +1209,8 @@ mod tests {
         // Enqueue all syncs
         let table_uuid = Uuid::new_v4();
         let log_store = ctx
-            .internal_object_store
+            .get_internal_object_store()
+            .unwrap()
             .get_log_store(&table_uuid.to_string());
         // The sync mechanism doesn't register the table, so for the sake of testing do it here
         ctx.metastore
