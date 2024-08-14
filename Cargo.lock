@@ -5994,7 +5994,7 @@ dependencies = [
 
 [[package]]
 name = "seafowl"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "arrow",
@@ -6027,7 +6027,7 @@ dependencies = [
  "futures",
  "hex",
  "indexmap 2.2.6",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "lazy_static",
  "metrics",
  "metrics-exporter-prometheus",

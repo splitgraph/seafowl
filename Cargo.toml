@@ -50,7 +50,7 @@ datafusion-sql = { git = "https://github.com/splitgraph/arrow-datafusion", branc
 [package]
 name = "seafowl"
 build = "build.rs"
-version = "0.5.7"
+version = "0.5.8"
 edition = "2021"
 
 readme = "README.md"
