@@ -143,7 +143,9 @@ jobs:
       - name: Get artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: seafowl-nightly-*
           path: artifacts
+          merge-multiple: true
 
       - name: Package artifacts
         run: |
