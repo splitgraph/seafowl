@@ -2,6 +2,7 @@ use arrow::array::RecordBatch;
 use arrow_schema::{SchemaBuilder, SchemaRef};
 use clade::sync::ColumnRole;
 use datafusion::datasource::{provider_as_source, TableProvider};
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::prelude::DataFrame;
@@ -476,12 +477,10 @@ impl SeafowlDataSyncWriter {
 
         // Construct a state for physical planning; we omit all analyzer/optimizer rules to increase
         // the stack overflow threshold that occurs during recursive plan tree traversal in DF.
-        let state = self
-            .context
-            .inner
-            .state()
+        let state = SessionStateBuilder::new_from_existing(self.context.inner.state())
             .with_analyzer_rules(vec![])
-            .with_optimizer_rules(vec![]);
+            .with_optimizer_rules(vec![])
+            .build();
         let mut sync_df = DataFrame::new(state, base_plan);
 
         // Iterate through all syncs for this table and construct a full plan by applying each
@@ -1265,7 +1264,7 @@ mod tests {
             .unwrap();
         let expected = [
             "+----------+--------------------+--------------------+",
-            "| count(*) | MIN(test_table.c1) | MAX(test_table.c1) |",
+            "| count(*) | min(test_table.c1) | max(test_table.c1) |",
             "+----------+--------------------+--------------------+",
             "| 1000     | 0                  | 999                |",
             "+----------+--------------------+--------------------+",
@@ -1319,7 +1318,7 @@ mod tests {
             .unwrap();
         let expected = [
             "+----------+--------------------+--------------------+",
-            "| count(*) | MIN(test_table.c1) | MAX(test_table.c1) |",
+            "| count(*) | min(test_table.c1) | max(test_table.c1) |",
             "+----------+--------------------+--------------------+",
             "| 1000     | 1000               | 1999               |",
             "+----------+--------------------+--------------------+",

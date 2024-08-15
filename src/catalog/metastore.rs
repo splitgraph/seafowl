@@ -15,7 +15,7 @@ use crate::wasm_udf::data_types::{
 };
 use clade::schema::{SchemaObject, TableObject};
 use dashmap::DashMap;
-use datafusion::catalog::schema::MemorySchemaProvider;
+use datafusion::catalog_common::memory::MemorySchemaProvider;
 use datafusion::datasource::TableProvider;
 
 use crate::catalog::memory::MemoryStore;

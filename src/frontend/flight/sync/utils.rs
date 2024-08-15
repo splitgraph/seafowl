@@ -4,7 +4,7 @@ use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, UInt64Array};
 use arrow::compute::{concat_batches, take};
 use arrow_row::{Row, RowConverter, SortField};
 use clade::sync::ColumnRole;
-use datafusion::physical_expr::expressions::{MaxAccumulator, MinAccumulator};
+use datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{col, lit, Accumulator, Expr};
 use std::collections::{HashMap, HashSet, VecDeque};

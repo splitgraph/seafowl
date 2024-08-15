@@ -2,21 +2,21 @@
 members = ["clade", "object_store_factory"]
 
 [workspace.dependencies]
-arrow = { version = "52.1.0", features = ["test_utils"] }
-arrow-buffer = "52.1.0"
-arrow-csv = "52.1.0"
-arrow-flight = "52.1.0"
+arrow = { version = "52.2.0", features = ["test_utils"] }
+arrow-buffer = "52.2.0"
+arrow-csv = "52.2.0"
+arrow-flight = "52.2.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "52.1.0"
-arrow-row = "52.1.0"
-arrow-schema = "52.1.0"
+arrow-integration-test = "52.2.0"
+arrow-row = "52.2.0"
+arrow-schema = "52.2.0"
 async-trait = "0.1.64"
 
-datafusion = "40.0.0"
-datafusion-common = "40.0.0"
-datafusion-expr = "40.0.0"
+datafusion = "41.0.0"
+datafusion-common = "41.0.0"
+datafusion-expr = "41.0.0"
 
 futures = "0.3"
 
@@ -32,20 +32,6 @@ tracing = { version = "0.1", features = ["log"] }
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 url = "2.5"
-
-
-
-[patch.crates-io]
-# Pick up fix for https://github.com/apache/arrow-datafusion/pull/11386 and backport for https://github.com/apache/datafusion/pull/11765
-datafusion = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-common = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-execution = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-optimizer = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-physical-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-physical-plan = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-proto = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-sql = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
 
 [package]
 name = "seafowl"
@@ -95,8 +81,8 @@ clap = { version = "3.2.19", features = [ "derive" ] }
 config = "0.14.0"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-40-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-40-upgrade", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-41-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-41-upgrade", optional = true }
 
 dashmap = "6.0.1"
 
@@ -106,7 +92,7 @@ datafusion-expr = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "b8162c0fb967b3f3d9409d84f08605440dbad13b", features = ["datafusion"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "d3a796709a4bc9ee8a0fdc4ea16f8c607c0daf19", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
@@ -133,7 +119,7 @@ rustyline = "14.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = ">=0.10.1"
-sqlparser = { version = "0.47", features = ["visitor"] }
+sqlparser = { version = "0.49", features = ["visitor"] }
 sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"

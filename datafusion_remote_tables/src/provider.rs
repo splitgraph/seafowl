@@ -5,10 +5,10 @@ use crate::filter_pushdown::{
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use connectorx::prelude::{get_arrow, ArrowDestination, CXQuery, SourceConn, SourceType};
+use datafusion::catalog::Session;
 use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
-use datafusion::execution::context::SessionState;
 use datafusion::physical_expr::expressions::{cast, col};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::memory::MemoryExec;
@@ -119,7 +119,7 @@ impl TableProvider for RemoteTable {
 
     async fn scan(
         &self,
-        _ctx: &SessionState,
+        _ctx: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,

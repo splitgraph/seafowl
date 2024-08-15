@@ -95,7 +95,7 @@ async fn test_create_table_and_insert() {
 
     let expected = [
         "+---------------------------+",
-        "| MAX(test_table.some_time) |",
+        "| max(test_table.some_time) |",
         "+---------------------------+",
         "| 2022-01-01T20:03:03       |",
         "+---------------------------+",
@@ -110,7 +110,7 @@ async fn test_create_table_and_insert() {
     let results = context.collect(plan).await.unwrap();
 
     let expected = ["+--------------------------------+--------------------------------------------+----------------------------+",
-        "| MAX(test_table.some_int_value) | count(DISTINCT test_table.some_bool_value) | MAX(test_table.some_value) |",
+        "| max(test_table.some_int_value) | count(DISTINCT test_table.some_bool_value) | max(test_table.some_value) |",
         "+--------------------------------+--------------------------------------------+----------------------------+",
         "| 3333                           | 0                                          | 44.0                       |",
         "+--------------------------------+--------------------------------------------+----------------------------+"];

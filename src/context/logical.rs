@@ -25,8 +25,9 @@ use datafusion_expr::logical_plan::{Extension, LogicalPlan};
 use deltalake::DeltaTable;
 use itertools::Itertools;
 use sqlparser::ast::{
-    AlterTableOperation, CreateFunctionBody, Expr as SqlExpr, Expr, Insert, ObjectType,
-    Query, Statement, TableFactor, TableWithJoins, Value, VisitMut,
+    AlterTableOperation, CreateFunctionBody, CreateTable as CreateTableSql,
+    Expr as SqlExpr, Expr, Insert, ObjectType, Query, Statement, TableFactor,
+    TableWithJoins, Value, VisitMut,
 };
 use std::sync::Arc;
 use tracing::debug;
@@ -159,7 +160,7 @@ impl SeafowlContext {
                 }
                 Statement::Drop { object_type: ObjectType::Table | ObjectType::Schema, .. } => self.inner.state().statement_to_plan(stmt).await,
                 // CREATE TABLE (create empty table with columns)
-                Statement::CreateTable {
+                Statement::CreateTable(CreateTableSql {
                     query: None,
                     name,
                     columns,
@@ -169,7 +170,7 @@ impl SeafowlContext {
                     if_not_exists,
                     or_replace: _,
                     ..
-                } if constraints.is_empty()
+                }) if constraints.is_empty()
                     && table_properties.is_empty()
                     && with_options.is_empty() =>
                     {
@@ -215,7 +216,8 @@ impl SeafowlContext {
 
                 // Other CREATE TABLE: SqlToRel only allows CreateTableAs statements and makes
                 // a CreateMemoryTable node. We're fine with that, but we'll execute it differently.
-                Statement::CreateTable { query: Some(ref mut input), .. } => {
+                Statement::CreateTable(CreateTableSql { query: Some(ref mut input), .. })
+                => {
                     let state = self.rewrite_time_travel_query(input).await?;
                     state.statement_to_plan(stmt).await
                 },
@@ -392,7 +394,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Dml: op=[Insert Into] table=[testcol.some_table]\
             \n  Projection: CAST(column1 AS Date32) AS date, CAST(column2 AS Float64) AS value\
             \n    Values: (Utf8(\"2022-01-01T12:00:00\"), Int64(42))"
@@ -411,7 +413,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(format!("{plan:?}"), "Dml: op=[Insert Into] table=[testcol.some_table]\
+        assert_eq!(format!("{plan}"), "Dml: op=[Insert Into] table=[testcol.some_table]\
         \n  Projection: testdb.testcol.some_table.date AS date, testdb.testcol.some_table.value AS value\
         \n    TableScan: testdb.testcol.some_table projection=[date, value]");
     }
@@ -420,7 +422,7 @@ mod tests {
         let ctx = in_memory_context_with_test_db().await;
 
         let plan = ctx.create_logical_plan(query).await.unwrap();
-        format!("{plan:?}")
+        format!("{plan}")
     }
 
     #[tokio::test]
@@ -463,7 +465,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Dml: op=[Insert Into] table=[testcol.some_table]\
             \n  Projection: CAST(column1 AS Date32) AS date, CAST(column2 AS Float64) AS value\
             \n    Values: (Utf8(\"2022-01-01T12:00:00\"), Int64(42))"

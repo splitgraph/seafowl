@@ -79,7 +79,7 @@ async fn test_interleaving_queries(
 
     let expected = [
         "+----------------------+",
-        "| MIN(flight_table.c1) |",
+        "| min(flight_table.c1) |",
         "+----------------------+",
         "| 1                    |",
         "+----------------------+",
@@ -99,7 +99,7 @@ async fn test_interleaving_queries(
 
     let expected = [
         "+----------------------+",
-        "| MAX(flight_table.c1) |",
+        "| max(flight_table.c1) |",
         "+----------------------+",
         "| 2                    |",
         "+----------------------+",
