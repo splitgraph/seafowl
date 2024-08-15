@@ -8,10 +8,8 @@ use datafusion::physical_expr::expressions::{case, cast, col};
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion::{
     arrow::datatypes::Schema as ArrowSchema,
-    catalog::{
-        schema::{MemorySchemaProvider, SchemaProvider},
-        CatalogProvider,
-    },
+    catalog::{CatalogProvider, SchemaProvider},
+    catalog_common::memory::MemorySchemaProvider,
     common::{DataFusionError, Result},
     datasource::TableProvider,
 };

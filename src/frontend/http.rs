@@ -1002,7 +1002,9 @@ pub mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
-            "SQL error: ParserError(\"Expected an SQL statement, found: 7\")"
+            &Bytes::from(
+                "SQL error: ParserError(\"Expected: an SQL statement, found: 7\")"
+            ),
         );
     }
 
@@ -1127,7 +1129,9 @@ pub mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
-            "SQL error: ParserError(\"Expected an SQL statement, found: SLEECT\")"
+            &Bytes::from(
+                "SQL error: ParserError(\"Expected: an SQL statement, found: SLEECT\")"
+            ),
         );
     }
 
@@ -1149,7 +1153,7 @@ pub mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
-            "SQL error: ParserError(\"Expected AS, found: EOF\")"
+            &Bytes::from("SQL error: ParserError(\"Expected: AS, found: EOF\")"),
         );
     }
 

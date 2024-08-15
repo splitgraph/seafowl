@@ -106,7 +106,7 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         SQLDataType::Interval => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
         // Explicitly list all other types so that if sqlparser
         // adds/changes the `SQLDataType` the compiler will tell us on upgrade
-        // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
+        // and avoid bugs like https://github.com/apache/datafusion/issues/3059
         SQLDataType::Nvarchar(_)
         | SQLDataType::JSON
         | SQLDataType::Uuid
@@ -140,6 +140,27 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         | SQLDataType::Struct(_)
         | SQLDataType::JSONB
         | SQLDataType::Unspecified
+        // Clickhouse datatypes
+        | SQLDataType::Int16
+        | SQLDataType::Int32
+        | SQLDataType::Int128
+        | SQLDataType::Int256
+        | SQLDataType::UInt8
+        | SQLDataType::UInt16
+        | SQLDataType::UInt32
+        | SQLDataType::UInt64
+        | SQLDataType::UInt128
+        | SQLDataType::UInt256
+        | SQLDataType::Float32
+        | SQLDataType::Date32
+        | SQLDataType::Datetime64(_, _)
+        | SQLDataType::FixedString(_)
+        | SQLDataType::Map(_, _)
+        | SQLDataType::Tuple(_)
+        | SQLDataType::Nested(_)
+        | SQLDataType::Union(_)
+        | SQLDataType::Nullable(_)
+        | SQLDataType::LowCardinality(_)
         => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),

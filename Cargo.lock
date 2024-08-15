@@ -1507,7 +1507,7 @@ dependencies = [
 [[package]]
 name = "connectorx"
 version = "0.3.4-alpha.2"
-source = "git+https://github.com/splitgraph/connector-x?branch=datafusion-40-upgrade#c18d9107a4afa84fc6604b55ea379ea7bb621128"
+source = "git+https://github.com/splitgraph/connector-x?branch=datafusion-41-upgrade#76e82fd1530f83d0429be2a180b115b25f98f666"
 dependencies = [
  "anyhow",
  "arrow",
@@ -1577,13 +1577,13 @@ checksum = "f7144d30dcf0fafbce74250a3963025d8d52177934239851c917d29f1df280c2"
 [[package]]
 name = "convergence"
 version = "0.16.0"
-source = "git+https://github.com/splitgraph/convergence?branch=datafusion-40-upgrade#e64074434fe5337782c37f9bade6117eb86a94a2"
+source = "git+https://github.com/splitgraph/convergence?branch=datafusion-41-upgrade#b1332ba41b6c03b70c4912b353925dc8f30be97d"
 dependencies = [
  "async-trait",
  "bytes",
  "chrono",
  "futures",
- "sqlparser 0.47.0",
+ "sqlparser 0.49.0",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -1592,7 +1592,7 @@ dependencies = [
 [[package]]
 name = "convergence-arrow"
 version = "0.16.0"
-source = "git+https://github.com/splitgraph/convergence?branch=datafusion-40-upgrade#e64074434fe5337782c37f9bade6117eb86a94a2"
+source = "git+https://github.com/splitgraph/convergence?branch=datafusion-41-upgrade#b1332ba41b6c03b70c4912b353925dc8f30be97d"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1905,8 +1905,9 @@ checksum = "e8566979429cf69b49a5c740c60791108e86440e8be149bbea4fe54d2c32d6e2"
 
 [[package]]
 name = "datafusion"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4fd4a99fc70d40ef7e52b243b4a399c3f8d353a40d5ecb200deee05e49c61bb"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -1919,16 +1920,18 @@ dependencies = [
  "bzip2",
  "chrono",
  "dashmap 6.0.1",
+ "datafusion-catalog",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
- "datafusion-functions-aggregate 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
- "datafusion-functions-array 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
+ "datafusion-functions",
+ "datafusion-functions-aggregate",
+ "datafusion-functions-nested",
  "datafusion-optimizer",
  "datafusion-physical-expr",
- "datafusion-physical-expr-common 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-optimizer",
  "datafusion-physical-plan",
  "datafusion-sql",
  "flate2",
@@ -1946,7 +1949,7 @@ dependencies = [
  "paste",
  "pin-project-lite",
  "rand",
- "sqlparser 0.47.0",
+ "sqlparser 0.49.0",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -1957,9 +1960,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-catalog"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13b3cfbd84c6003594ae1972314e3df303a27ce8ce755fcea3240c90f4c0529"
+dependencies = [
+ "arrow-schema",
+ "async-trait",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-plan",
+]
+
+[[package]]
 name = "datafusion-common"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44fdbc877e3e40dcf88cc8f283d9f5c8851f0a3aa07fee657b1b75ac1ad49b9c"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -1974,21 +1992,23 @@ dependencies = [
  "num_cpus",
  "object_store",
  "parquet",
- "sqlparser 0.47.0",
+ "sqlparser 0.49.0",
 ]
 
 [[package]]
 name = "datafusion-common-runtime"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a7496d1f664179f6ce3a5cbef6566056ccaf3ea4aa72cc455f80e62c1dd86b1"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "datafusion-execution"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799e70968c815b611116951e3dd876aef04bf217da31b72eec01ee6a959336a1"
 dependencies = [
  "arrow",
  "chrono",
@@ -2007,8 +2027,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c1841c409d9518c17971d15c9bae62e629eb937e6fb6c68cd32e9186f8b30d2"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2018,15 +2039,16 @@ dependencies = [
  "datafusion-common",
  "paste",
  "serde_json",
- "sqlparser 0.47.0",
+ "sqlparser 0.49.0",
  "strum",
  "strum_macros",
 ]
 
 [[package]]
 name = "datafusion-functions"
-version = "40.0.0"
+version = "41.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+<<<<<<< HEAD
 checksum = "a369332afd0ef5bd565f6db2139fb9f1dfdd0afa75a7f70f000b74208d76994f"
 dependencies = [
  "arrow",
@@ -2049,8 +2071,12 @@ dependencies = [
 name = "datafusion-functions"
 version = "40.0.0"
 source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+=======
+checksum = "a8e481cf34d2a444bd8fa09b65945f0ce83dc92df8665b761505b3d9f351bebb"
+>>>>>>> d5113ab (DataFusion 41 upgrade)
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "base64 0.22.1",
  "blake2",
  "blake3",
@@ -2072,9 +2098,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate"
-version = "40.0.0"
+version = "41.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92718db1aff70c47e5abf9fc975768530097059e5db7c7b78cd64b5e9a11fc77"
+checksum = "2b4ece19f73c02727e5e8654d79cd5652de371352c1df3c4ac3e419ecd6943fb"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2082,34 +2108,17 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-physical-expr-common 40.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "datafusion-physical-expr-common",
  "log",
  "paste",
- "sqlparser 0.47.0",
+ "sqlparser 0.49.0",
 ]
 
 [[package]]
-name = "datafusion-functions-aggregate"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
-dependencies = [
- "ahash 0.8.11",
- "arrow",
- "arrow-schema",
- "datafusion-common",
- "datafusion-execution",
- "datafusion-expr",
- "datafusion-physical-expr-common 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
- "log",
- "paste",
- "sqlparser 0.47.0",
-]
-
-[[package]]
-name = "datafusion-functions-array"
-version = "40.0.0"
+name = "datafusion-functions-nested"
+version = "41.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30bb80f46ff3dcf4bb4510209c2ba9b8ce1b716ac8b7bf70c6bf7dca6260c831"
+checksum = "a1474552cc824e8c9c88177d454db5781d4b66757d4aca75719306b8343a5e8d"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -2119,37 +2128,19 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions 40.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "datafusion-functions-aggregate 40.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "datafusion-functions",
+ "datafusion-functions-aggregate",
  "itertools 0.12.1",
  "log",
  "paste",
-]
-
-[[package]]
-name = "datafusion-functions-array"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
-dependencies = [
- "arrow",
- "arrow-array",
- "arrow-buffer",
- "arrow-ord",
- "arrow-schema",
- "datafusion-common",
- "datafusion-execution",
- "datafusion-expr",
- "datafusion-functions 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
- "datafusion-functions-aggregate 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
- "itertools 0.12.1",
- "log",
- "paste",
+ "rand 0.8.5",
 ]
 
 [[package]]
 name = "datafusion-optimizer"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "791ff56f55608bc542d1ea7a68a64bdc86a9413f5a381d06a39fd49c2a3ab906"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2167,8 +2158,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a223962b3041304a3e20ed07a21d5de3d88d7e4e71ca192135db6d24e3365a4"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2182,7 +2174,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-physical-expr-common 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
+ "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.14.5",
  "hex",
@@ -2196,9 +2188,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-common"
-version = "40.0.0"
+version = "41.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d8a72b0ca908e074aaeca52c14ddf5c28d22361e9cb6bc79bb733cd6661b536"
+checksum = "db5e7d8532a1601cd916881db87a70b0a599900d23f3db2897d389032da53bc6"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2209,22 +2201,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "datafusion-physical-expr-common"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+name = "datafusion-physical-optimizer"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdb9c78f308e050f5004671039786a925c3fee83b90004e9fcfd328d7febdcc0"
 dependencies = [
- "ahash 0.8.11",
- "arrow",
  "datafusion-common",
+<<<<<<< HEAD
  "datafusion-expr",
  "hashbrown 0.14.5",
  "rand",
+=======
+ "datafusion-execution",
+ "datafusion-physical-expr",
+ "datafusion-physical-plan",
+>>>>>>> d5113ab (DataFusion 41 upgrade)
 ]
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d1116949432eb2d30f6362707e2846d942e491052a206f2ddcb42d08aea1ffe"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2238,9 +2236,9 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions-aggregate 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
+ "datafusion-functions-aggregate",
  "datafusion-physical-expr",
- "datafusion-physical-expr-common 40.0.0 (git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765)",
+ "datafusion-physical-expr-common",
  "futures",
  "half",
  "hashbrown 0.14.5",
@@ -2256,8 +2254,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf1d25864c18178d0e51438648f5e0fa08417dbbc39b642c1752cbbb1013abf0"
 dependencies = [
  "arrow",
  "chrono",
@@ -2271,8 +2270,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto-common"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96a683253732334526b1cc5314a73a0f786803831f7e189ed3fe387ac50d7222"
 dependencies = [
  "arrow",
  "chrono",
@@ -2301,8 +2301,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "40.0.0"
-source = "git+https://github.com/splitgraph/arrow-datafusion?branch=backport-pr11765#16f8adc01fbd9a5d9500d2652d09b1605bbb5ada"
+version = "41.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b45d0180711165fe94015d7c4123eb3e1cf5fb60b1506453200b8d1ce666bef0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -2311,7 +2312,7 @@ dependencies = [
  "datafusion-expr",
  "log",
  "regex",
- "sqlparser 0.47.0",
+ "sqlparser 0.49.0",
  "strum",
 ]
 
@@ -2344,9 +2345,9 @@ dependencies = [
 
 [[package]]
 name = "delta_kernel"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04f22db2e9d735475ffcb97bf00b80d693b3d6b87ea11786bc48a7785e503680"
+checksum = "fa08a82239f51e6d3d249c38f0f5bf7c8a78b28587e1b466893c9eac84d252d8"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -2368,6 +2369,7 @@ dependencies = [
  "rustc_version",
  "serde",
  "serde_json",
+ "strum",
  "thiserror",
  "tracing",
  "url",
@@ -2378,9 +2380,9 @@ dependencies = [
 
 [[package]]
 name = "delta_kernel_derive"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05bdaeea7681865f265739cf1d071ed571a62deaf5b77a5eb6604bf303116164"
+checksum = "6502fa0ba72fd1f782ccebba8f4c8b9a07c7591559e39d3d05b7ead94690a13f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2389,16 +2391,16 @@ dependencies = [
 
 [[package]]
 name = "deltalake"
-version = "0.18.2"
-source = "git+https://github.com/delta-io/delta-rs?rev=b8162c0fb967b3f3d9409d84f08605440dbad13b#b8162c0fb967b3f3d9409d84f08605440dbad13b"
+version = "0.19.0"
+source = "git+https://github.com/delta-io/delta-rs?rev=d3a796709a4bc9ee8a0fdc4ea16f8c607c0daf19#d3a796709a4bc9ee8a0fdc4ea16f8c607c0daf19"
 dependencies = [
  "deltalake-core",
 ]
 
 [[package]]
 name = "deltalake-core"
-version = "0.18.2"
-source = "git+https://github.com/delta-io/delta-rs?rev=b8162c0fb967b3f3d9409d84f08605440dbad13b#b8162c0fb967b3f3d9409d84f08605440dbad13b"
+version = "0.19.0"
+source = "git+https://github.com/delta-io/delta-rs?rev=d3a796709a4bc9ee8a0fdc4ea16f8c607c0daf19#d3a796709a4bc9ee8a0fdc4ea16f8c607c0daf19"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -2419,8 +2421,8 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
- "datafusion-functions 40.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "datafusion-functions-array 40.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "datafusion-functions",
+ "datafusion-functions-aggregate",
  "datafusion-physical-expr",
  "datafusion-proto",
  "datafusion-sql",
@@ -5941,7 +5943,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sha2",
- "sqlparser 0.47.0",
+ "sqlparser 0.49.0",
  "sqlx",
  "strum",
  "strum_macros",
@@ -6291,21 +6293,12 @@ dependencies = [
 
 [[package]]
 name = "sqlparser"
-version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "295e9930cd7a97e58ca2a070541a3ca502b17f5d1fa7157376d0fabd85324f25"
-dependencies = [
- "log",
- "sqlparser_derive",
-]
-
-[[package]]
-name = "sqlparser"
 version = "0.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4a404d0e14905361b918cb8afdb73605e25c1d5029312bd9785142dcb3aa49e"
 dependencies = [
  "log",
+ "sqlparser_derive",
 ]
 
 [[package]]

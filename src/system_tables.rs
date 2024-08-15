@@ -7,11 +7,10 @@ use arrow::array::{Int64Builder, StringBuilder, StructBuilder, TimestampSecondBu
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion::catalog::schema::SchemaProvider;
+use datafusion::catalog::{SchemaProvider, Session};
 use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
-use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::{Expr, TableType};
@@ -114,7 +113,7 @@ where
     // TODO: Investigate streaming from sqlx instead of loading all the results in memory
     async fn scan(
         &self,
-        _ctx: &SessionState,
+        _ctx: &dyn Session,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,

@@ -1,10 +1,9 @@
 use crate::provider::RemoteTable;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
-use datafusion::datasource::provider::TableProviderFactory;
+use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::context::SessionState;
 use datafusion_expr::CreateExternalTable;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -16,7 +15,7 @@ pub struct RemoteTableFactory {}
 impl TableProviderFactory for RemoteTableFactory {
     async fn create(
         &self,
-        _ctx: &SessionState,
+        _ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
         let table = RemoteTable::new(
