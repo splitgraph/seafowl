@@ -3,17 +3,14 @@ use arrow_schema::{SchemaBuilder, SchemaRef};
 use clade::sync::ColumnRole;
 use datafusion::datasource::{provider_as_source, TableProvider};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::physical_expr::create_physical_expr;
-use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::prelude::DataFrame;
-use datafusion_common::{JoinType, Result, ScalarValue, ToDFSchema};
-use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_common::{JoinType, Result, ScalarValue};
 use datafusion_expr::{
     col, is_null, lit, when, LogicalPlan, LogicalPlanBuilder, Projection,
 };
 use datafusion_expr::{is_true, Expr};
 use deltalake::delta_datafusion::DeltaTableProvider;
-use deltalake::kernel::{Action, Add, Remove, Schema};
+use deltalake::kernel::{Action, Remove, Schema};
 use deltalake::logstore::LogStore;
 use deltalake::operations::create::CreateBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
@@ -32,7 +29,7 @@ use crate::context::SeafowlContext;
 use crate::frontend::flight::handler::SYNC_COMMIT_INFO;
 use crate::frontend::flight::sync::metrics::SyncMetrics;
 use crate::frontend::flight::sync::schema::SyncSchema;
-use crate::frontend::flight::sync::utils::{construct_qualifier, squash_batches};
+use crate::frontend::flight::sync::utils::{prune_partitions, squash_batches};
 use crate::frontend::flight::sync::{
     Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult,
 };
@@ -422,27 +419,11 @@ impl SeafowlDataSyncWriter {
         // that any of the entries has the full column list.
         let full_schema = TableProvider::schema(&table);
 
-        // Generate a qualifier expression for pruning partition files to include in the base scan.
-        // First construct the qualifier for old PKs; we definitely need to overwrite those in case
-        // of PK-changing UPDATEs or DELETEs. Note that this can be `None` if it's an all-INSERT
-        // syncs vec.
-        let prune_start = Instant::now();
-        let old_pk_qualifier = construct_qualifier(syncs, ColumnRole::OldPk)?;
-        // Next construct the qualifier for new PKs; these are only needed for idempotence.
-        let new_pk_qualifier = construct_qualifier(syncs, ColumnRole::NewPk)?;
-        let qualifier = match (old_pk_qualifier, new_pk_qualifier) {
-            (Some(old_pk_q), Some(new_pk_q)) => old_pk_q.or(new_pk_q),
-            (Some(old_pk_q), None) => old_pk_q,
-            (None, Some(new_pk_q)) => new_pk_q,
-            _ => panic!("There can be no situation without either old or new PKs"),
-        };
-
         // Gather previous Add files that (might) need to be re-written.
-        let files = self.get_partitions(&qualifier, full_schema.clone(), &table)?;
-        info!(
-            "Partition pruning done in {} ms with qualifier {qualifier}",
-            prune_start.elapsed().as_millis()
-        );
+        let prune_start = Instant::now();
+        let files = prune_partitions(syncs, &table)?;
+        let duration = prune_start.elapsed().as_millis();
+        info!("Partition pruning done in {duration} ms");
         // Create removes to prune away files that are refuted by the qualifier
         let removes = files
             .iter()
@@ -766,31 +747,6 @@ impl SeafowlDataSyncWriter {
             .map(LogicalPlan::Projection)?;
 
         Ok(DataFrame::new(session_state, sync_plan))
-    }
-
-    // Get a list of files that need to be scanned and removed based on the pruning qualifier.
-    fn get_partitions(
-        &self,
-        predicate: &Expr,
-        full_schema: SchemaRef,
-        table: &DeltaTable,
-    ) -> Result<Vec<Add>> {
-        let prune_expr = create_physical_expr(
-            predicate,
-            &full_schema.clone().to_dfschema()?,
-            &ExecutionProps::new(),
-        )?;
-        let pruning_predicate =
-            PruningPredicate::try_new(prune_expr, full_schema.clone())?;
-        let snapshot = table.snapshot()?;
-        let prune_map = pruning_predicate.prune(snapshot)?;
-
-        Ok(snapshot
-            .file_actions()?
-            .iter()
-            .zip(prune_map)
-            .filter_map(|(add, keep)| if keep { Some(add.clone()) } else { None })
-            .collect::<Vec<Add>>())
     }
 
     // Remove the pending location from a sequence for all syncs in the collection

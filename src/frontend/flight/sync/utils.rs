@@ -1,12 +1,17 @@
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::writer::DataSyncItem;
-use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, UInt64Array};
-use arrow::compute::{concat_batches, take};
+use crate::frontend::flight::sync::SyncResult;
+use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, Scalar, UInt64Array};
+use arrow::compute::kernels::cmp::{gt_eq, lt_eq};
+use arrow::compute::{
+    and_kleene, concat_batches, filter, is_not_null, max_boolean, take,
+};
 use arrow_row::{Row, RowConverter, SortField};
 use clade::sync::ColumnRole;
-use datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{col, lit, Accumulator, Expr};
+use datafusion::physical_optimizer::pruning::PruningStatistics;
+use datafusion_common::Result;
+use deltalake::kernel::Add;
+use deltalake::DeltaTable;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 // Compact a set of record batches into a single one, squashing any chain of changes to a given row
@@ -212,76 +217,141 @@ pub(super) fn squash_batches(
     Ok(batch)
 }
 
-// Generate a qualifier expression that, when applied to the table, will only return
-// rows whose primary keys are affected by the changes in `entry`. This is so that
-// we can only read the partitions from Delta Lake that we need to rewrite.
-pub(super) fn construct_qualifier(
+// Get a list of files that need to be scanned and re-written based on old/new PKs in the syncs.
+pub(super) fn prune_partitions(
     syncs: &[DataSyncItem],
-    role: ColumnRole,
-) -> Result<Option<Expr>> {
-    // Initialize the min/max accumulators for the primary key columns needed to prune the table
-    // files.
-    // The assumption here is that the primary key columns are the same across all syncs.
-    let mut min_max_values: Vec<(String, (MinAccumulator, MaxAccumulator))> = syncs
+    table: &DeltaTable,
+) -> SyncResult<Vec<Add>> {
+    let snapshot = table.snapshot()?;
+    let files = snapshot.file_actions()?;
+
+    // Maps of column, partition -> min max scalar value
+    let mut min_values: HashMap<(&str, usize), Scalar<ArrayRef>> = HashMap::new();
+    let mut max_values: HashMap<(&str, usize), Scalar<ArrayRef>> = HashMap::new();
+
+    // Gather the stats about the partitions and PK columns
+    for col in syncs
         .first()
-        .expect("At least one sync item in the queue")
+        .unwrap()
         .sync_schema
         .columns()
         .iter()
-        .filter(|col| col.role() == role)
-        .map(|col| {
-            Ok((
-                col.name().clone(),
-                (
-                    MinAccumulator::try_new(col.field().data_type())?,
-                    MaxAccumulator::try_new(col.field().data_type())?,
-                ),
-            ))
-        })
-        .collect::<Result<_>>()?;
+        .filter(|col| col.role() == ColumnRole::OldPk)
+    {
+        let maybe_min_vals = snapshot.min_values(&col.name().into());
+        let maybe_max_vals = snapshot.max_values(&col.name().into());
 
-    // Collect all min/max stats for PK columns
-    for sync in syncs {
-        min_max_values
-            .iter_mut()
-            .try_for_each(|(pk_col, (min_value, max_value))| {
-                let field = sync.sync_schema.column(pk_col, role).unwrap().field();
+        if maybe_min_vals.is_none() && maybe_max_vals.is_none() {
+            // We have no stats for any partition for this PK column, so short-circuit pruning
+            // by returning all files
+            return Ok(files);
+        }
 
-                if let Some(pk_array) = sync.batch.column_by_name(field.name()) {
-                    min_value.update_batch(&[pk_array.clone()])?;
-                    max_value.update_batch(&[pk_array.clone()])?;
-                }
-                Ok::<(), DataFusionError>(())
-            })?
+        if let Some(min_vals) = maybe_min_vals {
+            for file in 0..files.len() {
+                min_values.insert(
+                    (col.name().as_str(), file),
+                    Scalar::new(min_vals.slice(file, 1)),
+                );
+            }
+        }
+        if let Some(max_vals) = maybe_max_vals {
+            for file in 0..files.len() {
+                max_values.insert(
+                    (col.name().as_str(), file),
+                    Scalar::new(max_vals.slice(file, 1)),
+                );
+            }
+        }
     }
 
-    // Combine the statistics into a single qualifier expression
-    Ok(min_max_values
-        .iter_mut()
-        .filter_map(|(pk_col, (min_value, max_value))| {
-            let min_value = min_value.evaluate().ok()?;
-            let max_value = max_value.evaluate().ok()?;
-            if !min_value.is_null() && !max_value.is_null() {
-                Some(Ok(
-                    col(pk_col.as_str()).between(lit(min_value), lit(max_value))
-                ))
-            } else {
-                // There shouldn't be a situation where a max is NULL but min isn't and vice-versa.
-                // Moreover, it should be the case that if one column has NULL min/max values, all
-                // columns do (i.e. we're processing an all INSERT/DELETE changeset).
-                assert!(min_value.is_null() && max_value.is_null());
-                None
+    // Start off scanning no files
+    let mut prune_map = vec![false; files.len()];
+
+    for role in [ColumnRole::OldPk, ColumnRole::NewPk] {
+        for sync in syncs {
+            for (ind, used) in prune_map.iter_mut().enumerate() {
+                // Perform pruning only if we don't know whether the partition is needed yet
+                if !*used {
+                    let mut non_null_map = None;
+                    let mut sync_prune_map = None;
+                    for pk_col in sync
+                        .sync_schema
+                        .columns()
+                        .iter()
+                        .filter(|col| col.role() == role)
+                    {
+                        let array =
+                            sync.batch.column_by_name(pk_col.field().name()).unwrap();
+
+                        // Scope out any NULL values, which only denote no-PKs when inserting/deleting.
+                        // We re-use the same non-null map since there can't be a scenario where
+                        // some of the PKs are null and others aren't (i.e. NULL PKs are invalid).
+                        let array = match non_null_map {
+                            None => {
+                                let non_nulls = is_not_null(array)?;
+                                let array = filter(array, &non_nulls)?;
+                                non_null_map = Some(non_nulls);
+                                array
+                            }
+                            Some(ref non_nulls) => filter(array, non_nulls)?,
+                        };
+
+                        if array.is_empty() {
+                            // Old PKs for INSERT/ new PKs for DELETE, nothing to prune here
+                            continue;
+                        }
+
+                        let col_file = (pk_col.name().as_str(), ind);
+                        let next_sync_prune_map = match (
+                            min_values.get(&col_file),
+                            max_values.get(&col_file),
+                        ) {
+                            (Some(min_value), Some(max_value)) => and_kleene(
+                                &gt_eq(&array.as_ref(), min_value)?,
+                                &lt_eq(&array.as_ref(), max_value)?,
+                            )?,
+                            (Some(min_value), None) => gt_eq(&array.as_ref(), min_value)?,
+                            (None, Some(max_value)) => lt_eq(&array.as_ref(), max_value)?,
+                            _ => unreachable!("Validation ensured against this case"),
+                        };
+
+                        match sync_prune_map {
+                            None => sync_prune_map = Some(next_sync_prune_map),
+                            Some(prev_sync_prune_map) => {
+                                sync_prune_map = Some(and_kleene(
+                                    &prev_sync_prune_map,
+                                    &next_sync_prune_map,
+                                )?)
+                            }
+                        }
+                    }
+
+                    if let Some(sync_prune_map) = sync_prune_map
+                        && max_boolean(&sync_prune_map) != Some(false)
+                    {
+                        // We've managed to calculate the prune map for all columns and at least one
+                        // PK is either definitely in the current partition file, or it's unknown
+                        // whether it is in the current file, so in either case we must include
+                        // this partition in the scan.
+                        *used = true;
+                    }
+                }
             }
-        })
-        .collect::<Result<Vec<Expr>>>()?
-        .into_iter()
-        .reduce(|e1: Expr, e2| e1.and(e2)))
+        }
+    }
+
+    Ok(files
+        .iter()
+        .zip(prune_map)
+        .filter_map(|(add, keep)| if keep { Some(add.clone()) } else { None })
+        .collect::<Vec<Add>>())
 }
 
 #[cfg(test)]
 mod tests {
     use crate::frontend::flight::sync::schema::SyncSchema;
-    use crate::frontend::flight::sync::utils::{construct_qualifier, squash_batches};
+    use crate::frontend::flight::sync::utils::squash_batches;
     use crate::frontend::flight::sync::writer::DataSyncItem;
     use arrow::array::{
         BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray, UInt8Array,
@@ -289,7 +359,6 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use clade::sync::{ColumnDescriptor, ColumnRole};
     use datafusion_common::assert_batches_eq;
-    use datafusion_expr::{col, lit};
     use itertools::Itertools;
     use rand::distributions::{Alphanumeric, DistString, Distribution, WeightedIndex};
     use rand::seq::IteratorRandom;
@@ -619,7 +688,7 @@ mod tests {
             ],
         )?;
 
-        let syncs = &[
+        let _syncs = &[
             DataSyncItem {
                 tx_id: Uuid::new_v4(),
                 sync_schema: sync_schema.clone(),
@@ -631,27 +700,6 @@ mod tests {
                 batch: batch_2,
             },
         ];
-
-        let old_pk_expr = construct_qualifier(syncs, ColumnRole::OldPk)?;
-        let new_pk_expr = construct_qualifier(syncs, ColumnRole::NewPk)?;
-
-        assert_eq!(
-            old_pk_expr,
-            Some(
-                col("c1")
-                    .between(lit(0), lit(4))
-                    .and(col("c2").between(lit(1.1), lit(3.2)))
-            ),
-        );
-
-        assert_eq!(
-            new_pk_expr,
-            Some(
-                col("c1")
-                    .between(lit(2), lit(6))
-                    .and(col("c2").between(lit(0.1), lit(2.2)))
-            ),
-        );
 
         Ok(())
     }
