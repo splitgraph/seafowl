@@ -3,9 +3,7 @@ use crate::frontend::flight::sync::writer::DataSyncItem;
 use crate::frontend::flight::sync::SyncResult;
 use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, Scalar, UInt64Array};
 use arrow::compute::kernels::cmp::{gt_eq, lt_eq};
-use arrow::compute::{
-    and_kleene, concat_batches, filter, is_not_null, max_boolean, take,
-};
+use arrow::compute::{and_kleene, bool_or, concat_batches, filter, is_not_null, take};
 use arrow_row::{Row, RowConverter, SortField};
 use clade::sync::ColumnRole;
 use datafusion::physical_optimizer::pruning::PruningStatistics;
@@ -364,7 +362,8 @@ fn get_prune_map(
                 }
 
                 if let Some(sync_prune_map) = sync_prune_map
-                    && max_boolean(&sync_prune_map) != Some(false)
+                    && (bool_or(&sync_prune_map) == Some(true)
+                        || sync_prune_map.null_count() > 0)
                 {
                     // We've managed to calculate the prune map for all columns and at least one
                     // PK is either definitely in the current partition file, or it's unknown
@@ -382,10 +381,11 @@ fn get_prune_map(
 #[cfg(test)]
 mod tests {
     use crate::frontend::flight::sync::schema::SyncSchema;
-    use crate::frontend::flight::sync::utils::squash_batches;
+    use crate::frontend::flight::sync::utils::{get_prune_map, squash_batches};
     use crate::frontend::flight::sync::writer::DataSyncItem;
     use arrow::array::{
-        BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray, UInt8Array,
+        ArrayRef, BooleanArray, Float64Array, Int32Array, RecordBatch, Scalar,
+        StringArray, UInt8Array,
     };
     use arrow_schema::{DataType, Field, Schema};
     use clade::sync::{ColumnDescriptor, ColumnRole};
@@ -394,7 +394,8 @@ mod tests {
     use rand::distributions::{Alphanumeric, DistString, Distribution, WeightedIndex};
     use rand::seq::IteratorRandom;
     use rand::Rng;
-    use std::collections::HashSet;
+    use rstest::rstest;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -667,13 +668,27 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
+    #[case(
+        vec![Some(70), None, Some(30)],
+        vec![Some(90), Some(40), Some(60)],
+        vec![Some("aa"), Some("bb"), None],
+        vec![Some("rr"), Some("gg"), Some("a")],
+        vec![false, true, false],
+    )]
     #[test]
-    fn test_sync_filter() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_sync_pruning(
+        #[case] c1_min_values: Vec<Option<i32>>,
+        #[case] c1_max_values: Vec<Option<i32>>,
+        #[case] c2_min_values: Vec<Option<&str>>,
+        #[case] c2_max_values: Vec<Option<&str>>,
+        #[case] expected_prune_map: Vec<bool>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("old_c1", DataType::Int32, true),
-            Field::new("old_c2", DataType::Float64, true),
+            Field::new("old_c2", DataType::Utf8, true),
             Field::new("new_c1", DataType::Int32, true),
-            Field::new("new_c2", DataType::Float64, true),
+            Field::new("new_c2", DataType::Utf8, true),
         ]));
 
         let column_descriptors = vec![
@@ -701,10 +716,10 @@ mod tests {
         let batch_1 = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from(vec![Some(1), None])),
-                Arc::new(Float64Array::from(vec![Some(1.1), None])),
-                Arc::new(Int32Array::from(vec![2, 6])),
-                Arc::new(Float64Array::from(vec![2.1, 2.2])),
+                Arc::new(Int32Array::from(vec![Some(20), None])),
+                Arc::new(StringArray::from(vec![Some("ddd"), None])),
+                Arc::new(Int32Array::from(vec![40, 30])),
+                Arc::new(StringArray::from(vec!["ccc", "bbb"])),
             ],
         )?;
 
@@ -712,14 +727,14 @@ mod tests {
         let batch_2 = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from(vec![0, 4])),
-                Arc::new(Float64Array::from(vec![3.1, 3.2])),
-                Arc::new(Int32Array::from(vec![None, Some(3)])),
-                Arc::new(Float64Array::from(vec![None, Some(0.1)])),
+                Arc::new(Int32Array::from(vec![10, 50])),
+                Arc::new(StringArray::from(vec!["aaa", "eee"])),
+                Arc::new(Int32Array::from(vec![None, Some(60)])),
+                Arc::new(StringArray::from(vec![None, Some("fff")])),
             ],
         )?;
 
-        let _syncs = &[
+        let syncs = &[
             DataSyncItem {
                 tx_id: Uuid::new_v4(),
                 sync_schema: sync_schema.clone(),
@@ -731,6 +746,53 @@ mod tests {
                 batch: batch_2,
             },
         ];
+
+        let mut min_values = HashMap::new();
+        for (file, (c1_min_val, c2_min_val)) in
+            c1_min_values.iter().zip(c2_min_values.iter()).enumerate()
+        {
+            min_values.insert(
+                ("c1", file),
+                Scalar::new(Arc::new(Int32Array::from(vec![*c1_min_val])) as ArrayRef),
+            );
+            min_values.insert(
+                ("c2", file),
+                Scalar::new(Arc::new(StringArray::from(vec![*c2_min_val])) as ArrayRef),
+            );
+        }
+        let mut max_values = HashMap::new();
+        for (file, (c1_max_val, c2_max_val)) in
+            c1_max_values.iter().zip(c2_max_values.iter()).enumerate()
+        {
+            max_values.insert(
+                ("c1", file),
+                Scalar::new(Arc::new(Int32Array::from(vec![*c1_max_val])) as ArrayRef),
+            );
+            max_values.insert(
+                ("c2", file),
+                Scalar::new(Arc::new(StringArray::from(vec![*c2_max_val])) as ArrayRef),
+            );
+        }
+
+        let prune_map = vec![false; expected_prune_map.len()];
+        let prune_map = get_prune_map(
+            syncs,
+            ColumnRole::OldPk,
+            prune_map,
+            &min_values,
+            &max_values,
+        )
+        .unwrap();
+        let prune_map = get_prune_map(
+            syncs,
+            ColumnRole::NewPk,
+            prune_map,
+            &min_values,
+            &max_values,
+        )
+        .unwrap();
+
+        assert_eq!(prune_map, expected_prune_map);
 
         Ok(())
     }
