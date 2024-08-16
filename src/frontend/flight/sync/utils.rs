@@ -13,6 +13,7 @@ use datafusion_common::Result;
 use deltalake::kernel::Add;
 use deltalake::DeltaTable;
 use std::collections::{HashMap, HashSet, VecDeque};
+use tracing::warn;
 
 // Compact a set of record batches into a single one, squashing any chain of changes to a given row
 // into a single row in the output batch.
@@ -244,6 +245,12 @@ pub(super) fn prune_partitions(
         if maybe_min_vals.is_none() && maybe_max_vals.is_none() {
             // We have no stats for any partition for this PK column, so short-circuit pruning
             // by returning all files
+            warn!(
+                "Skipping partition pruning: no min/max stats found for column {} in table {} for version {}",
+                col.name(),
+                table.table_uri(),
+                snapshot.version(),
+            );
             return Ok(files);
         }
 
@@ -266,47 +273,76 @@ pub(super) fn prune_partitions(
     }
 
     // Start off scanning no files
-    let mut prune_map = vec![false; files.len()];
+    let prune_map = vec![false; files.len()];
+    // First construct the prune map for old PKs; we definitely need to overwrite those in case
+    // of PK-changing UPDATEs or DELETEs.
+    let prune_map = get_prune_map(
+        syncs,
+        ColumnRole::OldPk,
+        prune_map,
+        &min_values,
+        &max_values,
+    )?;
+    // Next construct the qualifier for new PKs; these are only needed for idempotence.
+    let prune_map = get_prune_map(
+        syncs,
+        ColumnRole::NewPk,
+        prune_map,
+        &min_values,
+        &max_values,
+    )?;
 
-    for role in [ColumnRole::OldPk, ColumnRole::NewPk] {
-        for sync in syncs {
-            for (ind, used) in prune_map.iter_mut().enumerate() {
-                // Perform pruning only if we don't know whether the partition is needed yet
-                if !*used {
-                    let mut non_null_map = None;
-                    let mut sync_prune_map = None;
-                    for pk_col in sync
-                        .sync_schema
-                        .columns()
-                        .iter()
-                        .filter(|col| col.role() == role)
-                    {
-                        let array =
-                            sync.batch.column_by_name(pk_col.field().name()).unwrap();
+    Ok(files
+        .iter()
+        .zip(prune_map)
+        .filter_map(|(add, keep)| if keep { Some(add.clone()) } else { None })
+        .collect::<Vec<Add>>())
+}
 
-                        // Scope out any NULL values, which only denote no-PKs when inserting/deleting.
-                        // We re-use the same non-null map since there can't be a scenario where
-                        // some of the PKs are null and others aren't (i.e. NULL PKs are invalid).
-                        let array = match non_null_map {
-                            None => {
-                                let non_nulls = is_not_null(array)?;
-                                let array = filter(array, &non_nulls)?;
-                                non_null_map = Some(non_nulls);
-                                array
-                            }
-                            Some(ref non_nulls) => filter(array, non_nulls)?,
-                        };
+// Go through each sync and each partition and check whether any single row out of non-NULL PKs can
+// possibly be found in that partition, and if so add it to the map.
+fn get_prune_map(
+    syncs: &[DataSyncItem],
+    role: ColumnRole,
+    mut prune_map: Vec<bool>,
+    min_values: &HashMap<(&str, usize), Scalar<ArrayRef>>,
+    max_values: &HashMap<(&str, usize), Scalar<ArrayRef>>,
+) -> SyncResult<Vec<bool>> {
+    for sync in syncs {
+        for (ind, used) in prune_map.iter_mut().enumerate() {
+            // Perform pruning only if we don't know whether the partition is needed yet
+            if !*used {
+                let mut non_null_map = None;
+                let mut sync_prune_map = None;
+                for pk_col in sync
+                    .sync_schema
+                    .columns()
+                    .iter()
+                    .filter(|col| col.role() == role)
+                {
+                    let array = sync.batch.column_by_name(pk_col.field().name()).unwrap();
 
-                        if array.is_empty() {
-                            // Old PKs for INSERT/ new PKs for DELETE, nothing to prune here
-                            continue;
+                    // Scope out any NULL values, which only denote no-PKs when inserting/deleting.
+                    // We re-use the same non-null map since there can't be a scenario where
+                    // some of the PKs are null and others aren't (i.e. NULL PKs are invalid).
+                    let array = match non_null_map {
+                        None => {
+                            let non_nulls = is_not_null(array)?;
+                            let array = filter(array, &non_nulls)?;
+                            non_null_map = Some(non_nulls);
+                            array
                         }
+                        Some(ref non_nulls) => filter(array, non_nulls)?,
+                    };
 
-                        let col_file = (pk_col.name().as_str(), ind);
-                        let next_sync_prune_map = match (
-                            min_values.get(&col_file),
-                            max_values.get(&col_file),
-                        ) {
+                    if array.is_empty() {
+                        // Old PKs for INSERT/ new PKs for DELETE, nothing to prune here
+                        continue;
+                    }
+
+                    let col_file = (pk_col.name().as_str(), ind);
+                    let next_sync_prune_map =
+                        match (min_values.get(&col_file), max_values.get(&col_file)) {
                             (Some(min_value), Some(max_value)) => and_kleene(
                                 &gt_eq(&array.as_ref(), min_value)?,
                                 &lt_eq(&array.as_ref(), max_value)?,
@@ -316,36 +352,31 @@ pub(super) fn prune_partitions(
                             _ => unreachable!("Validation ensured against this case"),
                         };
 
-                        match sync_prune_map {
-                            None => sync_prune_map = Some(next_sync_prune_map),
-                            Some(prev_sync_prune_map) => {
-                                sync_prune_map = Some(and_kleene(
-                                    &prev_sync_prune_map,
-                                    &next_sync_prune_map,
-                                )?)
-                            }
+                    match sync_prune_map {
+                        None => sync_prune_map = Some(next_sync_prune_map),
+                        Some(prev_sync_prune_map) => {
+                            sync_prune_map = Some(and_kleene(
+                                &prev_sync_prune_map,
+                                &next_sync_prune_map,
+                            )?)
                         }
                     }
+                }
 
-                    if let Some(sync_prune_map) = sync_prune_map
-                        && max_boolean(&sync_prune_map) != Some(false)
-                    {
-                        // We've managed to calculate the prune map for all columns and at least one
-                        // PK is either definitely in the current partition file, or it's unknown
-                        // whether it is in the current file, so in either case we must include
-                        // this partition in the scan.
-                        *used = true;
-                    }
+                if let Some(sync_prune_map) = sync_prune_map
+                    && max_boolean(&sync_prune_map) != Some(false)
+                {
+                    // We've managed to calculate the prune map for all columns and at least one
+                    // PK is either definitely in the current partition file, or it's unknown
+                    // whether it is in the current file, so in either case we must include
+                    // this partition in the scan.
+                    *used = true;
                 }
             }
         }
     }
 
-    Ok(files
-        .iter()
-        .zip(prune_map)
-        .filter_map(|(add, keep)| if keep { Some(add.clone()) } else { None })
-        .collect::<Vec<Add>>())
+    Ok(prune_map)
 }
 
 #[cfg(test)]
