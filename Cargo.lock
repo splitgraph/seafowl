@@ -682,9 +682,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.37.0"
+version = "1.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e52dc3fd7dfa6c01a69cf3903e00aa467261639138a05b06cd92314d2c8fb07"
+checksum = "ede095dfcc5c92b224813c24a82b65005a475c98d737e2726a898cf583e2e8bd"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
