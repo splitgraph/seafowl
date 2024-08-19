@@ -670,10 +670,8 @@ pub mod tests {
     use std::fmt::Display;
     use std::{collections::HashMap, sync::Arc};
 
-    use rand::{rngs::mock::StepRng, Rng};
     use std::cell::RefCell;
-    use uuid::Builder;
-    thread_local!(static STEP_RNG: RefCell<StepRng> = RefCell::new(StepRng::new(1, 1)));
+    thread_local!(static UUID_SEED: RefCell<u128> = const { RefCell::new(0) });
 
     use rstest::rstest;
     use uuid::Uuid;
@@ -797,16 +795,17 @@ pub mod tests {
     const SELECT_QUERY_HASH: &str =
         "7fbbf7dddfd330d03e5e08cc5885ad8ca823e1b56e7cbadd156daa0e21c288f6";
     const V1_ETAG: &str =
-        "1230e7ce41e2f7c2050b75e36b6f313f5cc4dd99b255f2761f589d60a44eee00";
+        "37ff2380efb2e1ba86ad7204998cb7541b32196f4604c85e03cf74f6f9fd75b0";
     const V2_ETAG: &str =
-        "b17259a6a4e10c9a8b42ce23e683b919ada82b2ed1fafbbcd10ff42c63ff2443";
+        "35a334f8ea79ff5e8c79ed3c8083ec2910a9404d56b71cf853b44f979fc0b7fa";
 
     pub fn deterministic_uuid() -> Uuid {
         // A crude hack to get reproducible bytes as source for table UUID generation, to enable
         // transparent etag asserts
-        STEP_RNG.with(|rng| {
-            let bytes: [u8; 16] = rng.borrow_mut().gen();
-            Builder::from_random_bytes(bytes).into_uuid()
+        UUID_SEED.with(|uuid_seed| {
+            let mut seed = uuid_seed.borrow_mut();
+            *seed += 1;
+            Uuid::from_u128(*seed)
         })
     }
 
@@ -1003,7 +1002,9 @@ pub mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
-            "SQL error: ParserError(\"Expected an SQL statement, found: 7\")"
+            &Bytes::from(
+                "SQL error: ParserError(\"Expected: an SQL statement, found: 7\")"
+            ),
         );
     }
 
@@ -1128,7 +1129,9 @@ pub mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
-            "SQL error: ParserError(\"Expected an SQL statement, found: SLEECT\")"
+            &Bytes::from(
+                "SQL error: ParserError(\"Expected: an SQL statement, found: SLEECT\")"
+            ),
         );
     }
 
@@ -1150,7 +1153,7 @@ pub mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.body(),
-            "SQL error: ParserError(\"Expected AS, found: EOF\")"
+            &Bytes::from("SQL error: ParserError(\"Expected: AS, found: EOF\")"),
         );
     }
 

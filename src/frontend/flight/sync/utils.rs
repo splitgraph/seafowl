@@ -4,7 +4,7 @@ use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, UInt64Array};
 use arrow::compute::{concat_batches, take};
 use arrow_row::{Row, RowConverter, SortField};
 use clade::sync::ColumnRole;
-use datafusion::physical_expr::expressions::{MaxAccumulator, MinAccumulator};
+use datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{col, lit, Accumulator, Expr};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -215,7 +215,10 @@ pub(super) fn squash_batches(
 // Generate a qualifier expression that, when applied to the table, will only return
 // rows whose primary keys are affected by the changes in `entry`. This is so that
 // we can only read the partitions from Delta Lake that we need to rewrite.
-pub(super) fn construct_qualifier(syncs: &[DataSyncItem]) -> Result<Expr> {
+pub(super) fn construct_qualifier(
+    syncs: &[DataSyncItem],
+    role: ColumnRole,
+) -> Result<Option<Expr>> {
     // Initialize the min/max accumulators for the primary key columns needed to prune the table
     // files.
     // The assumption here is that the primary key columns are the same across all syncs.
@@ -225,7 +228,7 @@ pub(super) fn construct_qualifier(syncs: &[DataSyncItem]) -> Result<Expr> {
         .sync_schema
         .columns()
         .iter()
-        .filter(|col| col.role() == ColumnRole::OldPk)
+        .filter(|col| col.role() == role)
         .map(|col| {
             Ok((
                 col.name().clone(),
@@ -242,24 +245,9 @@ pub(super) fn construct_qualifier(syncs: &[DataSyncItem]) -> Result<Expr> {
         min_max_values
             .iter_mut()
             .try_for_each(|(pk_col, (min_value, max_value))| {
-                let old_field = sync
-                    .sync_schema
-                    .column(pk_col, ColumnRole::OldPk)
-                    .unwrap()
-                    .field();
+                let field = sync.sync_schema.column(pk_col, role).unwrap().field();
 
-                if let Some(pk_array) = sync.batch.column_by_name(old_field.name()) {
-                    min_value.update_batch(&[pk_array.clone()])?;
-                    max_value.update_batch(&[pk_array.clone()])?;
-                }
-
-                let new_field = sync
-                    .sync_schema
-                    .column(pk_col, ColumnRole::NewPk)
-                    .unwrap()
-                    .field();
-
-                if let Some(pk_array) = sync.batch.column_by_name(new_field.name()) {
+                if let Some(pk_array) = sync.batch.column_by_name(field.name()) {
                     min_value.update_batch(&[pk_array.clone()])?;
                     max_value.update_batch(&[pk_array.clone()])?;
                 }
@@ -270,14 +258,24 @@ pub(super) fn construct_qualifier(syncs: &[DataSyncItem]) -> Result<Expr> {
     // Combine the statistics into a single qualifier expression
     Ok(min_max_values
         .iter_mut()
-        .map(|(pk_col, (min_value, max_value))| {
-            Ok(col(pk_col.as_str())
-                .between(lit(min_value.evaluate()?), lit(max_value.evaluate()?)))
+        .filter_map(|(pk_col, (min_value, max_value))| {
+            let min_value = min_value.evaluate().ok()?;
+            let max_value = max_value.evaluate().ok()?;
+            if !min_value.is_null() && !max_value.is_null() {
+                Some(Ok(
+                    col(pk_col.as_str()).between(lit(min_value), lit(max_value))
+                ))
+            } else {
+                // There shouldn't be a situation where a max is NULL but min isn't and vice-versa.
+                // Moreover, it should be the case that if one column has NULL min/max values, all
+                // columns do (i.e. we're processing an all INSERT/DELETE changeset).
+                assert!(min_value.is_null() && max_value.is_null());
+                None
+            }
         })
         .collect::<Result<Vec<Expr>>>()?
         .into_iter()
-        .reduce(|e1: Expr, e2| e1.and(e2))
-        .unwrap())
+        .reduce(|e1: Expr, e2| e1.and(e2)))
 }
 
 #[cfg(test)]
@@ -599,6 +597,7 @@ mod tests {
 
         let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
 
+        // UPDATE, INSERT
         let batch_1 = RecordBatch::try_new(
             schema.clone(),
             vec![
@@ -609,17 +608,18 @@ mod tests {
             ],
         )?;
 
+        // DELETE, UPDATE
         let batch_2 = RecordBatch::try_new(
             schema.clone(),
             vec![
                 Arc::new(Int32Array::from(vec![0, 4])),
                 Arc::new(Float64Array::from(vec![3.1, 3.2])),
-                Arc::new(Int32Array::from(vec![1, 3])),
-                Arc::new(Float64Array::from(vec![4.1, 0.1])),
+                Arc::new(Int32Array::from(vec![None, Some(3)])),
+                Arc::new(Float64Array::from(vec![None, Some(0.1)])),
             ],
         )?;
 
-        let expr = construct_qualifier(&[
+        let syncs = &[
             DataSyncItem {
                 tx_id: Uuid::new_v4(),
                 sync_schema: sync_schema.clone(),
@@ -630,13 +630,27 @@ mod tests {
                 sync_schema,
                 batch: batch_2,
             },
-        ])?;
+        ];
+
+        let old_pk_expr = construct_qualifier(syncs, ColumnRole::OldPk)?;
+        let new_pk_expr = construct_qualifier(syncs, ColumnRole::NewPk)?;
 
         assert_eq!(
-            expr,
-            col("c1")
-                .between(lit(0), lit(6))
-                .and(col("c2").between(lit(0.1), lit(4.1))),
+            old_pk_expr,
+            Some(
+                col("c1")
+                    .between(lit(0), lit(4))
+                    .and(col("c2").between(lit(1.1), lit(3.2)))
+            ),
+        );
+
+        assert_eq!(
+            new_pk_expr,
+            Some(
+                col("c1")
+                    .between(lit(2), lit(6))
+                    .and(col("c2").between(lit(0.1), lit(2.2)))
+            ),
         );
 
         Ok(())

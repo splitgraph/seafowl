@@ -11,6 +11,7 @@ use crate::{
 use datafusion::execution::{
     context::SessionState,
     memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool},
+    session_state::SessionStateBuilder,
 };
 use datafusion::{
     common::Result,
@@ -96,7 +97,11 @@ pub fn build_state_with_table_factories(
     config: SessionConfig,
     runtime: Arc<RuntimeEnv>,
 ) -> SessionState {
-    let mut state = SessionState::new_with_config_rt(config, runtime);
+    let mut state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(runtime)
+        .with_default_features()
+        .build();
 
     state
         .table_factories_mut()

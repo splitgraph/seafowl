@@ -2,21 +2,21 @@
 members = ["clade", "object_store_factory"]
 
 [workspace.dependencies]
-arrow = { version = "52.1.0", features = ["test_utils"] }
-arrow-buffer = "52.1.0"
-arrow-csv = "52.1.0"
-arrow-flight = "52.1.0"
+arrow = { version = "52.2.0", features = ["test_utils"] }
+arrow-buffer = "52.2.0"
+arrow-csv = "52.2.0"
+arrow-flight = "52.2.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "52.1.0"
-arrow-row = "52.1.0"
-arrow-schema = "52.1.0"
+arrow-integration-test = "52.2.0"
+arrow-row = "52.2.0"
+arrow-schema = "52.2.0"
 async-trait = "0.1.64"
 
-datafusion = "40.0.0"
-datafusion-common = "40.0.0"
-datafusion-expr = "40.0.0"
+datafusion = "41.0.0"
+datafusion-common = "41.0.0"
+datafusion-expr = "41.0.0"
 
 futures = "0.3"
 
@@ -33,24 +33,10 @@ tracing-log = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 url = "2.5"
 
-
-
-[patch.crates-io]
-# Pick up fix for https://github.com/apache/arrow-datafusion/pull/11386 and backport for https://github.com/apache/datafusion/pull/11765
-datafusion = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-common = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-execution = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-optimizer = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-physical-expr = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-physical-plan = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-proto = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-datafusion-sql = { git = "https://github.com/splitgraph/arrow-datafusion", branch = "backport-pr11765" }
-
 [package]
 name = "seafowl"
 build = "build.rs"
-version = "0.5.7"
+version = "0.5.8"
 edition = "2021"
 
 readme = "README.md"
@@ -86,17 +72,17 @@ arrow-integration-test = { workspace = true }
 arrow-row = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
-base64 = "0.21.0"
+base64 = "0.22.1"
 
 bytes = "1.4.0"
 chrono = { version = "0.4", default-features = false }
 clade = { path = "clade" }
 clap = { version = "3.2.19", features = [ "derive" ] }
-config = "0.13.3"
+config = "0.14.0"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-40-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-40-upgrade", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-41-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-41-upgrade", optional = true }
 
 dashmap = "6.0.1"
 
@@ -106,15 +92,15 @@ datafusion-expr = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "e75a0b49b40f35ed361444bbea0e5720f359d732", features = ["datafusion"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "d3a796709a4bc9ee8a0fdc4ea16f8c607c0daf19", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
 indexmap = "2.0.0"
 itertools = { workspace = true }
 lazy_static = ">=1.4.0"
-metrics = { version = "0.22.1" }
-metrics-exporter-prometheus = { version = "0.13.1" }
+metrics = { version = "0.23.0" }
+metrics-exporter-prometheus = { version = "0.15.3" }
 moka = { version = "0.12.5", default-features = false, features = ["future", "atomic64", "quanta"] }
 object_store = { version = "0.10.2", features = ["aws", "azure", "gcp"] }
 object_store_factory = { path = "object_store_factory" }
@@ -133,7 +119,7 @@ rustyline = "14.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = ">=0.10.1"
-sqlparser = { version = "0.47", features = ["visitor"] }
+sqlparser = { version = "0.49", features = ["visitor"] }
 sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
@@ -142,7 +128,7 @@ thiserror = "1"
 tokio = { workspace = true }
 tokio-graceful-shutdown = { version = "0.15" }
 tonic = { version = "0.11.0", optional = true }
-tower = "0.4"
+tower = "0.5"
 tracing = { workspace = true }
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
@@ -160,11 +146,11 @@ assert_cmd = "2"
 assert_unordered = "0.3"
 aws-config = { version = "1.0.1", features = ["behavior-version-latest"] }
 aws-credential-types = { version = "1.1.5", features = ["hardcoded-credentials"] }
-aws-sdk-sts = { version = "1.3.1", features = ["behavior-version-latest"] }
+aws-sdk-sts = { version = "1.38.0", features = ["behavior-version-latest"] }
 rstest = "*"
-serial_test = "2"
+serial_test = "3"
 tonic-reflection = "0.11"
-wiremock = "0.5"
+wiremock = "0.6"
 
 [build-dependencies]
 anyhow = "1.0.63"  # for build.rs

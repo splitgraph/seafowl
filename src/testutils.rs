@@ -24,16 +24,10 @@ struct MockResponse {
 
 impl Respond for MockResponse {
     fn respond(&self, request: &Request) -> ResponseTemplate {
-        if self.supports_ranges && request.headers.contains_key(&"Range".into()) {
+        if self.supports_ranges && request.headers.contains_key("Range") {
             // Bunch of unwraps/expects here to simplify test code (not testing range handling
             // in depth)
-            let range_header = request
-                .headers
-                .get(&"Range".into())
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .to_string();
+            let range_header = request.headers["Range"].to_str().unwrap();
             let range = range_header
                 .strip_prefix("bytes=")
                 .expect("Range doesn't start with bytes=");

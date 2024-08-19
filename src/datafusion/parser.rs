@@ -442,6 +442,7 @@ impl<'a> DFParser<'a> {
             expr,
             asc,
             nulls_first,
+            with_fill: None,
         })
     }
 

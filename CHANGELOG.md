@@ -4,6 +4,42 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.5.8] - 2024-08-14
+
+- Separate qualifier for new and old sync pks (<https://github.com/splitgraph/seafowl/pull/608>)
+- Allow running Seafowl without an object store / catalog config.
+  (<https://github.com/splitgraph/seafowl/pull/607>)
+- Remove bucket from options (<https://github.com/splitgraph/seafowl/pull/603>)
+- Remove prefix from options (<https://github.com/splitgraph/seafowl/pull/595>)
+- Migrate unstable field json repr to a canonical one
+  (<https://github.com/splitgraph/seafowl/pull/594>)
+- Add flag denoting first sync response (<https://github.com/splitgraph/seafowl/pull/593>)
+- Refactor object_store_factory and create StorageLocationInfo
+  (<https://github.com/splitgraph/seafowl/pull/592>)
+- Support empty syncs with no batches provided as payload
+  (<https://github.com/splitgraph/seafowl/pull/591>)
+- Add origin and position to flight handler debug (<https://github.com/splitgraph/seafowl/pull/590>)
+- Patch DF to circumvent an analyzer rule (<https://github.com/splitgraph/seafowl/pull/586>)
+- DataFusion 40 upgrade (<https://github.com/splitgraph/seafowl/pull/584>)
+- Optional sync sequence number (<https://github.com/splitgraph/seafowl/pull/581>)
+- BEAC-167: Move object store configs to object_store_factory
+  (<https://github.com/splitgraph/seafowl/pull/580>)
+- Add criteria for max separate sync calls to apply when flushing
+  (<https://github.com/splitgraph/seafowl/pull/579>)
+- Add memory and local FS store to the object_store_factory builder function
+  (<https://github.com/splitgraph/seafowl/pull/578>)
+- BEAC-167: Create a crate that instantiates an object store based on URL, settings and environment
+  variables (<https://github.com/splitgraph/seafowl/pull/569>)
+- TPC-DS Q75 fix backport (<https://github.com/splitgraph/seafowl/pull/563>)
+- Workflow_dispatch trigger for nightly workflow (<https://github.com/splitgraph/seafowl/pull/562>)
+- Allow using RUST_LOG_STYLE=never to disable ANSI colors
+  (<https://github.com/splitgraph/seafowl/pull/561>)
+- Use the storage location name as the key in the clade schema
+  (<https://github.com/splitgraph/seafowl/pull/556>)
+- Increase retries and add delay backoff to connect to client on tests
+  (<https://github.com/splitgraph/seafowl/pull/554>)
+- Make origin a string (<https://github.com/splitgraph/seafowl/pull/548>)
+
 ## [0.5.7] - 2024-06-21
 
 - Add flush task (<https://github.com/splitgraph/seafowl/pull/534>)
@@ -259,7 +295,8 @@
 
 <!-- next-url -->
 
-[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.7...HEAD
+[unreleased]: https://github.com/splitgraph/seafowl/compare/v0.5.8...HEAD
+[0.5.8]: https://github.com/splitgraph/seafowl/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/splitgraph/seafowl/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/splitgraph/seafowl/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/splitgraph/seafowl/compare/v0.5.4...v0.5.5
