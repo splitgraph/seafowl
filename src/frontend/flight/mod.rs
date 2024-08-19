@@ -36,7 +36,8 @@ pub async fn run_flight_server(
     let handler = SeafowlFlightHandler::new(context, sync_writer.clone());
     tokio::spawn(flush_task(flush_interval, lock_timeout, sync_writer));
 
-    let svc = FlightServiceServer::new(handler);
+    let svc =
+        FlightServiceServer::new(handler).max_decoding_message_size(16 * 1024 * 1024);
 
     let server = Server::builder();
     let mut server = server.layer(MetricsLayer {});
