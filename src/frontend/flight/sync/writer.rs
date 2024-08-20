@@ -8,7 +8,9 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::prelude::DataFrame;
 use datafusion_common::{JoinType, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::{col, is_null, lit, when, LogicalPlanBuilder};
+use datafusion_expr::{
+    col, is_null, lit, when, LogicalPlan, LogicalPlanBuilder, Projection,
+};
 use datafusion_expr::{is_true, Expr};
 use deltalake::delta_datafusion::DeltaTableProvider;
 use deltalake::kernel::{Action, Add, Remove, Schema};
@@ -424,6 +426,7 @@ impl SeafowlDataSyncWriter {
         // First construct the qualifier for old PKs; we definitely need to overwrite those in case
         // of PK-changing UPDATEs or DELETEs. Note that this can be `None` if it's an all-INSERT
         // syncs vec.
+        let prune_start = Instant::now();
         let old_pk_qualifier = construct_qualifier(syncs, ColumnRole::OldPk)?;
         // Next construct the qualifier for new PKs; these are only needed for idempotence.
         let new_pk_qualifier = construct_qualifier(syncs, ColumnRole::NewPk)?;
@@ -433,10 +436,13 @@ impl SeafowlDataSyncWriter {
             (None, Some(new_pk_q)) => new_pk_q,
             _ => panic!("There can be no situation without either old or new PKs"),
         };
-        info!("Generated qualifier {qualifier}");
 
         // Gather previous Add files that (might) need to be re-written.
         let files = self.get_partitions(&qualifier, full_schema.clone(), &table)?;
+        info!(
+            "Partition pruning done in {} ms with qualifier {qualifier}",
+            prune_start.elapsed().as_millis()
+        );
         // Create removes to prune away files that are refuted by the qualifier
         let removes = files
             .iter()
@@ -467,13 +473,9 @@ impl SeafowlDataSyncWriter {
         );
 
         // Convert the custom Delta table provider into a base logical plan
-        let base_plan = LogicalPlanBuilder::scan_with_filters(
-            SYNC_REF,
-            provider_as_source(base_scan),
-            None,
-            vec![qualifier.clone()],
-        )?
-        .build()?;
+        let base_plan =
+            LogicalPlanBuilder::scan(SYNC_REF, provider_as_source(base_scan), None)?
+                .build()?;
 
         // Construct a state for physical planning; we omit all analyzer/optimizer rules to increase
         // the stack overflow threshold that occurs during recursive plan tree traversal in DF.
@@ -754,10 +756,16 @@ impl SeafowlDataSyncWriter {
                     .collect::<Vec<_>>(),
                 None,
             )?
-            .filter(old_pk_nulls.not().and(new_pk_nulls).not())? // Remove deletes
-            .select(projection)?;
+            .filter(old_pk_nulls.not().and(new_pk_nulls).not())?; // Remove deletes
 
-        Ok(input_df)
+        // The `DataFrame::select`/`LogicalPlanBuilder::project` projection API leads to sub-optimal
+        // performance since it does a bunch of expression normalization that we don't really need.
+        // So deconstruct the present one and add a vanilla `Projection` on top of it.
+        let (session_state, plan) = input_df.into_parts();
+        let sync_plan = Projection::try_new(projection, Arc::new(plan))
+            .map(LogicalPlan::Projection)?;
+
+        Ok(DataFrame::new(session_state, sync_plan))
     }
 
     // Get a list of files that need to be scanned and removed based on the pruning qualifier.
