@@ -13,6 +13,8 @@ const IN_MEMORY_OLDEST: &str =
 const SQUASH_TIME: &str = "seafowl_changeset_writer_squash_time_seconds";
 const SQUASHED_BYTES: &str = "seafowl_changeset_writer_squashed_bytes_total";
 const SQUASHED_ROWS: &str = "seafowl_changeset_writer_squashed_rows_total";
+const PRUNING_TIME: &str = "seafowl_changeset_writer_pruning_time_milliseconds";
+const PRUNING_FILES: &str = "seafowl_changeset_writer_pruning_files_total";
 const FLUSH_TIME: &str = "seafowl_changeset_writer_flush_time_seconds";
 const FLUSH_BYTES: &str = "seafowl_changeset_writer_flush_bytes_total";
 const FLUSH_ROWS: &str = "seafowl_changeset_writer_flush_rows_total";
@@ -32,6 +34,8 @@ pub struct SyncMetrics {
     pub squash_time: Histogram,
     pub squashed_bytes: Counter,
     pub squashed_rows: Counter,
+    pub pruning_time: Histogram,
+    pub pruning_files: Histogram,
     pub flush_time: Histogram,
     pub flush_bytes: Counter,
     pub flush_rows: Counter,
@@ -79,6 +83,14 @@ impl SyncMetrics {
             SQUASHED_ROWS,
             "The reduction in row count due to batch squashing"
         );
+        describe_histogram!(
+            PRUNING_TIME,
+            "The time taken to prune partition files to re-write"
+        );
+        describe_histogram!(
+            PRUNING_FILES,
+            "The file count that partition pruning identified"
+        );
         describe_histogram!(FLUSH_TIME, "The time taken to flush a collections of syncs");
         describe_counter!(FLUSH_BYTES, "The total byte size flushed");
         describe_counter!(FLUSH_ROWS, "The total row count flushed");
@@ -99,6 +111,8 @@ impl SyncMetrics {
             squash_time: histogram!(SQUASH_TIME),
             squashed_bytes: counter!(SQUASHED_BYTES),
             squashed_rows: counter!(SQUASHED_ROWS),
+            pruning_time: histogram!(PRUNING_TIME),
+            pruning_files: histogram!(PRUNING_FILES),
             flush_time: histogram!(FLUSH_TIME),
             flush_bytes: counter!(FLUSH_BYTES),
             flush_rows: counter!(FLUSH_ROWS),
