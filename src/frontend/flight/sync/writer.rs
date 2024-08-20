@@ -427,11 +427,13 @@ impl SeafowlDataSyncWriter {
         let prune_start = Instant::now();
         // Gather previous Add files that (might) need to be re-written.
         let files = self.prune_partitions(syncs, full_schema.clone(), &table)?;
+        let prune_time = prune_start.elapsed().as_millis();
         info!(
-            "Partition pruning found {} files in {} ms",
+            "Partition pruning found {} files in {prune_time} ms",
             files.len(),
-            prune_start.elapsed().as_millis()
         );
+        self.metrics.pruning_time.record(prune_time as f64);
+        self.metrics.pruning_files.record(files.len() as f64);
         // Create removes to prune away files that are refuted by the qualifier
         let removes = files
             .iter()
