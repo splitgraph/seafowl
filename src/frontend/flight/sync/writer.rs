@@ -41,6 +41,7 @@ use crate::frontend::flight::sync::{
 
 const SYNC_REF: &str = "sync_data";
 const SYNC_JOIN_COLUMN: &str = "__sync_join";
+const FINE_GRAINED_PRUNING_ROW_CRITERIA: i64 = 3_000_000;
 
 // A handler for caching, coalescing and flushing table syncs received via
 // the Arrow Flight `do_put` calls.
@@ -810,7 +811,7 @@ impl SeafowlDataSyncWriter {
 
         // TODO: think of a better heuristic to trigger granular pruning
         // Try granular pruning if total row count is higher than 3M
-        if total_rows > 3_000_000 {
+        if total_rows > FINE_GRAINED_PRUNING_ROW_CRITERIA {
             let prune_start = Instant::now();
             let new_prune_map = get_prune_map(syncs, snapshot)?;
             let new_partition_count = new_prune_map.iter().filter(|p| **p).count();
