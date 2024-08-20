@@ -357,7 +357,7 @@ impl Default for DataSyncConfig {
         Self {
             max_in_memory_bytes: 3 * 1024 * 1024 * 1024,
             max_replication_lag_s: 600,
-            max_syncs_per_url: 100,
+            max_syncs_per_url: 50,
             write_lock_timeout_s: 3,
             flush_task_interval_s: 900,
         }

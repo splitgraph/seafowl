@@ -32,13 +32,16 @@ use crate::context::SeafowlContext;
 use crate::frontend::flight::handler::SYNC_COMMIT_INFO;
 use crate::frontend::flight::sync::metrics::SyncMetrics;
 use crate::frontend::flight::sync::schema::SyncSchema;
-use crate::frontend::flight::sync::utils::{construct_qualifier, squash_batches};
+use crate::frontend::flight::sync::utils::{
+    construct_qualifier, get_prune_map, squash_batches,
+};
 use crate::frontend::flight::sync::{
     Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult,
 };
 
 const SYNC_REF: &str = "sync_data";
 const SYNC_JOIN_COLUMN: &str = "__sync_join";
+const FINE_GRAINED_PRUNING_ROW_CRITERIA: i64 = 3_000_000;
 
 // A handler for caching, coalescing and flushing table syncs received via
 // the Arrow Flight `do_put` calls.
@@ -422,27 +425,16 @@ impl SeafowlDataSyncWriter {
         // that any of the entries has the full column list.
         let full_schema = TableProvider::schema(&table);
 
-        // Generate a qualifier expression for pruning partition files to include in the base scan.
-        // First construct the qualifier for old PKs; we definitely need to overwrite those in case
-        // of PK-changing UPDATEs or DELETEs. Note that this can be `None` if it's an all-INSERT
-        // syncs vec.
         let prune_start = Instant::now();
-        let old_pk_qualifier = construct_qualifier(syncs, ColumnRole::OldPk)?;
-        // Next construct the qualifier for new PKs; these are only needed for idempotence.
-        let new_pk_qualifier = construct_qualifier(syncs, ColumnRole::NewPk)?;
-        let qualifier = match (old_pk_qualifier, new_pk_qualifier) {
-            (Some(old_pk_q), Some(new_pk_q)) => old_pk_q.or(new_pk_q),
-            (Some(old_pk_q), None) => old_pk_q,
-            (None, Some(new_pk_q)) => new_pk_q,
-            _ => panic!("There can be no situation without either old or new PKs"),
-        };
-
         // Gather previous Add files that (might) need to be re-written.
-        let files = self.get_partitions(&qualifier, full_schema.clone(), &table)?;
+        let files = self.prune_partitions(syncs, full_schema.clone(), &table)?;
+        let prune_time = prune_start.elapsed().as_millis();
         info!(
-            "Partition pruning done in {} ms with qualifier {qualifier}",
-            prune_start.elapsed().as_millis()
+            "Partition pruning found {} files in {prune_time} ms",
+            files.len(),
         );
+        self.metrics.pruning_time.record(prune_time as f64);
+        self.metrics.pruning_files.record(files.len() as f64);
         // Create removes to prune away files that are refuted by the qualifier
         let removes = files
             .iter()
@@ -768,25 +760,70 @@ impl SeafowlDataSyncWriter {
         Ok(DataFrame::new(session_state, sync_plan))
     }
 
-    // Get a list of files that need to be scanned and removed based on the pruning qualifier.
-    fn get_partitions(
+    // Get a list of files that need to be scanned, re-written and removed based on the PK values in
+    // the sync items.
+    fn prune_partitions(
         &self,
-        predicate: &Expr,
+        syncs: &[DataSyncItem],
         full_schema: SchemaRef,
         table: &DeltaTable,
-    ) -> Result<Vec<Add>> {
+    ) -> SyncResult<Vec<Add>> {
+        let snapshot = table.snapshot()?;
+        let files = snapshot.file_actions()?;
+
+        // First perform coarse-grained pruning, by only looking at global min-max in the syncs.
+        // Generate a qualifier expression for old PKs; we definitely need to overwrite those in case
+        // of PK-changing UPDATEs or DELETEs. Note that this can be `None` if it's an all-INSERT
+        // syncs vec.
+        let old_pk_qualifier = construct_qualifier(syncs, ColumnRole::OldPk)?;
+        // Next construct the qualifier for new PKs; these are only needed for idempotence.
+        let new_pk_qualifier = construct_qualifier(syncs, ColumnRole::NewPk)?;
+        let qualifier = match (old_pk_qualifier, new_pk_qualifier) {
+            (Some(old_pk_q), Some(new_pk_q)) => old_pk_q.or(new_pk_q),
+            (Some(old_pk_q), None) => old_pk_q,
+            (None, Some(new_pk_q)) => new_pk_q,
+            _ => panic!("There can be no situation without either old or new PKs"),
+        };
+
         let prune_expr = create_physical_expr(
-            predicate,
+            &qualifier,
             &full_schema.clone().to_dfschema()?,
             &ExecutionProps::new(),
         )?;
         let pruning_predicate =
             PruningPredicate::try_new(prune_expr, full_schema.clone())?;
-        let snapshot = table.snapshot()?;
-        let prune_map = pruning_predicate.prune(snapshot)?;
 
-        Ok(snapshot
-            .file_actions()?
+        let mut prune_map = pruning_predicate.prune(snapshot)?;
+
+        let partition_count = prune_map.iter().filter(|p| **p).count();
+        let total_rows = files
+            .iter()
+            .zip(&prune_map)
+            .filter_map(|(add, keep)| {
+                if *keep && let Ok(Some(stats)) = add.get_stats_parsed() {
+                    Some(stats.num_records)
+                } else {
+                    None
+                }
+            })
+            .sum::<i64>();
+        debug!("Coarse-grained pruning found {partition_count} partitions with {total_rows} rows in total to re-write");
+
+        // TODO: think of a better heuristic to trigger granular pruning
+        // Try granular pruning if total row count is higher than 3M
+        if total_rows > FINE_GRAINED_PRUNING_ROW_CRITERIA {
+            let prune_start = Instant::now();
+            let new_prune_map = get_prune_map(syncs, snapshot)?;
+            let new_partition_count = new_prune_map.iter().filter(|p| **p).count();
+            info!(
+                "Fine-grained pruning scoped out {} partitions in {} ms",
+                partition_count - new_partition_count,
+                prune_start.elapsed().as_millis()
+            );
+            prune_map = new_prune_map;
+        }
+
+        Ok(files
             .iter()
             .zip(prune_map)
             .filter_map(|(add, keep)| if keep { Some(add.clone()) } else { None })
