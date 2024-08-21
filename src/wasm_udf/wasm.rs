@@ -16,11 +16,11 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 
 use wasmtime::{Engine, Instance, Memory, Module, Store, TypedFunc, Val, ValType};
+use wasmtime_wasi::preview1::WasiP1Ctx;
 
 use super::data_types::{get_wasm_type, CreateFunctionDataType, CreateFunctionLanguage};
 
-use wasi_common::WasiCtx;
-use wasmtime_wasi::sync::WasiCtxBuilder;
+use wasmtime_wasi::WasiCtxBuilder;
 
 use arrow::array::Array;
 use datafusion_expr::ColumnarValue;
@@ -65,7 +65,7 @@ fn sql_type_to_arrow_type(t: &CreateFunctionDataType) -> Result<DataType> {
 
 fn get_wasm_module_exported_fn<Params, Results>(
     instance: &Instance,
-    store: &mut Store<WasiCtx>,
+    store: &mut Store<WasiP1Ctx>,
     export_name: &str,
 ) -> Result<TypedFunc<Params, Results>>
 where
@@ -81,7 +81,7 @@ where
 }
 
 struct WasmMessagePackUDFInstance {
-    store: Store<WasiCtx>,
+    store: Store<WasiP1Ctx>,
     alloc: TypedFunc<i32, i32>,
     dealloc: TypedFunc<(i32, i32), ()>,
     udf: TypedFunc<i32, i32>,
@@ -95,10 +95,10 @@ impl WasmMessagePackUDFInstance {
         // Create a WASI context and put it in a Store; all instances in the store
         // share this context. `WasiCtxBuilder` provides a number of ways to
         // configure what the target program will have access to.
-        let wasi = WasiCtxBuilder::new().inherit_stderr().build();
+        let wasi = WasiCtxBuilder::new().inherit_stderr().build_p1();
         let mut store = Store::new(&engine, wasi);
         // Add both wasi_unstable and wasi_snapshot_preview1 WASI modules
-        wasmtime_wasi::add_to_linker(&mut linker, |s| s).map_err(|e| {
+        wasmtime_wasi::preview1::add_to_linker_sync(&mut linker, |s| s).map_err(|e| {
             DataFusionError::Internal(format!("Error linking to WASI modules: {e:?}"))
         })?;
         // Instantiate WASM module.
@@ -683,7 +683,7 @@ fn make_scalar_function_from_wasm(
 
         // Buffer for the results
         let mut results: Vec<Val> = Vec::new();
-        results.resize(array_len, Val::null());
+        results.resize(array_len, Val::null_any_ref());
 
         for row_ix in 0..array_len {
             let mut params: Vec<Val> = Vec::with_capacity(args.len());
