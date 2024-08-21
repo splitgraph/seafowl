@@ -145,3 +145,14 @@ pub async fn build_object_store_from_opts(
         }
     }
 }
+
+pub async fn build_storage_location_info_from_opts(
+    url: &Url,
+    options: &HashMap<String, String>,
+) -> Result<StorageLocationInfo, object_store::Error> {
+    Ok(StorageLocationInfo {
+        object_store: Arc::new(build_object_store_from_opts(url, options.clone()).await?),
+        options: options.clone(),
+        url: url.to_string(),
+    })
+}
