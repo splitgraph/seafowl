@@ -454,6 +454,10 @@ impl SeafowlDataSyncWriter {
             })
             .collect::<Vec<_>>();
 
+        // Guesstimate the number of new partition files that will be produced
+        let max_size = self.context.config.misc.max_partition_size as usize;
+        let min_file_count_hint = files.len() + (entry.rows + max_size - 1) / max_size;
+
         // Create a special Delta table provider that will only hit the above partition files
         let base_scan = Arc::new(
             DeltaTableProvider::try_new(
@@ -505,6 +509,7 @@ impl SeafowlDataSyncWriter {
             log_store.object_store(),
             local_data_dir,
             self.context.config.misc.max_partition_size,
+            Some(min_file_count_hint),
         )
         .await?;
 
