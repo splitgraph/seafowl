@@ -25,8 +25,9 @@ pub async fn fast_upload(from: &StdPath, to: String) -> object_store::Result<(),
 
     if let Err(e) = result {
         // Cross-device link (can't move files between filesystems)
+        // Function not implemented (os error 38)
         // Copy and remove the old file
-        if e.raw_os_error() == Some(18) {
+        if e.raw_os_error() == Some(18) || e.raw_os_error() == Some(38) {
             copy(from, target_path)
                 .and_then(|_| remove_file(from))
                 .map_err(|e| Error::Generic {
