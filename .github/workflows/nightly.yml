@@ -62,6 +62,11 @@ jobs:
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo build --release
 
+      - name: Test invoking the binaries
+        shell: bash
+        run: |
+          ./target/release/seafowl --version || exit 1
+
       - name: Docker meta
         id: docker_meta
         uses: docker/metadata-action@v5
