@@ -24,7 +24,7 @@ pub async fn fast_upload(from: &StdPath, to: String) -> object_store::Result<(),
     let result = rename(&from, &target_path).await;
 
     debug!(
-        "Rename operation got result: {}",
+        "Rename operation got result: {:?}",
         result
     );
 
