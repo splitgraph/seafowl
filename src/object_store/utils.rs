@@ -23,6 +23,11 @@ pub async fn fast_upload(from: &StdPath, to: String) -> object_store::Result<(),
 
     let result = rename(&from, &target_path).await;
 
+    debug!(
+        "Rename operation got result: {}",
+        result
+    );
+
     if let Err(e) = result {
         // Cross-device link (can't move files between filesystems)
         // Function not implemented (os error 38)
