@@ -14,17 +14,17 @@ jobs:
   build_binary:
     name: Build the binaries
     runs-on: ${{ matrix.os }}
-
+    permissions:
+      packages: write
+      contents: read
+      
     strategy:
       matrix:
-        build: [linux-x86_64, osx-x86_64]
+        build: [linux-x86_64]
         include:
           - build: linux-x86_64
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-          - build: osx-x86_64
-            os: macos-latest
-            target: x86_64-apple-darwin
 
     steps:
       - name: Install prerequisites
@@ -62,100 +62,34 @@ jobs:
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo build --release
 
-      - name: Test invoking the binaries
-        shell: bash
-        run: |
-          ./target/release/seafowl --version || exit 1
-
-      - name: Prepare artifact name
-        shell: bash
-        run: |
-          echo "ARTIFACT=seafowl-nightly-${{ matrix.target }}" >> $GITHUB_ENV
-          echo "SOURCE=target/release/seafowl" >> $GITHUB_ENV
-
-      - name: Login to DockerHub (Linux only)
-        if: matrix.build == 'linux-x86_64'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Test building and invoking the Docker image (Linux only)
-        if: matrix.build == 'linux-x86_64'
-        run: |
-          DOCKER_BUILDKIT=1 docker build . -t splitgraph/seafowl:test
-          docker run --rm splitgraph/seafowl:test --version
-
-      - name: Determine Docker tags (Linux only)
-        if: matrix.build == 'linux-x86_64'
-        id: meta
-        # https://github.com/docker/metadata-action
+      - name: Docker meta
+        id: docker_meta
         uses: docker/metadata-action@v5
         with:
-          images: |
-            splitgraph/seafowl
-          # Latest push to main: add nightly/latest tags
-          # Tag pushes: add full version (e.g. 0.1.1) and major.minor (e.g. 0.1)
+          flavor: |
+            latest=false
+          images: ghcr.io/mrchypark/seafowl
           tags: |
-            type=raw,value=nightly,enable={{is_default_branch}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}},enable=${{startsWith(github.event.ref, 'refs/tags/v')}}
-            type=semver,pattern={{major}}.{{minor}},enable=${{startsWith(github.event.ref, 'refs/tags/v')}}
-            type=raw,value=commit-{{sha}}
-
-      - name: Build and push Docker image (Linux only)
-        if: matrix.build == 'linux-x86_64'
-        uses: docker/build-push-action@v6
+            type=semver,pattern=v{{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix={{branch}}-,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
         with:
-          context: .
+          buildkitd-flags: --debug
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
-      - name: Upload binaries as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.ARTIFACT }}
-          path: ${{ env.SOURCE }}
-
-  github_release:
-    name: Perform GitHub release
-    needs: build_binary
-    runs-on: ubuntu-latest
-    if: startsWith(github.event.ref, 'refs/tags/v')
-    steps:
-      - name: Get the release version from the tag
-        shell: bash
-        if: env.RELEASE_VERSION == ''
-        run: |
-          # See: https://github.community/t5/GitHub-Actions/How-to-get-just-the-tag-name/m-p/32167/highlight/true#M1027
-          echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-          echo "version is: ${{ env.RELEASE_VERSION }}"
-
-      # Checkout required to access the release-notes.py script
-      - name: Checkout the repository
-        uses: actions/checkout@v4
-      - name: Generate release notes
-        run: |
-          ./.github/workflows/release-notes.py --tag ${{ env.RELEASE_VERSION }} --output notes-${{ env.RELEASE_VERSION }}.md
-          cat notes-${{ env.RELEASE_VERSION }}.md
-
-      - name: Get artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: seafowl-nightly-*
-          path: artifacts
-
-      - name: Package artifacts
-        run: |
-          chmod +x artifacts/seafowl-nightly-x86_64-unknown-linux-gnu/seafowl artifacts/seafowl-nightly-x86_64-apple-darwin/seafowl
-          tar -C artifacts/seafowl-nightly-x86_64-unknown-linux-gnu -czf seafowl-${{ env.RELEASE_VERSION }}-x86_64-unknown-linux-gnu.tar.gz seafowl
-          tar -C artifacts/seafowl-nightly-x86_64-apple-darwin -czf seafowl-${{ env.RELEASE_VERSION }}-x86_64-apple-darwin.tar.gz seafowl
-
-      - name: Upload release archive
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            seafowl-${{ env.RELEASE_VERSION }}-x86_64-unknown-linux-gnu.tar.gz
-            seafowl-${{ env.RELEASE_VERSION }}-x86_64-apple-darwin.tar.gz
-          body_path: notes-${{ env.RELEASE_VERSION }}.md
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
