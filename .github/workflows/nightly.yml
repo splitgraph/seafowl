@@ -46,16 +46,6 @@ jobs:
           rustup toolchain install nightly --profile minimal
           rustup default nightly
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # shared-key: ""
-          # key: ""
-          # env-vars: ""
-          # workspaces: ""
-
-          # Determines if the cache should be saved even when the workflow has failed.
-          cache-on-failure: "true"
-
       - name: Build the release binary
         shell: bash
         run: |
