@@ -18,11 +18,10 @@ use object_store_factory::aws::S3Config;
 use object_store_factory::google::GCSConfig;
 use object_store_factory::ObjectStoreConfig;
 
-/// Wrapper around the object_store crate.
-///
-/// This wrapper around the object_store crate holds on to the original config
-/// in order to provide a more efficient "upload" for the local object store (since it's
-/// stored on the local filesystem, we can just move the file to it instead).
+// Wrapper around the object_store crate that holds on to the original config
+// in order to provide a more efficient "upload" for the local object store
+// (since it's stored on the local filesystem, we can just move the file to
+// it instead).
 #[derive(Debug, Clone)]
 pub struct InternalObjectStore {
     pub inner: Arc<dyn ObjectStore>,

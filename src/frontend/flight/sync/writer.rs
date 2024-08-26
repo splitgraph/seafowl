@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Not;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::context::delta::plan_to_object_store;
@@ -800,8 +800,13 @@ impl SeafowlDataSyncWriter {
             .iter()
             .zip(&prune_map)
             .filter_map(|(add, keep)| {
-                if *keep && let Ok(Some(stats)) = add.get_stats_parsed() {
-                    Some(stats.num_records)
+                if *keep {
+                    if let Ok(Some(stats)) = add.get_json_stats() {
+                        Some(stats.num_records)
+                    } else {
+                        warn!("Missing log stats for Add {add:?}");
+                        None
+                    }
                 } else {
                     None
                 }
