@@ -19,8 +19,9 @@ use wasmtime::{Engine, Instance, Memory, Module, Store, TypedFunc, Val, ValType}
 
 use super::data_types::{get_wasm_type, CreateFunctionDataType, CreateFunctionLanguage};
 
+use wasi_common::sync::add_to_linker;
+use wasi_common::sync::WasiCtxBuilder;
 use wasi_common::WasiCtx;
-use wasmtime_wasi::sync::WasiCtxBuilder;
 
 use arrow::array::Array;
 use datafusion_expr::ColumnarValue;
@@ -98,7 +99,7 @@ impl WasmMessagePackUDFInstance {
         let wasi = WasiCtxBuilder::new().inherit_stderr().build();
         let mut store = Store::new(&engine, wasi);
         // Add both wasi_unstable and wasi_snapshot_preview1 WASI modules
-        wasmtime_wasi::add_to_linker(&mut linker, |s| s).map_err(|e| {
+        add_to_linker(&mut linker, |s| s).map_err(|e| {
             DataFusionError::Internal(format!("Error linking to WASI modules: {e:?}"))
         })?;
         // Instantiate WASM module.
@@ -683,7 +684,7 @@ fn make_scalar_function_from_wasm(
 
         // Buffer for the results
         let mut results: Vec<Val> = Vec::new();
-        results.resize(array_len, Val::null());
+        results.resize(array_len, Val::null_extern_ref());
 
         for row_ix in 0..array_len {
             let mut params: Vec<Val> = Vec::with_capacity(args.len());
