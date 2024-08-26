@@ -5924,7 +5924,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sha2",
- "sqlparser 0.49.0",
+ "sqlparser 0.50.0",
  "sqlx",
  "strum",
  "strum_macros",
@@ -6289,6 +6289,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2e5b515a2bd5168426033e9efbfd05500114833916f1d5c268f938b4ee130ac"
 dependencies = [
  "log",
+ "sqlparser_derive",
 ]
 
 [[package]]

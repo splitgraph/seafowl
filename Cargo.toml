@@ -119,7 +119,7 @@ rustyline = "14.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = ">=0.10.1"
-sqlparser = { version = "0.49", features = ["visitor"] }
+sqlparser = { version = "0.50", features = ["visitor"] }
 sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"
