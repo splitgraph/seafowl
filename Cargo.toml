@@ -92,7 +92,7 @@ datafusion-expr = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "d3a796709a4bc9ee8a0fdc4ea16f8c607c0daf19", features = ["datafusion"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "46b38d20f4c0e79c5ff8e47bd420bc5ac2caa9e2", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"

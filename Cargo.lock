@@ -2349,16 +2349,16 @@ dependencies = [
 
 [[package]]
 name = "deltalake"
-version = "0.19.0"
-source = "git+https://github.com/delta-io/delta-rs?rev=d3a796709a4bc9ee8a0fdc4ea16f8c607c0daf19#d3a796709a4bc9ee8a0fdc4ea16f8c607c0daf19"
+version = "0.19.1"
+source = "git+https://github.com/delta-io/delta-rs?rev=46b38d20f4c0e79c5ff8e47bd420bc5ac2caa9e2#46b38d20f4c0e79c5ff8e47bd420bc5ac2caa9e2"
 dependencies = [
  "deltalake-core",
 ]
 
 [[package]]
 name = "deltalake-core"
-version = "0.19.0"
-source = "git+https://github.com/delta-io/delta-rs?rev=d3a796709a4bc9ee8a0fdc4ea16f8c607c0daf19#d3a796709a4bc9ee8a0fdc4ea16f8c607c0daf19"
+version = "0.19.1"
+source = "git+https://github.com/delta-io/delta-rs?rev=46b38d20f4c0e79c5ff8e47bd420bc5ac2caa9e2#46b38d20f4c0e79c5ff8e47bd420bc5ac2caa9e2"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -2382,6 +2382,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-physical-expr",
+ "datafusion-physical-plan",
  "datafusion-proto",
  "datafusion-sql",
  "delta_kernel",
@@ -2409,7 +2410,7 @@ dependencies = [
  "roaring",
  "serde",
  "serde_json",
- "sqlparser 0.49.0",
+ "sqlparser 0.50.0",
  "thiserror",
  "tokio",
  "tracing",
@@ -6279,6 +6280,15 @@ checksum = "a4a404d0e14905361b918cb8afdb73605e25c1d5029312bd9785142dcb3aa49e"
 dependencies = [
  "log",
  "sqlparser_derive",
+]
+
+[[package]]
+name = "sqlparser"
+version = "0.50.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2e5b515a2bd5168426033e9efbfd05500114833916f1d5c268f938b4ee130ac"
+dependencies = [
+ "log",
 ]
 
 [[package]]
