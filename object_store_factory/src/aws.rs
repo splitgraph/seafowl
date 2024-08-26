@@ -211,6 +211,10 @@ pub async fn add_amazon_s3_specific_options(
         let region = detect_region(url).await.unwrap();
         options.insert(AmazonS3ConfigKey::Region, region.to_string());
     }
+
+    options
+        .entry(AmazonS3ConfigKey::ConditionalPut)
+        .or_insert_with(|| S3ConditionalPut::ETagMatch.to_string());
 }
 
 pub fn add_amazon_s3_environment_variables(
