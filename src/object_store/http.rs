@@ -11,8 +11,11 @@ use object_store::{
     ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
 };
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
-use warp::hyper::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
-use warp::hyper::HeaderMap;
+use reqwest::header::HeaderMap;
+use reqwest::header::{
+    CONTENT_LENGTH, ETAG, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
+    IF_UNMODIFIED_SINCE, LAST_MODIFIED, RANGE,
+};
 
 use crate::object_store::cache::{
     CachingObjectStore, DEFAULT_CACHE_CAPACITY, DEFAULT_CACHE_ENTRY_TTL,
@@ -33,9 +36,6 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::warn;
 use url::Url;
-use warp::hyper::header::{
-    IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_UNMODIFIED_SINCE, RANGE,
-};
 
 pub const ANYHOST: &str = "anyhost";
 
