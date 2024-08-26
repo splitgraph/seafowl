@@ -1,8 +1,8 @@
-use object_store::aws::S3ConditionalPut;
-use object_store::{
-    aws::resolve_bucket_region, aws::AmazonS3Builder, aws::AmazonS3ConfigKey, path::Path,
-    ClientConfigKey, ClientOptions, ObjectStore,
+use object_store::aws::{
+    resolve_bucket_region, AmazonS3Builder, AmazonS3ConfigKey, S3ConditionalPut,
 };
+use object_store::path::Path;
+use object_store::{ClientConfigKey, ClientOptions, ObjectStore};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
