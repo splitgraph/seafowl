@@ -1,3 +1,4 @@
+use object_store::aws::S3ConditionalPut;
 use object_store::{
     aws::resolve_bucket_region, aws::AmazonS3Builder, aws::AmazonS3ConfigKey, path::Path,
     ClientConfigKey, ClientOptions, ObjectStore,
@@ -141,7 +142,8 @@ impl S3Config {
         let mut builder = AmazonS3Builder::new()
             .with_region(self.region.clone().unwrap_or_default())
             .with_bucket_name(self.bucket.clone())
-            .with_allow_http(self.allow_http);
+            .with_allow_http(self.allow_http)
+            .with_conditional_put(S3ConditionalPut::ETagMatch);
 
         if let Some(endpoint) = &self.endpoint {
             builder = builder.with_endpoint(endpoint.clone());
