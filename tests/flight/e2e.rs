@@ -16,7 +16,7 @@ async fn test_interleaving_queries(
         )
         .await
         .expect("Can query health endpoint");
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), warp::http::StatusCode::OK);
     assert_eq!(response_text(resp).await, "ready");
 
     // Create test table
