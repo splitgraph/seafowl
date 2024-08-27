@@ -71,7 +71,6 @@ pub struct Vacuum {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Truncate {
-    /// If the vacuum target are not the partitions or the db, denotes which table it applies to
     pub table_name: String,
     /// Dummy result schema for the plan (empty)
     pub output_schema: DFSchemaRef,
