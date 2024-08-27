@@ -1,6 +1,5 @@
 #![feature(let_chains)]
 
-use clap::AppSettings::NoAutoVersion;
 use seafowl::config::context::setup_metrics;
 use tokio::select;
 
@@ -39,30 +38,26 @@ use seafowl::frontend::postgres::run_pg_server;
 const DEFAULT_CONFIG_PATH: &str = "seafowl.toml";
 
 #[derive(Debug, Parser)]
-#[clap(name = "seafowl", global_settings = &[NoAutoVersion])]
+#[command(name = "seafowl", disable_version_flag = true)]
 struct Args {
-    #[clap(short, long, default_value=DEFAULT_CONFIG_PATH)]
+    #[arg(short, long, default_value=DEFAULT_CONFIG_PATH)]
     config_path: PathBuf,
 
-    #[clap(
+    #[arg(
         short = 'V',
         long = "--version",
         help = "Print version information",
-        takes_value = false
+        num_args = 0
     )]
     version: bool,
 
-    #[clap(short, long, help = "Run a one-off command and exit")]
+    #[arg(short, long, help = "Run a one-off command and exit")]
     one_off: Option<String>,
 
-    #[clap(
-        long,
-        help = "Run commands interactively from a CLI",
-        takes_value = false
-    )]
+    #[arg(long, help = "Run commands interactively from a CLI", num_args = 0)]
     cli: bool,
 
-    #[clap(long, help = "Enable JSON logging", takes_value = false)]
+    #[arg(long, help = "Enable JSON logging", num_args = 0)]
     json_logs: bool,
 }
 
