@@ -9,7 +9,6 @@ use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use prost::Message;
-use reqwest::StatusCode;
 use rstest::rstest;
 use std::future;
 use std::sync::Arc;
