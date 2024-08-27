@@ -44,6 +44,7 @@ mod convert;
 #[path = "../../src/testutils.rs"]
 mod testutils;
 mod time_travel;
+mod truncate;
 mod vacuum;
 
 enum ObjectStoreType {

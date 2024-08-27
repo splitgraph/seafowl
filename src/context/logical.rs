@@ -2,6 +2,7 @@ use crate::catalog::DEFAULT_SCHEMA;
 use crate::context::SeafowlContext;
 use crate::datafusion::parser::{DFParser, Statement as DFStatement, CONVERT_TO_DELTA};
 use crate::datafusion::utils::build_schema;
+use crate::nodes::Truncate;
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 use crate::{
     nodes::{
@@ -245,7 +246,7 @@ impl SeafowlContext {
                         })),
                     }))
                 },
-                Statement::Truncate { table_name, partitions, .. } => {
+                Statement::Truncate { table: false, table_name, partitions, .. } => {
                     let table_name = if partitions.is_none() {
                         Some(table_name.to_string())
                     } else {
@@ -263,6 +264,14 @@ impl SeafowlContext {
                         node: Arc::new(SeafowlExtensionNode::Vacuum(Vacuum {
                             database,
                             table_name,
+                            output_schema: Arc::new(DFSchema::empty())
+                        })),
+                    }))
+                }
+                Statement::Truncate { table: true, table_name, .. } => {
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(SeafowlExtensionNode::Truncate(Truncate {
+                            table_name: table_name.to_string(),
                             output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))

@@ -159,6 +159,10 @@ impl<'a> DFParser<'a> {
                         self.parser.next_token();
                         self.parse_vacuum()
                     }
+                    Keyword::TRUNCATE => {
+                        self.parser.next_token();
+                        self.parse_truncate()
+                    }
                     _ => {
                         // use the native parser
                         Ok(Statement::Statement(Box::from(
@@ -216,6 +220,20 @@ impl<'a> DFParser<'a> {
             table_name,
             partitions,
             table: false,
+        })))
+    }
+
+    pub fn parse_truncate(&mut self) -> Result<Statement, ParserError> {
+        let table_name: ObjectName = if self.parser.parse_keyword(Keyword::TABLE) {
+            self.parser.parse_object_name(true)?
+        } else {
+            return self.expected("TABLE as a TRUNCATE target", self.parser.peek_token());
+        };
+
+        Ok(Statement::Statement(Box::new(SQLStatement::Truncate {
+            table_name,
+            partitions: None,
+            table: true,
         })))
     }
 
