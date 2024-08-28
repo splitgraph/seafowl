@@ -39,11 +39,6 @@ impl SyncSchema {
                             "Field for column with `Changed` role must be of type boolean: {}",
                             field.name()
                         )
-                    } else if field.is_nullable() {
-                        format!(
-                            "Field for column with `Changed` role can not be nullable: {}",
-                            field.name()
-                        )
                     } else if !column_descriptors.iter().any(|other_cd| {
                         col_desc.name == other_cd.name
                             && other_cd.role == ColumnRole::Value as i32
@@ -146,5 +141,17 @@ impl SyncColumn {
     // Get the field from the arrow schema
     pub fn field(&self) -> &FieldRef {
         &self.field
+    }
+
+    // Returns a canonical `SyncColumn` field (logical) name, used to name columns in a projection
+    pub fn canonical_field_name(column_descriptor: &ColumnDescriptor) -> String {
+        format!(
+            "{}_{}",
+            ColumnRole::try_from(column_descriptor.role)
+                .unwrap()
+                .as_str_name()
+                .to_lowercase(),
+            column_descriptor.name
+        )
     }
 }

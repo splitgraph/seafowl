@@ -1,7 +1,7 @@
 use arrow::array::RecordBatch;
 use arrow_schema::{SchemaBuilder, SchemaRef};
 use clade::sync::ColumnRole;
-use datafusion::datasource::{provider_as_source, TableProvider};
+use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
@@ -33,14 +33,16 @@ use crate::frontend::flight::handler::SYNC_COMMIT_INFO;
 use crate::frontend::flight::sync::metrics::SyncMetrics;
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::utils::{
-    construct_qualifier, get_prune_map, squash_batches,
+    construct_qualifier, get_prune_map, merge_schemas, squash_batches,
 };
 use crate::frontend::flight::sync::{
     Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult,
 };
 
 const SYNC_REF: &str = "sync_data";
-const SYNC_JOIN_COLUMN: &str = "__sync_join";
+pub(super) const JOIN_COLUMN: &str = "__join_col";
+pub(super) const LOWER_SYNC: &str = "__lower_sync";
+pub(super) const UPPER_SYNC: &str = "__upper_sync";
 const FINE_GRAINED_PRUNING_ROW_CRITERIA: i64 = 3_000_000;
 
 // A handler for caching, coalescing and flushing table syncs received via
@@ -475,20 +477,33 @@ impl SeafowlDataSyncWriter {
             .with_analyzer_rules(vec![])
             .with_optimizer_rules(vec![])
             .build();
-        let mut sync_df = DataFrame::new(state, base_plan);
+        let base_df = DataFrame::new(state.clone(), base_plan);
 
-        // Iterate through all syncs for this table and construct a full plan by applying each
-        // individual sync
-        for sync in syncs {
-            sync_df = self.apply_sync(
-                full_schema.clone(),
+        let mut sync_schema = syncs.first().unwrap().sync_schema.clone();
+        let first_batch = syncs.first().unwrap().batch.clone();
+        let provider = MemTable::try_new(first_batch.schema(), vec![vec![first_batch]])?;
+        let mut sync_df = DataFrame::new(
+            state,
+            LogicalPlanBuilder::scan(
+                LOWER_SYNC,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        );
+
+        // Make a plan to squash all syncs into a single change stream
+        for sync in &syncs[1..] {
+            (sync_schema, sync_df) = self.merge_syncs(
+                &sync_schema,
                 sync_df,
                 &sync.sync_schema,
                 sync.batch.clone(),
             )?;
         }
 
-        let input_plan = sync_df.create_physical_plan().await?;
+        let input_df = self.apply_syncs(full_schema, base_df, sync_df, &sync_schema)?;
+        let input_plan = input_df.create_physical_plan().await?;
 
         // To exploit fast data upload to local FS, i.e. simply move the partition files
         // once written to the disk, try to infer whether the location is a local dir
@@ -645,12 +660,78 @@ impl SeafowlDataSyncWriter {
         (syncs, new_sync_commit)
     }
 
-    fn apply_sync(
+    // Build a plan to merge two adjacent syncs into one.
+    // It assumes that both syncs were squashed before-hand (i.e. no PK-chains in either one).
+    fn merge_syncs(
+        &self,
+        lower_schema: &SyncSchema,
+        lower_df: DataFrame,
+        upper_schema: &SyncSchema,
+        upper_data: RecordBatch,
+    ) -> SyncResult<(SyncSchema, DataFrame)> {
+        let provider = MemTable::try_new(upper_data.schema(), vec![vec![upper_data]])?;
+        let upper_df = DataFrame::new(
+            self.context.inner.state(),
+            LogicalPlanBuilder::scan(
+                UPPER_SYNC,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        );
+
+        let (lower_join_cols, upper_join_cols): (Vec<String>, Vec<String>) = upper_schema
+            .map_columns(ColumnRole::OldPk, |sc| {
+                (
+                    lower_schema
+                        .column(sc.name(), ColumnRole::NewPk)
+                        .expect("PK columns identical")
+                        .field()
+                        .name()
+                        .clone(),
+                    sc.field().name().clone(),
+                )
+            })
+            .into_iter()
+            .unzip();
+
+        // TODO merge syncs using a union if schemas match
+        let merged_sync = upper_df.with_column(UPPER_SYNC, lit(true))?.join(
+            lower_df.with_column(LOWER_SYNC, lit(true))?,
+            JoinType::Full,
+            &upper_join_cols
+                .iter()
+                .map(|pk| pk.as_str())
+                .collect::<Vec<_>>(),
+            &lower_join_cols
+                .iter()
+                .map(|pk| pk.as_str())
+                .collect::<Vec<_>>(),
+            None,
+        )?;
+
+        // Build the merged projection and column descriptors
+        let (col_desc, projection) = merge_schemas(lower_schema, upper_schema)?;
+
+        // The `DataFrame::select`/`LogicalPlanBuilder::project` projection API leads to sub-optimal
+        // performance since it does a bunch of expression normalization that we don't really need.
+        // So deconstruct the present one and add a vanilla `Projection` on top of it.
+        let (session_state, plan) = merged_sync.into_parts();
+        let sync_plan = Projection::try_new(projection, Arc::new(plan))
+            .map(LogicalPlan::Projection)?;
+
+        Ok((
+            SyncSchema::try_new(col_desc, sync_plan.schema().inner().clone())?,
+            DataFrame::new(session_state, sync_plan),
+        ))
+    }
+
+    fn apply_syncs(
         &self,
         full_schema: SchemaRef,
-        input_df: DataFrame,
+        base_df: DataFrame,
+        sync_df: DataFrame,
         sync_schema: &SyncSchema,
-        data: RecordBatch,
     ) -> SyncResult<DataFrame> {
         // Skip rows where both old and new primary keys are NULL, meaning a row inserted/updated
         // and deleted within the same sync message (so it shouldn't be in the input nor output)
@@ -666,17 +747,31 @@ impl SeafowlDataSyncWriter {
             .reduce(|e1: Expr, e2| e1.and(e2))
             .unwrap();
 
-        // Construct the sync dataframe out of the record batch
-        let sync_df = self.context.inner.read_batch(data)?;
-
         // These differ since the physical column names are reflected in the ColumnDescriptor,
         // while logical column names are found in the arrow fields
-        let (input_pk_cols, sync_pk_cols): (Vec<String>, Vec<String>) = sync_schema
+        let (base_pk_cols, sync_pk_cols): (Vec<String>, Vec<String>) = sync_schema
             .map_columns(ColumnRole::OldPk, |c| {
                 (c.name().clone(), c.field().name().clone())
             })
             .into_iter()
             .unzip();
+
+        let input_df = base_df
+            .with_column(JOIN_COLUMN, lit(true))?
+            .join(
+                sync_df.filter(old_pk_nulls.clone().and(new_pk_nulls.clone()).not())?, // Filter out any temp rows
+                JoinType::Full,
+                &base_pk_cols
+                    .iter()
+                    .map(|pk| pk.as_str())
+                    .collect::<Vec<_>>(),
+                &sync_pk_cols
+                    .iter()
+                    .map(|pk| pk.as_str())
+                    .collect::<Vec<_>>(),
+                None,
+            )?
+            .filter(old_pk_nulls.clone().not().and(new_pk_nulls.clone()).not())?; // Remove deletes
 
         // Normalize the schema, by ordering columns according to the full table schema and
         // projecting the sync data accordingly.
@@ -717,7 +812,7 @@ impl SeafowlDataSyncWriter {
                     )?
                 } else {
                     when(
-                        is_null(col(SYNC_JOIN_COLUMN)),
+                        is_null(col(JOIN_COLUMN)),
                         // Column is not present in the sync schema, and the old row doesn't exist
                         // either, project a NULL
                         lit(ScalarValue::Null.cast_to(f.data_type())?),
@@ -732,23 +827,6 @@ impl SeafowlDataSyncWriter {
                 Ok(expr.alias(name))
             })
             .collect::<Result<_>>()?;
-
-        let input_df = input_df
-            .with_column(SYNC_JOIN_COLUMN, lit(true))?
-            .join(
-                sync_df,
-                JoinType::Full,
-                &input_pk_cols
-                    .iter()
-                    .map(|pk| pk.as_str())
-                    .collect::<Vec<_>>(),
-                &sync_pk_cols
-                    .iter()
-                    .map(|pk| pk.as_str())
-                    .collect::<Vec<_>>(),
-                None,
-            )?
-            .filter(old_pk_nulls.not().and(new_pk_nulls).not())?; // Remove deletes
 
         // The `DataFrame::select`/`LogicalPlanBuilder::project` projection API leads to sub-optimal
         // performance since it does a bunch of expression normalization that we don't really need.

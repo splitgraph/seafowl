@@ -58,41 +58,5 @@ async fn test_sync_errors() -> std::result::Result<(), Box<dyn std::error::Error
         r#"status: InvalidArgument, message: "Invalid sync schema: Change requested but batches do not contain old/new PK columns"#
     ).await;
 
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("old_c1", DataType::Int32, true),
-        Field::new("new_c1", DataType::Int32, true),
-        Field::new("changed_c2", DataType::Boolean, true),
-    ]));
-    cmd.column_descriptors = vec![
-        ColumnDescriptor {
-            role: ColumnRole::OldPk as i32,
-            name: "c1".to_string(),
-        },
-        ColumnDescriptor {
-            role: ColumnRole::NewPk as i32,
-            name: "c1".to_string(),
-        },
-        ColumnDescriptor {
-            role: ColumnRole::Changed as i32,
-            name: "c2".to_string(),
-        },
-    ];
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int32Array::from(vec![1, 2])),
-            Arc::new(Int32Array::from(vec![2, 1])),
-            Arc::new(BooleanArray::from(vec![true, false])),
-        ],
-    )?;
-
-    // Missing upsert/delete column
-    assert_sync_error(
-        cmd.clone(),
-        batch.clone(),
-        &mut client,
-        r#"status: InvalidArgument, message: "Invalid sync schema: Field for column with `Changed` role can not be nullable: changed_c2""#
-    ).await;
-
     Ok(())
 }
