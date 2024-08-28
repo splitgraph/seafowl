@@ -654,26 +654,27 @@ impl SeafowlContext {
                         SeafowlExtensionNode::Truncate(Truncate {
                             table_name, ..
                         }) => {
-                            let mut table =
-                                self.try_get_delta_table(table_name.clone()).await?;
+                            let mut table = self.try_get_delta_table(table_name).await?;
                             table.load().await?;
                             let snapshot = table.snapshot()?;
-                            let removes = snapshot.file_actions()?;
                             let deletion_timestamp = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .unwrap()
                                 .as_millis()
                                 as i64;
-                            let actions: Vec<Action> = removes
+                            let actions: Vec<Action> = snapshot
+                                .file_actions()?
                                 .into_iter()
-                                .map(|remove| {
+                                .map(|add_action| {
                                     Action::Remove(Remove {
-                                        path: remove.path,
+                                        path: add_action.path,
                                         deletion_timestamp: Some(deletion_timestamp),
                                         data_change: true,
                                         extended_file_metadata: Some(true),
-                                        partition_values: Some(remove.partition_values),
-                                        size: Some(remove.size),
+                                        partition_values: Some(
+                                            add_action.partition_values,
+                                        ),
+                                        size: Some(add_action.size),
                                         tags: None,
                                         deletion_vector: None,
                                         base_row_id: None,

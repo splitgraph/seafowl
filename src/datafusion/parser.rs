@@ -224,11 +224,11 @@ impl<'a> DFParser<'a> {
     }
 
     pub fn parse_truncate(&mut self) -> Result<Statement, ParserError> {
-        let table_name: ObjectName = if self.parser.parse_keyword(Keyword::TABLE) {
-            self.parser.parse_object_name(true)?
-        } else {
+        if !self.parser.parse_keyword(Keyword::TABLE) {
             return self.expected("TABLE as a TRUNCATE target", self.parser.peek_token());
-        };
+        }
+
+        let table_name = self.parser.parse_object_name(true)?;
 
         Ok(Statement::Statement(Box::new(SQLStatement::Truncate {
             table_name,
