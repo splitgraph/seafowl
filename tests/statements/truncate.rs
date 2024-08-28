@@ -4,10 +4,8 @@ use crate::statements::*;
 async fn test_truncate_table() -> Result<()> {
     let (context, _) = make_context_with_pg(ObjectStoreType::Local).await;
 
-    // Create table_1 and make tombstone by replacing the first file
+    // Create table_1 and check that it contains data
     create_table_and_insert(&context, "table_1").await;
-
-    // Check that table contains data
     let plan = context.plan_query("SELECT * FROM table_1").await.unwrap();
     let results = context.collect(plan).await.unwrap();
     let expected = [
@@ -24,7 +22,7 @@ async fn test_truncate_table() -> Result<()> {
     // Execute TRUNCATE command
     context.plan_query("TRUNCATE TABLE table_1").await.unwrap();
 
-    // Check that data was truncated
+    // Check that table_1 no longer contains data
     let plan = context.plan_query("SELECT * FROM table_1").await.unwrap();
     let results = context.collect(plan).await.unwrap();
     let expected = ["++", "++"];
