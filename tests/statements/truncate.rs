@@ -25,8 +25,7 @@ async fn test_truncate_table() -> Result<()> {
     // Check that table_1 no longer contains data
     let plan = context.plan_query("SELECT * FROM table_1").await.unwrap();
     let results = context.collect(plan).await.unwrap();
-    let expected = ["++", "++"];
-    assert_batches_eq!(expected, &results);
+    assert!(results.is_empty());
 
     Ok(())
 }
