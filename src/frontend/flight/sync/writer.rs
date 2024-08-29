@@ -706,19 +706,18 @@ impl SeafowlDataSyncWriter {
             .unzip();
 
         // TODO merge syncs using a union if schemas match
-        let merged_sync = upper_df.with_column(UPPER_SYNC, lit(true))?.join(
-            lower_df.with_column(LOWER_SYNC, lit(true))?,
+   let merged_sync = {
+        let upper_df = upper_df.with_column(UPPER_SYNC, lit(true))?;
+        let lower_df = lower_df.with_column(LOWER_SYNC, lit(true))?;
+        
+        upper_df.join(
+            lower_df,
             JoinType::Full,
-            &upper_join_cols
-                .iter()
-                .map(|pk| pk.as_str())
-                .collect::<Vec<_>>(),
-            &lower_join_cols
-                .iter()
-                .map(|pk| pk.as_str())
-                .collect::<Vec<_>>(),
+            &upper_join_cols.iter().map(String::as_str).collect::<Vec<_>>(),
+            &lower_join_cols.iter().map(String::as_str).collect::<Vec<_>>(),
             None,
-        )?;
+        )?
+    };
 
         // Build the merged projection and column descriptors
         let (col_desc, projection) = merge_schemas(lower_schema, upper_schema)?;
