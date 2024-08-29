@@ -45,9 +45,8 @@ struct Args {
 
     #[arg(
         short = 'V',
-        long = "--version",
+        long = "version",
         help = "Print version information",
-        num_args = 0
     )]
     version: bool,
 
