@@ -43,11 +43,7 @@ struct Args {
     #[arg(short, long, default_value=DEFAULT_CONFIG_PATH)]
     config_path: PathBuf,
 
-    #[arg(
-        short = 'V',
-        long = "version",
-        help = "Print version information",
-    )]
+    #[arg(short = 'V', long = "version", help = "Print version information")]
     version: bool,
 
     #[arg(short, long, help = "Run a one-off command and exit")]
