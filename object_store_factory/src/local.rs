@@ -6,6 +6,12 @@ use std::sync::Arc;
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct LocalConfig {
     pub data_dir: String,
+    #[serde(default = "default_false")]
+    pub disable_hardlinks: bool,
+}
+
+fn default_false() -> bool {
+    false
 }
 
 impl LocalConfig {
@@ -13,13 +19,27 @@ impl LocalConfig {
         map: &HashMap<String, String>,
     ) -> Result<Self, object_store::Error> {
         Ok(Self {
-            data_dir: map.get("data_dir").unwrap().clone(),
+            data_dir: map
+                .get("data_dir")
+                .ok_or_else(|| object_store::Error::Generic {
+                    store: "local",
+                    source: "Missing data_dir".into(),
+                })?
+                .clone(),
+            disable_hardlinks: map
+                .get("disable_hardlinks")
+                .map(|s| s == "true")
+                .unwrap_or(false),
         })
     }
 
     pub fn to_hashmap(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         map.insert("data_dir".to_string(), self.data_dir.clone());
+        map.insert(
+            "disable_hardlinks".to_string(),
+            self.disable_hardlinks.to_string(),
+        );
         map
     }
 
@@ -44,6 +64,31 @@ mod tests {
         let config = LocalConfig::from_hashmap(&map)
             .expect("Failed to create config from hashmap");
         assert_eq!(config.data_dir, "/tmp/data".to_string());
+        assert!(!config.disable_hardlinks); // Default value
+    }
+
+    #[test]
+    fn test_config_from_hashmap_with_disable_hardlinks() {
+        let mut map = HashMap::new();
+        map.insert("data_dir".to_string(), "/tmp/data".to_string());
+        map.insert("disable_hardlinks".to_string(), "true".to_string());
+
+        let config = LocalConfig::from_hashmap(&map)
+            .expect("Failed to create config from hashmap");
+        assert_eq!(config.data_dir, "/tmp/data".to_string());
+        assert!(config.disable_hardlinks);
+    }
+
+    #[test]
+    fn test_config_from_hashmap_with_disable_hardlinks_false() {
+        let mut map = HashMap::new();
+        map.insert("data_dir".to_string(), "/tmp/data".to_string());
+        map.insert("disable_hardlinks".to_string(), "false".to_string());
+
+        let config = LocalConfig::from_hashmap(&map)
+            .expect("Failed to create config from hashmap");
+        assert_eq!(config.data_dir, "/tmp/data".to_string());
+        assert!(!config.disable_hardlinks);
     }
 
     #[test]
@@ -64,6 +109,7 @@ mod tests {
 
         let result = LocalConfig {
             data_dir: data_dir.to_string(),
+            disable_hardlinks: false,
         }
         .build_local_storage();
         assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result);
@@ -73,6 +119,7 @@ mod tests {
     fn test_build_local_storage_with_invalid_path() {
         let result = LocalConfig {
             data_dir: "".to_string(),
+            disable_hardlinks: false,
         }
         .build_local_storage();
         assert!(result.is_err(), "Expected Err due to invalid path, got Ok");
@@ -82,10 +129,44 @@ mod tests {
     fn test_to_hashmap() {
         let local_config = LocalConfig {
             data_dir: "path/to/data".to_string(),
+            disable_hardlinks: true,
         };
 
         let hashmap = local_config.to_hashmap();
 
         assert_eq!(hashmap.get("data_dir"), Some(&"path/to/data".to_string()));
+        assert_eq!(hashmap.get("disable_hardlinks"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_default_false() {
+        assert!(!default_false());
+    }
+
+    #[test]
+    fn test_deserialize_with_default() {
+        let json = r#"
+        {
+            "data_dir": "/tmp/data"
+        }
+        "#;
+
+        let config: LocalConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.data_dir, "/tmp/data");
+        assert!(!config.disable_hardlinks);
+    }
+
+    #[test]
+    fn test_deserialize_with_disable_hardlinks() {
+        let json = r#"
+        {
+            "data_dir": "/tmp/data",
+            "disable_hardlinks": true
+        }
+        "#;
+
+        let config: LocalConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.data_dir, "/tmp/data");
+        assert!(config.disable_hardlinks);
     }
 }
