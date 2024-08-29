@@ -69,6 +69,13 @@ pub struct Vacuum {
     pub output_schema: DFSchemaRef,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct Truncate {
+    pub table_name: String,
+    /// Dummy result schema for the plan (empty)
+    pub output_schema: DFSchemaRef,
+}
+
 #[derive(AsRefStr, Debug, Clone, Hash, PartialEq, Eq)]
 pub enum SeafowlExtensionNode {
     ConvertTable(ConvertTable),
@@ -76,6 +83,7 @@ pub enum SeafowlExtensionNode {
     CreateFunction(CreateFunction),
     DropFunction(DropFunction),
     RenameTable(RenameTable),
+    Truncate(Truncate),
     Vacuum(Vacuum),
 }
 
@@ -120,6 +128,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
             SeafowlExtensionNode::RenameTable(RenameTable { output_schema, .. }) => {
                 output_schema
             }
+            SeafowlExtensionNode::Truncate(Truncate { output_schema, .. }) => {
+                output_schema
+            }
             SeafowlExtensionNode::Vacuum(Vacuum { output_schema, .. }) => output_schema,
         }
     }
@@ -152,6 +163,9 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
                 old_name, new_name, ..
             }) => {
                 write!(f, "RenameTable: {} to {}", old_name, new_name)
+            }
+            SeafowlExtensionNode::Truncate(Truncate { table_name, .. }) => {
+                write!(f, "Truncate: {table_name}")
             }
             SeafowlExtensionNode::Vacuum(Vacuum { database, .. }) => {
                 write!(
