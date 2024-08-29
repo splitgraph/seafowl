@@ -644,8 +644,9 @@ impl SeafowlDataSyncWriter {
         &self,
         syncs: &[DataSyncItem],
     ) -> SyncResult<(SyncSchema, DataFrame)> {
-        let mut sync_schema = syncs.first().unwrap().sync_schema.clone();
-        let first_batch = syncs.first().unwrap().batch.clone();
+        let first_sync = syncs.first().unwrap();
+        let mut sync_schema = first_sync.sync_schema.clone();
+        let first_batch = first_sync.batch.clone();
         let provider = MemTable::try_new(first_batch.schema(), vec![vec![first_batch]])?;
         let mut sync_df = DataFrame::new(
             self.context.inner.state(),
@@ -692,32 +693,35 @@ impl SeafowlDataSyncWriter {
 
         let (lower_join_cols, upper_join_cols): (Vec<String>, Vec<String>) = upper_schema
             .map_columns(ColumnRole::OldPk, |sc| {
-                (
-                    lower_schema
-                        .column(sc.name(), ColumnRole::NewPk)
-                        .expect("PK columns identical")
-                        .field()
-                        .name()
-                        .clone(),
-                    sc.field().name().clone(),
-                )
+                let lower_name = lower_schema
+                    .column(sc.name(), ColumnRole::NewPk)
+                    .expect("PK columns identical")
+                    .field()
+                    .name()
+                    .clone();
+                let upper_name = sc.field().name().clone();
+                (lower_name, upper_name)
             })
             .into_iter()
             .unzip();
 
         // TODO merge syncs using a union if schemas match
-   let merged_sync = {
         let upper_df = upper_df.with_column(UPPER_SYNC, lit(true))?;
         let lower_df = lower_df.with_column(LOWER_SYNC, lit(true))?;
-        
-        upper_df.join(
+
+        let merged_sync = upper_df.join(
             lower_df,
             JoinType::Full,
-            &upper_join_cols.iter().map(String::as_str).collect::<Vec<_>>(),
-            &lower_join_cols.iter().map(String::as_str).collect::<Vec<_>>(),
+            &upper_join_cols
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            &lower_join_cols
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
             None,
-        )?
-    };
+        )?;
 
         // Build the merged projection and column descriptors
         let (col_desc, projection) = merge_schemas(lower_schema, upper_schema)?;
