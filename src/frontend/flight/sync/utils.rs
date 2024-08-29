@@ -448,10 +448,7 @@ pub(super) fn merge_schemas(
 
     // Now project any missing sync columns from the upper schema
     for upper_sync_col in upper_schema.columns() {
-        let cd = ColumnDescriptor {
-            role: upper_sync_col.role() as _,
-            name: upper_sync_col.name().clone(),
-        };
+        let cd = upper_sync_col.column_descriptor();
 
         if col_desc.contains(&cd) {
             // We've already projected this column from the lower schema
