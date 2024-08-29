@@ -4,7 +4,7 @@ use crate::context::delta::plan_to_object_store;
 use crate::context::SeafowlContext;
 use crate::nodes::{
     ConvertTable, CreateFunction, CreateTable, DropFunction, RenameTable,
-    SeafowlExtensionNode, Vacuum,
+    SeafowlExtensionNode, Truncate, Vacuum,
 };
 use crate::object_store::factory::build_object_store;
 use crate::object_store::http::try_prepare_http_url;
@@ -649,6 +649,43 @@ impl SeafowlContext {
                                     &resolved_new_ref.table,
                                 )
                                 .await?;
+                            Ok(make_dummy_exec())
+                        }
+                        SeafowlExtensionNode::Truncate(Truncate {
+                            table_name, ..
+                        }) => {
+                            let mut table = self.try_get_delta_table(table_name).await?;
+                            table.load().await?;
+                            let snapshot = table.snapshot()?;
+                            let deletion_timestamp = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis()
+                                as i64;
+                            let actions: Vec<Action> = snapshot
+                                .file_actions()?
+                                .into_iter()
+                                .map(|add_action| {
+                                    Action::Remove(Remove {
+                                        path: add_action.path,
+                                        deletion_timestamp: Some(deletion_timestamp),
+                                        data_change: true,
+                                        extended_file_metadata: Some(true),
+                                        partition_values: Some(
+                                            add_action.partition_values,
+                                        ),
+                                        size: Some(add_action.size),
+                                        tags: None,
+                                        deletion_vector: None,
+                                        base_row_id: None,
+                                        default_row_commit_version: None,
+                                    })
+                                })
+                                .collect();
+
+                            let op = DeltaOperation::Delete { predicate: None };
+                            self.commit(actions, &table, op).await?;
+
                             Ok(make_dummy_exec())
                         }
                         SeafowlExtensionNode::Vacuum(Vacuum {
