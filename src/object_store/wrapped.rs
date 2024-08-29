@@ -17,6 +17,7 @@ use url::Url;
 use object_store_factory::aws::S3Config;
 use object_store_factory::google::GCSConfig;
 use object_store_factory::ObjectStoreConfig;
+use object_store_factory::local::LocalConfig;
 
 // Wrapper around the object_store crate that holds on to the original config
 // in order to provide a more efficient "upload" for the local object store
@@ -239,6 +240,9 @@ impl ObjectStore for InternalObjectStore {
     ///
     /// Will return an error if the destination already has an object.
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+      if let  ObjectStoreConfig::Local(LocalConfig { no_hardlinks: true, .. }) = self.config {
+        return self.inner.copy(from, to).await;
+      }
         self.inner.copy_if_not_exists(from, to).await
     }
 
@@ -254,6 +258,9 @@ impl ObjectStore for InternalObjectStore {
             // this with a lock too, so look into using that down the line instead.
             return self.inner.rename(from, to).await;
         }
+        if let ObjectStoreConfig::Local(LocalConfig { no_hardlinks: true, .. }) = self.config {
+            return self.inner.rename(from, to).await;
+        }
         self.inner.rename_if_not_exists(from, to).await
     }
 }
@@ -264,7 +271,7 @@ mod tests {
     use crate::object_store::wrapped::InternalObjectStore;
     use datafusion::common::Result;
     use rstest::rstest;
-
+    
     use object_store_factory::aws::S3Config;
     use object_store_factory::ObjectStoreConfig;
 

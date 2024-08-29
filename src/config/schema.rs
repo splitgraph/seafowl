@@ -637,6 +637,7 @@ cache_control = "private, max-age=86400"
             SeafowlConfig {
                 object_store: Some(ObjectStoreConfig::Local(LocalConfig {
                     data_dir: "./seafowl-data".to_string(),
+                    no_hardlinks: false,
                 })),
                 catalog: Some(Catalog::Postgres(Postgres {
                     dsn: "postgresql://user:pass@localhost:5432/somedb".to_string(),
@@ -732,6 +733,7 @@ cache_control = "private, max-age=86400"
             SeafowlConfig {
                 object_store: Some(ObjectStoreConfig::Local(LocalConfig {
                     data_dir: "some_other_path".to_string(),
+                    no_hardlinks: false,
                 })),
                 catalog: Some(Catalog::Sqlite(Sqlite {
                     dsn: "sqlite://file.sqlite".to_string(),
