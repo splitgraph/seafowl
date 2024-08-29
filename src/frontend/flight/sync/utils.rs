@@ -426,109 +426,24 @@ pub(super) fn merge_schemas(
     // TODO: implement sync role indexing in SyncSchema to make all the lookups below cheap
     // Project all sync columns from the lower schema
     for lower_sync_col in lower_schema.columns() {
-        let maybe_upper_sync_col =
-            upper_schema.column(lower_sync_col.name(), lower_sync_col.role());
-
-        // Build the expression that is going to be used when lower sync column is missing
-        let otherwise = match lower_sync_col.role() {
-            ColumnRole::OldPk => {
-                let upper_old_pk_col = maybe_upper_sync_col
-                    .expect("Old/New Pk columns must be the same across syncs");
-
-                when(
-                    col(LOWER_SYNC).is_null(),
-                    col(Column::new(
-                        Some(UPPER_SYNC),
-                        upper_old_pk_col.field().name(),
-                    )),
-                )
-                .otherwise(col(Column::new(
-                    Some(LOWER_SYNC),
-                    lower_sync_col.field().name(),
-                )))?
-            }
-            ColumnRole::NewPk => {
-                let upper_new_pk_col = maybe_upper_sync_col
-                    .expect("Old/New Pk columns must be the same across syncs");
-
-                col(Column::new(
-                    Some(UPPER_SYNC),
-                    upper_new_pk_col.field().name(),
-                ))
-            }
+        // Build the expression to project the combined column
+        let expr = match lower_sync_col.role() {
+            ColumnRole::OldPk => project_old_pk_column(lower_sync_col, upper_schema)?,
+            ColumnRole::NewPk => project_new_pk_column(lower_sync_col, upper_schema)?,
             ColumnRole::Changed => {
-                if let Some(upper_changed_col) = maybe_upper_sync_col {
-                    // The upper schema has the corresponding `Changed` column, take its values
-                    col(Column::new(
-                        Some(UPPER_SYNC),
-                        upper_changed_col.field().name(),
-                    ))
-                } else if upper_schema
-                    .column(lower_sync_col.name(), ColumnRole::Value)
-                    .is_some()
-                {
-                    // The upper schema doesn't have the `Changed` column at hand, but it does have
-                    // the corresponding `Value` column, project true to pick those values up
-                    lit(true)
-                } else {
-                    // The upper sync has neither the `Changed` nor the associated `Value` column,
-                    // project false to avoid overriding NULL values
-                    lit(false)
-                }
+                project_lower_changed_column(lower_sync_col, upper_schema)?
             }
-            ColumnRole::Value => {
-                if maybe_upper_sync_col.is_none()
-                    && lower_schema
-                        .column(lower_sync_col.name(), ColumnRole::Changed)
-                        .is_none()
-                {
-                    // There's no corresponding `Value` sync column in the upper schema, and
-                    // there's no `Changed` column in the lower schema either, we need to project
-                    // the `Changed` column that takes all the values from the lower schema and
-                    // no value from the upper one
-                    col_desc.insert(ColumnDescriptor {
-                        role: ColumnRole::Changed as _,
-                        name: lower_sync_col.name().clone(),
-                    });
-                    projection.push(
-                        when(col(LOWER_SYNC).is_null(), lit(false))
-                            .otherwise(lit(true))?,
-                    );
-                }
-
-                if let Some(upper_value_col) = maybe_upper_sync_col {
-                    col(Column::new(
-                        Some(UPPER_SYNC),
-                        upper_value_col.field().name(),
-                    ))
-                } else {
-                    // The upper sync doesn't have this column but the lower sync already has
-                    // the `Changed` column which was/will be included in the output.
-                    // Project NULLs in its place.
-                    when(
-                        col(UPPER_SYNC).is_null(),
-                        lit(ScalarValue::Null
-                            .cast_to(lower_sync_col.field().data_type())?),
-                    )
-                    .otherwise(col(Column::new(
-                        Some(LOWER_SYNC),
-                        lower_sync_col.field().name(),
-                    )))?
-                }
-            }
+            ColumnRole::Value => project_lower_value_column(
+                lower_sync_col,
+                lower_schema,
+                upper_schema,
+                &mut col_desc,
+                &mut projection,
+            )?,
         };
 
-        col_desc.insert(ColumnDescriptor {
-            role: lower_sync_col.role() as _,
-            name: lower_sync_col.name().clone(),
-        });
-        projection.push(
-            when(
-                col(UPPER_SYNC).is_null(),
-                col(Column::new(Some(LOWER_SYNC), lower_sync_col.field().name())),
-            )
-            .otherwise(otherwise)?,
-        );
+        col_desc.insert(lower_sync_col.column_descriptor());
+        projection.push(expr);
     }
 
     // Now project any missing sync columns from the upper schema
@@ -543,61 +458,23 @@ pub(super) fn merge_schemas(
             continue;
         }
 
-        let maybe_lower_sync_col =
-            lower_schema.column(upper_sync_col.name(), upper_sync_col.role());
-
         // Build the expression that is going to be used when upper sync column value is missing
-        let otherwise = match upper_sync_col.role() {
+        let expr = match upper_sync_col.role() {
             ColumnRole::Changed => {
-                if lower_schema
-                    .column(upper_sync_col.name(), ColumnRole::Value)
-                    .is_some()
-                {
-                    // The lower schema doesn't have the `Changed` column at hand, but it does have
-                    // the corresponding `Value` column, project true to pick those values up
-                    lit(true)
-                } else {
-                    // The lower sync has neither the `Changed` not the associated `Value` column,
-                    // project false to avoid overriding NULL values
-                    lit(false)
-                }
+                project_upper_changed_column(upper_sync_col, lower_schema)?
             }
-            ColumnRole::Value => {
-                if maybe_lower_sync_col.is_none()
-                    && upper_schema
-                        .column(upper_sync_col.name(), ColumnRole::Changed)
-                        .is_none()
-                {
-                    // There's no corresponding `Value` sync column in the upper schema, and
-                    // there's no `Changed` column in the lower schema either, we need to project
-                    // the `Changed` column that takes all the values from the lower schema and
-                    // no value from the upper one
-                    col_desc.insert(ColumnDescriptor {
-                        role: ColumnRole::Changed as _,
-                        name: upper_sync_col.name().clone(),
-                    });
-                    projection.push(
-                        when(col(UPPER_SYNC).is_not_null(), lit(false))
-                            .otherwise(lit(true))?,
-                    );
-                }
-
-                // The upper sync doesn't have this column but the lower sync already has
-                // the `Changed` column which was/will be included in the output.
-                // Project just NULLs in its place.
-                lit(ScalarValue::Null.cast_to(upper_sync_col.field().data_type())?)
-            }
+            ColumnRole::Value => project_upper_value_column(
+                upper_sync_col,
+                lower_schema,
+                upper_schema,
+                &mut col_desc,
+                &mut projection,
+            )?,
             _ => continue, // We already picked up PKs from the lower sync
         };
 
-        col_desc.insert(cd);
-        projection.push(
-            when(
-                col(UPPER_SYNC).is_not_null(),
-                col(Column::new(Some(UPPER_SYNC), upper_sync_col.field().name())),
-            )
-            .otherwise(otherwise)?,
-        );
+        col_desc.insert(upper_sync_col.column_descriptor());
+        projection.push(expr);
     }
 
     let col_desc = col_desc.into_iter().collect::<Vec<_>>();
@@ -613,6 +490,221 @@ pub(super) fn merge_schemas(
         .collect();
 
     Ok((col_desc, projection))
+}
+
+fn project_old_pk_column(
+    lower_old_pk_col: &SyncColumn,
+    upper_schema: &SyncSchema,
+) -> SyncResult<Expr> {
+    let lower_old_pk_field = lower_old_pk_col.field().name();
+
+    let upper_old_pk_col = upper_schema
+        .column(lower_old_pk_col.name(), ColumnRole::OldPk)
+        .expect("Old Pk columns must be the same across syncs");
+
+    // For un-matched lower sync rows use lower sync old PKs, otherwise
+    // for un-matched upper sync rows use upper sync old PKs, otherwise
+    // for matched lower-upper sync rows use lower sync old PKs
+    Ok(when(
+        col(UPPER_SYNC).is_null(),
+        col(Column::new(Some(LOWER_SYNC), lower_old_pk_field)),
+    )
+    .otherwise(
+        when(
+            col(LOWER_SYNC).is_null(),
+            col(Column::new(
+                Some(UPPER_SYNC),
+                upper_old_pk_col.field().name(),
+            )),
+        )
+        .otherwise(col(Column::new(Some(LOWER_SYNC), lower_old_pk_field)))?,
+    )?)
+}
+
+fn project_new_pk_column(
+    lower_new_pk_col: &SyncColumn,
+    upper_schema: &SyncSchema,
+) -> SyncResult<Expr> {
+    let lower_new_pk_field = lower_new_pk_col.field().name();
+
+    let upper_new_pk_col = upper_schema
+        .column(lower_new_pk_col.name(), ColumnRole::NewPk)
+        .expect("Old Pk columns must be the same across syncs");
+
+    // For un-matched lower sync rows use lower sync new PKs, otherwise
+    // for un-matched and matched upper sync rows use upper sync new PKs
+    Ok(when(
+        col(UPPER_SYNC).is_null(),
+        col(Column::new(Some(LOWER_SYNC), lower_new_pk_field)),
+    )
+    .otherwise(col(Column::new(
+        Some(UPPER_SYNC),
+        upper_new_pk_col.field().name(),
+    )))?)
+}
+
+fn project_lower_changed_column(
+    lower_changed_col: &SyncColumn,
+    upper_schema: &SyncSchema,
+) -> SyncResult<Expr> {
+    // For un-matched lower sync rows use lower sync changed values, otherwise ...
+    Ok(when(
+        col(UPPER_SYNC).is_null(),
+        col(Column::new(
+            Some(LOWER_SYNC),
+            lower_changed_col.field().name(),
+        )),
+    )
+    .otherwise(
+        if let Some(upper_changed_col) =
+            upper_schema.column(lower_changed_col.name(), ColumnRole::Changed)
+        {
+            // ... the upper schema has the corresponding `Changed` column, take its values
+            col(Column::new(
+                Some(UPPER_SYNC),
+                upper_changed_col.field().name(),
+            ))
+        } else if upper_schema
+            .column(lower_changed_col.name(), ColumnRole::Value)
+            .is_some()
+        {
+            // ... the upper schema doesn't have the `Changed` column at hand, but it does have
+            // the corresponding `Value` column, project true to pick those values up
+            lit(true)
+        } else {
+            // ... the upper sync has neither the `Changed` nor the associated `Value` column,
+            // project false to avoid overriding with NULL values
+            lit(false)
+        },
+    )?)
+}
+
+fn project_lower_value_column(
+    lower_value_col: &SyncColumn,
+    lower_schema: &SyncSchema,
+    upper_schema: &SyncSchema,
+    col_desc: &mut IndexSet<ColumnDescriptor>,
+    projection: &mut Vec<Expr>,
+) -> SyncResult<Expr> {
+    if upper_schema
+        .column(lower_value_col.name(), ColumnRole::Value)
+        .is_none()
+        && lower_schema
+            .column(lower_value_col.name(), ColumnRole::Changed)
+            .is_none()
+    {
+        // There's no corresponding `Value` sync column in the upper schema, and
+        // there's no `Changed` column in the lower schema either, we need to project
+        // the `Changed` column that takes all the values from the lower schema and
+        // no value from the upper one
+        col_desc.insert(ColumnDescriptor {
+            role: ColumnRole::Changed as _,
+            name: lower_value_col.name().clone(),
+        });
+        projection
+            .push(when(col(LOWER_SYNC).is_null(), lit(false)).otherwise(lit(true))?);
+    }
+
+    // For un-matched lower sync rows use lower sync value values, otherwise ...
+    Ok(when(
+        col(UPPER_SYNC).is_null(),
+        col(Column::new(
+            Some(LOWER_SYNC),
+            lower_value_col.field().name(),
+        )),
+    )
+    .otherwise(
+        if let Some(upper_value_col) =
+            upper_schema.column(lower_value_col.name(), ColumnRole::Value)
+        {
+            // ... the upper sync has this `Value` column, take its values
+            col(Column::new(
+                Some(UPPER_SYNC),
+                upper_value_col.field().name(),
+            ))
+        } else {
+            // ... the upper sync doesn't have this column but the lower sync already has
+            // the `Changed` column which was/will be included in the output.
+            // Project NULLs in its place.
+            when(
+                col(UPPER_SYNC).is_null(),
+                lit(ScalarValue::Null.cast_to(lower_value_col.field().data_type())?),
+            )
+            .otherwise(col(Column::new(
+                Some(LOWER_SYNC),
+                lower_value_col.field().name(),
+            )))?
+        },
+    )?)
+}
+
+fn project_upper_changed_column(
+    upper_changed_col: &SyncColumn,
+    lower_schema: &SyncSchema,
+) -> SyncResult<Expr> {
+    // For upper sync rows use upper sync changed values, otherwise ...
+    Ok(when(
+        col(UPPER_SYNC).is_not_null(),
+        col(Column::new(
+            Some(UPPER_SYNC),
+            upper_changed_col.field().name(),
+        )),
+    )
+    .otherwise(
+        if lower_schema
+            .column(upper_changed_col.name(), ColumnRole::Value)
+            .is_some()
+        {
+            // The lower schema doesn't have the `Changed` column at hand, but it does have
+            // the corresponding `Value` column, project true to pick those values up
+            lit(true)
+        } else {
+            // The lower sync has neither the `Changed` not the associated `Value` column,
+            // project false to avoid overriding with NULL values
+            lit(false)
+        },
+    )?)
+}
+
+fn project_upper_value_column(
+    upper_value_col: &SyncColumn,
+    lower_schema: &SyncSchema,
+    upper_schema: &SyncSchema,
+    col_desc: &mut IndexSet<ColumnDescriptor>,
+    projection: &mut Vec<Expr>,
+) -> SyncResult<Expr> {
+    if lower_schema
+        .column(upper_value_col.name(), ColumnRole::Value)
+        .is_none()
+        && upper_schema
+            .column(upper_value_col.name(), ColumnRole::Changed)
+            .is_none()
+    {
+        // There's no corresponding `Value` sync column in the upper schema, and
+        // there's no `Changed` column in the lower schema either, we need to project
+        // the `Changed` column that takes all the values from the lower schema and
+        // no value from the upper one
+        col_desc.insert(ColumnDescriptor {
+            role: ColumnRole::Changed as _,
+            name: upper_value_col.name().clone(),
+        });
+        projection
+            .push(when(col(UPPER_SYNC).is_not_null(), lit(false)).otherwise(lit(true))?);
+    }
+
+    Ok(when(
+        col(UPPER_SYNC).is_not_null(),
+        col(Column::new(
+            Some(UPPER_SYNC),
+            upper_value_col.field().name(),
+        )),
+    )
+    .otherwise(
+        // The upper sync doesn't have this column but the lower sync already has
+        // the `Changed` column which was/will be included in the output.
+        // Project just NULLs in its place.
+        lit(ScalarValue::Null.cast_to(upper_value_col.field().data_type())?),
+    )?)
 }
 
 #[cfg(test)]

@@ -154,4 +154,12 @@ impl SyncColumn {
             column_descriptor.name
         )
     }
+
+    // Returns a corresponding `ColumnDescriptor` for this column
+    pub fn column_descriptor(&self) -> ColumnDescriptor {
+        ColumnDescriptor {
+            role: self.role as _,
+            name: self.name.clone(),
+        }
+    }
 }
