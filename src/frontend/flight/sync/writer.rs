@@ -478,29 +478,7 @@ impl SeafowlDataSyncWriter {
             .with_optimizer_rules(vec![])
             .build();
         let base_df = DataFrame::new(state.clone(), base_plan);
-
-        let mut sync_schema = syncs.first().unwrap().sync_schema.clone();
-        let first_batch = syncs.first().unwrap().batch.clone();
-        let provider = MemTable::try_new(first_batch.schema(), vec![vec![first_batch]])?;
-        let mut sync_df = DataFrame::new(
-            state,
-            LogicalPlanBuilder::scan(
-                LOWER_SYNC,
-                provider_as_source(Arc::new(provider)),
-                None,
-            )?
-            .build()?,
-        );
-
-        // Make a plan to squash all syncs into a single change stream
-        for sync in &syncs[1..] {
-            (sync_schema, sync_df) = self.merge_syncs(
-                &sync_schema,
-                sync_df,
-                &sync.sync_schema,
-                sync.batch.clone(),
-            )?;
-        }
+        let (sync_schema, sync_df) = self.squash_syncs(syncs)?;
 
         let input_df = self.apply_syncs(full_schema, base_df, sync_df, &sync_schema)?;
         let input_plan = input_df.create_physical_plan().await?;
@@ -658,6 +636,38 @@ impl SeafowlDataSyncWriter {
             }));
 
         (syncs, new_sync_commit)
+    }
+
+    // Perform logical squashing of all pending sync batches into a single dataframe/plan, which can
+    // then be joined against the base scan
+    fn squash_syncs(
+        &self,
+        syncs: &[DataSyncItem],
+    ) -> SyncResult<(SyncSchema, DataFrame)> {
+        let mut sync_schema = syncs.first().unwrap().sync_schema.clone();
+        let first_batch = syncs.first().unwrap().batch.clone();
+        let provider = MemTable::try_new(first_batch.schema(), vec![vec![first_batch]])?;
+        let mut sync_df = DataFrame::new(
+            self.context.inner.state(),
+            LogicalPlanBuilder::scan(
+                LOWER_SYNC,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        );
+
+        // Make a plan to squash all syncs into a single change stream
+        for sync in &syncs[1..] {
+            (sync_schema, sync_df) = self.merge_syncs(
+                &sync_schema,
+                sync_df,
+                &sync.sync_schema,
+                sync.batch.clone(),
+            )?;
+        }
+
+        Ok((sync_schema, sync_df))
     }
 
     // Build a plan to merge two adjacent syncs into one.
