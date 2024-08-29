@@ -54,10 +54,10 @@ struct Args {
     #[arg(short, long, help = "Run a one-off command and exit")]
     one_off: Option<String>,
 
-    #[arg(long, help = "Run commands interactively from a CLI", required = false)]
+    #[arg(long, help = "Run commands interactively from a CLI")]
     cli: bool,
 
-    #[arg(long, help = "Enable JSON logging", required = false)]
+    #[arg(long, help = "Enable JSON logging")]
     json_logs: bool,
 }
 
