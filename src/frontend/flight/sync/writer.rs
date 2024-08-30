@@ -1732,4 +1732,117 @@ mod tests {
 
         Ok(())
     }
+
+    #[rstest]
+    #[case(vec![(vec![1, 2], vec![1, 2])])]
+    #[case(vec![(vec![1, 2], vec![2, 1]), (vec![1, 2], vec![2, 1])])]
+    #[case(vec![
+        (vec![2], vec![3]),
+        (vec![1], vec![2]),
+        (vec![3], vec![1]),
+        (vec![2], vec![3]),
+        (vec![1], vec![2]),
+        (vec![3], vec![1])])
+    ]
+    #[tokio::test]
+    async fn test_sync_pk_cycles(
+        #[case] pk_cycle: Vec<(Vec<i32>, Vec<i32>)>,
+    ) -> SyncResult<()> {
+        let ctx = Arc::new(in_memory_context().await);
+        let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
+
+        ctx.plan_query(
+            "CREATE TABLE test_table(c1 INT, c2 INT) AS VALUES (1, 1), (2, 2)",
+        )
+        .await?;
+        let table_uuid = ctx.get_table_uuid("test_table").await?;
+
+        // Ensure original content
+        let plan = ctx.plan_query("SELECT * FROM test_table").await.unwrap();
+        let results = ctx.collect(plan).await.unwrap();
+
+        let expected = [
+            "+----+----+",
+            "| c1 | c2 |",
+            "+----+----+",
+            "| 1  | 1  |",
+            "| 2  | 2  |",
+            "+----+----+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("old_c1", DataType::Int32, true),
+            Field::new("new_c1", DataType::Int32, true),
+            Field::new("changed_c2", DataType::Boolean, true),
+            Field::new("value_c2", DataType::Int32, true),
+        ]));
+
+        let column_descriptors = vec![
+            ColumnDescriptor {
+                role: ColumnRole::OldPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::NewPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c2".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c2".to_string(),
+            },
+        ];
+
+        let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
+
+        // Enqueue all syncs
+        let log_store = ctx
+            .get_internal_object_store()
+            .unwrap()
+            .get_log_store(&table_uuid.to_string());
+
+        // Cycle through the PKs, to end up in the same place as at start
+        for (old_pks, new_pks) in pk_cycle {
+            sync_mgr.enqueue_sync(
+                log_store.clone(),
+                None,
+                A.to_string(),
+                sync_schema.clone(),
+                vec![RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(Int32Array::from(old_pks.clone())),
+                        Arc::new(Int32Array::from(new_pks)),
+                        Arc::new(BooleanArray::from(vec![false; old_pks.len()])),
+                        Arc::new(Int32Array::from(vec![None; old_pks.len()])),
+                    ],
+                )?],
+            )?;
+        }
+
+        sync_mgr.flush_syncs(log_store.root_uri()).await?;
+
+        // Ensure updated content is the same as original
+        let plan = ctx
+            .plan_query("SELECT * FROM test_table ORDER BY c1")
+            .await
+            .unwrap();
+        let results = ctx.collect(plan).await.unwrap();
+
+        let expected = [
+            "+----+----+",
+            "| c1 | c2 |",
+            "+----+----+",
+            "| 1  | 1  |",
+            "| 2  | 2  |",
+            "+----+----+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
 }
