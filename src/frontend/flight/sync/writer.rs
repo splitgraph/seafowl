@@ -983,7 +983,9 @@ fn now() -> u64 {
 mod tests {
     use crate::context::test_utils::in_memory_context;
     use crate::frontend::flight::sync::schema::SyncSchema;
-    use crate::frontend::flight::sync::writer::{SeafowlDataSyncWriter, SequenceNumber};
+    use crate::frontend::flight::sync::writer::{
+        SeafowlDataSyncWriter, SequenceNumber, LOWER_SYNC,
+    };
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use clade::sync::{ColumnDescriptor, ColumnRole};
@@ -991,9 +993,12 @@ mod tests {
     use rstest::rstest;
     use std::collections::HashMap;
 
-    use crate::frontend::flight::sync::SyncCommitInfo;
-    use arrow::array::{Float32Array, Int32Array};
+    use crate::frontend::flight::sync::{SyncCommitInfo, SyncResult};
+    use arrow::array::{BooleanArray, Float32Array, Int32Array, StringArray};
+    use datafusion::dataframe::DataFrame;
+    use datafusion::datasource::{provider_as_source, MemTable};
     use datafusion_common::assert_batches_eq;
+    use datafusion_expr::{col, LogicalPlanBuilder};
     use itertools::Itertools;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -1465,5 +1470,266 @@ mod tests {
             "+----------+--------------------+--------------------+",
         ];
         assert_batches_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn test_sync_merging() -> SyncResult<()> {
+        let ctx = Arc::new(in_memory_context().await);
+        let sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
+
+        // Construct lower and upper schema that cover all possible cases
+        let lower_schema = Arc::new(Schema::new(vec![
+            Field::new("old_c1", DataType::Int32, true),
+            Field::new("new_c1", DataType::Int32, true),
+            // value only in lower
+            Field::new("value_c3", DataType::Utf8, true),
+            // value in both
+            Field::new("value_c5", DataType::Utf8, true),
+            // lower has value and changed
+            Field::new("changed_c6", DataType::Boolean, true),
+            Field::new("value_c6", DataType::Utf8, true),
+            // lower has value but not changed
+            Field::new("value_c7", DataType::Utf8, true),
+            // value and changed only in lower
+            Field::new("changed_c8", DataType::Boolean, true),
+            Field::new("value_c8", DataType::Utf8, true),
+            // value and changed in both
+            Field::new("changed_c10", DataType::Boolean, true),
+            Field::new("value_c10", DataType::Utf8, true),
+        ]));
+
+        let upper_schema = Arc::new(Schema::new(vec![
+            Field::new("old_c1", DataType::Int32, true),
+            Field::new("new_c1", DataType::Int32, true),
+            // value only in upper
+            Field::new("value_c4", DataType::Utf8, true),
+            // value in both
+            Field::new("value_c5", DataType::Utf8, true),
+            // upper has value but not changed
+            Field::new("value_c6", DataType::Utf8, true),
+            // upper has value and changed
+            Field::new("changed_c7", DataType::Boolean, true),
+            Field::new("value_c7", DataType::Utf8, true),
+            // value and changed only in upper
+            Field::new("changed_c9", DataType::Boolean, true),
+            Field::new("value_c9", DataType::Utf8, true),
+            // value and changed in both
+            Field::new("changed_c10", DataType::Boolean, true),
+            Field::new("value_c10", DataType::Utf8, true),
+        ]));
+
+        let lower_column_descriptors = vec![
+            ColumnDescriptor {
+                role: ColumnRole::OldPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::NewPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c3".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c5".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c6".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c6".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c7".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c8".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c8".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c10".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c10".to_string(),
+            },
+        ];
+
+        let upper_column_descriptors = vec![
+            ColumnDescriptor {
+                role: ColumnRole::OldPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::NewPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c4".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c5".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c6".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c7".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c7".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c9".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c9".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c10".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c10".to_string(),
+            },
+        ];
+
+        // UPDATE, INSERT
+        let lower_rows = 7;
+        let lower_batch = RecordBatch::try_new(
+            lower_schema.clone(),
+            vec![
+                // Insert 3 rows, Update 3 rows and delete 1 row
+                Arc::new(Int32Array::from(vec![
+                    None,
+                    None,
+                    None,
+                    Some(4),
+                    Some(6),
+                    Some(8),
+                    Some(10),
+                ])),
+                Arc::new(Int32Array::from(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                    Some(5),
+                    Some(7),
+                    Some(9),
+                    None,
+                ])),
+                Arc::new(StringArray::from(vec!["lower_c3"; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c5"; lower_rows])),
+                Arc::new(BooleanArray::from(vec![true; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c6"; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c7"; lower_rows])),
+                Arc::new(BooleanArray::from(vec![true; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c8"; lower_rows])),
+                Arc::new(BooleanArray::from(vec![true; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c10"; lower_rows])),
+            ],
+        )?;
+
+        let upper_rows = 7;
+        let upper_batch = RecordBatch::try_new(
+            upper_schema.clone(),
+            vec![
+                // Insert 1 row,
+                // Update 1 row inserted in lower, 1 row updated in lower and 1 other row,
+                // Delete 1 row inserted in lower, 1 row updated in lower and 1 other row
+                Arc::new(Int32Array::from(vec![
+                    None,
+                    Some(2),
+                    Some(7),
+                    Some(14),
+                    Some(3),
+                    Some(9),
+                    Some(16),
+                ])),
+                Arc::new(Int32Array::from(vec![
+                    Some(11),
+                    Some(12),
+                    Some(13),
+                    Some(15),
+                    None,
+                    None,
+                    None,
+                ])),
+                Arc::new(StringArray::from(vec!["upper_c4"; upper_rows])),
+                Arc::new(StringArray::from(vec!["upper_c5"; upper_rows])),
+                Arc::new(StringArray::from(vec!["upper_c6"; upper_rows])),
+                Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                Arc::new(StringArray::from(vec!["upper_c7"; upper_rows])),
+                Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                Arc::new(StringArray::from(vec!["upper_c9"; upper_rows])),
+                Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                Arc::new(StringArray::from(vec!["upper_c10"; upper_rows])),
+            ],
+        )?;
+
+        let provider = MemTable::try_new(lower_schema.clone(), vec![vec![lower_batch]])?;
+        let lower_df = DataFrame::new(
+            ctx.inner.state(),
+            LogicalPlanBuilder::scan(
+                LOWER_SYNC,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        );
+
+        let (_, merged_df) = sync_mgr.merge_syncs(
+            &SyncSchema::try_new(lower_column_descriptors, lower_schema)?,
+            lower_df,
+            &SyncSchema::try_new(upper_column_descriptors, upper_schema)?,
+            upper_batch,
+        )?;
+
+        // Pre-sort the merged batch to keep the order stable
+        let results = merged_df
+            .sort(vec![
+                col("old_pk_c1").sort(true, true),
+                col("new_pk_c1").sort(true, true),
+            ])?
+            .collect()
+            .await?;
+
+        let expected = [
+            "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+            "| old_pk_c1 | new_pk_c1 | changed_c3 | value_c3 | value_c5 | changed_c6 | value_c6 | value_c7 | changed_c8 | value_c8 | changed_c10 | value_c10 | changed_c4 | value_c4 | changed_c7 | changed_c9 | value_c9 |",
+            "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+            "|           |           | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "|           | 1         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "|           | 11        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "|           | 12        | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "| 4         | 5         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "| 6         | 13        | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "| 8         |           | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "| 10        |           | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "| 14        | 15        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "| 16        |           | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
     }
 }

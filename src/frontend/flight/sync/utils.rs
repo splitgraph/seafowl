@@ -552,73 +552,87 @@ fn project_changed_column(
     other_schema: &SyncSchema,
     sync_position: SyncPosition,
 ) -> SyncResult<Expr> {
-    let (this_sync, that_sync) = match sync_position {
+    let (this_sync, other_sync) = match sync_position {
         SyncPosition::Lower => (LOWER_SYNC, UPPER_SYNC),
         SyncPosition::Upper => (UPPER_SYNC, LOWER_SYNC),
     };
 
     // For un-matched rows in this sync use this sync changed values, otherwise ...
     Ok(when(
-        col(that_sync).is_null(),
+        col(other_sync).is_null(),
         col(Column::new(
             Some(this_sync),
             this_changed_col.field().name(),
         )),
     )
-    .otherwise(match sync_position {
-        SyncPosition::Lower => {
-            if let Some(upper_changed_col) =
-                other_schema.column(this_changed_col.name(), ColumnRole::Changed)
-            {
-                // ... upper sync has the corresponding `Changed` column, take the upper column value
-                col(Column::new(
-                    Some(UPPER_SYNC),
-                    upper_changed_col.field().name(),
-                ))
-            } else if other_schema
-                .column(this_changed_col.name(), ColumnRole::Value)
-                .is_some()
-            {
-                // ... upper sync doesn't have the `Changed` column at hand, but it does have
-                // the corresponding `Value` column, project true to pick those values up
-                lit(true)
-            } else {
-                // ... upper sync has neither the `Changed` nor the associated `Value` column,
-                // project false to avoid overriding with NULL values
-                lit(false)
+    .otherwise(
+        if let Some(other_changed_col) =
+            other_schema.column(this_changed_col.name(), ColumnRole::Changed)
+        {
+            // ... other sync has the corresponding `Changed` column, take the upper column value in
+            // both cases
+            col(Column::new(
+                Some(UPPER_SYNC),
+                match sync_position {
+                    SyncPosition::Lower => other_changed_col.field().name(),
+                    SyncPosition::Upper => this_changed_col.field().name(),
+                },
+            ))
+        } else if other_schema
+            .column(this_changed_col.name(), ColumnRole::Value)
+            .is_some()
+        {
+            // ... other sync doesn't have the `Changed` column in the schema, but it does have
+            // the corresponding `Value` column
+            match sync_position {
+                // project true to pick those upper values up
+                SyncPosition::Lower => lit(true),
+                // project true to pick those lower values up only for non-upper rows
+                SyncPosition::Upper => {
+                    when(col(UPPER_SYNC).is_null(), lit(true)).otherwise(col(
+                        Column::new(Some(UPPER_SYNC), this_changed_col.field().name()),
+                    ))?
+                }
             }
-        }
-        // In case of upper sync always take its values
-        SyncPosition::Upper => col(Column::new(
-            Some(UPPER_SYNC),
-            this_changed_col.field().name(),
-        )),
-    })?)
+        } else {
+            // ... other sync has neither the `Changed` nor the associated `Value` column,
+            match sync_position {
+                // project false to avoid overriding lower values with NULL values
+                SyncPosition::Lower => lit(false),
+                // project false to avoid overriding upper values with NULL values
+                SyncPosition::Upper => {
+                    when(col(UPPER_SYNC).is_null(), lit(false)).otherwise(col(
+                        Column::new(Some(UPPER_SYNC), this_changed_col.field().name()),
+                    ))?
+                }
+            }
+        },
+    )?)
 }
 
 fn project_value_column(
     this_value_col: &SyncColumn,
     this_schema: &SyncSchema,
-    that_schema: &SyncSchema,
+    other_schema: &SyncSchema,
     col_desc: &mut IndexSet<ColumnDescriptor>,
     projection: &mut Vec<Expr>,
     sync_position: SyncPosition,
 ) -> SyncResult<Expr> {
-    let (this_sync, that_sync) = match sync_position {
+    let (this_sync, other_sync) = match sync_position {
         SyncPosition::Lower => (LOWER_SYNC, UPPER_SYNC),
         SyncPosition::Upper => (UPPER_SYNC, LOWER_SYNC),
     };
 
-    if that_schema
+    if other_schema
         .column(this_value_col.name(), ColumnRole::Value)
         .is_none()
         && this_schema
             .column(this_value_col.name(), ColumnRole::Changed)
             .is_none()
     {
-        // There's no corresponding `Value` sync column in that schema (so we'll project NULLs), and
-        // there's no `Changed` column in this schema either, we need to project the `Changed`
-        // column that takes all the values from this sync and no value from that sync
+        // There's no corresponding `Value` sync column in the other schema (so we'll project NULLs),
+        // and there's no `Changed` column in this schema either, we need to project the `Changed`
+        // column that takes all the values from this sync and no value from the other sync
         col_desc.insert(ColumnDescriptor {
             role: ColumnRole::Changed as _,
             name: this_value_col.name().clone(),
@@ -628,17 +642,20 @@ fn project_value_column(
 
     // For un-matched rows in this sync use this sync changed values, otherwise ...
     Ok(when(
-        col(that_sync).is_null(),
+        col(other_sync).is_null(),
         col(Column::new(Some(this_sync), this_value_col.field().name())),
     )
     .otherwise(
-        if let Some(that_value_col) =
-            that_schema.column(this_value_col.name(), ColumnRole::Value)
+        if let Some(other_value_col) =
+            other_schema.column(this_value_col.name(), ColumnRole::Value)
         {
             match sync_position {
                 SyncPosition::Lower => {
                     // ... the upper sync has this `Value` column too, take its values
-                    col(Column::new(Some(UPPER_SYNC), that_value_col.field().name()))
+                    col(Column::new(
+                        Some(UPPER_SYNC),
+                        other_value_col.field().name(),
+                    ))
                 }
                 SyncPosition::Upper => {
                     // ... the lower sync has this `Value` column too, take its values where it
@@ -649,12 +666,12 @@ fn project_value_column(
                     )
                     .otherwise(col(Column::new(
                         Some(LOWER_SYNC),
-                        that_value_col.field().name(),
+                        other_value_col.field().name(),
                     )))?
                 }
             }
         } else {
-            // ... that sync doesn't have this column but this sync does. Since the corresponding
+            // ... other sync doesn't have this column but this sync does. Since the corresponding
             // `Changed` column will be added regardless
             match sync_position {
                 SyncPosition::Lower => {
