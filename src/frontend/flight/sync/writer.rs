@@ -1,7 +1,7 @@
 use arrow::array::RecordBatch;
 use arrow_schema::{SchemaBuilder, SchemaRef};
 use clade::sync::ColumnRole;
-use datafusion::datasource::{provider_as_source, TableProvider};
+use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
@@ -33,14 +33,16 @@ use crate::frontend::flight::handler::SYNC_COMMIT_INFO;
 use crate::frontend::flight::sync::metrics::SyncMetrics;
 use crate::frontend::flight::sync::schema::SyncSchema;
 use crate::frontend::flight::sync::utils::{
-    construct_qualifier, get_prune_map, squash_batches,
+    construct_qualifier, get_prune_map, merge_schemas, squash_batches,
 };
 use crate::frontend::flight::sync::{
     Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult,
 };
 
 const SYNC_REF: &str = "sync_data";
-const SYNC_JOIN_COLUMN: &str = "__sync_join";
+pub(super) const JOIN_COLUMN: &str = "__join_col";
+pub(super) const LOWER_SYNC: &str = "__lower_sync";
+pub(super) const UPPER_SYNC: &str = "__upper_sync";
 const FINE_GRAINED_PRUNING_ROW_CRITERIA: i64 = 3_000_000;
 
 // A handler for caching, coalescing and flushing table syncs received via
@@ -475,20 +477,11 @@ impl SeafowlDataSyncWriter {
             .with_analyzer_rules(vec![])
             .with_optimizer_rules(vec![])
             .build();
-        let mut sync_df = DataFrame::new(state, base_plan);
+        let base_df = DataFrame::new(state.clone(), base_plan);
+        let (sync_schema, sync_df) = self.squash_syncs(syncs)?;
 
-        // Iterate through all syncs for this table and construct a full plan by applying each
-        // individual sync
-        for sync in syncs {
-            sync_df = self.apply_sync(
-                full_schema.clone(),
-                sync_df,
-                &sync.sync_schema,
-                sync.batch.clone(),
-            )?;
-        }
-
-        let input_plan = sync_df.create_physical_plan().await?;
+        let input_df = self.apply_syncs(full_schema, base_df, sync_df, &sync_schema)?;
+        let input_plan = input_df.create_physical_plan().await?;
 
         // To exploit fast data upload to local FS, i.e. simply move the partition files
         // once written to the disk, try to infer whether the location is a local dir
@@ -645,12 +638,113 @@ impl SeafowlDataSyncWriter {
         (syncs, new_sync_commit)
     }
 
-    fn apply_sync(
+    // Perform logical squashing of all pending sync batches into a single dataframe/plan, which can
+    // then be joined against the base scan
+    fn squash_syncs(
+        &self,
+        syncs: &[DataSyncItem],
+    ) -> SyncResult<(SyncSchema, DataFrame)> {
+        let first_sync = syncs.first().unwrap();
+        let mut sync_schema = first_sync.sync_schema.clone();
+        let first_batch = first_sync.batch.clone();
+        let provider = MemTable::try_new(first_batch.schema(), vec![vec![first_batch]])?;
+        let mut sync_df = DataFrame::new(
+            self.context.inner.state(),
+            LogicalPlanBuilder::scan(
+                LOWER_SYNC,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        );
+
+        // Make a plan to squash all syncs into a single change stream
+        for sync in &syncs[1..] {
+            (sync_schema, sync_df) = self.merge_syncs(
+                &sync_schema,
+                sync_df,
+                &sync.sync_schema,
+                sync.batch.clone(),
+            )?;
+        }
+
+        Ok((sync_schema, sync_df))
+    }
+
+    // Build a plan to merge two adjacent syncs into one.
+    // It assumes that both syncs were squashed before-hand (i.e. no PK-chains in either one).
+    fn merge_syncs(
+        &self,
+        lower_schema: &SyncSchema,
+        lower_df: DataFrame,
+        upper_schema: &SyncSchema,
+        upper_data: RecordBatch,
+    ) -> SyncResult<(SyncSchema, DataFrame)> {
+        let provider = MemTable::try_new(upper_data.schema(), vec![vec![upper_data]])?;
+        let upper_df = DataFrame::new(
+            self.context.inner.state(),
+            LogicalPlanBuilder::scan(
+                UPPER_SYNC,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        );
+
+        let (lower_join_cols, upper_join_cols): (Vec<String>, Vec<String>) = upper_schema
+            .map_columns(ColumnRole::OldPk, |sc| {
+                let lower_name = lower_schema
+                    .column(sc.name(), ColumnRole::NewPk)
+                    .expect("PK columns identical")
+                    .field()
+                    .name()
+                    .clone();
+                let upper_name = sc.field().name().clone();
+                (lower_name, upper_name)
+            })
+            .into_iter()
+            .unzip();
+
+        // TODO merge syncs using a union if schemas match
+        let upper_df = upper_df.with_column(UPPER_SYNC, lit(true))?;
+        let lower_df = lower_df.with_column(LOWER_SYNC, lit(true))?;
+
+        let merged_sync = upper_df.join(
+            lower_df,
+            JoinType::Full,
+            &upper_join_cols
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            &lower_join_cols
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            None,
+        )?;
+
+        // Build the merged projection and column descriptors
+        let (col_desc, projection) = merge_schemas(lower_schema, upper_schema)?;
+
+        // The `DataFrame::select`/`LogicalPlanBuilder::project` projection API leads to sub-optimal
+        // performance since it does a bunch of expression normalization that we don't really need.
+        // So deconstruct the present one and add a vanilla `Projection` on top of it.
+        let (session_state, plan) = merged_sync.into_parts();
+        let sync_plan = Projection::try_new(projection, Arc::new(plan))
+            .map(LogicalPlan::Projection)?;
+
+        Ok((
+            SyncSchema::try_new(col_desc, sync_plan.schema().inner().clone())?,
+            DataFrame::new(session_state, sync_plan),
+        ))
+    }
+
+    fn apply_syncs(
         &self,
         full_schema: SchemaRef,
-        input_df: DataFrame,
+        base_df: DataFrame,
+        sync_df: DataFrame,
         sync_schema: &SyncSchema,
-        data: RecordBatch,
     ) -> SyncResult<DataFrame> {
         // Skip rows where both old and new primary keys are NULL, meaning a row inserted/updated
         // and deleted within the same sync message (so it shouldn't be in the input nor output)
@@ -666,17 +760,31 @@ impl SeafowlDataSyncWriter {
             .reduce(|e1: Expr, e2| e1.and(e2))
             .unwrap();
 
-        // Construct the sync dataframe out of the record batch
-        let sync_df = self.context.inner.read_batch(data)?;
-
         // These differ since the physical column names are reflected in the ColumnDescriptor,
         // while logical column names are found in the arrow fields
-        let (input_pk_cols, sync_pk_cols): (Vec<String>, Vec<String>) = sync_schema
+        let (base_pk_cols, sync_pk_cols): (Vec<String>, Vec<String>) = sync_schema
             .map_columns(ColumnRole::OldPk, |c| {
                 (c.name().clone(), c.field().name().clone())
             })
             .into_iter()
             .unzip();
+
+        let input_df = base_df
+            .with_column(JOIN_COLUMN, lit(true))?
+            .join(
+                sync_df.filter(old_pk_nulls.clone().and(new_pk_nulls.clone()).not())?, // Filter out any temp rows
+                JoinType::Full,
+                &base_pk_cols
+                    .iter()
+                    .map(|pk| pk.as_str())
+                    .collect::<Vec<_>>(),
+                &sync_pk_cols
+                    .iter()
+                    .map(|pk| pk.as_str())
+                    .collect::<Vec<_>>(),
+                None,
+            )?
+            .filter(old_pk_nulls.clone().not().and(new_pk_nulls.clone()).not())?; // Remove deletes
 
         // Normalize the schema, by ordering columns according to the full table schema and
         // projecting the sync data accordingly.
@@ -717,7 +825,7 @@ impl SeafowlDataSyncWriter {
                     )?
                 } else {
                     when(
-                        is_null(col(SYNC_JOIN_COLUMN)),
+                        is_null(col(JOIN_COLUMN)),
                         // Column is not present in the sync schema, and the old row doesn't exist
                         // either, project a NULL
                         lit(ScalarValue::Null.cast_to(f.data_type())?),
@@ -732,23 +840,6 @@ impl SeafowlDataSyncWriter {
                 Ok(expr.alias(name))
             })
             .collect::<Result<_>>()?;
-
-        let input_df = input_df
-            .with_column(SYNC_JOIN_COLUMN, lit(true))?
-            .join(
-                sync_df,
-                JoinType::Full,
-                &input_pk_cols
-                    .iter()
-                    .map(|pk| pk.as_str())
-                    .collect::<Vec<_>>(),
-                &sync_pk_cols
-                    .iter()
-                    .map(|pk| pk.as_str())
-                    .collect::<Vec<_>>(),
-                None,
-            )?
-            .filter(old_pk_nulls.not().and(new_pk_nulls).not())?; // Remove deletes
 
         // The `DataFrame::select`/`LogicalPlanBuilder::project` projection API leads to sub-optimal
         // performance since it does a bunch of expression normalization that we don't really need.
@@ -892,7 +983,9 @@ fn now() -> u64 {
 mod tests {
     use crate::context::test_utils::in_memory_context;
     use crate::frontend::flight::sync::schema::SyncSchema;
-    use crate::frontend::flight::sync::writer::{SeafowlDataSyncWriter, SequenceNumber};
+    use crate::frontend::flight::sync::writer::{
+        SeafowlDataSyncWriter, SequenceNumber, LOWER_SYNC,
+    };
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use clade::sync::{ColumnDescriptor, ColumnRole};
@@ -900,9 +993,12 @@ mod tests {
     use rstest::rstest;
     use std::collections::HashMap;
 
-    use crate::frontend::flight::sync::SyncCommitInfo;
-    use arrow::array::{Float32Array, Int32Array};
+    use crate::frontend::flight::sync::{SyncCommitInfo, SyncResult};
+    use arrow::array::{BooleanArray, Float32Array, Int32Array, StringArray};
+    use datafusion::dataframe::DataFrame;
+    use datafusion::datasource::{provider_as_source, MemTable};
     use datafusion_common::assert_batches_eq;
+    use datafusion_expr::{col, LogicalPlanBuilder};
     use itertools::Itertools;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -1374,5 +1470,379 @@ mod tests {
             "+----------+--------------------+--------------------+",
         ];
         assert_batches_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn test_sync_merging() -> SyncResult<()> {
+        let ctx = Arc::new(in_memory_context().await);
+        let sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
+
+        // Construct lower and upper schema that cover all possible cases
+        let lower_schema = Arc::new(Schema::new(vec![
+            Field::new("old_c1", DataType::Int32, true),
+            Field::new("new_c1", DataType::Int32, true),
+            // value only in lower
+            Field::new("value_c3", DataType::Utf8, true),
+            // value in both
+            Field::new("value_c5", DataType::Utf8, true),
+            // lower has value and changed
+            Field::new("changed_c6", DataType::Boolean, true),
+            Field::new("value_c6", DataType::Utf8, true),
+            // lower has value but not changed
+            Field::new("value_c7", DataType::Utf8, true),
+            // value and changed only in lower
+            Field::new("changed_c8", DataType::Boolean, true),
+            Field::new("value_c8", DataType::Utf8, true),
+            // value and changed in both
+            Field::new("changed_c10", DataType::Boolean, true),
+            Field::new("value_c10", DataType::Utf8, true),
+        ]));
+
+        let upper_schema = Arc::new(Schema::new(vec![
+            Field::new("old_c1", DataType::Int32, true),
+            Field::new("new_c1", DataType::Int32, true),
+            // value only in upper
+            Field::new("value_c4", DataType::Utf8, true),
+            // value in both
+            Field::new("value_c5", DataType::Utf8, true),
+            // upper has value but not changed
+            Field::new("value_c6", DataType::Utf8, true),
+            // upper has value and changed
+            Field::new("changed_c7", DataType::Boolean, true),
+            Field::new("value_c7", DataType::Utf8, true),
+            // value and changed only in upper
+            Field::new("changed_c9", DataType::Boolean, true),
+            Field::new("value_c9", DataType::Utf8, true),
+            // value and changed in both
+            Field::new("changed_c10", DataType::Boolean, true),
+            Field::new("value_c10", DataType::Utf8, true),
+        ]));
+
+        let lower_column_descriptors = vec![
+            ColumnDescriptor {
+                role: ColumnRole::OldPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::NewPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c3".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c5".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c6".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c6".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c7".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c8".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c8".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c10".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c10".to_string(),
+            },
+        ];
+
+        let upper_column_descriptors = vec![
+            ColumnDescriptor {
+                role: ColumnRole::OldPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::NewPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c4".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c5".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c6".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c7".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c7".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c9".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c9".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c10".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c10".to_string(),
+            },
+        ];
+
+        // UPDATE, INSERT
+        let lower_rows = 7;
+        let lower_batch = RecordBatch::try_new(
+            lower_schema.clone(),
+            vec![
+                // Insert 3 rows, Update 3 rows and delete 1 row
+                Arc::new(Int32Array::from(vec![
+                    None,
+                    None,
+                    None,
+                    Some(4),
+                    Some(6),
+                    Some(8),
+                    Some(10),
+                ])),
+                Arc::new(Int32Array::from(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                    Some(5),
+                    Some(7),
+                    Some(9),
+                    None,
+                ])),
+                Arc::new(StringArray::from(vec!["lower_c3"; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c5"; lower_rows])),
+                Arc::new(BooleanArray::from(vec![true; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c6"; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c7"; lower_rows])),
+                Arc::new(BooleanArray::from(vec![true; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c8"; lower_rows])),
+                Arc::new(BooleanArray::from(vec![true; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c10"; lower_rows])),
+            ],
+        )?;
+
+        let upper_rows = 7;
+        let upper_batch = RecordBatch::try_new(
+            upper_schema.clone(),
+            vec![
+                // Insert 1 row,
+                // Update 1 row inserted in lower, 1 row updated in lower and 1 other row,
+                // Delete 1 row inserted in lower, 1 row updated in lower and 1 other row
+                Arc::new(Int32Array::from(vec![
+                    None,
+                    Some(2),
+                    Some(7),
+                    Some(14),
+                    Some(3),
+                    Some(9),
+                    Some(16),
+                ])),
+                Arc::new(Int32Array::from(vec![
+                    Some(11),
+                    Some(12),
+                    Some(13),
+                    Some(15),
+                    None,
+                    None,
+                    None,
+                ])),
+                Arc::new(StringArray::from(vec!["upper_c4"; upper_rows])),
+                Arc::new(StringArray::from(vec!["upper_c5"; upper_rows])),
+                Arc::new(StringArray::from(vec!["upper_c6"; upper_rows])),
+                Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                Arc::new(StringArray::from(vec!["upper_c7"; upper_rows])),
+                Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                Arc::new(StringArray::from(vec!["upper_c9"; upper_rows])),
+                Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                Arc::new(StringArray::from(vec!["upper_c10"; upper_rows])),
+            ],
+        )?;
+
+        let provider = MemTable::try_new(lower_schema.clone(), vec![vec![lower_batch]])?;
+        let lower_df = DataFrame::new(
+            ctx.inner.state(),
+            LogicalPlanBuilder::scan(
+                LOWER_SYNC,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        );
+
+        let (_, merged_df) = sync_mgr.merge_syncs(
+            &SyncSchema::try_new(lower_column_descriptors, lower_schema)?,
+            lower_df,
+            &SyncSchema::try_new(upper_column_descriptors, upper_schema)?,
+            upper_batch,
+        )?;
+
+        // Pre-sort the merged batch to keep the order stable
+        let results = merged_df
+            .sort(vec![
+                col("old_pk_c1").sort(true, true),
+                col("new_pk_c1").sort(true, true),
+            ])?
+            .collect()
+            .await?;
+
+        let expected = [
+            "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+            "| old_pk_c1 | new_pk_c1 | changed_c3 | value_c3 | value_c5 | changed_c6 | value_c6 | value_c7 | changed_c8 | value_c8 | changed_c10 | value_c10 | changed_c4 | value_c4 | changed_c7 | changed_c9 | value_c9 |",
+            "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+            "|           |           | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "|           | 1         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "|           | 11        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "|           | 12        | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "| 4         | 5         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "| 6         | 13        | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "| 8         |           | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "| 10        |           | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "| 14        | 15        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "| 16        |           | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[case(vec![(vec![1, 2], vec![1, 2])])]
+    #[case(vec![(vec![1, 2], vec![2, 1]), (vec![1, 2], vec![2, 1])])]
+    #[case(vec![
+        (vec![2], vec![3]),
+        (vec![1], vec![2]),
+        (vec![3], vec![1]),
+        (vec![2], vec![3]),
+        (vec![1], vec![2]),
+        (vec![3], vec![1])])
+    ]
+    #[tokio::test]
+    async fn test_sync_pk_cycles(
+        #[case] pk_cycle: Vec<(Vec<i32>, Vec<i32>)>,
+    ) -> SyncResult<()> {
+        let ctx = Arc::new(in_memory_context().await);
+        let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
+
+        ctx.plan_query(
+            "CREATE TABLE test_table(c1 INT, c2 INT) AS VALUES (1, 1), (2, 2)",
+        )
+        .await?;
+        let table_uuid = ctx.get_table_uuid("test_table").await?;
+
+        // Ensure original content
+        let plan = ctx.plan_query("SELECT * FROM test_table").await.unwrap();
+        let results = ctx.collect(plan).await.unwrap();
+
+        let expected = [
+            "+----+----+",
+            "| c1 | c2 |",
+            "+----+----+",
+            "| 1  | 1  |",
+            "| 2  | 2  |",
+            "+----+----+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("old_c1", DataType::Int32, true),
+            Field::new("new_c1", DataType::Int32, true),
+            Field::new("changed_c2", DataType::Boolean, true),
+            Field::new("value_c2", DataType::Int32, true),
+        ]));
+
+        let column_descriptors = vec![
+            ColumnDescriptor {
+                role: ColumnRole::OldPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::NewPk as i32,
+                name: "c1".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Changed as i32,
+                name: "c2".to_string(),
+            },
+            ColumnDescriptor {
+                role: ColumnRole::Value as i32,
+                name: "c2".to_string(),
+            },
+        ];
+
+        let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
+
+        // Enqueue all syncs
+        let log_store = ctx
+            .get_internal_object_store()
+            .unwrap()
+            .get_log_store(&table_uuid.to_string());
+
+        // Cycle through the PKs, to end up in the same place as at start
+        for (old_pks, new_pks) in pk_cycle {
+            sync_mgr.enqueue_sync(
+                log_store.clone(),
+                None,
+                A.to_string(),
+                sync_schema.clone(),
+                vec![RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(Int32Array::from(old_pks.clone())),
+                        Arc::new(Int32Array::from(new_pks)),
+                        Arc::new(BooleanArray::from(vec![false; old_pks.len()])),
+                        Arc::new(Int32Array::from(vec![None; old_pks.len()])),
+                    ],
+                )?],
+            )?;
+        }
+
+        sync_mgr.flush_syncs(log_store.root_uri()).await?;
+
+        // Ensure updated content is the same as original
+        let plan = ctx
+            .plan_query("SELECT * FROM test_table ORDER BY c1")
+            .await
+            .unwrap();
+        let results = ctx.collect(plan).await.unwrap();
+
+        let expected = [
+            "+----+----+",
+            "| c1 | c2 |",
+            "+----+----+",
+            "| 1  | 1  |",
+            "| 2  | 2  |",
+            "+----+----+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
     }
 }
