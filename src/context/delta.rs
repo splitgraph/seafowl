@@ -528,7 +528,7 @@ mod tests {
                     Arc::new(LocalFileSystem::new_with_prefix(tmp_dir.path()).unwrap()),
                     ObjectStoreConfig::Local(LocalConfig {
                         data_dir: tmp_dir.path().to_string_lossy().to_string(),
-                        no_hardlinks: false,
+                        disable_hardlinks: false,
                     }),
                 ),
                 Some(tmp_dir),
