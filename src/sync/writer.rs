@@ -29,21 +29,20 @@ use uuid::Uuid;
 use crate::context::delta::plan_to_object_store;
 
 use crate::context::SeafowlContext;
-use crate::frontend::flight::handler::SYNC_COMMIT_INFO;
-use crate::frontend::flight::sync::metrics::SyncMetrics;
-use crate::frontend::flight::sync::schema::SyncSchema;
-use crate::frontend::flight::sync::utils::{
+use crate::sync::metrics::SyncMetrics;
+use crate::sync::schema::SyncSchema;
+use crate::sync::utils::{
     construct_qualifier, get_prune_map, merge_schemas, squash_batches,
 };
-use crate::frontend::flight::sync::{
-    Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult,
-};
+use crate::sync::{Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult};
 
 const SYNC_REF: &str = "sync_data";
 pub(super) const JOIN_COLUMN: &str = "__join_col";
 pub(super) const LOWER_SYNC: &str = "__lower_sync";
 pub(super) const UPPER_SYNC: &str = "__upper_sync";
 const FINE_GRAINED_PRUNING_ROW_CRITERIA: i64 = 3_000_000;
+// Denotes the last sequence number that was fully committed
+pub const SYNC_COMMIT_INFO: &str = "sync_commit_info";
 
 // A handler for caching, coalescing and flushing table syncs received via
 // the Arrow Flight `do_put` calls.
@@ -83,7 +82,7 @@ const FINE_GRAINED_PRUNING_ROW_CRITERIA: i64 = 3_000_000;
 //
 // Finally, once table_3 is flushed `SeafowlDataSyncWriter` will advance the
 // durable sequence up to 3, since both it and 2 have now been completely persisted.
-pub(crate) struct SeafowlDataSyncWriter {
+pub struct SeafowlDataSyncWriter {
     context: Arc<SeafowlContext>,
     // An indexed-queue of transactions sorted by insertion order
     txs: IndexMap<Uuid, Transaction>,
@@ -982,10 +981,8 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::context::test_utils::in_memory_context;
-    use crate::frontend::flight::sync::schema::SyncSchema;
-    use crate::frontend::flight::sync::writer::{
-        SeafowlDataSyncWriter, SequenceNumber, LOWER_SYNC,
-    };
+    use crate::sync::schema::SyncSchema;
+    use crate::sync::writer::{SeafowlDataSyncWriter, SequenceNumber, LOWER_SYNC};
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use clade::sync::{ColumnDescriptor, ColumnRole};
@@ -993,7 +990,7 @@ mod tests {
     use rstest::rstest;
     use std::collections::HashMap;
 
-    use crate::frontend::flight::sync::{SyncCommitInfo, SyncResult};
+    use crate::sync::{SyncCommitInfo, SyncResult};
     use arrow::array::{BooleanArray, Float32Array, Int32Array, StringArray};
     use datafusion::dataframe::DataFrame;
     use datafusion::datasource::{provider_as_source, MemTable};

@@ -1,8 +1,6 @@
 mod handler;
 mod metrics;
 mod sql;
-mod sync;
-
 use crate::config::schema::FlightFrontend;
 use crate::context::SeafowlContext;
 use crate::frontend::flight::handler::SeafowlFlightHandler;
@@ -15,8 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-use crate::frontend::flight::sync::flush_task;
-use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
+use crate::sync::flush_task;
+use crate::sync::writer::SeafowlDataSyncWriter;
 use tonic::transport::Server;
 
 pub async fn run_flight_server(

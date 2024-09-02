@@ -1,6 +1,6 @@
-use crate::frontend::flight::sync::schema::{SyncColumn, SyncSchema};
-use crate::frontend::flight::sync::writer::{DataSyncItem, LOWER_SYNC, UPPER_SYNC};
-use crate::frontend::flight::sync::SyncResult;
+use crate::sync::schema::{SyncColumn, SyncSchema};
+use crate::sync::writer::{DataSyncItem, LOWER_SYNC, UPPER_SYNC};
+use crate::sync::SyncResult;
 use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, Scalar, UInt64Array};
 use arrow::compute::kernels::cmp::{gt_eq, lt_eq};
 use arrow::compute::{and_kleene, bool_or, concat_batches, filter, is_not_null, take};
@@ -699,11 +699,9 @@ fn project_value_column(
 
 #[cfg(test)]
 mod tests {
-    use crate::frontend::flight::sync::schema::SyncSchema;
-    use crate::frontend::flight::sync::utils::{
-        construct_qualifier, get_prune_map, squash_batches,
-    };
-    use crate::frontend::flight::sync::writer::DataSyncItem;
+    use crate::sync::schema::SyncSchema;
+    use crate::sync::utils::{construct_qualifier, get_prune_map, squash_batches};
+    use crate::sync::writer::DataSyncItem;
     use arrow::array::{
         Array, ArrayRef, BooleanArray, Float64Array, Int32Array, RecordBatch,
         StringArray, UInt8Array,

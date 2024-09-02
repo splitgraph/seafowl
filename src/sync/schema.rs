@@ -1,4 +1,4 @@
-use crate::frontend::flight::sync::SyncError;
+use crate::sync::SyncError;
 use arrow_schema::{DataType, FieldRef, SchemaRef};
 use clade::sync::{ColumnDescriptor, ColumnRole};
 use std::collections::HashSet;
