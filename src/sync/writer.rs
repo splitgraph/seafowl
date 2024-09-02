@@ -763,7 +763,7 @@ impl SeafowlDataSyncWriter {
         // while logical column names are found in the arrow fields
         let (base_pk_cols, sync_pk_cols): (Vec<String>, Vec<String>) = sync_schema
             .map_columns(ColumnRole::OldPk, |c| {
-                (c.name().clone(), c.field().name().clone())
+                (c.name().to_string(), c.field().name().clone())
             })
             .into_iter()
             .unzip();

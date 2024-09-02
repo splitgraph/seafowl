@@ -236,7 +236,7 @@ pub(super) fn construct_qualifier(
         .filter(|col| col.role() == role)
         .map(|col| {
             Ok((
-                col.name().clone(),
+                col.name().to_string(),
                 (
                     MinAccumulator::try_new(col.field().data_type())?,
                     MaxAccumulator::try_new(col.field().data_type())?,
@@ -319,18 +319,14 @@ pub(super) fn get_prune_map(
 
         if let Some(min_vals) = maybe_min_vals {
             for file in 0..partition_count {
-                min_values.insert(
-                    (col.name().as_str(), file),
-                    Scalar::new(min_vals.slice(file, 1)),
-                );
+                min_values
+                    .insert((col.name(), file), Scalar::new(min_vals.slice(file, 1)));
             }
         }
         if let Some(max_vals) = maybe_max_vals {
             for file in 0..partition_count {
-                max_values.insert(
-                    (col.name().as_str(), file),
-                    Scalar::new(max_vals.slice(file, 1)),
-                );
+                max_values
+                    .insert((col.name(), file), Scalar::new(max_vals.slice(file, 1)));
             }
         }
     }
@@ -372,7 +368,7 @@ pub(super) fn get_prune_map(
                             continue;
                         }
 
-                        let col_file = (pk_col.name().as_str(), ind);
+                        let col_file = (pk_col.name(), ind);
                         let next_sync_prune_map = match (
                             min_values.get(&col_file),
                             max_values.get(&col_file),
@@ -635,7 +631,7 @@ fn project_value_column(
         // column that takes all the values from this sync and no value from the other sync
         col_desc.insert(ColumnDescriptor {
             role: ColumnRole::Changed as _,
-            name: this_value_col.name().clone(),
+            name: this_value_col.name().to_string(),
         });
         projection.push(when(col(this_sync).is_null(), lit(false)).otherwise(lit(true))?);
     }
