@@ -12,7 +12,7 @@ arrow-flight = "52.2.0"
 arrow-integration-test = "52.2.0"
 arrow-row = "52.2.0"
 arrow-schema = "52.2.0"
-async-trait = "0.1.64"
+async-trait = "0.1.82"
 
 datafusion = "41.0.0"
 datafusion-common = "41.0.0"
@@ -146,7 +146,7 @@ wasmtime-wasi = "24.0.0"
 assert_cmd = "2"
 assert_unordered = "0.3"
 aws-config = { version = "1.0.1", features = ["behavior-version-latest"] }
-aws-credential-types = { version = "1.1.5", features = ["hardcoded-credentials"] }
+aws-credential-types = { version = "1.2.1", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.40.0", features = ["behavior-version-latest"] }
 rstest = "*"
 serial_test = "3"
