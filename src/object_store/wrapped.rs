@@ -152,6 +152,9 @@ impl ObjectStore for InternalObjectStore {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
+        if let  ObjectStoreConfig::Local(LocalConfig { disable_hardlinks: true, .. }) = self.config {
+          return self.inner.put_opts(location, payload, PutOptions{mode: object_store::PutMode::Overwrite, ..opts}).await
+        };
         self.inner.put_opts(location, payload, opts).await
     }
 
@@ -240,9 +243,9 @@ impl ObjectStore for InternalObjectStore {
     ///
     /// Will return an error if the destination already has an object.
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-      if let  ObjectStoreConfig::Local(LocalConfig { disable_hardlinks: true, .. }) = self.config {
-        return self.inner.copy(from, to).await;
-      }
+        if let  ObjectStoreConfig::Local(LocalConfig { disable_hardlinks: true, .. }) = self.config {
+            return self.inner.copy(from, to).await;
+        }
         self.inner.copy_if_not_exists(from, to).await
     }
 
