@@ -19,20 +19,26 @@ impl LocalConfig {
         map: &HashMap<String, String>,
     ) -> Result<Self, object_store::Error> {
         Ok(Self {
-          data_dir: map.get("data_dir")
-          .ok_or_else(|| object_store::Error::Generic {
-              store: "local",
-              source: "Missing data_dir".into(),
-          })?
-          .clone(),
-            disable_hardlinks: map.get("disable_hardlinks").map(|s| s == "true").unwrap_or(false),
+            data_dir: map
+                .get("data_dir")
+                .ok_or_else(|| object_store::Error::Generic {
+                    store: "local",
+                    source: "Missing data_dir".into(),
+                })?
+                .clone(),
+            disable_hardlinks: map
+                .get("disable_hardlinks")
+                .map(|s| s == "true")
+                .unwrap_or(false),
         })
     }
 
     pub fn to_hashmap(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         map.insert("data_dir".to_string(), self.data_dir.clone());
-        map.insert("disable_hardlinks".to_string(), self.disable_hardlinks.to_string());
+        map.insert(
+            "disable_hardlinks".to_string(), 
+            self.disable_hardlinks.to_string());
         map
     }
 
@@ -57,7 +63,7 @@ mod tests {
         let config = LocalConfig::from_hashmap(&map)
             .expect("Failed to create config from hashmap");
         assert_eq!(config.data_dir, "/tmp/data".to_string());
-        assert_eq!(config.disable_hardlinks, false); // Default value
+        assert!(!config.disable_hardlinks); // Default value
     }
 
     #[test]
@@ -69,7 +75,7 @@ mod tests {
         let config = LocalConfig::from_hashmap(&map)
             .expect("Failed to create config from hashmap");
         assert_eq!(config.data_dir, "/tmp/data".to_string());
-        assert_eq!(config.disable_hardlinks, true);
+        assert!(config.disable_hardlinks);
     }
 
     #[test]
@@ -81,7 +87,7 @@ mod tests {
         let config = LocalConfig::from_hashmap(&map)
             .expect("Failed to create config from hashmap");
         assert_eq!(config.data_dir, "/tmp/data".to_string());
-        assert_eq!(config.disable_hardlinks, false);
+        assert!(!config.disable_hardlinks);
     }
 
     #[test]
@@ -133,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_default_false() {
-        assert_eq!(default_false(), false);
+        assert!(!default_false());
     }
 
     #[test]
@@ -146,7 +152,7 @@ mod tests {
 
         let config: LocalConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.data_dir, "/tmp/data");
-        assert_eq!(config.disable_hardlinks, false);
+        assert!(!config.disable_hardlinks);
     }
 
     #[test]
@@ -160,6 +166,6 @@ mod tests {
 
         let config: LocalConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.data_dir, "/tmp/data");
-        assert_eq!(config.disable_hardlinks, true);
+        assert!(config.disable_hardlinks);
     }
 }

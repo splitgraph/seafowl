@@ -29,7 +29,7 @@ use seafowl::{
 
 use tokio::time::{interval, Duration};
 use tracing::level_filters::LevelFilter;
-use tracing::{error, info, debug, subscriber, warn};
+use tracing::{debug, error, info, subscriber, warn};
 use tracing_log::LogTracer;
 use tracing_subscriber::filter::EnvFilter;
 

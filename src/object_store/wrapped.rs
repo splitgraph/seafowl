@@ -16,8 +16,8 @@ use url::Url;
 
 use object_store_factory::aws::S3Config;
 use object_store_factory::google::GCSConfig;
-use object_store_factory::ObjectStoreConfig;
 use object_store_factory::local::LocalConfig;
+use object_store_factory::ObjectStoreConfig;
 
 // Wrapper around the object_store crate that holds on to the original config
 // in order to provide a more efficient "upload" for the local object store
@@ -152,8 +152,21 @@ impl ObjectStore for InternalObjectStore {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        if let  ObjectStoreConfig::Local(LocalConfig { disable_hardlinks: true, .. }) = self.config {
-          return self.inner.put_opts(location, payload, PutOptions{mode: object_store::PutMode::Overwrite, ..opts}).await
+        if let ObjectStoreConfig::Local(LocalConfig { 
+            disable_hardlinks: true, 
+            .. 
+        }) = self.config 
+        {
+          return self
+              .inner
+              .put_opts(
+                  location, 
+                  payload, 
+                  PutOptions{
+                      mode: object_store::PutMode::Overwrite, 
+                      ..opts
+                  },
+              ).await;
         };
         self.inner.put_opts(location, payload, opts).await
     }
@@ -243,7 +256,11 @@ impl ObjectStore for InternalObjectStore {
     ///
     /// Will return an error if the destination already has an object.
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        if let  ObjectStoreConfig::Local(LocalConfig { disable_hardlinks: true, .. }) = self.config {
+        if let ObjectStoreConfig::Local(LocalConfig { 
+            disable_hardlinks: true, 
+            .. 
+        }) = self.config 
+        {
             return self.inner.copy(from, to).await;
         }
         self.inner.copy_if_not_exists(from, to).await
@@ -261,7 +278,11 @@ impl ObjectStore for InternalObjectStore {
             // this with a lock too, so look into using that down the line instead.
             return self.inner.rename(from, to).await;
         }
-        if let ObjectStoreConfig::Local(LocalConfig { disable_hardlinks: true, .. }) = self.config {
+        if let ObjectStoreConfig::Local(LocalConfig { 
+            disable_hardlinks: true, 
+            .. 
+        }) = self.config 
+        {
             return self.inner.rename(from, to).await;
         }
         self.inner.rename_if_not_exists(from, to).await
