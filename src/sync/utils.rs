@@ -1,6 +1,6 @@
-use crate::frontend::flight::sync::schema::{SyncColumn, SyncSchema};
-use crate::frontend::flight::sync::writer::{DataSyncItem, LOWER_SYNC, UPPER_SYNC};
-use crate::frontend::flight::sync::SyncResult;
+use crate::sync::schema::{SyncColumn, SyncSchema};
+use crate::sync::writer::{DataSyncItem, LOWER_SYNC, UPPER_SYNC};
+use crate::sync::SyncResult;
 use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, Scalar, UInt64Array};
 use arrow::compute::kernels::cmp::{gt_eq, lt_eq};
 use arrow::compute::{and_kleene, bool_or, concat_batches, filter, is_not_null, take};
@@ -236,7 +236,7 @@ pub(super) fn construct_qualifier(
         .filter(|col| col.role() == role)
         .map(|col| {
             Ok((
-                col.name().clone(),
+                col.name().to_string(),
                 (
                     MinAccumulator::try_new(col.field().data_type())?,
                     MaxAccumulator::try_new(col.field().data_type())?,
@@ -319,18 +319,14 @@ pub(super) fn get_prune_map(
 
         if let Some(min_vals) = maybe_min_vals {
             for file in 0..partition_count {
-                min_values.insert(
-                    (col.name().as_str(), file),
-                    Scalar::new(min_vals.slice(file, 1)),
-                );
+                min_values
+                    .insert((col.name(), file), Scalar::new(min_vals.slice(file, 1)));
             }
         }
         if let Some(max_vals) = maybe_max_vals {
             for file in 0..partition_count {
-                max_values.insert(
-                    (col.name().as_str(), file),
-                    Scalar::new(max_vals.slice(file, 1)),
-                );
+                max_values
+                    .insert((col.name(), file), Scalar::new(max_vals.slice(file, 1)));
             }
         }
     }
@@ -372,7 +368,7 @@ pub(super) fn get_prune_map(
                             continue;
                         }
 
-                        let col_file = (pk_col.name().as_str(), ind);
+                        let col_file = (pk_col.name(), ind);
                         let next_sync_prune_map = match (
                             min_values.get(&col_file),
                             max_values.get(&col_file),
@@ -423,7 +419,6 @@ pub(super) fn merge_schemas(
     let mut projection = vec![];
     let mut col_desc = IndexSet::new();
 
-    // TODO: implement sync role indexing in SyncSchema to make all the lookups below cheap
     // Project all sync columns from the lower schema
     for lower_sync_col in lower_schema.columns() {
         // Build the expression to project the combined column
@@ -635,7 +630,7 @@ fn project_value_column(
         // column that takes all the values from this sync and no value from the other sync
         col_desc.insert(ColumnDescriptor {
             role: ColumnRole::Changed as _,
-            name: this_value_col.name().clone(),
+            name: this_value_col.name().to_string(),
         });
         projection.push(when(col(this_sync).is_null(), lit(false)).otherwise(lit(true))?);
     }
@@ -699,11 +694,9 @@ fn project_value_column(
 
 #[cfg(test)]
 mod tests {
-    use crate::frontend::flight::sync::schema::SyncSchema;
-    use crate::frontend::flight::sync::utils::{
-        construct_qualifier, get_prune_map, squash_batches,
-    };
-    use crate::frontend::flight::sync::writer::DataSyncItem;
+    use crate::sync::schema::SyncSchema;
+    use crate::sync::utils::{construct_qualifier, get_prune_map, squash_batches};
+    use crate::sync::writer::DataSyncItem;
     use arrow::array::{
         Array, ArrayRef, BooleanArray, Float64Array, Int32Array, RecordBatch,
         StringArray, UInt8Array,

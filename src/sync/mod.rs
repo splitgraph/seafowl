@@ -1,4 +1,4 @@
-use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
+use crate::sync::writer::SeafowlDataSyncWriter;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;

@@ -2,8 +2,8 @@ use crate::catalog::memory::MemoryStore;
 use crate::frontend::flight::handler::{
     SeafowlFlightHandler, SEAFOWL_SQL_DATA, SEAFOWL_SYNC_CALL_MAX_ROWS,
 };
-use crate::frontend::flight::sync::schema::SyncSchema;
-use crate::frontend::flight::sync::SyncError;
+use crate::sync::schema::SyncSchema;
+use crate::sync::SyncError;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;

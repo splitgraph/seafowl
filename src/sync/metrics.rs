@@ -1,4 +1,4 @@
-use crate::frontend::flight::sync::{Origin, SequenceNumber};
+use crate::sync::{Origin, SequenceNumber};
 use metrics::{
     counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram,
     Counter, Gauge, Histogram,

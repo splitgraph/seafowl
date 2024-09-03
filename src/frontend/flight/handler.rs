@@ -20,12 +20,10 @@ use tracing::{debug, error, info};
 use url::Url;
 
 use crate::context::SeafowlContext;
-use crate::frontend::flight::sync::schema::SyncSchema;
-use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
-use crate::frontend::flight::sync::SyncResult;
+use crate::sync::schema::SyncSchema;
+use crate::sync::writer::SeafowlDataSyncWriter;
+use crate::sync::SyncResult;
 
-pub const SYNC_COMMIT_INFO: &str = "sync_commit_info";
-// Denoted the last sequence number that was fully committed
 pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
 
 lazy_static! {

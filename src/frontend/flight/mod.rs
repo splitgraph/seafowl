@@ -1,8 +1,6 @@
 mod handler;
 mod metrics;
 mod sql;
-mod sync;
-
 use crate::config::schema::FlightFrontend;
 use crate::context::SeafowlContext;
 use crate::frontend::flight::handler::SeafowlFlightHandler;
@@ -15,9 +13,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-use crate::frontend::flight::sync::flush_task;
-use crate::frontend::flight::sync::writer::SeafowlDataSyncWriter;
+use crate::sync::flush_task;
+use crate::sync::writer::SeafowlDataSyncWriter;
 use tonic::transport::Server;
+
+const MAX_MESSAGE_SIZE: usize = 128 * 1024 * 1024;
 
 pub async fn run_flight_server(
     context: Arc<SeafowlContext>,
@@ -37,7 +37,7 @@ pub async fn run_flight_server(
     tokio::spawn(flush_task(flush_interval, lock_timeout, sync_writer));
 
     let svc =
-        FlightServiceServer::new(handler).max_decoding_message_size(16 * 1024 * 1024);
+        FlightServiceServer::new(handler).max_decoding_message_size(MAX_MESSAGE_SIZE);
 
     let server = Server::builder();
     let mut server = server.layer(MetricsLayer {});

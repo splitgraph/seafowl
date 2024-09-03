@@ -1,11 +1,13 @@
-use crate::frontend::flight::sync::SyncError;
+use crate::sync::SyncError;
 use arrow_schema::{DataType, FieldRef, SchemaRef};
 use clade::sync::{ColumnDescriptor, ColumnRole};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SyncSchema {
     columns: Vec<SyncColumn>,
+    indices: HashMap<ColumnRole, HashMap<Arc<str>, usize>>,
 }
 
 impl SyncSchema {
@@ -75,27 +77,45 @@ impl SyncSchema {
             });
         }
 
+        let mut indices = HashMap::new();
         let columns = column_descriptors
-            .iter()
+            .into_iter()
             .zip(schema.fields())
-            .map(|(column_descriptor, field)| SyncColumn {
-                role: column_descriptor.role(),
-                name: column_descriptor.name.clone(),
-                field: field.clone(),
+            .enumerate()
+            .map(|(idx, (column_descriptor, field))| {
+                let role = column_descriptor.role();
+                let name: Arc<str> = Arc::from(column_descriptor.name.as_str());
+
+                let sync_column = SyncColumn {
+                    role,
+                    name: name.clone(),
+                    field: field.clone(),
+                };
+
+                indices
+                    .entry(role)
+                    .or_insert(HashMap::new())
+                    .insert(name.clone(), idx);
+
+                sync_column
             })
             .collect();
 
-        Ok(Self { columns })
+        Ok(Self { columns, indices })
     }
 
     pub fn empty() -> Self {
-        SyncSchema { columns: vec![] }
+        SyncSchema {
+            columns: vec![],
+            indices: Default::default(),
+        }
     }
 
     pub fn column(&self, name: &str, role: ColumnRole) -> Option<&SyncColumn> {
-        self.columns()
-            .iter()
-            .find(|col| col.name == name && col.role == role)
+        self.indices
+            .get(&role)
+            .and_then(|cols| cols.get(name))
+            .map(|idx| &self.columns[*idx])
     }
 
     pub fn columns(&self) -> &[SyncColumn] {
@@ -106,20 +126,24 @@ impl SyncSchema {
     pub fn map_columns<F, T>(&self, role: ColumnRole, f: F) -> Vec<T>
     where
         Self: Sized,
-        F: FnMut(&SyncColumn) -> T,
+        F: Fn(&SyncColumn) -> T,
     {
-        self.columns
-            .iter()
-            .filter(|sc| sc.role == role)
-            .map(f)
-            .collect::<Vec<T>>()
+        self.indices
+            .get(&role)
+            .map(|role_cols| {
+                role_cols
+                    .values()
+                    .map(|idx| f(&self.columns[*idx]))
+                    .collect::<Vec<T>>()
+            })
+            .unwrap_or_default()
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SyncColumn {
     role: ColumnRole,
-    name: String,
+    name: Arc<str>,
     field: FieldRef,
 }
 
@@ -134,8 +158,8 @@ impl SyncColumn {
     //
     // For all roles except `Changed`, the sync column refers to itself, but for `Changed` it refers
     // to a `Value` column whose field name is the same as this name.
-    pub fn name(&self) -> &String {
-        &self.name
+    pub fn name(&self) -> &str {
+        self.name.as_ref()
     }
 
     // Get the field from the arrow schema
@@ -159,7 +183,7 @@ impl SyncColumn {
     pub fn column_descriptor(&self) -> ColumnDescriptor {
         ColumnDescriptor {
             role: self.role as _,
-            name: self.name.clone(),
+            name: self.name.to_string(),
         }
     }
 }
