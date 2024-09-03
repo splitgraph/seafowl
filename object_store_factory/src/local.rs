@@ -92,7 +92,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
+    #[should_panic(expected = "called `Result::unwrap()` on an `Err` value")]
     fn test_config_from_hashmap_without_data_dir() {
         let map = HashMap::new();
         // This test will panic because data_dir is missing, which causes unwrap() to panic.
