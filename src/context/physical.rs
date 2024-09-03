@@ -315,6 +315,7 @@ impl SeafowlContext {
                         object_store,
                         local_table_dir,
                         self.config.misc.max_partition_size,
+                        None,
                     )
                     .await?;
 
@@ -427,6 +428,7 @@ impl SeafowlContext {
                                 object_store,
                                 local_table_dir,
                                 self.config.misc.max_partition_size,
+                                None,
                             )
                             .await?;
 
