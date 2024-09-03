@@ -419,7 +419,6 @@ pub(super) fn merge_schemas(
     let mut projection = vec![];
     let mut col_desc = IndexSet::new();
 
-    // TODO: implement sync role indexing in SyncSchema to make all the lookups below cheap
     // Project all sync columns from the lower schema
     for lower_sync_col in lower_schema.columns() {
         // Build the expression to project the combined column

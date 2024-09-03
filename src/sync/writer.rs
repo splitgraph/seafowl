@@ -6,7 +6,7 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::prelude::DataFrame;
-use datafusion_common::{JoinType, Result, ScalarValue, ToDFSchema};
+use datafusion_common::{DFSchemaRef, JoinType, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     col, is_null, lit, when, LogicalPlan, LogicalPlanBuilder, Projection,
@@ -20,6 +20,7 @@ use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
+use std::iter::once;
 use std::ops::Not;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -647,26 +648,24 @@ impl SeafowlDataSyncWriter {
         let mut sync_schema = first_sync.sync_schema.clone();
         let first_batch = first_sync.batch.clone();
         let provider = MemTable::try_new(first_batch.schema(), vec![vec![first_batch]])?;
-        let mut sync_df = DataFrame::new(
-            self.context.inner.state(),
-            LogicalPlanBuilder::scan(
-                LOWER_SYNC,
-                provider_as_source(Arc::new(provider)),
-                None,
-            )?
-            .build()?,
-        );
+        let mut sync_plan = LogicalPlanBuilder::scan(
+            LOWER_SYNC,
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?
+        .build()?;
 
         // Make a plan to squash all syncs into a single change stream
         for sync in &syncs[1..] {
-            (sync_schema, sync_df) = self.merge_syncs(
+            (sync_schema, sync_plan) = self.merge_syncs(
                 &sync_schema,
-                sync_df,
+                sync_plan,
                 &sync.sync_schema,
                 sync.batch.clone(),
             )?;
         }
 
+        let sync_df = DataFrame::new(self.context.inner.state(), sync_plan);
         Ok((sync_schema, sync_df))
     }
 
@@ -675,20 +674,18 @@ impl SeafowlDataSyncWriter {
     fn merge_syncs(
         &self,
         lower_schema: &SyncSchema,
-        lower_df: DataFrame,
+        lower_plan: LogicalPlan,
         upper_schema: &SyncSchema,
         upper_data: RecordBatch,
-    ) -> SyncResult<(SyncSchema, DataFrame)> {
+    ) -> SyncResult<(SyncSchema, LogicalPlan)> {
         let provider = MemTable::try_new(upper_data.schema(), vec![vec![upper_data]])?;
-        let upper_df = DataFrame::new(
-            self.context.inner.state(),
-            LogicalPlanBuilder::scan(
-                UPPER_SYNC,
-                provider_as_source(Arc::new(provider)),
-                None,
-            )?
-            .build()?,
-        );
+        let upper_plan = LogicalPlanBuilder::scan(
+            UPPER_SYNC,
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?;
+        let exprs = self.add_sync_flag(upper_plan.schema(), UPPER_SYNC);
+        let upper_plan = upper_plan.project(exprs)?;
 
         let (lower_join_cols, upper_join_cols): (Vec<String>, Vec<String>) = upper_schema
             .map_columns(ColumnRole::OldPk, |sc| {
@@ -705,22 +702,34 @@ impl SeafowlDataSyncWriter {
             .unzip();
 
         // TODO merge syncs using a union if schemas match
-        let upper_df = upper_df.with_column(UPPER_SYNC, lit(true))?;
-        let lower_df = lower_df.with_column(LOWER_SYNC, lit(true))?;
+        // Add the `LOWER_SYNC` flag to lower plan; we can't use the usual API since it becomes
+        // increasingly slower as more plan nodes are added, so do it at a lower level.
+        let lower_plan = match lower_plan {
+            // Scan indicates this is a first lower sync, so add an explicit projection on top
+            LogicalPlan::TableScan(_) => {
+                let exprs = self.add_sync_flag(lower_plan.schema(), LOWER_SYNC);
+                Projection::try_new(exprs, Arc::new(lower_plan))
+                    .map(LogicalPlan::Projection)?
+            }
+            // In case of projection (sync 2+) just extend the present list of expressions with the
+            // flag
+            LogicalPlan::Projection(Projection {
+                mut expr, input, ..
+            }) => {
+                expr.push(lit(true).alias(LOWER_SYNC));
+                Projection::try_new(expr, input).map(LogicalPlan::Projection)?
+            }
+            _ => unreachable!("The lower sync can only be a TableScan or a Projection"),
+        };
 
-        let merged_sync = upper_df.join(
-            lower_df,
-            JoinType::Full,
-            &upper_join_cols
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            &lower_join_cols
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            None,
-        )?;
+        let merged_plan = upper_plan
+            .join(
+                lower_plan,
+                JoinType::Full,
+                (upper_join_cols, lower_join_cols),
+                None,
+            )?
+            .build()?;
 
         // Build the merged projection and column descriptors
         let (col_desc, projection) = merge_schemas(lower_schema, upper_schema)?;
@@ -728,14 +737,22 @@ impl SeafowlDataSyncWriter {
         // The `DataFrame::select`/`LogicalPlanBuilder::project` projection API leads to sub-optimal
         // performance since it does a bunch of expression normalization that we don't really need.
         // So deconstruct the present one and add a vanilla `Projection` on top of it.
-        let (session_state, plan) = merged_sync.into_parts();
-        let sync_plan = Projection::try_new(projection, Arc::new(plan))
+        let sync_plan = Projection::try_new(projection, Arc::new(merged_plan))
             .map(LogicalPlan::Projection)?;
 
         Ok((
             SyncSchema::try_new(col_desc, sync_plan.schema().inner().clone())?,
-            DataFrame::new(session_state, sync_plan),
+            sync_plan,
         ))
+    }
+
+    fn add_sync_flag(&self, schema: &DFSchemaRef, sync: &str) -> Vec<Expr> {
+        schema
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .chain(once(lit(true).alias(sync)))
+            .collect()
     }
 
     fn apply_syncs(
@@ -1683,22 +1700,20 @@ mod tests {
         )?;
 
         let provider = MemTable::try_new(lower_schema.clone(), vec![vec![lower_batch]])?;
-        let lower_df = DataFrame::new(
-            ctx.inner.state(),
-            LogicalPlanBuilder::scan(
-                LOWER_SYNC,
-                provider_as_source(Arc::new(provider)),
-                None,
-            )?
-            .build()?,
-        );
+        let lower_plan = LogicalPlanBuilder::scan(
+            LOWER_SYNC,
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?
+        .build()?;
 
-        let (_, merged_df) = sync_mgr.merge_syncs(
+        let (_, merged_plan) = sync_mgr.merge_syncs(
             &SyncSchema::try_new(lower_column_descriptors, lower_schema)?,
-            lower_df,
+            lower_plan,
             &SyncSchema::try_new(upper_column_descriptors, upper_schema)?,
             upper_batch,
         )?;
+        let merged_df = DataFrame::new(ctx.inner.state(), merged_plan);
 
         // Pre-sort the merged batch to keep the order stable
         let results = merged_df
