@@ -1075,7 +1075,9 @@ fn now() -> u64 {
 mod tests {
     use crate::context::test_utils::in_memory_context;
     use crate::sync::schema::SyncSchema;
-    use crate::sync::writer::{SeafowlDataSyncWriter, SequenceNumber, LOWER_SYNC};
+    use crate::sync::writer::{
+        SeafowlDataSyncWriter, SequenceNumber, LOWER_SYNC, UPPER_SYNC,
+    };
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use clade::sync::{ColumnDescriptor, ColumnRole};
@@ -1562,8 +1564,9 @@ mod tests {
         assert_batches_eq!(expected, &results);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_sync_merging() -> SyncResult<()> {
+    async fn test_sync_merging(#[values(true, false)] union: bool) -> SyncResult<()> {
         let ctx = Arc::new(in_memory_context().await);
         let sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
 
@@ -1738,42 +1741,64 @@ mod tests {
             ],
         )?;
 
-        let upper_rows = 7;
-        let upper_batch = RecordBatch::try_new(
-            upper_schema.clone(),
-            vec![
-                // Insert 1 row,
-                // Update 1 row inserted in lower, 1 row updated in lower and 1 other row,
-                // Delete 1 row inserted in lower, 1 row updated in lower and 1 other row
-                Arc::new(Int32Array::from(vec![
-                    None,
-                    Some(2),
-                    Some(7),
-                    Some(14),
-                    Some(3),
-                    Some(9),
-                    Some(16),
-                ])),
-                Arc::new(Int32Array::from(vec![
-                    Some(11),
-                    Some(12),
-                    Some(13),
-                    Some(15),
-                    None,
-                    None,
-                    None,
-                ])),
-                Arc::new(StringArray::from(vec!["upper_c4"; upper_rows])),
-                Arc::new(StringArray::from(vec!["upper_c5"; upper_rows])),
-                Arc::new(StringArray::from(vec!["upper_c6"; upper_rows])),
-                Arc::new(BooleanArray::from(vec![false; upper_rows])),
-                Arc::new(StringArray::from(vec!["upper_c7"; upper_rows])),
-                Arc::new(BooleanArray::from(vec![false; upper_rows])),
-                Arc::new(StringArray::from(vec!["upper_c9"; upper_rows])),
-                Arc::new(BooleanArray::from(vec![false; upper_rows])),
-                Arc::new(StringArray::from(vec!["upper_c10"; upper_rows])),
-            ],
-        )?;
+        let upper_batch = if union {
+            // Create an append-only upper batch
+            let upper_rows = 3;
+            RecordBatch::try_new(
+                upper_schema.clone(),
+                vec![
+                    // Insert 3 rows,
+                    Arc::new(Int32Array::from(vec![None, None, None])),
+                    Arc::new(Int32Array::from(vec![Some(11), Some(12), Some(13)])),
+                    Arc::new(StringArray::from(vec!["upper_c4"; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c5"; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c6"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c7"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c9"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c10"; upper_rows])),
+                ],
+            )?
+        } else {
+            let upper_rows = 7;
+            RecordBatch::try_new(
+                upper_schema.clone(),
+                vec![
+                    // Insert 1 row,
+                    // Update 1 row inserted in lower, 1 row updated in lower and 1 other row,
+                    // Delete 1 row inserted in lower, 1 row updated in lower and 1 other row
+                    Arc::new(Int32Array::from(vec![
+                        None,
+                        Some(2),
+                        Some(7),
+                        Some(14),
+                        Some(3),
+                        Some(9),
+                        Some(16),
+                    ])),
+                    Arc::new(Int32Array::from(vec![
+                        Some(11),
+                        Some(12),
+                        Some(13),
+                        Some(15),
+                        None,
+                        None,
+                        None,
+                    ])),
+                    Arc::new(StringArray::from(vec!["upper_c4"; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c5"; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c6"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c7"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c9"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c10"; upper_rows])),
+                ],
+            )?
+        };
 
         let provider = MemTable::try_new(lower_schema.clone(), vec![vec![lower_batch]])?;
         let lower_plan = LogicalPlanBuilder::scan(
@@ -1783,12 +1808,21 @@ mod tests {
         )?
         .build()?;
 
-        let (_, merged_plan) = sync_mgr.merge_syncs(
-            &SyncSchema::try_new(lower_column_descriptors, lower_schema)?,
-            lower_plan,
-            &SyncSchema::try_new(upper_column_descriptors, upper_schema)?,
-            upper_batch,
+        let provider = MemTable::try_new(upper_schema.clone(), vec![vec![upper_batch]])?;
+        let upper_plan = LogicalPlanBuilder::scan(
+            UPPER_SYNC,
+            provider_as_source(Arc::new(provider)),
+            None,
         )?;
+
+        let lower_schema = SyncSchema::try_new(lower_column_descriptors, lower_schema)?;
+        let upper_schema = SyncSchema::try_new(upper_column_descriptors, upper_schema)?;
+        let (_, merged_plan) = if union {
+            sync_mgr.union_syncs(&lower_schema, lower_plan, &upper_schema, upper_plan)?
+        } else {
+            sync_mgr.join_syncs(&lower_schema, lower_plan, &upper_schema, upper_plan)?
+        };
+
         let merged_df = DataFrame::new(ctx.inner.state(), merged_plan);
 
         // Pre-sort the merged batch to keep the order stable
@@ -1800,7 +1834,25 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
+        let expected = if union {
+            [
+            "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+            "| old_pk_c1 | new_pk_c1 | changed_c3 | value_c3 | value_c5 | changed_c6 | value_c6 | value_c7 | changed_c8 | value_c8 | changed_c10 | value_c10 | changed_c4 | value_c4 | changed_c7 | changed_c9 | value_c9 |",
+            "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+            "|           | 1         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "|           | 2         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "|           | 3         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "|           | 11        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "|           | 12        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "|           | 13        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+            "| 4         | 5         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "| 6         | 7         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "| 8         | 9         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "| 10        |           | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+            "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+        ]
+        } else {
+            [
             "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
             "| old_pk_c1 | new_pk_c1 | changed_c3 | value_c3 | value_c5 | changed_c6 | value_c6 | value_c7 | changed_c8 | value_c8 | changed_c10 | value_c10 | changed_c4 | value_c4 | changed_c7 | changed_c9 | value_c9 |",
             "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
@@ -1815,7 +1867,8 @@ mod tests {
             "| 14        | 15        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
             "| 16        |           | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
             "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
-        ];
+        ]
+        };
         assert_batches_eq!(expected, &results);
 
         Ok(())
