@@ -11,11 +11,11 @@ pub(super) fn union_pk_column(
     upper_schema: &SyncSchema,
 ) -> (Expr, Expr) {
     let upper_pk_col = upper_schema
-        .column(lower_pk_col.name(), ColumnRole::OldPk)
+        .column(lower_pk_col.name(), lower_pk_col.role())
         .expect("Old Pk columns must be the same across syncs");
 
     (
-        col(lower_pk_col.field.name()),
+        col(lower_pk_col.field().name()),
         col(upper_pk_col.field().name()),
     )
 }
@@ -31,7 +31,7 @@ pub(super) fn union_changed_column(
         // ... other sync has the corresponding `Changed` column, projects both
         match sync_position {
             SyncPosition::Lower => (
-                col(this_changed_col.field.name()),
+                col(this_changed_col.field().name()),
                 col(other_changed_col.field().name()),
             ),
             SyncPosition::Upper => {
@@ -46,17 +46,17 @@ pub(super) fn union_changed_column(
         // the corresponding `Value` column
         match sync_position {
             // project true to pick those upper values up
-            SyncPosition::Lower => (col(this_changed_col.field.name()), lit(true)),
+            SyncPosition::Lower => (col(this_changed_col.field().name()), lit(true)),
             // project true to pick those lower values up
-            SyncPosition::Upper => (lit(true), col(this_changed_col.field.name())),
+            SyncPosition::Upper => (lit(true), col(this_changed_col.field().name())),
         }
     } else {
         // ... other sync has neither the `Changed` nor the associated `Value` column,
         match sync_position {
             // project false to avoid overriding lower values with NULL values
-            SyncPosition::Lower => (col(this_changed_col.field.name()), lit(false)),
+            SyncPosition::Lower => (col(this_changed_col.field().name()), lit(false)),
             // project false to avoid overriding upper values with NULL values
-            SyncPosition::Upper => (lit(false), col(this_changed_col.field.name())),
+            SyncPosition::Upper => (lit(false), col(this_changed_col.field().name())),
         }
     }
 }
@@ -96,7 +96,7 @@ pub(super) fn union_value_column(
             // ... other sync has the corresponding `Changed` column, projects both
             match sync_position {
                 SyncPosition::Lower => (
-                    col(this_value_col.field.name()),
+                    col(this_value_col.field().name()),
                     col(other_value_col.field().name()),
                 ),
                 SyncPosition::Upper => {
@@ -110,12 +110,12 @@ pub(super) fn union_value_column(
             // `Changed` column will be added regardless ...
             match sync_position {
                 SyncPosition::Lower => (
-                    col(this_value_col.field.name()),
+                    col(this_value_col.field().name()),
                     lit(ScalarValue::Null.cast_to(this_value_col.field().data_type())?),
                 ),
                 SyncPosition::Upper => (
                     lit(ScalarValue::Null.cast_to(this_value_col.field().data_type())?),
-                    col(this_value_col.field.name()),
+                    col(this_value_col.field().name()),
                 ),
             }
         },

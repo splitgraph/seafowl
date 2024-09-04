@@ -668,8 +668,6 @@ impl SeafowlDataSyncWriter {
         Ok((sync_schema, sync_df))
     }
 
-    // Build a plan to merge two adjacent syncs into one.
-    // It assumes that both syncs were squashed before-hand (i.e. no PK-chains in either one).
     fn merge_syncs(
         &self,
         lower_schema: &SyncSchema,
@@ -677,12 +675,89 @@ impl SeafowlDataSyncWriter {
         upper_schema: &SyncSchema,
         upper_data: RecordBatch,
     ) -> SyncResult<(SyncSchema, LogicalPlan)> {
+        let upper_append_only = upper_schema
+            .columns()
+            .iter()
+            .find_map(|sc| {
+                if sc.role() == ColumnRole::OldPk {
+                    let null_count = upper_data
+                        .column_by_name(sc.field().name())
+                        .expect("Old PK array must exist")
+                        .null_count();
+                    Some(upper_data.num_rows() == null_count)
+                } else {
+                    None
+                }
+            })
+            .expect("At least 1 old PK column must exist");
+
         let provider = MemTable::try_new(upper_data.schema(), vec![vec![upper_data]])?;
         let upper_plan = LogicalPlanBuilder::scan(
             UPPER_SYNC,
             provider_as_source(Arc::new(provider)),
             None,
         )?;
+
+        if upper_append_only {
+            self.union_syncs(lower_schema, lower_plan, upper_schema, upper_plan)
+        } else {
+            self.join_syncs(lower_schema, lower_plan, upper_schema, upper_plan)
+        }
+    }
+
+    // Build a plan to union two adjacent syncs into one when the upper sync is append-only, meaning
+    // there are no PK chains to resolve.
+    fn union_syncs(
+        &self,
+        lower_schema: &SyncSchema,
+        lower_plan: LogicalPlan,
+        upper_schema: &SyncSchema,
+        upper_plan: LogicalPlanBuilder,
+    ) -> SyncResult<(SyncSchema, LogicalPlan)> {
+        let (col_desc, merged) =
+            merge_schemas(lower_schema, upper_schema, MergeProjection::new_union())?;
+
+        let (low_proj, upp_proj) = merged.union();
+
+        // TODO merge syncs using a union if schemas match
+        // Add the `LOWER_SYNC` flag to lower plan; we can't use the usual API since it becomes
+        // increasingly slower as more plan nodes are added, so do it at a lower level.
+        let lower_plan = match lower_plan {
+            // Scan indicates this is a first lower sync, so add an explicit projection on top
+            LogicalPlan::TableScan(_) | LogicalPlan::Union(_) => {
+                Projection::try_new(low_proj, Arc::new(lower_plan))
+                    .map(LogicalPlan::Projection)?
+            }
+            // In case of projection (sync 2+) just extend the present list of expressions with the
+            // flag
+            LogicalPlan::Projection(Projection { input, .. }) => {
+                Projection::try_new(low_proj, input).map(LogicalPlan::Projection)?
+            }
+            _ => unreachable!(
+                "The lower sync can only be a TableScan, Projection or a Union"
+            ),
+        };
+
+        let upper_plan = upper_plan.project(upp_proj)?.build()?;
+        let merged_plan = LogicalPlanBuilder::from(lower_plan)
+            .union(upper_plan)?
+            .build()?;
+
+        Ok((
+            SyncSchema::try_new(col_desc, merged_plan.schema().inner().clone())?,
+            merged_plan,
+        ))
+    }
+
+    // Build a plan to join two adjacent syncs into one, to resolve potential PK-chains.
+    // It assumes that both syncs were squashed before-hand (i.e. no PK-chains in either one).
+    fn join_syncs(
+        &self,
+        lower_schema: &SyncSchema,
+        lower_plan: LogicalPlan,
+        upper_schema: &SyncSchema,
+        upper_plan: LogicalPlanBuilder,
+    ) -> SyncResult<(SyncSchema, LogicalPlan)> {
         let exprs = self.add_sync_flag(upper_plan.schema(), UPPER_SYNC);
         let upper_plan = upper_plan.project(exprs)?;
 
@@ -721,7 +796,7 @@ impl SeafowlDataSyncWriter {
             _ => unreachable!("The lower sync can only be a TableScan or a Projection"),
         };
 
-        let merged_plan = upper_plan
+        let join_plan = upper_plan
             .join(
                 lower_plan,
                 JoinType::Full,
@@ -732,18 +807,18 @@ impl SeafowlDataSyncWriter {
 
         // Build the merged projection and column descriptors
         let (col_desc, merged) =
-            merge_schemas(lower_schema, upper_schema, MergeProjection::Join(vec![]))?;
+            merge_schemas(lower_schema, upper_schema, MergeProjection::new_join())?;
         let projection = merged.join();
 
         // The `DataFrame::select`/`LogicalPlanBuilder::project` projection API leads to sub-optimal
         // performance since it does a bunch of expression normalization that we don't really need.
         // So deconstruct the present one and add a vanilla `Projection` on top of it.
-        let sync_plan = Projection::try_new(projection, Arc::new(merged_plan))
+        let merged_plan = Projection::try_new(projection, Arc::new(join_plan))
             .map(LogicalPlan::Projection)?;
 
         Ok((
-            SyncSchema::try_new(col_desc, sync_plan.schema().inner().clone())?,
-            sync_plan,
+            SyncSchema::try_new(col_desc, merged_plan.schema().inner().clone())?,
+            merged_plan,
         ))
     }
 
@@ -1385,7 +1460,7 @@ mod tests {
             .await
             .unwrap();
 
-        // INSERT 10K rows in batches of `insert_batch_rows` rows
+        // INSERT 1K rows in batches of `insert_batch_rows` rows
         let batch_rows = insert_batch_rows as usize;
         for (seq, new_pks) in (0..1000).chunks(batch_rows).into_iter().enumerate() {
             let batch = RecordBatch::try_new(

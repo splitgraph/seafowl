@@ -24,6 +24,14 @@ pub(crate) enum MergeProjection {
 
 #[allow(dead_code)]
 impl MergeProjection {
+    pub(crate) fn new_join() -> Self {
+        MergeProjection::Join(vec![])
+    }
+
+    pub(crate) fn new_union() -> Self {
+        MergeProjection::Union(vec![], vec![])
+    }
+
     pub(crate) fn join(self) -> Vec<Expr> {
         match self {
             MergeProjection::Join(projection) => projection,
