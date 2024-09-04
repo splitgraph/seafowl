@@ -31,10 +31,9 @@ use crate::context::delta::plan_to_object_store;
 
 use crate::context::SeafowlContext;
 use crate::sync::metrics::SyncMetrics;
-use crate::sync::schema::SyncSchema;
-use crate::sync::utils::{
-    construct_qualifier, get_prune_map, merge_schemas, squash_batches,
-};
+use crate::sync::schema::merge::MergeProjection;
+use crate::sync::schema::{merge::merge_schemas, SyncSchema};
+use crate::sync::utils::{construct_qualifier, get_prune_map, squash_batches};
 use crate::sync::{Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult};
 
 const SYNC_REF: &str = "sync_data";
@@ -732,7 +731,9 @@ impl SeafowlDataSyncWriter {
             .build()?;
 
         // Build the merged projection and column descriptors
-        let (col_desc, projection) = merge_schemas(lower_schema, upper_schema)?;
+        let (col_desc, merged) =
+            merge_schemas(lower_schema, upper_schema, MergeProjection::Join(vec![]))?;
+        let projection = merged.join();
 
         // The `DataFrame::select`/`LogicalPlanBuilder::project` projection API leads to sub-optimal
         // performance since it does a bunch of expression normalization that we don't really need.
