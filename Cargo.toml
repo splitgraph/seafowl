@@ -78,7 +78,7 @@ base64 = "0.22.1"
 bytes = "1.4.0"
 chrono = { version = "0.4", default-features = false }
 clade = { path = "clade" }
-clap = { version = "4.5.16", features = [ "derive" ] }
+clap = { version = "4.5.17", features = [ "derive" ] }
 config = "0.14.0"
 
 # PG wire protocol support
