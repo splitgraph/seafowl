@@ -192,3 +192,26 @@ impl SyncColumn {
         }
     }
 }
+
+// A test helper to avoid having to explicitly specify verbose column descriptors for each case, but
+// instead have them be implicitly defined through arrow field names.
+#[cfg(test)]
+pub fn arrow_to_sync_schema(schema: SchemaRef) -> crate::sync::SyncResult<SyncSchema> {
+    let col_desc = schema
+        .fields
+        .iter()
+        .map(|f| {
+            let (role, name) = f
+                .name()
+                .rsplit_once("_")
+                .expect("Test field names have <role>_<name> format");
+            ColumnDescriptor {
+                role: ColumnRole::from_str_name(&role.to_uppercase())
+                    .expect("Test field name with valid role") as _,
+                name: name.to_string(),
+            }
+        })
+        .collect();
+
+    SyncSchema::try_new(col_desc, schema)
+}
