@@ -719,25 +719,7 @@ impl SeafowlDataSyncWriter {
 
         let (low_proj, upp_proj) = merged.union();
 
-        // TODO merge syncs using a union if schemas match
-        // Add the `LOWER_SYNC` flag to lower plan; we can't use the usual API since it becomes
-        // increasingly slower as more plan nodes are added, so do it at a lower level.
-        let lower_plan = match lower_plan {
-            // Scan indicates this is a first lower sync, so add an explicit projection on top
-            LogicalPlan::TableScan(_) | LogicalPlan::Union(_) => {
-                Projection::try_new(low_proj, Arc::new(lower_plan))
-                    .map(LogicalPlan::Projection)?
-            }
-            // In case of projection (sync 2+) just extend the present list of expressions with the
-            // flag
-            LogicalPlan::Projection(Projection { input, .. }) => {
-                Projection::try_new(low_proj, input).map(LogicalPlan::Projection)?
-            }
-            _ => unreachable!(
-                "The lower sync can only be a TableScan, Projection or a Union"
-            ),
-        };
-
+        let lower_plan = self.project_expressions(lower_plan, low_proj)?;
         let upper_plan = upper_plan.project(upp_proj)?.build()?;
         let merged_plan = LogicalPlanBuilder::from(lower_plan)
             .union(upper_plan)?
@@ -775,26 +757,20 @@ impl SeafowlDataSyncWriter {
             .into_iter()
             .unzip();
 
-        // TODO merge syncs using a union if schemas match
-        // Add the `LOWER_SYNC` flag to lower plan; we can't use the usual API since it becomes
-        // increasingly slower as more plan nodes are added, so do it at a lower level.
-        let lower_plan = match lower_plan {
-            // Scan indicates this is a first lower sync, so add an explicit projection on top
-            LogicalPlan::TableScan(_) => {
-                let exprs = self.add_sync_flag(lower_plan.schema(), LOWER_SYNC);
-                Projection::try_new(exprs, Arc::new(lower_plan))
-                    .map(LogicalPlan::Projection)?
-            }
-            // In case of projection (sync 2+) just extend the present list of expressions with the
-            // flag
-            LogicalPlan::Projection(Projection {
+        // Add the `LOWER_SYNC` flag to lower plan
+        let lower_plan =
+            if let LogicalPlan::Projection(Projection {
                 mut expr, input, ..
-            }) => {
+            }) = lower_plan
+            {
+                // In case of projection just extend the present list of expressions with the flag,
+                // saving us from adding one more plan node.
                 expr.push(lit(true).alias(LOWER_SYNC));
                 Projection::try_new(expr, input).map(LogicalPlan::Projection)?
-            }
-            _ => unreachable!("The lower sync can only be a TableScan or a Projection"),
-        };
+            } else {
+                let exprs = self.add_sync_flag(lower_plan.schema(), LOWER_SYNC);
+                self.project_expressions(lower_plan, exprs)?
+            };
 
         let join_plan = upper_plan
             .join(
@@ -810,16 +786,29 @@ impl SeafowlDataSyncWriter {
             merge_schemas(lower_schema, upper_schema, MergeProjection::new_join())?;
         let projection = merged.join();
 
-        // The `DataFrame::select`/`LogicalPlanBuilder::project` projection API leads to sub-optimal
-        // performance since it does a bunch of expression normalization that we don't really need.
-        // So deconstruct the present one and add a vanilla `Projection` on top of it.
-        let merged_plan = Projection::try_new(projection, Arc::new(join_plan))
-            .map(LogicalPlan::Projection)?;
+        let merged_plan = self.project_expressions(join_plan, projection)?;
 
         Ok((
             SyncSchema::try_new(col_desc, merged_plan.schema().inner().clone())?,
             merged_plan,
         ))
+    }
+
+    // More efficient projection on top of an existing logical plan.
+    //
+    // We can't use the `DataFrame::select`/`LogicalPlanBuilder::project` projection API since it
+    // leads to sub-optimal performance due to a bunch of plan/expression walking/normalization that
+    // we don't really need.
+    //
+    // This becomes increasingly slower as more plan nodes are added, so do it at a lower level
+    // instead by deconstruct the present one and adding a vanilla `Projection` on top of it.
+    fn project_expressions(
+        &self,
+        plan: LogicalPlan,
+        projection: Vec<Expr>,
+    ) -> SyncResult<LogicalPlan> {
+        Ok(Projection::try_new(projection, Arc::new(plan))
+            .map(LogicalPlan::Projection)?)
     }
 
     fn add_sync_flag(&self, schema: &DFSchemaRef, sync: &str) -> Vec<Expr> {
