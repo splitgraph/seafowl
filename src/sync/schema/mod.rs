@@ -4,6 +4,10 @@ use clade::sync::{ColumnDescriptor, ColumnRole};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+pub(super) mod join;
+pub(super) mod merge;
+pub(super) mod union;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SyncSchema {
     columns: Vec<SyncColumn>,
@@ -38,8 +42,9 @@ impl SyncSchema {
                 Ok(ColumnRole::Changed) => {
                     let err = if field.data_type() != &DataType::Boolean {
                         format!(
-                            "Field for column with `Changed` role must be of type boolean: {}",
-                            field.name()
+                            "Field for column {} with `Changed` role must be of type boolean, got {}",
+                            field.name(),
+                            field.data_type(),
                         )
                     } else if !column_descriptors.iter().any(|other_cd| {
                         col_desc.name == other_cd.name
