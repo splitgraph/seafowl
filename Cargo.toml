@@ -85,7 +85,7 @@ config = "0.14.0"
 convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-41-upgrade", optional = true }
 convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-41-upgrade", optional = true }
 
-dashmap = "6.0.1"
+dashmap = "6.1.0"
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
