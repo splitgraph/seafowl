@@ -412,7 +412,7 @@ pub(super) fn get_prune_map(
 
 #[cfg(test)]
 mod tests {
-    use crate::sync::schema::SyncSchema;
+    use crate::sync::schema::arrow_to_sync_schema;
     use crate::sync::utils::{construct_qualifier, get_prune_map, squash_batches};
     use crate::sync::writer::DataSyncItem;
     use arrow::array::{
@@ -420,7 +420,7 @@ mod tests {
         StringArray, UInt8Array,
     };
     use arrow_schema::{DataType, Field, Schema};
-    use clade::sync::{ColumnDescriptor, ColumnRole};
+    use clade::sync::ColumnRole;
     use datafusion::physical_optimizer::pruning::PruningStatistics;
     use datafusion_common::{assert_batches_eq, Column, ScalarValue};
     use datafusion_expr::{col, lit};
@@ -436,37 +436,14 @@ mod tests {
     #[test]
     fn test_batch_squashing() -> Result<(), Box<dyn std::error::Error>> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("old_c1", DataType::Int32, true),
-            Field::new("new_c1", DataType::Int32, true),
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c1", DataType::Int32, true),
             Field::new("value_c2", DataType::Float64, true),
             Field::new("changed_c3", DataType::Boolean, false),
             Field::new("value_c3", DataType::Utf8, true),
         ]));
 
-        let column_descriptors = vec![
-            ColumnDescriptor {
-                role: ColumnRole::OldPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::NewPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c2".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Changed as i32,
-                name: "c3".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c3".to_string(),
-            },
-        ];
-
-        let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
+        let sync_schema = arrow_to_sync_schema(schema.clone())?;
 
         // Test a batch with several edge cases with:
         // - multiple changes to the same row
@@ -511,14 +488,14 @@ mod tests {
         let squashed = squash_batches(&sync_schema, vec![batch.clone()])?;
 
         let expected = [
-            "+--------+--------+----------+------------+----------+",
-            "| old_c1 | new_c1 | value_c2 | changed_c3 | value_c3 |",
-            "+--------+--------+----------+------------+----------+",
-            "|        | 2      | 1.2      | true       |          |",
-            "|        | 3      | 3.0      | true       | two      |",
-            "| 4      | 4      | 4.4      | true       | four     |",
-            "| 5      |        |          | false      | five     |",
-            "+--------+--------+----------+------------+----------+",
+            "+-----------+-----------+----------+------------+----------+",
+            "| old_pk_c1 | new_pk_c1 | value_c2 | changed_c3 | value_c3 |",
+            "+-----------+-----------+----------+------------+----------+",
+            "|           | 2         | 1.2      | true       |          |",
+            "|           | 3         | 3.0      | true       | two      |",
+            "| 4         | 4         | 4.4      | true       | four     |",
+            "| 5         |           |          | false      | five     |",
+            "+-----------+-----------+----------+------------+----------+",
         ];
         assert_batches_eq!(expected, &[squashed]);
 
@@ -528,47 +505,16 @@ mod tests {
     #[test]
     fn fuzz_batch_squashing() -> Result<(), Box<dyn std::error::Error>> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("old_c1", DataType::UInt8, true),
-            Field::new("old_c2", DataType::UInt8, true),
-            Field::new("new_c1", DataType::UInt8, true),
-            Field::new("new_c2", DataType::UInt8, true),
+            Field::new("old_pk_c1", DataType::UInt8, true),
+            Field::new("old_pk_c2", DataType::UInt8, true),
+            Field::new("new_pk_c1", DataType::UInt8, true),
+            Field::new("new_pk_c2", DataType::UInt8, true),
             Field::new("value_c3", DataType::Float64, true),
             Field::new("changed_c4", DataType::Boolean, false),
             Field::new("value_c4", DataType::Utf8, true),
         ]));
 
-        let column_descriptors = vec![
-            ColumnDescriptor {
-                role: ColumnRole::OldPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::OldPk as i32,
-                name: "c2".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::NewPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::NewPk as i32,
-                name: "c2".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c3".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Changed as i32,
-                name: "c4".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c4".to_string(),
-            },
-        ];
-
-        let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
+        let sync_schema = arrow_to_sync_schema(schema.clone())?;
 
         let mut rng = rand::thread_rng();
         let row_count = rng.gen_range(1..=1000); // With more than 1000 rows the test becomes slow
@@ -705,32 +651,13 @@ mod tests {
     #[test]
     fn test_sync_filter() -> Result<(), Box<dyn std::error::Error>> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("old_c1", DataType::Int32, true),
-            Field::new("old_c2", DataType::Float64, true),
-            Field::new("new_c1", DataType::Int32, true),
-            Field::new("new_c2", DataType::Float64, true),
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("old_pk_c2", DataType::Float64, true),
+            Field::new("new_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c2", DataType::Float64, true),
         ]));
 
-        let column_descriptors = vec![
-            ColumnDescriptor {
-                role: ColumnRole::OldPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::OldPk as i32,
-                name: "c2".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::NewPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::NewPk as i32,
-                name: "c2".to_string(),
-            },
-        ];
-
-        let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
+        let sync_schema = arrow_to_sync_schema(schema.clone())?;
 
         // UPDATE, INSERT
         let batch_1 = RecordBatch::try_new(
@@ -847,32 +774,13 @@ mod tests {
         #[case] expected_prune_map: Vec<bool>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("old_c1", DataType::Int32, true),
-            Field::new("old_c2", DataType::Utf8, true),
-            Field::new("new_c1", DataType::Int32, true),
-            Field::new("new_c2", DataType::Utf8, true),
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("old_pk_c2", DataType::Utf8, true),
+            Field::new("new_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c2", DataType::Utf8, true),
         ]));
 
-        let column_descriptors = vec![
-            ColumnDescriptor {
-                role: ColumnRole::OldPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::OldPk as i32,
-                name: "c2".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::NewPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::NewPk as i32,
-                name: "c2".to_string(),
-            },
-        ];
-
-        let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
+        let sync_schema = arrow_to_sync_schema(schema.clone())?;
 
         // UPDATE, INSERT
         let batch_1 = RecordBatch::try_new(

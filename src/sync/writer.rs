@@ -1063,13 +1063,12 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::context::test_utils::in_memory_context;
-    use crate::sync::schema::SyncSchema;
+    use crate::sync::schema::{arrow_to_sync_schema, SyncSchema};
     use crate::sync::writer::{
         SeafowlDataSyncWriter, SequenceNumber, LOWER_SYNC, UPPER_SYNC,
     };
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
-    use clade::sync::{ColumnDescriptor, ColumnRole};
     use rand::Rng;
     use rstest::rstest;
     use std::collections::HashMap;
@@ -1084,32 +1083,12 @@ mod tests {
     use std::sync::Arc;
     use uuid::Uuid;
 
-    fn sync_schema() -> (SchemaRef, SyncSchema) {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("old_c1", DataType::Int32, true),
-            Field::new("new_c1", DataType::Int32, true),
+    fn test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c1", DataType::Int32, true),
             Field::new("value_c2", DataType::Float32, true),
-        ]));
-
-        let column_descriptors = vec![
-            ColumnDescriptor {
-                role: ColumnRole::OldPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::NewPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c2".to_string(),
-            },
-        ];
-
-        (
-            schema.clone(),
-            SyncSchema::try_new(column_descriptors, schema).unwrap(),
-        )
+        ]))
     }
 
     // Create a randomly sized vector of random record batches with
@@ -1202,7 +1181,8 @@ mod tests {
     ) {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
-        let (arrow_schema, sync_schema) = sync_schema();
+        let arrow_schema = test_schema();
+        let sync_schema = arrow_to_sync_schema(arrow_schema.clone()).unwrap();
 
         let mut mem_seq = HashMap::from([(A.to_string(), None), (B.to_string(), None)]);
         let mut dur_seq = HashMap::from([(A.to_string(), None), (B.to_string(), None)]);
@@ -1329,27 +1309,23 @@ mod tests {
         #[case] last_sync_commit: Option<SyncCommitInfo>,
         #[case] skip_ind: usize,
         #[case] expected_sync_commit: Option<SyncCommitInfo>,
-    ) {
+    ) -> SyncResult<()> {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
-        let (arrow_schema, sync_schema) = sync_schema();
+        let arrow_schema = test_schema();
+        let sync_schema = arrow_to_sync_schema(arrow_schema.clone())?;
 
         // Enqueue all syncs
         for (table_name, origin, sequence) in syncs {
-            let log_store = ctx
-                .get_internal_object_store()
-                .unwrap()
-                .get_log_store(table_name);
+            let log_store = ctx.get_internal_object_store()?.get_log_store(table_name);
 
-            sync_mgr
-                .enqueue_sync(
-                    log_store,
-                    sequence.map(|seq| seq as SequenceNumber),
-                    origin.to_string(),
-                    sync_schema.clone(),
-                    random_batches(arrow_schema.clone()),
-                )
-                .unwrap();
+            sync_mgr.enqueue_sync(
+                log_store,
+                sequence.map(|seq| seq as SequenceNumber),
+                origin.to_string(),
+                sync_schema.clone(),
+                random_batches(arrow_schema.clone()),
+            )?;
         }
 
         let in_syncs = &sync_mgr.syncs.first().unwrap().1.syncs;
@@ -1359,41 +1335,37 @@ mod tests {
         assert_eq!(expected_sync_commit, new_sync_commit);
         assert_eq!(in_syncs[skip_ind..].len(), out_syncs.len());
         assert_eq!(in_syncs[skip_ind..].to_vec(), out_syncs.to_vec());
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_empty_sync() {
+    async fn test_empty_sync() -> SyncResult<()> {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
-        let (arrow_schema, sync_schema) = sync_schema();
+        let arrow_schema = test_schema();
+        let sync_schema = arrow_to_sync_schema(arrow_schema.clone())?;
 
         // Enqueue all syncs
-        let log_store = ctx
-            .get_internal_object_store()
-            .unwrap()
-            .get_log_store("test_table");
+        let log_store = ctx.get_internal_object_store()?.get_log_store("test_table");
 
         // Add first non-empty sync
-        sync_mgr
-            .enqueue_sync(
-                log_store.clone(),
-                None,
-                A.to_string(),
-                sync_schema.clone(),
-                random_batches(arrow_schema.clone()),
-            )
-            .unwrap();
+        sync_mgr.enqueue_sync(
+            log_store.clone(),
+            None,
+            A.to_string(),
+            sync_schema.clone(),
+            random_batches(arrow_schema.clone()),
+        )?;
 
         // Add empty sync with an explicit sequence number denoting the end of the transaction
-        sync_mgr
-            .enqueue_sync(
-                log_store.clone(),
-                Some(100),
-                A.to_string(),
-                SyncSchema::empty(),
-                vec![],
-            )
-            .unwrap();
+        sync_mgr.enqueue_sync(
+            log_store.clone(),
+            Some(100),
+            A.to_string(),
+            SyncSchema::empty(),
+            vec![],
+        )?;
 
         // Adding a new empty sync with `Some` sequence number amounts to an empty transaction which
         // isn't supported
@@ -1412,11 +1384,13 @@ mod tests {
 
         // Ensure the tx is marked as durable after flushing
         let url = sync_mgr.syncs.first().unwrap().0.clone();
-        sync_mgr.flush_syncs(url).await.unwrap();
+        sync_mgr.flush_syncs(url).await?;
         assert_eq!(
             sync_mgr.stored_sequences(&A.to_string()),
             (Some(100), Some(100))
         );
+
+        Ok(())
     }
 
     #[rstest]
@@ -1430,7 +1404,8 @@ mod tests {
     ) {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
-        let (arrow_schema, sync_schema) = sync_schema();
+        let arrow_schema = test_schema();
+        let sync_schema = arrow_to_sync_schema(arrow_schema.clone()).unwrap();
 
         // Enqueue all syncs
         let table_uuid = Uuid::new_v4();
@@ -1561,8 +1536,8 @@ mod tests {
 
         // Construct lower and upper schema that cover all possible cases
         let lower_schema = Arc::new(Schema::new(vec![
-            Field::new("old_c1", DataType::Int32, true),
-            Field::new("new_c1", DataType::Int32, true),
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c1", DataType::Int32, true),
             // value only in lower
             Field::new("value_c3", DataType::Utf8, true),
             // value in both
@@ -1581,8 +1556,8 @@ mod tests {
         ]));
 
         let upper_schema = Arc::new(Schema::new(vec![
-            Field::new("old_c1", DataType::Int32, true),
-            Field::new("new_c1", DataType::Int32, true),
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c1", DataType::Int32, true),
             // value only in upper
             Field::new("value_c4", DataType::Utf8, true),
             // value in both
@@ -1599,100 +1574,6 @@ mod tests {
             Field::new("changed_c10", DataType::Boolean, true),
             Field::new("value_c10", DataType::Utf8, true),
         ]));
-
-        let lower_column_descriptors = vec![
-            ColumnDescriptor {
-                role: ColumnRole::OldPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::NewPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c3".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c5".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Changed as i32,
-                name: "c6".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c6".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c7".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Changed as i32,
-                name: "c8".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c8".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Changed as i32,
-                name: "c10".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c10".to_string(),
-            },
-        ];
-
-        let upper_column_descriptors = vec![
-            ColumnDescriptor {
-                role: ColumnRole::OldPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::NewPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c4".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c5".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c6".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Changed as i32,
-                name: "c7".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c7".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Changed as i32,
-                name: "c9".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c9".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Changed as i32,
-                name: "c10".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c10".to_string(),
-            },
-        ];
 
         // UPDATE, INSERT
         let lower_rows = 7;
@@ -1804,8 +1685,8 @@ mod tests {
             None,
         )?;
 
-        let lower_schema = SyncSchema::try_new(lower_column_descriptors, lower_schema)?;
-        let upper_schema = SyncSchema::try_new(upper_column_descriptors, upper_schema)?;
+        let lower_schema = arrow_to_sync_schema(lower_schema)?;
+        let upper_schema = arrow_to_sync_schema(upper_schema)?;
         let (_, merged_plan) = if union {
             sync_mgr.union_syncs(&lower_schema, lower_plan, &upper_schema, upper_plan)?
         } else {
@@ -1902,32 +1783,12 @@ mod tests {
         assert_batches_eq!(expected, &results);
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new("old_c1", DataType::Int32, true),
-            Field::new("new_c1", DataType::Int32, true),
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c1", DataType::Int32, true),
             Field::new("changed_c2", DataType::Boolean, true),
             Field::new("value_c2", DataType::Int32, true),
         ]));
-
-        let column_descriptors = vec![
-            ColumnDescriptor {
-                role: ColumnRole::OldPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::NewPk as i32,
-                name: "c1".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Changed as i32,
-                name: "c2".to_string(),
-            },
-            ColumnDescriptor {
-                role: ColumnRole::Value as i32,
-                name: "c2".to_string(),
-            },
-        ];
-
-        let sync_schema = SyncSchema::try_new(column_descriptors, schema.clone())?;
+        let sync_schema = arrow_to_sync_schema(schema.clone())?;
 
         // Enqueue all syncs
         let log_store = ctx
