@@ -154,14 +154,10 @@ impl Repository for $repo {
         &self,
         name: &str,
     ) -> Result<DatabaseRecord, Error> {
-        let mut tx = self.executor.begin().await.map_err($repo::interpret_error)?;
-
         let database = sqlx::query_as(r#"SELECT id, name FROM database WHERE database.name = $1"#)
             .bind(name)
-            .fetch_one(&mut *tx)
+            .fetch_one(&self.executor)
             .await.map_err($repo::interpret_error)?;
-
-        tx.commit().await.map_err($repo::interpret_error)?;
 
         Ok(database)
     }
@@ -171,8 +167,6 @@ impl Repository for $repo {
         database_name: &str,
         collection_name: &str,
     ) -> Result<CollectionRecord, Error> {
-        let mut tx = self.executor.begin().await.map_err($repo::interpret_error)?;
-
         let collection = sqlx::query_as(
             r#"
         SELECT collection.id, database.id AS database_id, collection.name
@@ -182,10 +176,8 @@ impl Repository for $repo {
         )
         .bind(database_name)
         .bind(collection_name)
-        .fetch_one(&mut *tx)
+        .fetch_one(&self.executor)
         .await.map_err($repo::interpret_error)?;
-
-        tx.commit().await.map_err($repo::interpret_error)?;
 
         Ok(collection)
     }
@@ -196,8 +188,6 @@ impl Repository for $repo {
         collection_name: &str,
         table_name: &str,
     ) -> Result<TableRecord, Error> {
-        let mut tx = self.executor.begin().await.map_err($repo::interpret_error)?;
-
         let table = sqlx::query_as(
             r#"
         SELECT "table".id, collection.id as collection_id, "table".name
@@ -210,10 +200,8 @@ impl Repository for $repo {
         .bind(database_name)
         .bind(collection_name)
         .bind(table_name)
-        .fetch_one(&mut *tx)
+        .fetch_one(&self.executor)
         .await.map_err($repo::interpret_error)?;
-
-        tx.commit().await.map_err($repo::interpret_error)?;
 
         Ok(table)
     }
@@ -313,17 +301,17 @@ impl Repository for $repo {
         uuid: Uuid,
         version: i64,
     ) -> Result<TableVersionId, Error> {
-        let mut tx = self.executor.begin().await.map_err($repo::interpret_error)?;
-
         // For now we only support linear history
         let last_version_id: TableVersionId = sqlx::query(r#"SELECT max(table_version.id) AS id
                 FROM table_version
                 JOIN "table" ON table_version.table_id = "table".id
                 WHERE "table".uuid = $1"#)
             .bind(uuid)
-            .fetch_one(&mut *tx)
+            .fetch_one(&self.executor)
             .await.map_err($repo::interpret_error)?
             .try_get("id").map_err($repo::interpret_error)?;
+
+        let mut tx = self.executor.begin().await.map_err($repo::interpret_error)?;
 
         let new_version_id = sqlx::query(
             "INSERT INTO table_version (table_id, version)
@@ -466,8 +454,6 @@ impl Repository for $repo {
         &self,
         database_id: DatabaseId,
     ) -> Result<Vec<AllDatabaseFunctionsResult>, Error> {
-        let mut tx = self.executor.begin().await.map_err($repo::interpret_error)?;
-
         let functions = sqlx::query_as(
             r#"
         SELECT
@@ -484,10 +470,8 @@ impl Repository for $repo {
         WHERE database_id = $1;
         "#)
         .bind(database_id)
-        .fetch_all(&mut *tx)
+        .fetch_all(&self.executor)
         .await.map_err($repo::interpret_error)?;
-
-        tx.commit().await.map_err($repo::interpret_error)?;
 
         Ok(functions)
     }
