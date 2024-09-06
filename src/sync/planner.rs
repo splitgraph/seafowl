@@ -1,0 +1,725 @@
+use crate::context::SeafowlContext;
+use crate::sync::metrics::SyncPlanMetrics;
+use crate::sync::schema::merge::{merge_schemas, MergeProjection};
+use crate::sync::schema::SyncSchema;
+use crate::sync::utils::{construct_qualifier, get_prune_map};
+use crate::sync::writer::{now, DataSyncItem};
+use crate::sync::SyncResult;
+use arrow::array::RecordBatch;
+use arrow_schema::SchemaRef;
+use clade::sync::ColumnRole;
+use datafusion::catalog::TableProvider;
+use datafusion::dataframe::DataFrame;
+use datafusion::datasource::{provider_as_source, MemTable};
+use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::physical_expr::create_physical_expr;
+use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::{DFSchemaRef, JoinType, ScalarValue, ToDFSchema};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::{
+    col, is_null, is_true, lit, when, Expr, LogicalPlan, LogicalPlanBuilder, Projection,
+};
+use deltalake::delta_datafusion::DeltaTableProvider;
+use deltalake::kernel::{Action, Add, Remove};
+use deltalake::DeltaTable;
+use std::iter::once;
+use std::ops::Not;
+use std::sync::Arc;
+use std::time::Instant;
+use tracing::{debug, info, warn};
+
+const SYNC_REF: &str = "sync_data";
+pub(super) const JOIN_COLUMN: &str = "__join_col";
+pub(super) const LOWER_SYNC: &str = "__lower_sync";
+pub(super) const UPPER_SYNC: &str = "__upper_sync";
+const FINE_GRAINED_PRUNING_ROW_CRITERIA: i64 = 3_000_000;
+
+pub(super) struct SeafowlSyncPlanner {
+    context: Arc<SeafowlContext>,
+    metrics: SyncPlanMetrics,
+}
+
+impl SeafowlSyncPlanner {
+    pub fn new(context: Arc<SeafowlContext>) -> Self {
+        Self {
+            context,
+            metrics: Default::default(),
+        }
+    }
+
+    // Construct a plan for flushing the pending syncs to the provided table.
+    // Return the plan and the files that are re-written by it (to be removed from the table state).
+    pub(super) async fn plan_syncs(
+        &self,
+        syncs: &[DataSyncItem],
+        table: &DeltaTable,
+    ) -> SyncResult<(Arc<dyn ExecutionPlan>, Vec<Action>)> {
+        // Use the schema from the object store as a source of truth, since it's not guaranteed
+        // that any of the entries has the full column list.
+        let full_schema = TableProvider::schema(table);
+
+        let prune_start = Instant::now();
+        // Gather previous Add files that (might) need to be re-written.
+        let files = self.prune_partitions(syncs, full_schema.clone(), table)?;
+        let prune_time = prune_start.elapsed().as_millis();
+        info!(
+            "Partition pruning found {} files in {prune_time} ms",
+            files.len(),
+        );
+        self.metrics.pruning_time.record(prune_time as f64);
+        self.metrics.pruning_files.record(files.len() as f64);
+
+        // Create removes to prune away files that are refuted by the qualifier
+        let removes = files
+            .iter()
+            .map(|add| {
+                Action::Remove(Remove {
+                    path: add.path.clone(),
+                    deletion_timestamp: Some(now() as i64),
+                    data_change: true,
+                    extended_file_metadata: Some(true),
+                    partition_values: Some(add.partition_values.clone()),
+                    size: Some(add.size),
+                    tags: None,
+                    deletion_vector: None,
+                    base_row_id: None,
+                    default_row_commit_version: None,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        // Create a special Delta table provider that will only hit the above partition files
+        let base_scan = Arc::new(
+            DeltaTableProvider::try_new(
+                table.snapshot()?.clone(),
+                table.log_store(),
+                Default::default(),
+            )?
+            .with_files(files),
+        );
+
+        // Convert the custom Delta table provider into a base logical plan
+        let base_plan =
+            LogicalPlanBuilder::scan(SYNC_REF, provider_as_source(base_scan), None)?
+                .build()?;
+
+        // Construct a state for physical planning; we omit all analyzer/optimizer rules to increase
+        // the stack overflow threshold that occurs during recursive plan tree traversal in DF.
+        let state = SessionStateBuilder::new_from_existing(self.context.inner.state())
+            .with_analyzer_rules(vec![])
+            .with_optimizer_rules(vec![])
+            .build();
+        let base_df = DataFrame::new(state.clone(), base_plan);
+        let (sync_schema, sync_df) = self.squash_syncs(syncs)?;
+
+        let input_df = self.apply_syncs(full_schema, base_df, sync_df, &sync_schema)?;
+        let input_plan = input_df.create_physical_plan().await?;
+
+        Ok((input_plan, removes))
+    }
+
+    // Perform logical squashing of the provided sync batches into a single dataframe/plan, which can
+    // then be joined against the base scan
+    fn squash_syncs(
+        &self,
+        syncs: &[DataSyncItem],
+    ) -> SyncResult<(SyncSchema, DataFrame)> {
+        let first_sync = syncs.first().unwrap();
+        let mut sync_schema = first_sync.sync_schema.clone();
+        let first_batch = first_sync.batch.clone();
+        let provider = MemTable::try_new(first_batch.schema(), vec![vec![first_batch]])?;
+        let mut sync_plan = LogicalPlanBuilder::scan(
+            LOWER_SYNC,
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?
+        .build()?;
+
+        // Make a plan to squash all syncs into a single change stream
+        for sync in &syncs[1..] {
+            (sync_schema, sync_plan) = self.merge_syncs(
+                &sync_schema,
+                sync_plan,
+                &sync.sync_schema,
+                sync.batch.clone(),
+            )?;
+        }
+
+        let sync_df = DataFrame::new(self.context.inner.state(), sync_plan);
+        Ok((sync_schema, sync_df))
+    }
+
+    fn merge_syncs(
+        &self,
+        lower_schema: &SyncSchema,
+        lower_plan: LogicalPlan,
+        upper_schema: &SyncSchema,
+        upper_data: RecordBatch,
+    ) -> SyncResult<(SyncSchema, LogicalPlan)> {
+        let upper_append_only = upper_schema
+            .columns()
+            .iter()
+            .find_map(|sc| {
+                if sc.role() == ColumnRole::OldPk {
+                    let null_count = upper_data
+                        .column_by_name(sc.field().name())
+                        .expect("Old PK array must exist")
+                        .null_count();
+                    Some(upper_data.num_rows() == null_count)
+                } else {
+                    None
+                }
+            })
+            .expect("At least 1 old PK column must exist");
+
+        let provider = MemTable::try_new(upper_data.schema(), vec![vec![upper_data]])?;
+        let upper_plan = LogicalPlanBuilder::scan(
+            UPPER_SYNC,
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?;
+
+        if upper_append_only {
+            self.union_syncs(lower_schema, lower_plan, upper_schema, upper_plan)
+        } else {
+            self.join_syncs(lower_schema, lower_plan, upper_schema, upper_plan)
+        }
+    }
+
+    // Build a plan to union two adjacent syncs into one when the upper sync is append-only, meaning
+    // there are no PK chains to resolve.
+    fn union_syncs(
+        &self,
+        lower_schema: &SyncSchema,
+        lower_plan: LogicalPlan,
+        upper_schema: &SyncSchema,
+        upper_plan: LogicalPlanBuilder,
+    ) -> SyncResult<(SyncSchema, LogicalPlan)> {
+        let (col_desc, merged) =
+            merge_schemas(lower_schema, upper_schema, MergeProjection::new_union())?;
+
+        let (low_proj, upp_proj) = merged.union();
+
+        let lower_plan = self.project_expressions(lower_plan, low_proj)?;
+        let upper_plan = upper_plan.project(upp_proj)?.build()?;
+        let merged_plan = LogicalPlanBuilder::from(lower_plan)
+            .union(upper_plan)?
+            .build()?;
+
+        Ok((
+            SyncSchema::try_new(col_desc, merged_plan.schema().inner().clone())?,
+            merged_plan,
+        ))
+    }
+
+    // Build a plan to join two adjacent syncs into one, to resolve potential PK-chains.
+    // It assumes that both syncs were squashed before-hand (i.e. no PK-chains in either one).
+    fn join_syncs(
+        &self,
+        lower_schema: &SyncSchema,
+        lower_plan: LogicalPlan,
+        upper_schema: &SyncSchema,
+        upper_plan: LogicalPlanBuilder,
+    ) -> SyncResult<(SyncSchema, LogicalPlan)> {
+        let exprs = self.add_sync_flag(upper_plan.schema(), UPPER_SYNC);
+        let upper_plan = upper_plan.project(exprs)?;
+
+        let (lower_join_cols, upper_join_cols): (Vec<String>, Vec<String>) = upper_schema
+            .map_columns(ColumnRole::OldPk, |sc| {
+                let lower_name = lower_schema
+                    .column(sc.name(), ColumnRole::NewPk)
+                    .expect("PK columns identical")
+                    .field()
+                    .name()
+                    .clone();
+                let upper_name = sc.field().name().clone();
+                (lower_name, upper_name)
+            })
+            .into_iter()
+            .unzip();
+
+        // Add the `LOWER_SYNC` flag to lower plan
+        let lower_plan =
+            if let LogicalPlan::Projection(Projection {
+                mut expr, input, ..
+            }) = lower_plan
+            {
+                // In case of projection just extend the present list of expressions with the flag,
+                // saving us from adding one more plan node.
+                expr.push(lit(true).alias(LOWER_SYNC));
+                Projection::try_new(expr, input).map(LogicalPlan::Projection)?
+            } else {
+                let exprs = self.add_sync_flag(lower_plan.schema(), LOWER_SYNC);
+                self.project_expressions(lower_plan, exprs)?
+            };
+
+        let join_plan = upper_plan
+            .join(
+                lower_plan,
+                JoinType::Full,
+                (upper_join_cols, lower_join_cols),
+                None,
+            )?
+            .build()?;
+
+        // Build the merged projection and column descriptors
+        let (col_desc, merged) =
+            merge_schemas(lower_schema, upper_schema, MergeProjection::new_join())?;
+        let projection = merged.join();
+
+        let merged_plan = self.project_expressions(join_plan, projection)?;
+
+        Ok((
+            SyncSchema::try_new(col_desc, merged_plan.schema().inner().clone())?,
+            merged_plan,
+        ))
+    }
+
+    // More efficient projection on top of an existing logical plan.
+    //
+    // We can't use the `DataFrame::select`/`LogicalPlanBuilder::project` projection API since it
+    // leads to sub-optimal performance due to a bunch of plan/expression walking/normalization that
+    // we don't really need.
+    //
+    // This becomes increasingly slower as more plan nodes are added, so do it at a lower level
+    // instead by deconstruct the present one and adding a vanilla `Projection` on top of it.
+    fn project_expressions(
+        &self,
+        plan: LogicalPlan,
+        projection: Vec<Expr>,
+    ) -> SyncResult<LogicalPlan> {
+        Ok(Projection::try_new(projection, Arc::new(plan))
+            .map(LogicalPlan::Projection)?)
+    }
+
+    fn add_sync_flag(&self, schema: &DFSchemaRef, sync: &str) -> Vec<Expr> {
+        schema
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .chain(once(lit(true).alias(sync)))
+            .collect()
+    }
+
+    fn apply_syncs(
+        &self,
+        full_schema: SchemaRef,
+        base_df: DataFrame,
+        sync_df: DataFrame,
+        sync_schema: &SyncSchema,
+    ) -> SyncResult<DataFrame> {
+        // Skip rows where both old and new primary keys are NULL, meaning a row inserted/updated
+        // and deleted within the same sync message (so it shouldn't be in the input nor output)
+        let old_pk_nulls = sync_schema
+            .map_columns(ColumnRole::OldPk, |c| is_null(col(c.field().name())))
+            .into_iter()
+            .reduce(|e1: Expr, e2| e1.and(e2))
+            .unwrap();
+
+        let new_pk_nulls = sync_schema
+            .map_columns(ColumnRole::NewPk, |c| is_null(col(c.field().name())))
+            .into_iter()
+            .reduce(|e1: Expr, e2| e1.and(e2))
+            .unwrap();
+
+        // These differ since the physical column names are reflected in the ColumnDescriptor,
+        // while logical column names are found in the arrow fields
+        let (base_pk_cols, sync_pk_cols): (Vec<String>, Vec<String>) = sync_schema
+            .map_columns(ColumnRole::OldPk, |c| {
+                (c.name().to_string(), c.field().name().clone())
+            })
+            .into_iter()
+            .unzip();
+
+        let input_df = base_df
+            .with_column(JOIN_COLUMN, lit(true))?
+            .join(
+                sync_df.filter(old_pk_nulls.clone().and(new_pk_nulls.clone()).not())?, // Filter out any temp rows
+                JoinType::Full,
+                &base_pk_cols
+                    .iter()
+                    .map(|pk| pk.as_str())
+                    .collect::<Vec<_>>(),
+                &sync_pk_cols
+                    .iter()
+                    .map(|pk| pk.as_str())
+                    .collect::<Vec<_>>(),
+                None,
+            )?
+            .filter(old_pk_nulls.clone().not().and(new_pk_nulls.clone()).not())?; // Remove deletes
+
+        // Normalize the schema, by ordering columns according to the full table schema and
+        // projecting the sync data accordingly.
+        let projection = full_schema
+            .flattened_fields()
+            .iter()
+            .map(|f| {
+                let name = f.name();
+
+                let expr = if let Some(sync_col) = sync_schema
+                    .column(name, ColumnRole::Value)
+                    .or(sync_schema.column(name, ColumnRole::NewPk))
+                {
+                    // The column is present in the sync schema...
+                    when(
+                        old_pk_nulls.clone().and(new_pk_nulls.clone()),
+                        // ...but the row doesn't exist in the sync, so inherit the old value
+                        col(name),
+                    )
+                    .otherwise(
+                        if let Some(changed_sync_col) =
+                            sync_schema.column(name, ColumnRole::Changed)
+                        {
+                            // ... and there is a `Changed` flag denoting whether the column has changed.
+                            when(
+                                is_true(col(changed_sync_col.field().name())),
+                                // If it's true take the new value
+                                col(sync_col.field().name()),
+                            )
+                            .otherwise(
+                                // If it's false take the old value
+                                col(name),
+                            )?
+                        } else {
+                            // ... and the sync has a new corresponding value without a `Changed` flag
+                            col(sync_col.field().name())
+                        },
+                    )?
+                } else {
+                    when(
+                        is_null(col(JOIN_COLUMN)),
+                        // Column is not present in the sync schema, and the old row doesn't exist
+                        // either, project a NULL
+                        lit(ScalarValue::Null.cast_to(f.data_type())?),
+                    )
+                    .otherwise(
+                        // Column is not present in the sync schema, but the old row does exist
+                        // so project its value
+                        col(name),
+                    )?
+                };
+
+                Ok(expr.alias(name))
+            })
+            .collect::<datafusion_common::Result<_>>()?;
+
+        // The `DataFrame::select`/`LogicalPlanBuilder::project` projection API leads to sub-optimal
+        // performance since it does a bunch of expression normalization that we don't really need.
+        // So deconstruct the present one and add a vanilla `Projection` on top of it.
+        let (session_state, plan) = input_df.into_parts();
+        let sync_plan = Projection::try_new(projection, Arc::new(plan))
+            .map(LogicalPlan::Projection)?;
+
+        Ok(DataFrame::new(session_state, sync_plan))
+    }
+
+    // Get a list of files that need to be scanned, re-written and removed based on the PK values in
+    // the sync items.
+    fn prune_partitions(
+        &self,
+        syncs: &[DataSyncItem],
+        full_schema: SchemaRef,
+        table: &DeltaTable,
+    ) -> SyncResult<Vec<Add>> {
+        let snapshot = table.snapshot()?;
+        let files = snapshot.file_actions()?;
+
+        // First perform coarse-grained pruning, by only looking at global min-max in the syncs.
+        // Generate a qualifier expression for old PKs; we definitely need to overwrite those in case
+        // of PK-changing UPDATEs or DELETEs. Note that this can be `None` if it's an all-INSERT
+        // syncs vec.
+        let old_pk_qualifier = construct_qualifier(syncs, ColumnRole::OldPk)?;
+        // Next construct the qualifier for new PKs; these are only needed for idempotence.
+        let new_pk_qualifier = construct_qualifier(syncs, ColumnRole::NewPk)?;
+        let qualifier = match (old_pk_qualifier, new_pk_qualifier) {
+            (Some(old_pk_q), Some(new_pk_q)) => old_pk_q.or(new_pk_q),
+            (Some(old_pk_q), None) => old_pk_q,
+            (None, Some(new_pk_q)) => new_pk_q,
+            _ => panic!("There can be no situation without either old or new PKs"),
+        };
+
+        let prune_expr = create_physical_expr(
+            &qualifier,
+            &full_schema.clone().to_dfschema()?,
+            &ExecutionProps::new(),
+        )?;
+        let pruning_predicate =
+            PruningPredicate::try_new(prune_expr, full_schema.clone())?;
+
+        let mut prune_map = pruning_predicate.prune(snapshot)?;
+
+        let partition_count = prune_map.iter().filter(|p| **p).count();
+        let total_rows = files
+            .iter()
+            .zip(&prune_map)
+            .filter_map(|(add, keep)| {
+                if *keep {
+                    if let Ok(Some(stats)) = add.get_json_stats() {
+                        Some(stats.num_records)
+                    } else {
+                        warn!("Missing log stats for Add {add:?}");
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .sum::<i64>();
+        debug!("Coarse-grained pruning found {partition_count} partitions with {total_rows} rows in total to re-write");
+
+        // TODO: think of a better heuristic to trigger granular pruning
+        // Try granular pruning if total row count is higher than 3M
+        if total_rows > FINE_GRAINED_PRUNING_ROW_CRITERIA {
+            let prune_start = Instant::now();
+            let new_prune_map = get_prune_map(syncs, snapshot)?;
+            let new_partition_count = new_prune_map.iter().filter(|p| **p).count();
+            info!(
+                "Fine-grained pruning scoped out {} partitions in {} ms",
+                partition_count - new_partition_count,
+                prune_start.elapsed().as_millis()
+            );
+            prune_map = new_prune_map;
+        }
+
+        Ok(files
+            .iter()
+            .zip(prune_map)
+            .filter_map(|(add, keep)| if keep { Some(add.clone()) } else { None })
+            .collect::<Vec<Add>>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::context::test_utils::in_memory_context;
+    use crate::sync::{
+        planner::{SeafowlSyncPlanner, LOWER_SYNC, UPPER_SYNC},
+        SyncResult,
+    };
+    use arrow::array::{BooleanArray, Int32Array, StringArray};
+    use arrow::record_batch::RecordBatch;
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion::dataframe::DataFrame;
+    use datafusion::datasource::{provider_as_source, MemTable};
+    use datafusion_common::assert_batches_eq;
+    use datafusion_expr::{col, LogicalPlanBuilder};
+    use rstest::rstest;
+    use std::sync::Arc;
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_sync_merging(#[values(true, false)] union: bool) -> SyncResult<()> {
+        let ctx = Arc::new(in_memory_context().await);
+        let planner = SeafowlSyncPlanner::new(ctx.clone());
+
+        // Construct lower and upper schema that cover all possible cases
+        let lower_schema = Arc::new(Schema::new(vec![
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c1", DataType::Int32, true),
+            // value only in lower
+            Field::new("value_c3", DataType::Utf8, true),
+            // value in both
+            Field::new("value_c5", DataType::Utf8, true),
+            // lower has value and changed
+            Field::new("changed_c6", DataType::Boolean, true),
+            Field::new("value_c6", DataType::Utf8, true),
+            // lower has value but not changed
+            Field::new("value_c7", DataType::Utf8, true),
+            // value and changed only in lower
+            Field::new("changed_c8", DataType::Boolean, true),
+            Field::new("value_c8", DataType::Utf8, true),
+            // value and changed in both
+            Field::new("changed_c10", DataType::Boolean, true),
+            Field::new("value_c10", DataType::Utf8, true),
+        ]));
+
+        let upper_schema = Arc::new(Schema::new(vec![
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c1", DataType::Int32, true),
+            // value only in upper
+            Field::new("value_c4", DataType::Utf8, true),
+            // value in both
+            Field::new("value_c5", DataType::Utf8, true),
+            // upper has value but not changed
+            Field::new("value_c6", DataType::Utf8, true),
+            // upper has value and changed
+            Field::new("changed_c7", DataType::Boolean, true),
+            Field::new("value_c7", DataType::Utf8, true),
+            // value and changed only in upper
+            Field::new("changed_c9", DataType::Boolean, true),
+            Field::new("value_c9", DataType::Utf8, true),
+            // value and changed in both
+            Field::new("changed_c10", DataType::Boolean, true),
+            Field::new("value_c10", DataType::Utf8, true),
+        ]));
+
+        // UPDATE, INSERT
+        let lower_rows = 7;
+        let lower_batch = RecordBatch::try_new(
+            lower_schema.clone(),
+            vec![
+                // Insert 3 rows, Update 3 rows and delete 1 row
+                Arc::new(Int32Array::from(vec![
+                    None,
+                    None,
+                    None,
+                    Some(4),
+                    Some(6),
+                    Some(8),
+                    Some(10),
+                ])),
+                Arc::new(Int32Array::from(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                    Some(5),
+                    Some(7),
+                    Some(9),
+                    None,
+                ])),
+                Arc::new(StringArray::from(vec!["lower_c3"; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c5"; lower_rows])),
+                Arc::new(BooleanArray::from(vec![true; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c6"; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c7"; lower_rows])),
+                Arc::new(BooleanArray::from(vec![true; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c8"; lower_rows])),
+                Arc::new(BooleanArray::from(vec![true; lower_rows])),
+                Arc::new(StringArray::from(vec!["lower_c10"; lower_rows])),
+            ],
+        )?;
+
+        let upper_batch = if union {
+            // Create an append-only upper batch
+            let upper_rows = 3;
+            RecordBatch::try_new(
+                upper_schema.clone(),
+                vec![
+                    // Insert 3 rows,
+                    Arc::new(Int32Array::from(vec![None, None, None])),
+                    Arc::new(Int32Array::from(vec![Some(11), Some(12), Some(13)])),
+                    Arc::new(StringArray::from(vec!["upper_c4"; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c5"; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c6"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c7"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c9"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c10"; upper_rows])),
+                ],
+            )?
+        } else {
+            let upper_rows = 7;
+            RecordBatch::try_new(
+                upper_schema.clone(),
+                vec![
+                    // Insert 1 row,
+                    // Update 1 row inserted in lower, 1 row updated in lower and 1 other row,
+                    // Delete 1 row inserted in lower, 1 row updated in lower and 1 other row
+                    Arc::new(Int32Array::from(vec![
+                        None,
+                        Some(2),
+                        Some(7),
+                        Some(14),
+                        Some(3),
+                        Some(9),
+                        Some(16),
+                    ])),
+                    Arc::new(Int32Array::from(vec![
+                        Some(11),
+                        Some(12),
+                        Some(13),
+                        Some(15),
+                        None,
+                        None,
+                        None,
+                    ])),
+                    Arc::new(StringArray::from(vec!["upper_c4"; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c5"; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c6"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c7"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c9"; upper_rows])),
+                    Arc::new(BooleanArray::from(vec![false; upper_rows])),
+                    Arc::new(StringArray::from(vec!["upper_c10"; upper_rows])),
+                ],
+            )?
+        };
+
+        let provider = MemTable::try_new(lower_schema.clone(), vec![vec![lower_batch]])?;
+        let lower_plan = LogicalPlanBuilder::scan(
+            LOWER_SYNC,
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?
+        .build()?;
+
+        let provider = MemTable::try_new(upper_schema.clone(), vec![vec![upper_batch]])?;
+        let upper_plan = LogicalPlanBuilder::scan(
+            UPPER_SYNC,
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?;
+
+        let lower_schema = crate::sync::schema::arrow_to_sync_schema(lower_schema)?;
+        let upper_schema = crate::sync::schema::arrow_to_sync_schema(upper_schema)?;
+        let (_, merged_plan) = if union {
+            planner.union_syncs(&lower_schema, lower_plan, &upper_schema, upper_plan)?
+        } else {
+            planner.join_syncs(&lower_schema, lower_plan, &upper_schema, upper_plan)?
+        };
+
+        let merged_df = DataFrame::new(ctx.inner.state(), merged_plan);
+
+        // Pre-sort the merged batch to keep the order stable
+        let results = merged_df
+            .sort(vec![
+                col("old_pk_c1").sort(true, true),
+                col("new_pk_c1").sort(true, true),
+            ])?
+            .collect()
+            .await?;
+
+        let expected = if union {
+            [
+                "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+                "| old_pk_c1 | new_pk_c1 | changed_c3 | value_c3 | value_c5 | changed_c6 | value_c6 | value_c7 | changed_c8 | value_c8 | changed_c10 | value_c10 | changed_c4 | value_c4 | changed_c7 | changed_c9 | value_c9 |",
+                "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+                "|           | 1         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+                "|           | 2         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+                "|           | 3         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+                "|           | 11        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+                "|           | 12        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+                "|           | 13        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+                "| 4         | 5         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+                "| 6         | 7         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+                "| 8         | 9         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+                "| 10        |           | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+                "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+            ]
+        } else {
+            [
+                "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+                "| old_pk_c1 | new_pk_c1 | changed_c3 | value_c3 | value_c5 | changed_c6 | value_c6 | value_c7 | changed_c8 | value_c8 | changed_c10 | value_c10 | changed_c4 | value_c4 | changed_c7 | changed_c9 | value_c9 |",
+                "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+                "|           |           | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+                "|           | 1         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+                "|           | 11        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+                "|           | 12        | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+                "| 4         | 5         | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+                "| 6         | 13        | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+                "| 8         |           | true       | lower_c3 | upper_c5 | true       | upper_c6 | upper_c7 | false      | lower_c8 | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+                "| 10        |           | true       | lower_c3 | lower_c5 | true       | lower_c6 | lower_c7 | true       | lower_c8 | true        | lower_c10 | false      |          | true       | false      |          |",
+                "| 14        | 15        | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+                "| 16        |           | false      |          | upper_c5 | true       | upper_c6 | upper_c7 | false      |          | false       | upper_c10 | true       | upper_c4 | false      | false      | upper_c9 |",
+                "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
+            ]
+        };
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+}

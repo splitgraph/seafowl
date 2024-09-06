@@ -6,6 +6,7 @@ use tokio::sync::RwLock;
 use tracing::warn;
 
 mod metrics;
+mod planner;
 pub mod schema;
 mod utils;
 pub(crate) mod writer;

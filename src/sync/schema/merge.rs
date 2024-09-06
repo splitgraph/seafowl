@@ -1,3 +1,4 @@
+use crate::sync::planner::LOWER_SYNC;
 use crate::sync::schema::join::{
     join_changed_column, join_new_pk_column, join_old_pk_column, join_value_column,
 };
@@ -5,7 +6,6 @@ use crate::sync::schema::union::{
     union_changed_column, union_pk_column, union_value_column,
 };
 use crate::sync::schema::{SyncColumn, SyncSchema};
-use crate::sync::writer::LOWER_SYNC;
 use crate::sync::SyncResult;
 use clade::sync::{ColumnDescriptor, ColumnRole};
 use datafusion::logical_expr::Expr;
