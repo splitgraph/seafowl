@@ -404,12 +404,8 @@ impl SeafowlSyncPlanner {
             })
             .collect::<datafusion_common::Result<_>>()?;
 
-        // The `DataFrame::select`/`LogicalPlanBuilder::project` projection API leads to sub-optimal
-        // performance since it does a bunch of expression normalization that we don't really need.
-        // So deconstruct the present one and add a vanilla `Projection` on top of it.
         let (session_state, plan) = input_df.into_parts();
-        let sync_plan = Projection::try_new(projection, Arc::new(plan))
-            .map(LogicalPlan::Projection)?;
+        let sync_plan = self.project_expressions(plan, projection)?;
 
         Ok(DataFrame::new(session_state, sync_plan))
     }
