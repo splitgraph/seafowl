@@ -1,6 +1,6 @@
+use crate::sync::planner::{LOWER_SYNC, UPPER_SYNC};
 use crate::sync::schema::merge::SyncPosition;
 use crate::sync::schema::{SyncColumn, SyncSchema};
-use crate::sync::writer::{LOWER_SYNC, UPPER_SYNC};
 use crate::sync::SyncResult;
 use clade::sync::{ColumnDescriptor, ColumnRole};
 use datafusion_common::{Column, ScalarValue};

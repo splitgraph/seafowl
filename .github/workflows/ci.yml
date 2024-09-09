@@ -4,6 +4,10 @@ on: [push, pull_request]
 
 jobs:
   CI:
+    # Enable pull request trigger only from forks, since otherwise we get 2 job runs in PRs
+    if:
+      github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name !=
+      github.repository
     name: Lint, build, test
     runs-on: ubuntu-latest
     env:
