@@ -154,7 +154,7 @@ tonic-reflection = "0.11"
 wiremock = "0.6"
 
 [build-dependencies]
-anyhow = "1.0.63"  # for build.rs
+anyhow = "1.0.87"  # for build.rs
 vergen = "7"
 
 [profile.release]
