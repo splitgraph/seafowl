@@ -98,7 +98,12 @@ impl SchemaProvider for SeafowlSchema {
             },
         };
 
-        delta_table.load().await?;
+        delta_table.load().await.map_err(|e| {
+            DataFusionError::Context(
+                format!("loading Delta Table {}.{}", self.name, name),
+                Box::new(DataFusionError::External(Box::new(e))),
+            )
+        })?;
 
         let table = Arc::from(delta_table) as Arc<dyn TableProvider>;
         self.tables.insert(Arc::from(name), table.clone());

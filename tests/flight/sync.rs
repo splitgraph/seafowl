@@ -146,7 +146,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "External error: Not a Delta table: no log files".to_string()
+        "loading Delta Table public.replicated_table\ncaused by\nExternal error: Not a Delta table: no log files".to_string()
     );
 
     //
