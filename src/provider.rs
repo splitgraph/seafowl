@@ -100,7 +100,12 @@ impl SchemaProvider for SeafowlSchema {
 
         delta_table.load().await.map_err(|e| {
             DataFusionError::Context(
-                format!("loading Delta Table {}.{}", self.name, name),
+                format!(
+                    "Loading Delta Table {}.{} ({})",
+                    self.name,
+                    name,
+                    delta_table.log_store().root_uri()
+                ),
                 Box::new(DataFusionError::External(Box::new(e))),
             )
         })?;
