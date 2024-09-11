@@ -1,7 +1,7 @@
 use crate::context::SeafowlContext;
 use crate::sync::metrics::SyncPlanMetrics;
 use crate::sync::schema::merge::{merge_schemas, MergeProjection};
-use crate::sync::schema::SyncSchema;
+use crate::sync::schema::{SyncColumn, SyncSchema};
 use crate::sync::utils::{construct_qualifier, get_prune_map};
 use crate::sync::writer::{now, DataSyncItem};
 use crate::sync::SyncResult;
@@ -15,10 +15,10 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{DFSchemaRef, JoinType, ScalarValue, ToDFSchema};
+use datafusion_common::{Column, DFSchemaRef, JoinType, ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
-    col, is_null, is_true, lit, when, Expr, LogicalPlan, LogicalPlanBuilder, Projection,
+    col, lit, when, Expr, LogicalPlan, LogicalPlanBuilder, Projection,
 };
 use deltalake::delta_datafusion::DeltaTableProvider;
 use deltalake::kernel::{Action, Add, Remove};
@@ -29,10 +29,9 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
-const SYNC_REF: &str = "sync_data";
-pub(super) const JOIN_COLUMN: &str = "__join_col";
-pub(super) const LOWER_SYNC: &str = "__lower_sync";
-pub(super) const UPPER_SYNC: &str = "__upper_sync";
+pub(super) const LOWER_REL: &str = "__lower_rel";
+pub(super) const UPPER_REL: &str = "__upper_rel";
+pub(super) const UPSERT_COL: &str = "__upsert_col";
 const FINE_GRAINED_PRUNING_ROW_CRITERIA: i64 = 3_000_000;
 
 pub(super) struct SeafowlSyncPlanner {
@@ -101,7 +100,7 @@ impl SeafowlSyncPlanner {
 
         // Convert the custom Delta table provider into a base logical plan
         let base_plan =
-            LogicalPlanBuilder::scan(SYNC_REF, provider_as_source(base_scan), None)?
+            LogicalPlanBuilder::scan(LOWER_REL, provider_as_source(base_scan), None)?
                 .build()?;
 
         // Construct a state for physical planning; we omit all analyzer/optimizer rules to increase
@@ -112,8 +111,11 @@ impl SeafowlSyncPlanner {
             .build();
         let base_df = DataFrame::new(state.clone(), base_plan);
         let (sync_schema, sync_df) = self.squash_syncs(syncs)?;
+        let sync_df = self.normalize_syncs(&sync_schema, sync_df)?;
 
-        let input_df = self.apply_syncs(full_schema, base_df, sync_df, &sync_schema)?;
+        let input_df = self
+            .apply_syncs(full_schema, base_df, sync_df, &sync_schema)
+            .await?;
         let input_plan = input_df.create_physical_plan().await?;
 
         Ok((input_plan, removes))
@@ -130,7 +132,7 @@ impl SeafowlSyncPlanner {
         let first_batch = first_sync.batch.clone();
         let provider = MemTable::try_new(first_batch.schema(), vec![vec![first_batch]])?;
         let mut sync_plan = LogicalPlanBuilder::scan(
-            LOWER_SYNC,
+            LOWER_REL,
             provider_as_source(Arc::new(provider)),
             None,
         )?
@@ -175,7 +177,7 @@ impl SeafowlSyncPlanner {
 
         let provider = MemTable::try_new(upper_data.schema(), vec![vec![upper_data]])?;
         let upper_plan = LogicalPlanBuilder::scan(
-            UPPER_SYNC,
+            UPPER_REL,
             provider_as_source(Arc::new(provider)),
             None,
         )?;
@@ -222,7 +224,7 @@ impl SeafowlSyncPlanner {
         upper_schema: &SyncSchema,
         upper_plan: LogicalPlanBuilder,
     ) -> SyncResult<(SyncSchema, LogicalPlan)> {
-        let exprs = self.add_sync_flag(upper_plan.schema(), UPPER_SYNC);
+        let exprs = self.add_sync_flag(upper_plan.schema(), UPPER_REL);
         let upper_plan = upper_plan.project(exprs)?;
 
         let (lower_join_cols, upper_join_cols): (Vec<String>, Vec<String>) = upper_schema
@@ -239,7 +241,7 @@ impl SeafowlSyncPlanner {
             .into_iter()
             .unzip();
 
-        // Add the `LOWER_SYNC` flag to lower plan
+        // Add the `LOWER_REL` flag to lower plan
         let lower_plan =
             if let LogicalPlan::Projection(Projection {
                 mut expr, input, ..
@@ -247,10 +249,10 @@ impl SeafowlSyncPlanner {
             {
                 // In case of projection just extend the present list of expressions with the flag,
                 // saving us from adding one more plan node.
-                expr.push(lit(true).alias(LOWER_SYNC));
+                expr.push(lit(true).alias(LOWER_REL));
                 Projection::try_new(expr, input).map(LogicalPlan::Projection)?
             } else {
-                let exprs = self.add_sync_flag(lower_plan.schema(), LOWER_SYNC);
+                let exprs = self.add_sync_flag(lower_plan.schema(), LOWER_REL);
                 self.project_expressions(lower_plan, exprs)?
             };
 
@@ -274,6 +276,133 @@ impl SeafowlSyncPlanner {
             SyncSchema::try_new(col_desc, merged_plan.schema().inner().clone())?,
             merged_plan,
         ))
+    }
+
+    // Normalize the squashed sync, by collapsing old and new pks into a single group,
+    // projecting the upsert flag column, and breaking up PK-changing UPDATEs into
+    // DELETEs + UPSERTs.
+    fn normalize_syncs(
+        &self,
+        sync_schema: &SyncSchema,
+        sync_df: DataFrame,
+    ) -> SyncResult<DataFrame> {
+        let (old_pk, new_pk) = sync_schema
+            .columns()
+            .iter()
+            .find_map(|sc| {
+                if sc.role() == ColumnRole::OldPk {
+                    let old_name = sc.field().name();
+                    let new_name = sync_schema
+                        .column(sc.name(), ColumnRole::NewPk)
+                        .unwrap()
+                        .field()
+                        .name();
+                    Some((col(old_name), col(new_name)))
+                } else {
+                    None
+                }
+            })
+            .expect("At least 1 old PK column must exist");
+
+        // Filter out any temp rows
+        let sync_df = sync_df
+            .filter(old_pk.clone().is_null().and(new_pk.clone().is_null()).not())?;
+
+        let mut inserts_deletes = vec![];
+        let mut pk_changing_updates_to_deletes = vec![];
+        let mut pk_changing_updates_to_upserts = vec![];
+        for sync_col in sync_schema.columns().iter() {
+            if sync_col.role() == ColumnRole::OldPk {
+                let old_pk = col(sync_col.field().name());
+                let new_pk = col(sync_schema
+                    .column(sync_col.name(), ColumnRole::NewPk)
+                    .unwrap()
+                    .field()
+                    .name());
+
+                inserts_deletes.push(
+                    when(
+                        old_pk.clone().is_null().and(new_pk.clone().is_not_null()),
+                        new_pk.clone(),
+                    )
+                    .otherwise(
+                        when(
+                            old_pk.clone().is_not_null().and(new_pk.clone().is_null()),
+                            old_pk.clone(),
+                        )
+                        .otherwise(old_pk.clone())?,
+                    )?
+                    .alias_qualified(
+                        Some(UPPER_REL),
+                        SyncColumn::canonical_field_name(
+                            ColumnRole::NewPk,
+                            sync_col.name(),
+                        ),
+                    ),
+                );
+
+                pk_changing_updates_to_deletes.push(old_pk);
+                pk_changing_updates_to_upserts.push(new_pk);
+            } else if matches!(sync_col.role(), ColumnRole::Changed | ColumnRole::Value) {
+                inserts_deletes.push(col(sync_col.field().name()).alias_qualified(
+                    Some(UPPER_REL),
+                    SyncColumn::canonical_field_name(sync_col.role(), sync_col.name()),
+                ));
+                pk_changing_updates_to_deletes.push(
+                    lit(ScalarValue::Null.cast_to(sync_col.field().data_type())?)
+                        .alias_qualified(
+                            Some(UPPER_REL),
+                            SyncColumn::canonical_field_name(
+                                sync_col.role(),
+                                sync_col.name(),
+                            ),
+                        ),
+                );
+                pk_changing_updates_to_upserts.push(col(sync_col.field().name()));
+            }
+        }
+        inserts_deletes.push(
+            when(new_pk.clone().is_null(), lit(false))
+                .otherwise(lit(true))?
+                .alias(UPSERT_COL),
+        );
+        pk_changing_updates_to_deletes.push(lit(false).alias(UPSERT_COL));
+        pk_changing_updates_to_upserts.push(lit(true).alias(UPSERT_COL));
+
+        // First process INSERTS, DELETES and PK-preserving UPDATES
+        let (_, plan) = sync_df
+            .clone()
+            .filter(
+                old_pk
+                    .clone()
+                    .is_null()
+                    .or(new_pk.clone().is_null())
+                    .or(old_pk.clone().eq(new_pk.clone())),
+            )?
+            .into_parts();
+        let inserts_deletes = self.project_expressions(plan, inserts_deletes)?;
+
+        // Now process PK-changing UPDATEs by splitting them up into DELETE + INSERT
+        let pk_changing_updates = sync_df.filter(
+            old_pk
+                .clone()
+                .is_not_null()
+                .and(new_pk.clone().is_not_null())
+                .and(old_pk.clone().not_eq(new_pk.clone())),
+        )?;
+        let (session_state, plan) = pk_changing_updates.into_parts();
+
+        // Now explicitly break up PK-changing updates to deletes and upserts
+        let pk_changing_updates_to_deletes =
+            self.project_expressions(plan.clone(), pk_changing_updates_to_deletes)?;
+        let pk_changing_updates_to_upserts =
+            self.project_expressions(plan, pk_changing_updates_to_upserts)?;
+
+        let plan = LogicalPlanBuilder::from(inserts_deletes)
+            .union(pk_changing_updates_to_deletes)?
+            .union(pk_changing_updates_to_upserts)?
+            .build()?;
+        Ok(DataFrame::new(session_state, plan))
     }
 
     // More efficient projection on top of an existing logical plan.
@@ -302,40 +431,26 @@ impl SeafowlSyncPlanner {
             .collect()
     }
 
-    fn apply_syncs(
+    async fn apply_syncs(
         &self,
         full_schema: SchemaRef,
         base_df: DataFrame,
         sync_df: DataFrame,
         sync_schema: &SyncSchema,
     ) -> SyncResult<DataFrame> {
-        // Skip rows where both old and new primary keys are NULL, meaning a row inserted/updated
-        // and deleted within the same sync message (so it shouldn't be in the input nor output)
-        let old_pk_nulls = sync_schema
-            .map_columns(ColumnRole::OldPk, |c| is_null(col(c.field().name())))
-            .into_iter()
-            .reduce(|e1: Expr, e2| e1.and(e2))
-            .unwrap();
-
-        let new_pk_nulls = sync_schema
-            .map_columns(ColumnRole::NewPk, |c| is_null(col(c.field().name())))
-            .into_iter()
-            .reduce(|e1: Expr, e2| e1.and(e2))
-            .unwrap();
-
         // These differ since the physical column names are reflected in the ColumnDescriptor,
         // while logical column names are found in the arrow fields
         let (base_pk_cols, sync_pk_cols): (Vec<String>, Vec<String>) = sync_schema
-            .map_columns(ColumnRole::OldPk, |c| {
+            .map_columns(ColumnRole::NewPk, |c| {
                 (c.name().to_string(), c.field().name().clone())
             })
             .into_iter()
             .unzip();
 
         let input_df = base_df
-            .with_column(JOIN_COLUMN, lit(true))?
+            .with_column(LOWER_REL, lit(true))?
             .join(
-                sync_df.filter(old_pk_nulls.clone().and(new_pk_nulls.clone()).not())?, // Filter out any temp rows
+                sync_df,
                 JoinType::Full,
                 &base_pk_cols
                     .iter()
@@ -347,7 +462,7 @@ impl SeafowlSyncPlanner {
                     .collect::<Vec<_>>(),
                 None,
             )?
-            .filter(old_pk_nulls.clone().not().and(new_pk_nulls.clone()).not())?; // Remove deletes
+            .filter(col(UPSERT_COL).is_not_false())?; // Remove deleted rows
 
         // Normalize the schema, by ordering columns according to the full table schema and
         // projecting the sync data accordingly.
@@ -363,9 +478,9 @@ impl SeafowlSyncPlanner {
                 {
                     // The column is present in the sync schema...
                     when(
-                        old_pk_nulls.clone().and(new_pk_nulls.clone()),
+                        col(UPSERT_COL).is_null(),
                         // ...but the row doesn't exist in the sync, so inherit the old value
-                        col(name),
+                        col(Column::new(Some(LOWER_REL), name)),
                     )
                     .otherwise(
                         if let Some(changed_sync_col) =
@@ -373,22 +488,29 @@ impl SeafowlSyncPlanner {
                         {
                             // ... and there is a `Changed` flag denoting whether the column has changed.
                             when(
-                                is_true(col(changed_sync_col.field().name())),
+                                col(Column::new(
+                                    Some(UPPER_REL),
+                                    changed_sync_col.field().name(),
+                                ))
+                                .is_true(),
                                 // If it's true take the new value
-                                col(sync_col.field().name()),
+                                col(Column::new(
+                                    Some(UPPER_REL),
+                                    sync_col.field().name(),
+                                )),
                             )
                             .otherwise(
                                 // If it's false take the old value
-                                col(name),
+                                col(Column::new(Some(LOWER_REL), name)),
                             )?
                         } else {
                             // ... and the sync has a new corresponding value without a `Changed` flag
-                            col(sync_col.field().name())
+                            col(Column::new(Some(UPPER_REL), sync_col.field().name()))
                         },
                     )?
                 } else {
                     when(
-                        is_null(col(JOIN_COLUMN)),
+                        col(LOWER_REL).is_null(),
                         // Column is not present in the sync schema, and the old row doesn't exist
                         // either, project a NULL
                         lit(ScalarValue::Null.cast_to(f.data_type())?),
@@ -396,7 +518,7 @@ impl SeafowlSyncPlanner {
                     .otherwise(
                         // Column is not present in the sync schema, but the old row does exist
                         // so project its value
-                        col(name),
+                        col(Column::new(Some(LOWER_REL), name)),
                     )?
                 };
 
@@ -405,9 +527,9 @@ impl SeafowlSyncPlanner {
             .collect::<datafusion_common::Result<_>>()?;
 
         let (session_state, plan) = input_df.into_parts();
-        let sync_plan = self.project_expressions(plan, projection)?;
+        let input_plan = self.project_expressions(plan, projection)?;
 
-        Ok(DataFrame::new(session_state, sync_plan))
+        Ok(DataFrame::new(session_state, input_plan))
     }
 
     // Get a list of files that need to be scanned, re-written and removed based on the PK values in
@@ -490,7 +612,7 @@ impl SeafowlSyncPlanner {
 mod tests {
     use crate::context::test_utils::in_memory_context;
     use crate::sync::{
-        planner::{SeafowlSyncPlanner, LOWER_SYNC, UPPER_SYNC},
+        planner::{SeafowlSyncPlanner, LOWER_REL, UPPER_REL},
         SyncResult,
     };
     use arrow::array::{BooleanArray, Int32Array, StringArray};
@@ -647,7 +769,7 @@ mod tests {
 
         let provider = MemTable::try_new(lower_schema.clone(), vec![vec![lower_batch]])?;
         let lower_plan = LogicalPlanBuilder::scan(
-            LOWER_SYNC,
+            LOWER_REL,
             provider_as_source(Arc::new(provider)),
             None,
         )?
@@ -655,7 +777,7 @@ mod tests {
 
         let provider = MemTable::try_new(upper_schema.clone(), vec![vec![upper_batch]])?;
         let upper_plan = LogicalPlanBuilder::scan(
-            UPPER_SYNC,
+            UPPER_REL,
             provider_as_source(Arc::new(provider)),
             None,
         )?;

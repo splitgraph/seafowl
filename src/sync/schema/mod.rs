@@ -173,15 +173,8 @@ impl SyncColumn {
     }
 
     // Returns a canonical `SyncColumn` field (logical) name, used to name columns in a projection
-    pub fn canonical_field_name(column_descriptor: &ColumnDescriptor) -> String {
-        format!(
-            "{}_{}",
-            ColumnRole::try_from(column_descriptor.role)
-                .unwrap()
-                .as_str_name()
-                .to_lowercase(),
-            column_descriptor.name
-        )
+    pub fn canonical_field_name(role: ColumnRole, name: &str) -> String {
+        format!("{}_{name}", role.as_str_name().to_lowercase())
     }
 
     // Returns a corresponding `ColumnDescriptor` for this column

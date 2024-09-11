@@ -1,4 +1,4 @@
-use crate::sync::planner::{LOWER_SYNC, UPPER_SYNC};
+use crate::sync::planner::{LOWER_REL, UPPER_REL};
 use crate::sync::schema::merge::SyncPosition;
 use crate::sync::schema::{SyncColumn, SyncSchema};
 use crate::sync::SyncResult;
@@ -21,18 +21,18 @@ pub(super) fn join_old_pk_column(
     // for un-matched upper sync rows use upper sync old PKs, otherwise
     // for matched lower-upper sync rows use lower sync old PKs
     Ok(when(
-        col(UPPER_SYNC).is_null(),
-        col(Column::new(Some(LOWER_SYNC), lower_old_pk_field)),
+        col(UPPER_REL).is_null(),
+        col(Column::new(Some(LOWER_REL), lower_old_pk_field)),
     )
     .otherwise(
         when(
-            col(LOWER_SYNC).is_null(),
+            col(LOWER_REL).is_null(),
             col(Column::new(
-                Some(UPPER_SYNC),
+                Some(UPPER_REL),
                 upper_old_pk_col.field().name(),
             )),
         )
-        .otherwise(col(Column::new(Some(LOWER_SYNC), lower_old_pk_field)))?,
+        .otherwise(col(Column::new(Some(LOWER_REL), lower_old_pk_field)))?,
     )?)
 }
 
@@ -49,11 +49,11 @@ pub(super) fn join_new_pk_column(
     // For un-matched lower sync rows use lower sync new PKs, otherwise
     // for un-matched and matched upper sync rows use upper sync new PKs
     Ok(when(
-        col(UPPER_SYNC).is_null(),
-        col(Column::new(Some(LOWER_SYNC), lower_new_pk_field)),
+        col(UPPER_REL).is_null(),
+        col(Column::new(Some(LOWER_REL), lower_new_pk_field)),
     )
     .otherwise(col(Column::new(
-        Some(UPPER_SYNC),
+        Some(UPPER_REL),
         upper_new_pk_col.field().name(),
     )))?)
 }
@@ -64,8 +64,8 @@ pub(super) fn join_changed_column(
     sync_position: SyncPosition,
 ) -> SyncResult<Expr> {
     let (this_sync, other_sync) = match sync_position {
-        SyncPosition::Lower => (LOWER_SYNC, UPPER_SYNC),
-        SyncPosition::Upper => (UPPER_SYNC, LOWER_SYNC),
+        SyncPosition::Lower => (LOWER_REL, UPPER_REL),
+        SyncPosition::Upper => (UPPER_REL, LOWER_REL),
     };
 
     // For un-matched rows in this sync use this sync changed values, otherwise ...
@@ -83,7 +83,7 @@ pub(super) fn join_changed_column(
             // ... other sync has the corresponding `Changed` column, take the upper column value in
             // both cases
             col(Column::new(
-                Some(UPPER_SYNC),
+                Some(UPPER_REL),
                 match sync_position {
                     SyncPosition::Lower => other_changed_col.field().name(),
                     SyncPosition::Upper => this_changed_col.field().name(),
@@ -100,8 +100,8 @@ pub(super) fn join_changed_column(
                 SyncPosition::Lower => lit(true),
                 // project true to pick those lower values up only for non-upper rows
                 SyncPosition::Upper => {
-                    when(col(UPPER_SYNC).is_null(), lit(true)).otherwise(col(
-                        Column::new(Some(UPPER_SYNC), this_changed_col.field().name()),
+                    when(col(UPPER_REL).is_null(), lit(true)).otherwise(col(
+                        Column::new(Some(UPPER_REL), this_changed_col.field().name()),
                     ))?
                 }
             }
@@ -112,8 +112,8 @@ pub(super) fn join_changed_column(
                 SyncPosition::Lower => lit(false),
                 // project false to avoid overriding upper values with NULL values
                 SyncPosition::Upper => {
-                    when(col(UPPER_SYNC).is_null(), lit(false)).otherwise(col(
-                        Column::new(Some(UPPER_SYNC), this_changed_col.field().name()),
+                    when(col(UPPER_REL).is_null(), lit(false)).otherwise(col(
+                        Column::new(Some(UPPER_REL), this_changed_col.field().name()),
                     ))?
                 }
             }
@@ -130,8 +130,8 @@ pub(super) fn join_value_column(
     sync_position: SyncPosition,
 ) -> SyncResult<Expr> {
     let (this_sync, other_sync) = match sync_position {
-        SyncPosition::Lower => (LOWER_SYNC, UPPER_SYNC),
-        SyncPosition::Upper => (UPPER_SYNC, LOWER_SYNC),
+        SyncPosition::Lower => (LOWER_REL, UPPER_REL),
+        SyncPosition::Upper => (UPPER_REL, LOWER_REL),
     };
 
     if other_schema
@@ -163,20 +163,17 @@ pub(super) fn join_value_column(
             match sync_position {
                 SyncPosition::Lower => {
                     // ... the upper sync has this `Value` column too, take its values
-                    col(Column::new(
-                        Some(UPPER_SYNC),
-                        other_value_col.field().name(),
-                    ))
+                    col(Column::new(Some(UPPER_REL), other_value_col.field().name()))
                 }
                 SyncPosition::Upper => {
                     // ... the lower sync has this `Value` column too, take its values where it
                     // didn't get joined to the upper sync, otherwise take upper sync values
                     when(
-                        col(UPPER_SYNC).is_null(),
-                        col(Column::new(Some(UPPER_SYNC), this_value_col.field().name())),
+                        col(UPPER_REL).is_null(),
+                        col(Column::new(Some(UPPER_REL), this_value_col.field().name())),
                     )
                     .otherwise(col(Column::new(
-                        Some(LOWER_SYNC),
+                        Some(LOWER_REL),
                         other_value_col.field().name(),
                     )))?
                 }
@@ -189,19 +186,19 @@ pub(super) fn join_value_column(
                     // ... project NULLs in its place for unmatched upper sync rows, otherwise for
                     // the matched rows project the lower sync values.
                     when(
-                        col(UPPER_SYNC).is_null(),
+                        col(UPPER_REL).is_null(),
                         lit(ScalarValue::Null
                             .cast_to(this_value_col.field().data_type())?),
                     )
                     .otherwise(col(Column::new(
-                        Some(LOWER_SYNC),
+                        Some(LOWER_REL),
                         this_value_col.field().name(),
                     )))?
                 }
                 SyncPosition::Upper => {
                     // ... project upper schema column values both where it matched rows in the
                     // lower sync and where it didn't (i.e. which has NULLs by virtue of the JOIN)
-                    col(Column::new(Some(UPPER_SYNC), this_value_col.field().name()))
+                    col(Column::new(Some(UPPER_REL), this_value_col.field().name()))
                 }
             }
         },
