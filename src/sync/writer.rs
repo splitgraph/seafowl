@@ -1084,10 +1084,9 @@ mod tests {
 
     #[rstest]
     #[case(vec![(vec![1, 2], vec![1, 2], None)])]
-    #[should_panic(expected = "assertion `left == right` failed")]
     #[case(vec![
-        (vec![1, 2], vec![2, 1], Some(vec!["a", "b"])),
-        (vec![2, 1], vec![1, 2], Some(vec!["a", "b"]))
+        (vec![1, 2, 3], vec![3, 1, 2], Some(vec!["a", "b", "a"])),
+        (vec![1, 2, 3], vec![3, 1, 2], Some(vec!["b", "a", "b"])),
     ])]
     #[case(vec![
         (vec![2], vec![3], Some(vec!["b"])),
