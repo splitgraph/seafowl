@@ -611,6 +611,7 @@ impl SeafowlSyncPlanner {
 #[cfg(test)]
 mod tests {
     use crate::context::test_utils::in_memory_context;
+    use crate::sync::schema::arrow_to_sync_schema;
     use crate::sync::{
         planner::{SeafowlSyncPlanner, LOWER_REL, UPPER_REL},
         SyncResult,
@@ -836,6 +837,59 @@ mod tests {
                 "+-----------+-----------+------------+----------+----------+------------+----------+----------+------------+----------+-------------+-----------+------------+----------+------------+------------+----------+",
             ]
         };
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sync_normalizing() -> SyncResult<()> {
+        let ctx = Arc::new(in_memory_context().await);
+        let planner = SeafowlSyncPlanner::new(ctx.clone());
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c1", DataType::Int32, true),
+            Field::new("value_c2", DataType::Utf8, true),
+        ]));
+        let sync_schema = arrow_to_sync_schema(schema.clone())?;
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![None, Some(2), Some(3), Some(5)])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(4), None])),
+                Arc::new(StringArray::from(vec![
+                    "insert",
+                    "pk-preserving-update",
+                    "pk-changing-update",
+                    "delete",
+                ])),
+            ],
+        )?;
+
+        let sync_df = ctx.inner.read_batch(batch)?;
+        let normalized_sync = planner.normalize_syncs(&sync_schema, sync_df)?;
+
+        let results = normalized_sync
+            .sort(vec![
+                col("old_pk_c1").sort(true, true),
+                col("new_pk_c1").sort(true, true),
+            ])?
+            .collect()
+            .await?;
+
+        let expected = [
+            "+-----------+----------------------+--------------+",
+            "| new_pk_c1 | value_c2             | __upsert_col |",
+            "+-----------+----------------------+--------------+",
+            "| 1         | insert               | true         |",
+            "| 2         | pk-preserving-update | true         |",
+            "| 3         |                      | false        |",
+            "| 4         | pk-changing-update   | true         |",
+            "| 5         | delete               | false        |",
+            "+-----------+----------------------+--------------+",
+        ];
         assert_batches_eq!(expected, &results);
 
         Ok(())
