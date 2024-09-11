@@ -11,7 +11,7 @@ use clade::sync::ColumnRole;
 use datafusion::catalog::TableProvider;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::{provider_as_source, MemTable};
-use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::ExecutionPlan;
@@ -103,13 +103,7 @@ impl SeafowlSyncPlanner {
             LogicalPlanBuilder::scan(LOWER_REL, provider_as_source(base_scan), None)?
                 .build()?;
 
-        // Construct a state for physical planning; we omit all analyzer/optimizer rules to increase
-        // the stack overflow threshold that occurs during recursive plan tree traversal in DF.
-        let state = SessionStateBuilder::new_from_existing(self.context.inner.state())
-            .with_analyzer_rules(vec![])
-            .with_optimizer_rules(vec![])
-            .build();
-        let base_df = DataFrame::new(state.clone(), base_plan);
+        let base_df = DataFrame::new(self.session_state(), base_plan);
         let (sync_schema, sync_df) = self.squash_syncs(syncs)?;
         let sync_df = self.normalize_syncs(&sync_schema, sync_df)?;
 
@@ -119,6 +113,15 @@ impl SeafowlSyncPlanner {
         let input_plan = input_df.create_physical_plan().await?;
 
         Ok((input_plan, removes))
+    }
+
+    // Construct a state for physical planning; we omit all analyzer/optimizer rules to increase
+    // the stack overflow threshold that occurs during recursive plan tree traversal in DF.
+    fn session_state(&self) -> SessionState {
+        SessionStateBuilder::new_from_existing(self.context.inner.state())
+            .with_analyzer_rules(vec![])
+            .with_optimizer_rules(vec![])
+            .build()
     }
 
     // Perform logical squashing of the provided sync batches into a single dataframe/plan, which can
@@ -148,7 +151,7 @@ impl SeafowlSyncPlanner {
             )?;
         }
 
-        let sync_df = DataFrame::new(self.context.inner.state(), sync_plan);
+        let sync_df = DataFrame::new(self.session_state(), sync_plan);
         Ok((sync_schema, sync_df))
     }
 
