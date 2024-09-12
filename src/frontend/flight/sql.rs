@@ -1,7 +1,5 @@
 use crate::catalog::memory::MemoryStore;
-use crate::frontend::flight::handler::{
-    SeafowlFlightHandler, SEAFOWL_SQL_DATA, SEAFOWL_SYNC_CALL_MAX_ROWS,
-};
+use crate::frontend::flight::handler::{SeafowlFlightHandler, SEAFOWL_SQL_DATA};
 use crate::sync::schema::SyncSchema;
 use crate::sync::SyncError;
 use arrow::record_batch::RecordBatch;
@@ -201,17 +199,6 @@ impl FlightSqlService for SeafowlFlightHandler {
         .await?;
 
         let sync_schema = if !batches.is_empty() {
-            // Validate row count under prescribed limit
-            if batches
-                .iter()
-                .fold(0, |rows, batch| rows + batch.num_rows())
-                > SEAFOWL_SYNC_CALL_MAX_ROWS
-            {
-                let err = format!("Change contains more than max allowed {SEAFOWL_SYNC_CALL_MAX_ROWS} rows");
-                warn!(err);
-                return Err(Status::invalid_argument(err));
-            }
-
             SyncSchema::try_new(
                 cmd.column_descriptors.clone(),
                 batches.first().unwrap().schema(),

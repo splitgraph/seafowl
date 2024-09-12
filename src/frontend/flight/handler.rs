@@ -24,8 +24,6 @@ use crate::sync::schema::SyncSchema;
 use crate::sync::writer::SeafowlDataSyncWriter;
 use crate::sync::SyncResult;
 
-pub const SEAFOWL_SYNC_CALL_MAX_ROWS: usize = 65536;
-
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
         let mut builder = SqlInfoDataBuilder::new();
