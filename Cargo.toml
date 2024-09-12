@@ -17,6 +17,7 @@ async-trait = "0.1.82"
 datafusion = "41.0.0"
 datafusion-common = "41.0.0"
 datafusion-expr = "41.0.0"
+datafusion-functions-nested = "41.0.0"
 
 futures = "0.3"
 
@@ -90,6 +91,7 @@ dashmap = "6.1.0"
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions-nested = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 

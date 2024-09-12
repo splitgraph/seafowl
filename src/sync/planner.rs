@@ -20,6 +20,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     col, lit, when, Expr, LogicalPlan, LogicalPlanBuilder, Projection,
 };
+use datafusion_functions_nested::expr_fn::make_array;
 use deltalake::delta_datafusion::DeltaTableProvider;
 use deltalake::kernel::{Action, Add, Remove};
 use deltalake::DeltaTable;
@@ -289,6 +290,7 @@ impl SeafowlSyncPlanner {
         sync_schema: &SyncSchema,
         sync_df: DataFrame,
     ) -> SyncResult<DataFrame> {
+        // Pick the first Old/New PK for constructing the cases below
         let (old_pk, new_pk) = sync_schema
             .columns()
             .iter()
@@ -311,9 +313,41 @@ impl SeafowlSyncPlanner {
         let sync_df = sync_df
             .filter(old_pk.clone().is_null().and(new_pk.clone().is_null()).not())?;
 
-        let mut inserts_deletes = vec![];
-        let mut pk_changing_updates_to_deletes = vec![];
-        let mut pk_changing_updates_to_upserts = vec![];
+        // Construct the conditions for all possible 4 cases that we want to normalize
+        let insert = old_pk.clone().is_null().and(new_pk.clone().is_not_null());
+        let pk_preserving_update = old_pk
+            .clone()
+            .is_not_null()
+            .and(new_pk.clone().is_not_null())
+            .and(old_pk.clone().eq(new_pk.clone()));
+        let pk_changing_update = old_pk
+            .clone()
+            .is_not_null()
+            .and(new_pk.clone().is_not_null())
+            .and(old_pk.clone().not_eq(new_pk.clone()));
+
+        let mut projection = vec![];
+        let mut unnest_cols = vec![];
+        // Now generate the expressions to project the sync from the "old-new" form
+        // +-----------+-----------+----------------------+
+        // | old_pk_c1 | new_pk_c1 | value_c2             |
+        // +-----------+-----------+----------------------+
+        // |           | 1         | insert               |
+        // | 2         | 2         | pk-preserving-update |
+        // | 3         | 4         | pk-changing-update   |
+        // | 5         |           | delete               |
+        // +-----------+-----------+----------------------+
+        //
+        // into the "upsert" form
+        //
+        // +-----------+----------------------+--------------+
+        // | pk_c1     | value_c2             | upsert       |
+        // +-----------+----------------------+--------------+
+        // | [1]       | insert               | [true]       |
+        // | [2]       | pk-preserving-update | [true]       |
+        // | [3, 4]    | pk-changing-update   | [false, true]|
+        // | [5]       | delete               | [false]      |
+        // +-----------+----------------------+--------------+
         for sync_col in sync_schema.columns().iter() {
             if sync_col.role() == ColumnRole::OldPk {
                 let old_pk = col(sync_col.field().name());
@@ -323,89 +357,47 @@ impl SeafowlSyncPlanner {
                     .field()
                     .name());
 
-                inserts_deletes.push(
-                    when(
-                        old_pk.clone().is_null().and(new_pk.clone().is_not_null()),
-                        new_pk.clone(),
-                    )
-                    .otherwise(
-                        when(
-                            old_pk.clone().is_not_null().and(new_pk.clone().is_null()),
-                            old_pk.clone(),
+                let name =
+                    SyncColumn::canonical_field_name(ColumnRole::NewPk, sync_col.name());
+                projection.push(
+                    when(insert.clone(), make_array(vec![new_pk.clone()]))
+                        .when(
+                            pk_preserving_update.clone(),
+                            make_array(vec![new_pk.clone()]),
                         )
-                        .otherwise(old_pk.clone())?,
-                    )?
-                    .alias_qualified(
-                        Some(UPPER_REL),
-                        SyncColumn::canonical_field_name(
-                            ColumnRole::NewPk,
-                            sync_col.name(),
-                        ),
-                    ),
+                        .when(
+                            pk_changing_update.clone(),
+                            make_array(vec![old_pk.clone(), new_pk.clone()]),
+                        )
+                        .otherwise(make_array(vec![old_pk.clone()]))? // delete
+                        .alias_qualified(Some(UPPER_REL), &name),
                 );
-
-                pk_changing_updates_to_deletes.push(old_pk);
-                pk_changing_updates_to_upserts.push(new_pk);
+                unnest_cols.push(name);
             } else if matches!(sync_col.role(), ColumnRole::Changed | ColumnRole::Value) {
-                inserts_deletes.push(col(sync_col.field().name()).alias_qualified(
+                projection.push(col(sync_col.field().name()).alias_qualified(
                     Some(UPPER_REL),
                     SyncColumn::canonical_field_name(sync_col.role(), sync_col.name()),
                 ));
-                pk_changing_updates_to_deletes.push(
-                    lit(ScalarValue::Null.cast_to(sync_col.field().data_type())?)
-                        .alias_qualified(
-                            Some(UPPER_REL),
-                            SyncColumn::canonical_field_name(
-                                sync_col.role(),
-                                sync_col.name(),
-                            ),
-                        ),
-                );
-                pk_changing_updates_to_upserts.push(col(sync_col.field().name()));
             }
         }
-        inserts_deletes.push(
-            when(new_pk.clone().is_null(), lit(false))
-                .otherwise(lit(true))?
+        projection.push(
+            when(insert, make_array(vec![lit(true)]))
+                .when(pk_preserving_update, make_array(vec![lit(true)]))
+                .when(pk_changing_update, make_array(vec![lit(false), lit(true)]))
+                .otherwise(make_array(vec![lit(false)]))? // delete
                 .alias(UPSERT_COL),
         );
-        pk_changing_updates_to_deletes.push(lit(false).alias(UPSERT_COL));
-        pk_changing_updates_to_upserts.push(lit(true).alias(UPSERT_COL));
+        unnest_cols.push(UPSERT_COL.to_string());
+        let unnest_cols = unnest_cols.iter().map(String::as_str).collect::<Vec<_>>();
 
-        // First process INSERTS, DELETES and PK-preserving UPDATES
-        let (_, plan) = sync_df
-            .clone()
-            .filter(
-                old_pk
-                    .clone()
-                    .is_null()
-                    .or(new_pk.clone().is_null())
-                    .or(old_pk.clone().eq(new_pk.clone())),
-            )?
-            .into_parts();
-        let inserts_deletes = self.project_expressions(plan, inserts_deletes)?;
+        let (session_state, plan) = sync_df.into_parts();
 
-        // Now process PK-changing UPDATEs by splitting them up into DELETE + INSERT
-        let pk_changing_updates = sync_df.filter(
-            old_pk
-                .clone()
-                .is_not_null()
-                .and(new_pk.clone().is_not_null())
-                .and(old_pk.clone().not_eq(new_pk.clone())),
-        )?;
-        let (session_state, plan) = pk_changing_updates.into_parts();
+        // Construct the normalized dataframe unnesting the above pk and upsert columns
+        let normalized_df =
+            DataFrame::new(session_state, self.project_expressions(plan, projection)?)
+                .unnest_columns(&unnest_cols)?;
 
-        // Now explicitly break up PK-changing updates to deletes and upserts
-        let pk_changing_updates_to_deletes =
-            self.project_expressions(plan.clone(), pk_changing_updates_to_deletes)?;
-        let pk_changing_updates_to_upserts =
-            self.project_expressions(plan, pk_changing_updates_to_upserts)?;
-
-        let plan = LogicalPlanBuilder::from(inserts_deletes)
-            .union(pk_changing_updates_to_deletes)?
-            .union(pk_changing_updates_to_upserts)?
-            .build()?;
-        Ok(DataFrame::new(session_state, plan))
+        Ok(normalized_df)
     }
 
     // More efficient projection on top of an existing logical plan.
@@ -491,16 +483,9 @@ impl SeafowlSyncPlanner {
                         {
                             // ... and there is a `Changed` flag denoting whether the column has changed.
                             when(
-                                col(Column::new(
-                                    Some(UPPER_REL),
-                                    changed_sync_col.field().name(),
-                                ))
-                                .is_true(),
+                                col(changed_sync_col.field().name()).is_true(),
                                 // If it's true take the new value
-                                col(Column::new(
-                                    Some(UPPER_REL),
-                                    sync_col.field().name(),
-                                )),
+                                col(sync_col.field().name()),
                             )
                             .otherwise(
                                 // If it's false take the old value
@@ -508,7 +493,7 @@ impl SeafowlSyncPlanner {
                             )?
                         } else {
                             // ... and the sync has a new corresponding value without a `Changed` flag
-                            col(Column::new(Some(UPPER_REL), sync_col.field().name()))
+                            col(sync_col.field().name())
                         },
                     )?
                 } else {
@@ -875,10 +860,7 @@ mod tests {
         let normalized_sync = planner.normalize_syncs(&sync_schema, sync_df)?;
 
         let results = normalized_sync
-            .sort(vec![
-                col("old_pk_c1").sort(true, true),
-                col("new_pk_c1").sort(true, true),
-            ])?
+            .sort(vec![col("new_pk_c1").sort(true, true)])?
             .collect()
             .await?;
 
@@ -888,7 +870,7 @@ mod tests {
             "+-----------+----------------------+--------------+",
             "| 1         | insert               | true         |",
             "| 2         | pk-preserving-update | true         |",
-            "| 3         |                      | false        |",
+            "| 3         | pk-changing-update   | false        |",
             "| 4         | pk-changing-update   | true         |",
             "| 5         | delete               | false        |",
             "+-----------+----------------------+--------------+",
