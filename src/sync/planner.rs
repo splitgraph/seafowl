@@ -372,7 +372,7 @@ impl SeafowlSyncPlanner {
                         .otherwise(make_array(vec![old_pk.clone()]))? // delete
                         .alias_qualified(Some(UPPER_REL), &name),
                 );
-                unnest_cols.push(name);
+                unnest_cols.push(Column::new(Some(UPPER_REL), name));
             } else if matches!(sync_col.role(), ColumnRole::Changed | ColumnRole::Value) {
                 projection.push(col(sync_col.field().name()).alias_qualified(
                     Some(UPPER_REL),
@@ -387,17 +387,19 @@ impl SeafowlSyncPlanner {
                 .otherwise(make_array(vec![lit(false)]))? // delete
                 .alias(UPSERT_COL),
         );
-        unnest_cols.push(UPSERT_COL.to_string());
-        let unnest_cols = unnest_cols.iter().map(String::as_str).collect::<Vec<_>>();
-
-        let (session_state, plan) = sync_df.into_parts();
+        unnest_cols.push(Column::from(UPSERT_COL));
 
         // Construct the normalized dataframe unnesting the above pk and upsert columns
-        let normalized_df =
-            DataFrame::new(session_state, self.project_expressions(plan, projection)?)
-                .unnest_columns(&unnest_cols)?;
+        let (session_state, plan) = sync_df.into_parts();
+        let normalized_plan =
+            LogicalPlanBuilder::from(self.project_expressions(plan, projection)?)
+                .unnest_columns_with_options(unnest_cols.clone(), Default::default())?
+                // DataFusion currently swallows the unnested column qualifiers so we need to alias
+                // it explicitly
+                .alias(UPPER_REL)?
+                .build()?;
 
-        Ok(normalized_df)
+        Ok(DataFrame::new(session_state, normalized_plan))
     }
 
     // More efficient projection on top of an existing logical plan.
@@ -483,9 +485,16 @@ impl SeafowlSyncPlanner {
                         {
                             // ... and there is a `Changed` flag denoting whether the column has changed.
                             when(
-                                col(changed_sync_col.field().name()).is_true(),
+                                col(Column::new(
+                                    Some(UPPER_REL),
+                                    changed_sync_col.field().name(),
+                                ))
+                                .is_true(),
                                 // If it's true take the new value
-                                col(sync_col.field().name()),
+                                col(Column::new(
+                                    Some(UPPER_REL),
+                                    sync_col.field().name(),
+                                )),
                             )
                             .otherwise(
                                 // If it's false take the old value
@@ -493,7 +502,7 @@ impl SeafowlSyncPlanner {
                             )?
                         } else {
                             // ... and the sync has a new corresponding value without a `Changed` flag
-                            col(sync_col.field().name())
+                            col(Column::new(Some(UPPER_REL), sync_col.field().name()))
                         },
                     )?
                 } else {
