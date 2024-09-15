@@ -2,6 +2,7 @@ use crate::sync::SyncError;
 use arrow_schema::{DataType, FieldRef, SchemaRef};
 use clade::sync::{ColumnDescriptor, ColumnRole};
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 pub(super) mod join;
@@ -147,6 +148,26 @@ impl SyncSchema {
                     .collect::<Vec<T>>()
             })
             .unwrap_or_default()
+    }
+}
+
+impl Display for SyncSchema {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.columns()
+                .iter()
+                .map(|sync_col| format!(
+                    "{{{}, {}, {}, {}}}",
+                    sync_col.name,
+                    sync_col.role.as_str_name(),
+                    sync_col.field.data_type(),
+                    sync_col.field.name(),
+                ))
+                .collect::<Vec<String>>()
+                .join(", "),
+        )
     }
 }
 

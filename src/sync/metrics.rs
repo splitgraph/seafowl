@@ -10,7 +10,7 @@ const IN_MEMORY_BYTES: &str = "seafowl_changeset_writer_in_memory_bytes_current"
 const IN_MEMORY_ROWS: &str = "seafowl_changeset_writer_in_memory_rows_current";
 const IN_MEMORY_OLDEST: &str =
     "seafowl_changeset_writer_in_memory_oldest_timestamp_seconds";
-const SQUASH_TIME: &str = "seafowl_changeset_writer_squash_time_seconds";
+const SQUASH_TIME: &str = "seafowl_changeset_writer_squash_time_milliseconds";
 const SQUASHED_BYTES: &str = "seafowl_changeset_writer_squashed_bytes_total";
 const SQUASHED_ROWS: &str = "seafowl_changeset_writer_squashed_rows_total";
 const PRUNING_TIME: &str = "seafowl_changeset_writer_pruning_time_milliseconds";

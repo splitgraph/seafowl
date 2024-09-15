@@ -224,11 +224,15 @@ impl SeafowlDataSyncWriter {
             self.metrics.request_rows.increment(sync_rows as u64);
             let start = Instant::now();
             let batch = squash_batches(&sync_schema, batches)?;
-            let duration = start.elapsed().as_secs();
+            let duration = start.elapsed().as_millis();
 
             // Get new size and row count
             let size = batch.get_array_memory_size();
             let rows = batch.num_rows();
+            debug!(
+                "Physical squashing removed {} rows in {duration} ms for batch with schema \n{sync_schema}",
+                sync_rows - rows,
+            );
 
             let item = DataSyncItem {
                 tx_id,
