@@ -202,6 +202,7 @@ impl FlightSqlService for SeafowlFlightHandler {
             SyncSchema::try_new(
                 cmd.column_descriptors.clone(),
                 batches.first().unwrap().schema(),
+                true,
             )
             .map_err(|err| {
                 warn!("{err}");
