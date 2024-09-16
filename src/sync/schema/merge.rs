@@ -1,4 +1,4 @@
-use crate::sync::planner::LOWER_SYNC;
+use crate::sync::planner::LOWER_REL;
 use crate::sync::schema::join::{
     join_changed_column, join_new_pk_column, join_old_pk_column, join_value_column,
 };
@@ -180,8 +180,10 @@ pub(crate) fn merge_schemas(
     // Wrap the final projection expression in a qualified alias, since it will act as a new lower
     // sync in the subsequent merge
     let qual_as_lower = |(expr, cd): (&mut Expr, &ColumnDescriptor)| {
-        *expr = std::mem::take(expr)
-            .alias_qualified(Some(LOWER_SYNC), SyncColumn::canonical_field_name(cd));
+        *expr = std::mem::take(expr).alias_qualified(
+            Some(LOWER_REL),
+            SyncColumn::canonical_field_name(cd.role(), &cd.name),
+        );
     };
 
     match &mut merge {

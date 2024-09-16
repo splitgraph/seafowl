@@ -2,6 +2,7 @@ use crate::sync::SyncError;
 use arrow_schema::{DataType, FieldRef, SchemaRef};
 use clade::sync::{ColumnDescriptor, ColumnRole};
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 pub(super) mod join;
@@ -18,6 +19,7 @@ impl SyncSchema {
     pub fn try_new(
         column_descriptors: Vec<ColumnDescriptor>,
         schema: SchemaRef,
+        validate_pks: bool,
     ) -> Result<Self, SyncError> {
         if column_descriptors.len() != schema.flattened_fields().len() {
             return Err(SyncError::SchemaError {
@@ -68,18 +70,22 @@ impl SyncSchema {
             }
         }
 
-        if old_pk_types.is_empty() || new_pk_types.is_empty() {
-            return Err(SyncError::SchemaError {
-                reason: "Change requested but batches do not contain old/new PK columns"
-                    .to_string(),
-            });
-        }
+        if validate_pks {
+            if old_pk_types.is_empty() || new_pk_types.is_empty() {
+                return Err(SyncError::SchemaError {
+                    reason:
+                        "Change requested but batches do not contain old/new PK columns"
+                            .to_string(),
+                });
+            }
 
-        if old_pk_types != new_pk_types {
-            return Err(SyncError::SchemaError {
-                reason: "Change requested but old and new PK columns are not the same"
-                    .to_string(),
-            });
+            if old_pk_types != new_pk_types {
+                return Err(SyncError::SchemaError {
+                    reason:
+                        "Change requested but old and new PK columns are not the same"
+                            .to_string(),
+                });
+            }
         }
 
         let mut indices = HashMap::new();
@@ -145,6 +151,26 @@ impl SyncSchema {
     }
 }
 
+impl Display for SyncSchema {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.columns()
+                .iter()
+                .map(|sync_col| format!(
+                    "{{{}, {}, {}, {}}}",
+                    sync_col.name,
+                    sync_col.role.as_str_name(),
+                    sync_col.field.data_type(),
+                    sync_col.field.name(),
+                ))
+                .collect::<Vec<String>>()
+                .join(", "),
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SyncColumn {
     role: ColumnRole,
@@ -173,15 +199,8 @@ impl SyncColumn {
     }
 
     // Returns a canonical `SyncColumn` field (logical) name, used to name columns in a projection
-    pub fn canonical_field_name(column_descriptor: &ColumnDescriptor) -> String {
-        format!(
-            "{}_{}",
-            ColumnRole::try_from(column_descriptor.role)
-                .unwrap()
-                .as_str_name()
-                .to_lowercase(),
-            column_descriptor.name
-        )
+    pub fn canonical_field_name(role: ColumnRole, name: &str) -> String {
+        format!("{}_{name}", role.as_str_name().to_lowercase())
     }
 
     // Returns a corresponding `ColumnDescriptor` for this column
@@ -213,5 +232,5 @@ pub fn arrow_to_sync_schema(schema: SchemaRef) -> crate::sync::SyncResult<SyncSc
         })
         .collect();
 
-    SyncSchema::try_new(col_desc, schema)
+    SyncSchema::try_new(col_desc, schema, true)
 }

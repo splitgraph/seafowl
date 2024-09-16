@@ -224,11 +224,15 @@ impl SeafowlDataSyncWriter {
             self.metrics.request_rows.increment(sync_rows as u64);
             let start = Instant::now();
             let batch = squash_batches(&sync_schema, batches)?;
-            let duration = start.elapsed().as_secs();
+            let duration = start.elapsed().as_millis();
 
             // Get new size and row count
             let size = batch.get_array_memory_size();
             let rows = batch.num_rows();
+            debug!(
+                "Physical squashing removed {} rows in {duration} ms for batch with schema \n{sync_schema}",
+                sync_rows - rows,
+            );
 
             let item = DataSyncItem {
                 tx_id,
@@ -257,7 +261,7 @@ impl SeafowlDataSyncWriter {
             self.metrics.squash_time.record(duration as f64);
             self.metrics
                 .squashed_bytes
-                .increment((sync_size - size) as u64);
+                .increment((sync_size.saturating_sub(size)) as u64);
             self.metrics
                 .squashed_rows
                 .increment((sync_rows - rows) as u64);
@@ -624,14 +628,14 @@ mod tests {
     use crate::sync::schema::{arrow_to_sync_schema, SyncSchema};
     use crate::sync::writer::{SeafowlDataSyncWriter, SequenceNumber};
     use crate::sync::{SyncCommitInfo, SyncResult};
-    use arrow::array::{BooleanArray, Float32Array, Int32Array};
+    use arrow::array::{BooleanArray, Float32Array, Int32Array, StringArray};
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::assert_batches_eq;
-    use itertools::Itertools;
     use rand::Rng;
     use rstest::rstest;
     use std::collections::HashMap;
+    use std::ops::Range;
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -946,13 +950,49 @@ mod tests {
     }
 
     #[rstest]
-    #[case(100, 50)]
-    #[case(50, 100)]
-    #[case(100, 100)]
+    #[case::insert_basic(
+        vec![None, None],
+        vec![Some(0..500), Some(500..1000)],
+        1000,
+        0,
+        999,
+    )]
+    // #[case::insert_idempotent(
+    //     vec![None, None, None, None],
+    //     vec![Some(0..500), Some(0..500), Some(500..1000), Some(500..1000)],
+    //     1000,
+    //     0,
+    //     999,
+    // )]
+    #[case::insert_update(
+        vec![None, Some(0..300), None, Some(300..1000)],
+        vec![Some(0..500), Some(1000..1300), Some(500..1000), Some(1300..2000)],
+        1000,
+        1000,
+        1999,
+    )]
+    // #[case::insert_update_idempotent(
+    //     vec![None, Some(0..300), Some(0..300), Some(300..1000), Some(300..1000)],
+    //     vec![Some(0..1000), Some(1000..1300), Some(1000..1300), Some(1300..2000), Some(1300..2000)],
+    //     1000,
+    //     1000,
+    //     1999,
+    // )]
+    #[case::insert_idempotent_update_idempotent(
+        vec![None, Some(0..300), None, Some(300..1000), None, Some(0..300), None, Some(300..1000)],
+        vec![Some(0..500), Some(1000..1300), Some(500..1000), Some(1300..2000), Some(0..500), Some(1000..1300), Some(500..1000), Some(1300..2000)],
+        1000,
+        1000,
+        1999,
+    )]
     #[tokio::test]
-    async fn test_bulk_insert_update(
-        #[case] insert_batch_rows: i32,
-        #[case] update_batch_rows: i32,
+    async fn test_bulk_changes(
+        #[case] old_pks: Vec<Option<Range<i32>>>,
+        #[case] new_pks: Vec<Option<Range<i32>>>,
+        #[case] count: usize,
+        #[case] min: usize,
+        #[case] max: usize,
+        #[values(1, 2, 3, 4, 5)] flush_freq: usize,
     ) {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
@@ -979,14 +1019,31 @@ mod tests {
             .unwrap();
 
         // INSERT 1K rows in batches of `insert_batch_rows` rows
-        let batch_rows = insert_batch_rows as usize;
-        for (seq, new_pks) in (0..1000).chunks(batch_rows).into_iter().enumerate() {
+        for (seq, (old_pks, new_pks)) in
+            old_pks.into_iter().zip(new_pks.into_iter()).enumerate()
+        {
+            let old_pks = old_pks.map(Iterator::collect::<Vec<i32>>);
+            let new_pks = new_pks.map(Iterator::collect::<Vec<i32>>);
+            let rows = old_pks
+                .clone()
+                .map(|pks| pks.len())
+                .or(new_pks.clone().map(|pks| pks.len()))
+                .unwrap();
+
             let batch = RecordBatch::try_new(
                 arrow_schema.clone(),
                 vec![
-                    Arc::new(Int32Array::new_null(batch_rows)),
-                    Arc::new(Int32Array::from(new_pks.collect::<Vec<i32>>())),
-                    Arc::new(Float32Array::new_null(batch_rows)),
+                    Arc::new(
+                        old_pks
+                            .map(Int32Array::from)
+                            .unwrap_or(Int32Array::new_null(rows)),
+                    ),
+                    Arc::new(
+                        new_pks
+                            .map(Int32Array::from)
+                            .unwrap_or(Int32Array::new_null(rows)),
+                    ),
+                    Arc::new(Float32Array::new_null(rows)),
                 ],
             )
             .unwrap();
@@ -1001,108 +1058,66 @@ mod tests {
                 )
                 .unwrap();
 
-            if (seq + 1) % 5 == 0 {
-                // Flush after every 5th sync
+            if (seq + 1) % flush_freq == 0 {
+                // Flush after every flush_freq sync
                 sync_mgr.flush_syncs(log_store.root_uri()).await.unwrap();
             }
         }
+
+        // Flush any remaining syncs
+        sync_mgr.flush_syncs(log_store.root_uri()).await.unwrap();
 
         // Check row count, min and max directly:
         let results = ctx
             .collect(
-                ctx.plan_query("SELECT COUNT(*), MIN(c1), MAX(c1) FROM test_table")
-                    .await
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let expected = [
-            "+----------+--------------------+--------------------+",
-            "| count(*) | min(test_table.c1) | max(test_table.c1) |",
-            "+----------+--------------------+--------------------+",
-            "| 1000     | 0                  | 999                |",
-            "+----------+--------------------+--------------------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
-
-        // Now UPDATE each row by shifting the PK over by 1000 in batches of `update_batch_rows`` rows
-        let start_seq = 10_000;
-        let batch_rows = update_batch_rows as usize;
-        for (seq, (old_pks, new_pks)) in (0..1000)
-            .chunks(batch_rows)
-            .into_iter()
-            .zip((1000..2000).chunks(batch_rows).into_iter())
-            .enumerate()
-        {
-            let batch = RecordBatch::try_new(
-                arrow_schema.clone(),
-                vec![
-                    Arc::new(Int32Array::from(old_pks.collect::<Vec<i32>>())),
-                    Arc::new(Int32Array::from(new_pks.collect::<Vec<i32>>())),
-                    Arc::new(Float32Array::new_null(batch_rows)),
-                ],
-            )
-            .unwrap();
-
-            sync_mgr
-                .enqueue_sync(
-                    log_store.clone(),
-                    Some(start_seq + seq as SequenceNumber),
-                    A.to_string(),
-                    sync_schema.clone(),
-                    vec![batch],
+                ctx.plan_query(
+                    "SELECT COUNT(*), COUNT(DISTINCT c1), MIN(c1), MAX(c1) FROM test_table",
                 )
-                .unwrap();
-
-            if (seq + 1) % 5 == 0 {
-                // Flush after every 5th sync
-                sync_mgr.flush_syncs(log_store.root_uri()).await.unwrap();
-            }
-        }
-
-        // Check row count, min and max directly again:
-        let results = ctx
-            .collect(
-                ctx.plan_query("SELECT COUNT(*), MIN(c1), MAX(c1) FROM test_table")
-                    .await
-                    .unwrap(),
+                .await
+                .unwrap(),
             )
             .await
             .unwrap();
+
+        let dist_min_max = format!("| {count}     | {count}                          | {min:<4}               | {max:<4}               |");
         let expected = [
-            "+----------+--------------------+--------------------+",
-            "| count(*) | min(test_table.c1) | max(test_table.c1) |",
-            "+----------+--------------------+--------------------+",
-            "| 1000     | 1000               | 1999               |",
-            "+----------+--------------------+--------------------+",
+            "+----------+-------------------------------+--------------------+--------------------+",
+            "| count(*) | count(DISTINCT test_table.c1) | min(test_table.c1) | max(test_table.c1) |",
+            "+----------+-------------------------------+--------------------+--------------------+",
+            dist_min_max.as_str(),
+            "+----------+-------------------------------+--------------------+--------------------+",
         ];
+
         assert_batches_eq!(expected, &results);
     }
 
+    type OldNewVal = (Vec<i32>, Vec<i32>, Option<Vec<&'static str>>);
+
     #[rstest]
-    #[case(vec![(vec![1, 2], vec![1, 2])])]
-    #[case(vec![(vec![1, 2], vec![2, 1]), (vec![1, 2], vec![2, 1])])]
+    #[case(vec![(vec![1, 2], vec![1, 2], None)])]
     #[case(vec![
-        (vec![2], vec![3]),
-        (vec![1], vec![2]),
-        (vec![3], vec![1]),
-        (vec![2], vec![3]),
-        (vec![1], vec![2]),
-        (vec![3], vec![1])])
+        (vec![1, 2, 3], vec![3, 1, 2], Some(vec!["a", "b", "a"])),
+        (vec![1, 2, 3], vec![3, 1, 2], Some(vec!["b", "a", "b"])),
+    ])]
+    #[case(vec![
+        (vec![2], vec![3], Some(vec!["b"])),
+        (vec![1], vec![2], Some(vec!["a"])),
+        (vec![3], vec![1], Some(vec!["b"])),
+        (vec![2], vec![3], Some(vec!["a"])),
+        (vec![1], vec![2], Some(vec!["b"])),
+        (vec![3], vec![1], Some(vec!["a"]))])
     ]
     #[tokio::test]
-    async fn test_sync_pk_cycles(
-        #[case] pk_cycle: Vec<(Vec<i32>, Vec<i32>)>,
-    ) -> SyncResult<()> {
+    async fn test_sync_pk_cycles(#[case] pk_cycle: Vec<OldNewVal>) {
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
 
         ctx.plan_query(
-            "CREATE TABLE test_table(c1 INT, c2 INT) AS VALUES (1, 1), (2, 2)",
+            "CREATE TABLE test_table(c1 INT, c2 TEXT) AS VALUES (1, 'a'), (2, 'b')",
         )
-        .await?;
-        let table_uuid = ctx.get_table_uuid("test_table").await?;
+        .await
+        .unwrap();
+        let table_uuid = ctx.get_table_uuid("test_table").await.unwrap();
 
         // Ensure original content
         let plan = ctx.plan_query("SELECT * FROM test_table").await.unwrap();
@@ -1112,8 +1127,8 @@ mod tests {
             "+----+----+",
             "| c1 | c2 |",
             "+----+----+",
-            "| 1  | 1  |",
-            "| 2  | 2  |",
+            "| 1  | a  |",
+            "| 2  | b  |",
             "+----+----+",
         ];
         assert_batches_eq!(expected, &results);
@@ -1122,9 +1137,9 @@ mod tests {
             Field::new("old_pk_c1", DataType::Int32, true),
             Field::new("new_pk_c1", DataType::Int32, true),
             Field::new("changed_c2", DataType::Boolean, true),
-            Field::new("value_c2", DataType::Int32, true),
+            Field::new("value_c2", DataType::Utf8, true),
         ]));
-        let sync_schema = arrow_to_sync_schema(schema.clone())?;
+        let sync_schema = arrow_to_sync_schema(schema.clone()).unwrap();
 
         // Enqueue all syncs
         let log_store = ctx
@@ -1133,25 +1148,34 @@ mod tests {
             .get_log_store(&table_uuid.to_string());
 
         // Cycle through the PKs, to end up in the same place as at start
-        for (old_pks, new_pks) in pk_cycle {
-            sync_mgr.enqueue_sync(
-                log_store.clone(),
-                None,
-                A.to_string(),
-                sync_schema.clone(),
-                vec![RecordBatch::try_new(
-                    schema.clone(),
-                    vec![
-                        Arc::new(Int32Array::from(old_pks.clone())),
-                        Arc::new(Int32Array::from(new_pks)),
-                        Arc::new(BooleanArray::from(vec![false; old_pks.len()])),
-                        Arc::new(Int32Array::from(vec![None; old_pks.len()])),
-                    ],
-                )?],
-            )?;
+        for (old_pks, new_pks, value) in pk_cycle {
+            sync_mgr
+                .enqueue_sync(
+                    log_store.clone(),
+                    None,
+                    A.to_string(),
+                    sync_schema.clone(),
+                    vec![RecordBatch::try_new(
+                        schema.clone(),
+                        vec![
+                            Arc::new(Int32Array::from(old_pks.clone())),
+                            Arc::new(Int32Array::from(new_pks)),
+                            Arc::new(BooleanArray::from(vec![
+                                value.is_some();
+                                old_pks.len()
+                            ])),
+                            Arc::new(
+                                value
+                                    .map(StringArray::from)
+                                    .unwrap_or(StringArray::new_null(old_pks.len())),
+                            ),
+                        ],
+                    )
+                    .unwrap()],
+                )
+                .unwrap();
         }
-
-        sync_mgr.flush_syncs(log_store.root_uri()).await?;
+        sync_mgr.flush_syncs(log_store.root_uri()).await.unwrap();
 
         // Ensure updated content is the same as original
         let plan = ctx
@@ -1164,12 +1188,10 @@ mod tests {
             "+----+----+",
             "| c1 | c2 |",
             "+----+----+",
-            "| 1  | 1  |",
-            "| 2  | 2  |",
+            "| 1  | a  |",
+            "| 2  | b  |",
             "+----+----+",
         ];
         assert_batches_eq!(expected, &results);
-
-        Ok(())
     }
 }

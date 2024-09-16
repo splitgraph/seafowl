@@ -83,7 +83,8 @@ pub(super) fn squash_batches(
     // columns. There are 3 categories of columns for which we track row ids: old PKs, new PKs, and
     // changed columns.
     let mut chain_count = 0;
-    let mut column_rows: Vec<(u64, u64, Vec<u64>)> = vec![];
+    let mut column_rows: Vec<(u64, u64, Vec<u64>)> =
+        Vec::with_capacity(old_pks.num_rows());
     let mut temp_rows = HashSet::new();
     let mut pk_chains: HashMap<Row, usize> = HashMap::new();
 

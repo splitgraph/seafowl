@@ -311,6 +311,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         cd2.clone(),
         cd3.clone(),
         cd4.clone(),
+        cd5.clone(),
         cd6.clone(),
         cd7.clone(),
     ];
@@ -320,6 +321,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         f2.clone(),
         f3.clone(),
         f4.clone(),
+        f5.clone(),
         f6.clone(),
         f7.clone(),
     ]));
@@ -344,13 +346,17 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
                 Some("eight"),
                 Some("two"),
             ])),
+            // As per the rules during PK-changing updates all columns must be emitted, even if they're
+            // empty
+            Arc::new(Float64Array::from(vec![None, None, None, None])),
             Arc::new(StringArray::from(vec![
                 Some("seven"),
                 Some("six in sync #4"),
                 None,
-                None,
+                // As per the rules during PK-changing updates the TOASTed columns must be re-emitted
+                Some("four"),
             ])),
-            Arc::new(BooleanArray::from(vec![false, true, true, false])),
+            Arc::new(BooleanArray::from(vec![false, true, true, true])),
         ],
     )?;
 

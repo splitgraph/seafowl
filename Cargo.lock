@@ -5888,6 +5888,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-functions-nested",
  "datafusion-remote-tables",
  "deltalake",
  "futures",
