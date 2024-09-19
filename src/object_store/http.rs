@@ -152,7 +152,7 @@ impl HttpObjectStore {
     fn request_builder(&self, path: &Path) -> RequestBuilder {
         self.client.get(self.get_uri(path)).header(
             "User-Agent",
-            format!("Seafowl/{}", env!("VERGEN_GIT_SEMVER")),
+            format!("Seafowl/{}", env!("VERGEN_RUSTC_SEMVER")),
         )
     }
 
@@ -391,7 +391,7 @@ impl ObjectStore for HttpObjectStore {
         let response = self
             .send(self.client.head(&uri).header(
                 "User-Agent",
-                format!("Seafowl/{}", env!("VERGEN_GIT_SEMVER")),
+                format!("Seafowl/{}", env!("VERGEN_RUSTC_SEMVER")),
             ))
             .await;
 
