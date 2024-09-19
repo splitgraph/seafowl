@@ -88,7 +88,7 @@ fn print_version_info(f: &mut impl std::io::Write) -> std::io::Result<()> {
     writeln!(
         f,
         "Seafowl {} ({} {})",
-        env!("VERGEN_GIT_SEMVER"),
+        env!("VERGEN_GIT_DESCRIBE"),
         env!("VERGEN_GIT_SHA"),
         env!("VERGEN_GIT_COMMIT_TIMESTAMP")
     )?;
@@ -100,12 +100,8 @@ fn print_version_info(f: &mut impl std::io::Write) -> std::io::Result<()> {
         env!("VERGEN_RUSTC_HOST_TRIPLE"),
         env!("VERGEN_BUILD_TIMESTAMP")
     )?;
-    writeln!(
-        f,
-        "Target: {} {}",
-        env!("VERGEN_CARGO_PROFILE"),
-        env!("VERGEN_CARGO_TARGET_TRIPLE"),
-    )?;
+    writeln!(f, "Target: {}", env!("VERGEN_CARGO_TARGET_TRIPLE"),)?;
+    writeln!(f, "Opt level: {}", env!("VERGEN_CARGO_OPT_LEVEL"))?;
     writeln!(f, "Features: {}", env!("VERGEN_CARGO_FEATURES"))?;
 
     Ok(())
@@ -124,7 +120,7 @@ async fn main() {
         prepare_tracing(args.json_logs)
     }
 
-    info!("Starting Seafowl {}", env!("VERGEN_BUILD_SEMVER"));
+    info!("Starting Seafowl {}", env!("CARGO_PKG_VERSION"));
 
     let config_path = &args.config_path;
 

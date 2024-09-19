@@ -1,13 +1,23 @@
 use anyhow::Result;
-use vergen::{vergen, Config, ShaKind};
+use vergen_gitcl::{BuildBuilder, CargoBuilder, Emitter, GitclBuilder, RustcBuilder};
 
 fn main() -> Result<()> {
-    // Generate the default 'cargo:' instruction output
-    let mut config = Config::default();
-    // Change the SHA output to the short variant
-    *config.git_mut().sha_kind_mut() = ShaKind::Short;
-    // Add a `-dirty` flag to the SEMVER output
-    *config.git_mut().semver_dirty_mut() = Some("-dirty");
+    let build = BuildBuilder::all_build()?;
+    let cargo = CargoBuilder::all_cargo()?;
 
-    vergen(Config::default())
+    let gitcl = GitclBuilder::default()
+        .all()
+        // Change the SHA output to the short variant
+        .sha(true)
+        // Add a `-dirty` flag to the SEMVER output
+        .dirty(true)
+        .build()?;
+    let rustc = RustcBuilder::all_rustc()?;
+
+    Emitter::default()
+        .add_instructions(&build)?
+        .add_instructions(&cargo)?
+        .add_instructions(&gitcl)?
+        .add_instructions(&rustc)?
+        .emit()
 }

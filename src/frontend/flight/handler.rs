@@ -29,7 +29,7 @@ lazy_static! {
         let mut builder = SqlInfoDataBuilder::new();
         // Server information
         builder.append(SqlInfo::FlightSqlServerName, "Seafowl Flight SQL Server");
-        builder.append(SqlInfo::FlightSqlServerVersion, env!("VERGEN_GIT_SEMVER"));
+        builder.append(SqlInfo::FlightSqlServerVersion, env!("VERGEN_RUSTC_SEMVER"));
         // 1.3 comes from https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/Schema.fbs#L24
         builder.append(SqlInfo::FlightSqlServerArrowVersion, "1.3");
         builder.build().unwrap()

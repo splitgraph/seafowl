@@ -157,7 +157,7 @@ wiremock = "0.6"
 
 [build-dependencies]
 anyhow = "1.0.89"  # for build.rs
-vergen = "7"
+vergen-gitcl = { version = "1", features = ["build", "cargo", "rustc"] }
 
 [profile.release]
 codegen-units = 1
