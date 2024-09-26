@@ -141,7 +141,7 @@ warp = "0.3.6"
 
 # For WASM user-defined functions
 wasi-common = "25.0.0"
-wasmtime = "25.0.0"
+wasmtime = "25.0.1"
 wasmtime-wasi = "25.0.0"
 
 [dev-dependencies]
