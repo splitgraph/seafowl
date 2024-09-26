@@ -12,7 +12,7 @@ arrow-flight = "52.2.0"
 arrow-integration-test = "52.2.0"
 arrow-row = "52.2.0"
 arrow-schema = "52.2.0"
-async-trait = "0.1.82"
+async-trait = "0.1.83"
 
 datafusion = "41.0.0"
 datafusion-common = "41.0.0"
