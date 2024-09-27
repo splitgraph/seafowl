@@ -99,7 +99,7 @@ impl ObjectStoreFactory {
     }
     pub async fn get_log_store_for_table(
         &self,
-        url: Url,
+        mut url: Url,
         options: HashMap<String, String>,
         table_path: String,
     ) -> Result<Arc<dyn LogStore>, object_store::Error> {
@@ -134,16 +134,28 @@ impl ObjectStoreFactory {
             }
         };
 
+        // Any path provided in the url has not been included in the object store root, so it
+        // needs to become a part of the prefix, alongside with the actual table name (unless
+        // it's a file/memory store)
+        let prefix = if !url.path().is_empty()
+            && url.scheme() != "file"
+            && url.scheme() != "memory"
+        {
+            format!("{}/{table_path}", url.path())
+        } else {
+            table_path.clone()
+        };
+
+        // This is the least surprising way to extend the path, and make the url point to the table
+        // root: https://github.com/servo/rust-url/issues/333
+        url.path_segments_mut().unwrap().push(&table_path);
+
         let prefixed_store: PrefixStore<Arc<dyn ObjectStore>> =
-            PrefixStore::new(store, table_path.clone());
+            PrefixStore::new(store, prefix);
 
         Ok(default_logstore(
             Arc::from(prefixed_store),
-            &url.join(&table_path)
-                .map_err(|e| object_store::Error::Generic {
-                    store: "object_store_factory",
-                    source: Box::new(e),
-                })?,
+            &url,
             &Default::default(),
         ))
     }

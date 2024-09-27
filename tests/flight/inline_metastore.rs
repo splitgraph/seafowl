@@ -21,6 +21,7 @@ use crate::flight::*;
 // Testing with properly sent inline metastore
 #[case("local.file_with_store", TestServerType::InlineOnly, false)]
 #[case("s3.minio", TestServerType::InlineOnly, false)]
+#[case("s3.minio_prefix", TestServerType::InlineOnly, false)]
 #[case("gcs.fake", TestServerType::InlineOnly, false)]
 #[tokio::test]
 async fn test_inline_query(

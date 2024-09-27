@@ -228,13 +228,13 @@ impl<'de> Deserialize<'de> for AccessSettings {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(d)?;
-        return match s.as_str() {
+        match s.as_str() {
             "any" => Ok(AccessSettings::Any),
             "off" => Ok(AccessSettings::Off),
             s => Ok(AccessSettings::Password {
                 sha256_hash: s.to_string(),
             }),
-        };
+        }
     }
 }
 
