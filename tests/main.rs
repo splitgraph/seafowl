@@ -55,6 +55,7 @@ impl TestSeafowl {
 }
 
 // Actual Seafowl target running in a separate process
+#[allow(clippy::zombie_processes)]
 #[fixture]
 pub async fn test_seafowl() -> TestSeafowl {
     // Pick free ports for the frontends

@@ -150,7 +150,6 @@ pub struct CreateFunctionDetails {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
 
