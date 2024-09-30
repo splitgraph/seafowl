@@ -28,11 +28,39 @@ use std::path::{Path, PathBuf};
 
 use moka::policy::EvictionPolicy;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 pub const DEFAULT_MIN_FETCH_SIZE: u64 = 1024 * 1024; // 1 MiB
 pub const DEFAULT_CACHE_CAPACITY: u64 = 1024 * 1024 * 1024; // 1 GiB
 pub const DEFAULT_CACHE_ENTRY_TTL: Duration = Duration::from_secs(3 * 60);
+
+const LOGTRACE: &str = "LOGTRACE";
+
+fn current_epoch_nanos() -> u128 {
+    let duration_since_epoch = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap();
+
+    duration_since_epoch.as_nanos()
+}
+
+fn log_cache_trace_event(
+    event: &str,
+    path: &object_store::path::Path,
+    range: Range<usize>,
+    start: u128,
+    end: u128,
+) {
+    debug!(
+        event = event,
+        filename = path.to_string(),
+        range_start = range.start,
+        range_end = range.end,
+        start = start,
+        end = end,
+        LOGTRACE
+    );
+}
 
 #[derive(Debug)]
 struct CacheFileManager {
@@ -57,10 +85,18 @@ impl CacheFileManager {
         }
 
         let start = Instant::now();
+        let epoch_start = current_epoch_nanos();
         tokio::fs::write(&path, data.as_ref()).await?;
 
         debug!("Written data for {:?} to {:?}", cache_key, path);
         self.metrics.log_cache_disk_write(start, data.len());
+        log_cache_trace_event(
+            "write_file",
+            &cache_key.path,
+            cache_key.range.clone(),
+            epoch_start,
+            current_epoch_nanos(),
+        );
         Ok(path)
     }
 
@@ -322,6 +358,9 @@ impl CachingObjectStore {
             key, value, cause
         );
 
+        let start = current_epoch_nanos();
+        let mut end: Option<u128> = None;
+
         if cause != RemovalCause::Replaced {
             file_manager
                 .metrics
@@ -331,6 +370,7 @@ impl CachingObjectStore {
                 .metrics
                 .cache_usage
                 .decrement(value.size() as f64);
+            end = Some(current_epoch_nanos());
         };
 
         if let CacheValue::File(path, _) = value {
@@ -339,7 +379,19 @@ impl CachingObjectStore {
             if let Err(e) = file_manager.remove_file(&path).await {
                 file_manager.metrics.deletion_errors.increment(1);
                 error!("Failed to remove a data file at {path:?}: {:?}", e);
+            } else {
+                end = Some(current_epoch_nanos())
             }
+        }
+
+        if let Some(end) = end {
+            log_cache_trace_event(
+                "cache_eviction",
+                &key.path,
+                key.range.clone(),
+                start,
+                end,
+            )
         }
     }
 
@@ -422,7 +474,15 @@ impl CachingObjectStore {
         range: Range<usize>,
     ) -> object_store::Result<Bytes> {
         let start = Instant::now();
-        let result = self.inner.get_range(location, range).await;
+        let epoch_start = current_epoch_nanos();
+        let result = self.inner.get_range(location, range.clone()).await;
+        log_cache_trace_event(
+            "get_range_outbound",
+            location,
+            range,
+            epoch_start,
+            current_epoch_nanos(),
+        );
         self.metrics.log_get_range_outbound_request(start, &result);
         result
     }
@@ -463,6 +523,8 @@ impl CachingObjectStore {
                 range: chunk_range.clone(),
             };
 
+            let start = current_epoch_nanos();
+
             let chunk_data = match self.cache.get(&key).await {
                 // If the value is missing extend the chunk range to fetch and continue
                 None => {
@@ -474,13 +536,29 @@ impl CachingObjectStore {
                     match value {
                         CacheValue::Memory(data) => {
                             debug!("Cache value for {key:?} fetched from memory");
+                            log_cache_trace_event(
+                                "cache_read_memory",
+                                location,
+                                chunk_range.clone(),
+                                start,
+                                current_epoch_nanos(),
+                            );
                             self.metrics.log_cache_memory_read(data.len());
                             Some(data.clone())
                         }
                         CacheValue::File(path, _) => {
                             debug!("Cache value for {key:?} fetching from the file");
                             match self.file_manager.read_file(path).await {
-                                Ok(data) => Some(data),
+                                Ok(data) => {
+                                    log_cache_trace_event(
+                                        "cache_read_disk",
+                                        location,
+                                        chunk_range.clone(),
+                                        start,
+                                        current_epoch_nanos(),
+                                    );
+                                    Some(data)
+                                }
                                 Err(err) => {
                                     warn!(
                                         "Re-downloading cache value for {key:?}: {err}"
@@ -661,6 +739,7 @@ impl ObjectStore for CachingObjectStore {
         self.metrics
             .get_range_bytes
             .increment((range.end - range.start).try_into().unwrap());
+        let start = current_epoch_nanos();
 
         debug!("{location}-{range:?} get_range");
         // Expand the range to the next max_fetch_size (+ alignment)
@@ -679,6 +758,13 @@ impl ObjectStore for CachingObjectStore {
         data.advance(offset);
         data.truncate(range.end - range.start);
         debug!("{location}-{range:?} return");
+        log_cache_trace_event(
+            "get_range_request",
+            location,
+            range,
+            start,
+            current_epoch_nanos(),
+        );
         Ok(data)
     }
 
