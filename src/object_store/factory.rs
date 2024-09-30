@@ -148,7 +148,12 @@ impl ObjectStoreFactory {
 
         // This is the least surprising way to extend the path, and make the url point to the table
         // root: https://github.com/servo/rust-url/issues/333
-        url.path_segments_mut().unwrap().push(&table_path);
+        url.path_segments_mut()
+            .map_err(|_| object_store::Error::Generic {
+                store: "object_store_factory",
+                source: "The provided URL is a cannot-be-a-base URL".into(),
+            })?
+            .push(&table_path);
 
         let prefixed_store: PrefixStore<Arc<dyn ObjectStore>> =
             PrefixStore::new(store, prefix);
