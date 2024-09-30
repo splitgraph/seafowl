@@ -149,7 +149,7 @@ assert_cmd = "2"
 assert_unordered = "0.3"
 aws-config = { version = "1.5.6", features = ["behavior-version-latest"] }
 aws-credential-types = { version = "1.2.1", features = ["hardcoded-credentials"] }
-aws-sdk-sts = { version = "1.43.0", features = ["behavior-version-latest"] }
+aws-sdk-sts = { version = "1.44.0", features = ["behavior-version-latest"] }
 rstest = "*"
 serial_test = "3"
 tonic-reflection = "0.11"
