@@ -1,53 +1,53 @@
-/// Default implementation for a Repository that factors out common
-/// query patterns / SQL queries between Postgres and SQLite.
-///
-/// Usage:
-///
-/// The struct has to have certain fields, since this macro relies on them:
-///
-/// ```ignore
-/// pub struct MyRepository {
-///     pub executor: sqlx::Pool<sqlx::SqlxDatabaseType>
-/// }
-///
-/// impl MyRepository {
-///     pub const MIGRATOR: sqlx::Migrator = sqlx::migrate!("my/migrations");
-///     pub const QUERIES: RepositoryQueries = RepositoryQueries {
-///         all_columns_in_database: "SELECT ...",
-///     }
-///     pub fn interpret_error(error: sqlx::Error) -> Error {
-///         // Interpret the database-specific error code and turn some sqlx errors
-///         // into the Error enum values like UniqueConstraintViolation/FKConstraintViolation
-///         // ...
-///     }
-/// }
-///
-/// implement_repository!(SqliteRepository)
-/// ```
-///
-/// Gigajank alert: why are we doing this? The code between PG and SQLite is extremely similar.
-/// But, I couldn't find a better way to factor it out in order to reduce duplication.
-/// Here's what I tried:
-///
-///   - Use a generic `Pool<Any>`. This causes a weird borrow checker error when using a
-///     `QueryBuilder` (https://github.com/launchbadge/sqlx/issues/1978)
-///   - Make the implementation generic over any DB (that implements sqlx::Database). In that
-///     case, we need to add a bunch of `where` clauses to the implementation giving constraints
-///     on the argument, the query and the result types (see https://stackoverflow.com/a/70573732).
-///     And, when we do that, we hit the borrow checker error again from #1.
-///   - Add macros with default implementations for everything in the Repository trait and use them
-///     instead of putting the whole implementation in a macro. This conflicts with the #[async_trait]
-///     macro and breaks it (see https://stackoverflow.com/q/68573578). Another solution in that SO
-///     question is generating the implementation functions with a macro and calling them
-///     from the trait, which could work but still means we have to write out all functions in the
-///     PG implementation, SQLite implementation and the macros for both variants of the implementation
-///     functions (since we can't build a function that's generic over any DB)
-///
-/// In any case, this means we have to remove compile-time query checking (even if we duplicate the code
-/// completely), see https://github.com/launchbadge/sqlx/issues/121 and
-/// https://github.com/launchbadge/sqlx/issues/916.
+//! Default implementation for a Repository that factors out common
+//! query patterns / SQL queries between Postgres and SQLite.
+//!
+//! Usage:
+//!
+//! The struct has to have certain fields, since this macro relies on them:
+//!
+//! ```ignore
+//! pub struct MyRepository {
+//!     pub executor: sqlx::Pool<sqlx::SqlxDatabaseType>
+//! }
+//!
+//! impl MyRepository {
+//!     pub const MIGRATOR: sqlx::Migrator = sqlx::migrate!("my/migrations");
+//!     pub const QUERIES: RepositoryQueries = RepositoryQueries {
+//!         all_columns_in_database: "SELECT ...",
+//!     }
+//!     pub fn interpret_error(error: sqlx::Error) -> Error {
+//!         // Interpret the database-specific error code and turn some sqlx errors
+//!         // into the Error enum values like UniqueConstraintViolation/FKConstraintViolation
+//!         // ...
+//!     }
+//! }
+//!
+//! implement_repository!(SqliteRepository)
+//! ```
+//!
+//! Gigajank alert: why are we doing this? The code between PG and SQLite is extremely similar.
+//! But, I couldn't find a better way to factor it out in order to reduce duplication.
+//! Here's what I tried:
+//!
+//!   - Use a generic `Pool<Any>`. This causes a weird borrow checker error when using a
+//!     `QueryBuilder` (https://github.com/launchbadge/sqlx/issues/1978)
+//!   - Make the implementation generic over any DB (that implements sqlx::Database). In that
+//!     case, we need to add a bunch of `where` clauses to the implementation giving constraints
+//!     on the argument, the query and the result types (see https://stackoverflow.com/a/70573732).
+//!     And, when we do that, we hit the borrow checker error again from #1.
+//!   - Add macros with default implementations for everything in the Repository trait and use them
+//!     instead of putting the whole implementation in a macro. This conflicts with the #[async_trait]
+//!     macro and breaks it (see https://stackoverflow.com/q/68573578). Another solution in that SO
+//!     question is generating the implementation functions with a macro and calling them
+//!     from the trait, which could work but still means we have to write out all functions in the
+//!     PG implementation, SQLite implementation and the macros for both variants of the implementation
+//!     functions (since we can't build a function that's generic over any DB)
+//!
+//! In any case, this means we have to remove compile-time query checking (even if we duplicate the code
+//! completely), see https://github.com/launchbadge/sqlx/issues/121 and
+//! https://github.com/launchbadge/sqlx/issues/916.
 
-/// Queries that are different between SQLite and PG
+// Queries that are different between SQLite and PG
 pub struct RepositoryQueries {
     pub latest_table_versions: &'static str,
     pub cast_timestamp: &'static str,
