@@ -133,8 +133,11 @@ impl SeafowlSyncPlanner {
     ) -> SyncResult<(SyncSchema, DataFrame)> {
         let first_sync = syncs.first().unwrap();
         let mut sync_schema = first_sync.sync_schema.clone();
-        let first_batch = first_sync.batch.clone();
-        let provider = MemTable::try_new(first_batch.schema(), vec![vec![first_batch]])?;
+        let first_sync_data = first_sync.data.clone();
+        let provider = MemTable::try_new(
+            first_sync_data.first().unwrap().schema(),
+            vec![first_sync_data],
+        )?;
         let mut sync_plan = LogicalPlanBuilder::scan(
             LOWER_REL,
             provider_as_source(Arc::new(provider)),
@@ -148,7 +151,7 @@ impl SeafowlSyncPlanner {
                 &sync_schema,
                 sync_plan,
                 &sync.sync_schema,
-                sync.batch.clone(),
+                sync.data.first().unwrap().clone(),
             )?;
         }
 
@@ -945,9 +948,9 @@ mod tests {
         )?;
 
         let sync_item = DataSyncItem {
-            tx_id: Default::default(),
+            tx_ids: Default::default(),
             sync_schema,
-            batch,
+            data: vec![batch],
         };
 
         ctx.plan_query("CREATE TABLE test_table(c1 INT, c2 TEXT)")

@@ -149,6 +149,21 @@ impl SyncSchema {
             })
             .unwrap_or_default()
     }
+
+    // Check whether this and the other sync schemas are the same.
+    //
+    // This is a narrower check than the equality check, since it checks for the sync column roles,
+    // names, data types and order (and doesn't inspect the underlying arrows field equality).
+    pub fn same(&self, other: &SyncSchema) -> bool {
+        self.columns()
+            .iter()
+            .zip(other.columns().iter())
+            .all(|(this, other)| {
+                this.name == other.name
+                    && this.role == other.role
+                    && this.field().data_type() == other.field().data_type()
+            })
+    }
 }
 
 impl Display for SyncSchema {
