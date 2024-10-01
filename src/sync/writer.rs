@@ -25,6 +25,7 @@ use crate::sync::{Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult}
 
 // Denotes the last sequence number that was fully committed
 pub const SYNC_COMMIT_INFO: &str = "sync_commit_info";
+const MAX_ROWS_PER_SYNC: usize = 100_000;
 
 // A handler for caching, coalescing and flushing table syncs received via
 // the Arrow Flight `do_put` calls.
@@ -114,6 +115,9 @@ pub(super) struct DataSyncCollection {
 // An object corresponding to a single `do_put` call.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct DataSyncItem {
+    // Flag denoting whether the batches have been physically squashed yet or not. If true there is
+    // a single record batch in the `data` field, and this is strictly the case during flushing.
+    pub(super) squashed: bool,
     // The (internal) id of the transaction that this change belongs to; for now it corresponds to
     // a random v4 UUID generated for the first message received in this transaction.
     pub(super) tx_ids: Vec<Uuid>,
@@ -223,15 +227,16 @@ impl SeafowlDataSyncWriter {
                     let prev_item = entry.syncs.last_mut().unwrap();
                     let (_, prev_rows) = size_and_rows(&prev_item.data);
                     if prev_item.sync_schema.same(&sync_schema)
-                        && prev_rows + sync_rows < 100_000
+                        && prev_rows + sync_rows <= MAX_ROWS_PER_SYNC
                     {
                         // Just append to the last item if the sync schema matches and the row count
                         // is smaller than a predefined value
+                        prev_item.squashed = false;
                         prev_item.tx_ids.push(tx_id);
                         prev_item.data.extend(batches.clone());
-                        // TODO: Concatenate batches after we have ? of them to reduce the overhead
                     } else {
                         entry.syncs.push(DataSyncItem {
+                            squashed: false,
                             tx_ids: vec![tx_id],
                             sync_schema: sync_schema.clone(),
                             data: batches.clone(),
@@ -246,6 +251,7 @@ impl SeafowlDataSyncWriter {
                     insertion_time: now(),
                     log_store,
                     syncs: vec![DataSyncItem {
+                        squashed: false,
                         tx_ids: vec![tx_id],
                         sync_schema: sync_schema.clone(),
                         data: batches,
@@ -298,7 +304,7 @@ impl SeafowlDataSyncWriter {
     }
 
     pub async fn flush(&mut self) -> SyncResult<()> {
-        while let Some(url) = self.flush_ready() {
+        while let Some(url) = self.flush_ready()? {
             self.flush_syncs(url).await?;
         }
 
@@ -315,7 +321,7 @@ impl SeafowlDataSyncWriter {
     // Criteria for return the cached entry ready to be persisted to storage.
     // First flush any records that are explicitly beyond the configured max
     // lag, followed by further entries if we're still above max cache size.
-    fn flush_ready(&mut self) -> Option<String> {
+    fn flush_ready(&mut self) -> SyncResult<Option<String>> {
         if let Some((url, sync)) = self.syncs.first()
             && now() - sync.insertion_time
                 >= self.context.config.misc.sync_conf.max_replication_lag_s
@@ -325,13 +331,27 @@ impl SeafowlDataSyncWriter {
                 "Flushing due to lag-based criteria ({}): {url}",
                 sync.insertion_time
             );
-            Some(url.clone())
-        } else if self.size >= self.context.config.misc.sync_conf.max_in_memory_bytes {
-            // Or if we're over the size limit flush the oldest entry
-            let url = self.syncs.first().map(|kv| kv.0.clone()).unwrap();
-            info!("Flushing due to size-based criteria ({}): {url}", self.size);
-            Some(url.clone())
-        } else if let Some((url, entry)) = self.syncs.iter().find(|(_, entry)| {
+            return Ok(Some(url.clone()));
+        }
+
+        if self.size >= self.context.config.misc.sync_conf.max_in_memory_bytes {
+            // Or if we're over the size limit try squashing the largest entry
+            if let Some((url, _)) = self.syncs.iter().max_by_key(|(_, entry)| entry.size)
+            {
+                let url = url.clone();
+                self.physical_squashing(&url)?;
+
+                // And if we're still above the threshold flush
+                if self.size >= self.context.config.misc.sync_conf.max_in_memory_bytes {
+                    info!("Flushing due to size-based criteria ({}): {url}", self.size);
+                    return Ok(Some(url));
+                }
+            }
+        }
+
+        // TODO: Given that we have logical squashing now, this criteria can be removed, i.e. by
+        // recursively squashing 100 syncs until we can apply the compacted batches to the base scan
+        if let Some((url, entry)) = self.syncs.iter().find(|(_, entry)| {
             entry.syncs.len() >= self.context.config.misc.sync_conf.max_syncs_per_url
         }) {
             // Otherwise if there are pending syncs with more than a predefined number of calls
@@ -340,15 +360,14 @@ impl SeafowlDataSyncWriter {
             // results in deeply nested plan trees that are known to be problematic for now:
             // - https://github.com/apache/datafusion/issues/9373
             // - https://github.com/apache/datafusion/issues/9375
-            // TODO: Make inter-sync squashing work when/even in absence of sync schema match
             info!(
                 "Flushing due to max-sync messages criteria ({}): {url}",
                 entry.syncs.len()
             );
-            Some(url.clone())
-        } else {
-            None
+            return Ok(Some(url.clone()));
         }
+
+        Ok(None)
     }
 
     // Flush the table containing the oldest sync in memory
@@ -452,8 +471,7 @@ impl SeafowlDataSyncWriter {
         let tx_ids = entry
             .syncs
             .iter()
-            .map(|sync| sync.tx_ids.clone())
-            .flatten()
+            .flat_map(|sync| sync.tx_ids.clone())
             .unique()
             .collect();
         self.remove_tx_locations(&url, tx_ids);
@@ -479,11 +497,14 @@ impl SeafowlDataSyncWriter {
     // Perform physical squashing of change batches for a particular table
     fn physical_squashing(&mut self, url: &String) -> SyncResult<()> {
         if let Some(table_syncs) = self.syncs.get_mut(url) {
+            debug!(
+                "Total {} in-memory bytes before squashing syncs for {url}",
+                self.size
+            );
             // Squash the batches and measure the time it took and the reduction in rows/size
-            let mut new_size = 0;
-            let mut new_rows = 0;
-            for item in table_syncs.syncs.iter_mut() {
-                let (sync_size, sync_rows) = size_and_rows(&item.data);
+            // TODO: parallelize this
+            for item in table_syncs.syncs.iter_mut().filter(|i| !i.squashed) {
+                let (old_size, old_rows) = size_and_rows(&item.data);
 
                 let start = Instant::now();
                 let batch = squash_batches(&item.sync_schema, &item.data)?;
@@ -492,29 +513,38 @@ impl SeafowlDataSyncWriter {
                 // Get new size and row count
                 let size = batch.get_array_memory_size();
                 let rows = batch.num_rows();
+                let size_delta = old_size as i64 - size as i64;
+                let rows_delta = old_rows as i64 - rows as i64;
                 debug!(
-                    "Physical squashing removed {} rows in {duration} ms for batches with schema \n{}",
-                    sync_rows - rows,
+                    "Physical squashing removed {size_delta} rows in {duration} ms for batches with schema \n{}",
                     item.sync_schema,
                 );
-
-                new_size += size;
-                new_rows += rows;
-                item.data = vec![batch];
 
                 self.metrics.squash_time.record(duration as f64);
                 self.metrics
                     .squashed_bytes
-                    .increment((sync_size.saturating_sub(size)) as u64);
+                    .increment((old_size.saturating_sub(size)) as u64);
                 self.metrics
                     .squashed_rows
-                    .increment((sync_rows - rows) as u64);
+                    .increment(old_rows.saturating_sub(rows) as u64);
+                self.metrics.in_memory_bytes.decrement(size_delta as f64);
+                self.metrics.in_memory_rows.increment(rows_delta as f64);
+
+                self.size -= old_size;
+                self.size += size;
+                table_syncs.size -= old_size;
+                table_syncs.size += size;
+                table_syncs.rows -= old_rows;
+                table_syncs.rows += rows;
+
+                item.squashed = true;
+                item.data = vec![batch];
             }
 
-            self.size -= table_syncs.size;
-            self.size += new_size;
-            table_syncs.size = new_size;
-            table_syncs.rows = new_rows;
+            debug!(
+                "Total {} in-memory bytes after squashing syncs for {url}",
+                self.size
+            );
         };
 
         Ok(())

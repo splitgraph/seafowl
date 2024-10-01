@@ -700,11 +700,13 @@ mod tests {
 
         let syncs = &[
             DataSyncItem {
+                squashed: true,
                 tx_ids: vec![Uuid::new_v4()],
                 sync_schema: sync_schema.clone(),
                 data: vec![batch_1],
             },
             DataSyncItem {
+                squashed: true,
                 tx_ids: vec![Uuid::new_v4()],
                 sync_schema,
                 data: vec![batch_2],
@@ -823,11 +825,13 @@ mod tests {
 
         let syncs = &[
             DataSyncItem {
+                squashed: true,
                 tx_ids: vec![Uuid::new_v4()],
                 sync_schema: sync_schema.clone(),
                 data: vec![batch_1],
             },
             DataSyncItem {
+                squashed: true,
                 tx_ids: vec![Uuid::new_v4()],
                 sync_schema,
                 data: vec![batch_2],
