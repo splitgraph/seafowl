@@ -948,7 +948,7 @@ mod tests {
         )?;
 
         let sync_item = DataSyncItem {
-            squashed: true,
+            is_squashed: true,
             tx_ids: Default::default(),
             sync_schema,
             data: vec![batch],

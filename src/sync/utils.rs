@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::log::warn;
 
 // Returns the total number of bytes and rows in the slice of batches
-pub(super) fn size_and_rows(batches: &[RecordBatch]) -> (usize, usize) {
+pub(super) fn get_size_and_rows(batches: &[RecordBatch]) -> (usize, usize) {
     batches.iter().fold((0, 0), |(size, rows), batch| {
         (
             size + batch.get_array_memory_size(),
@@ -700,13 +700,13 @@ mod tests {
 
         let syncs = &[
             DataSyncItem {
-                squashed: true,
+                is_squashed: true,
                 tx_ids: vec![Uuid::new_v4()],
                 sync_schema: sync_schema.clone(),
                 data: vec![batch_1],
             },
             DataSyncItem {
-                squashed: true,
+                is_squashed: true,
                 tx_ids: vec![Uuid::new_v4()],
                 sync_schema,
                 data: vec![batch_2],
@@ -825,13 +825,13 @@ mod tests {
 
         let syncs = &[
             DataSyncItem {
-                squashed: true,
+                is_squashed: true,
                 tx_ids: vec![Uuid::new_v4()],
                 sync_schema: sync_schema.clone(),
                 data: vec![batch_1],
             },
             DataSyncItem {
-                squashed: true,
+                is_squashed: true,
                 tx_ids: vec![Uuid::new_v4()],
                 sync_schema,
                 data: vec![batch_2],

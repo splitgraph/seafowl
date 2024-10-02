@@ -152,9 +152,9 @@ impl SyncSchema {
 
     // Check whether this and the other sync schemas are the same.
     //
-    // This is a narrower check than the equality check, since it checks for the sync column roles,
+    // This is a shallower check than the equality check, since it checks for the sync column roles,
     // names, data types and order (and doesn't inspect the underlying arrows field equality).
-    pub fn same(&self, other: &SyncSchema) -> bool {
+    pub fn is_compatible_with(&self, other: &SyncSchema) -> bool {
         self.columns()
             .iter()
             .zip(other.columns().iter())
