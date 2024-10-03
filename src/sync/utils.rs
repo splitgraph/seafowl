@@ -13,6 +13,16 @@ use datafusion_expr::{col, lit, Accumulator, Expr};
 use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::log::warn;
 
+// Returns the total number of bytes and rows in the slice of batches
+pub(super) fn get_size_and_rows(batches: &[RecordBatch]) -> (usize, usize) {
+    batches.iter().fold((0, 0), |(size, rows), batch| {
+        (
+            size + batch.get_array_memory_size(),
+            rows + batch.num_rows(),
+        )
+    })
+}
+
 // Compact a set of record batches into a single one, squashing any chain of changes to a given row
 // into a single row in the output batch.
 // This means that if a row is changed multiple times, only the last change will be reflected in the
@@ -20,11 +30,11 @@ use tracing::log::warn;
 // accompanying Changed field was `true`).
 pub(super) fn squash_batches(
     sync_schema: &SyncSchema,
-    data: Vec<RecordBatch>,
+    data: &[RecordBatch],
 ) -> Result<RecordBatch> {
     // Concatenate all the record batches into a single one
     let schema = data.first().unwrap().schema();
-    let batch = concat_batches(&schema, &data)?;
+    let batch = concat_batches(&schema, data)?;
 
     // Get columns, sort fields and null arrays for a particular role
     let columns = |role: ColumnRole| -> (Vec<ArrayRef>, (Vec<SortField>, Vec<ArrayRef>)) {
@@ -252,7 +262,9 @@ pub(super) fn construct_qualifier(
             .try_for_each(|(pk_col, (min_value, max_value))| {
                 let field = sync.sync_schema.column(pk_col, role).unwrap().field();
 
-                if let Some(pk_array) = sync.batch.column_by_name(field.name()) {
+                if let Some(pk_array) =
+                    sync.data.first().unwrap().column_by_name(field.name())
+                {
                     min_value.update_batch(&[pk_array.clone()])?;
                     max_value.update_batch(&[pk_array.clone()])?;
                 }
@@ -347,8 +359,12 @@ pub(super) fn get_prune_map(
                         .iter()
                         .filter(|col| col.role() == role)
                     {
-                        let array =
-                            sync.batch.column_by_name(pk_col.field().name()).unwrap();
+                        let array = sync
+                            .data
+                            .first()
+                            .unwrap()
+                            .column_by_name(pk_col.field().name())
+                            .unwrap();
 
                         // Scope out any NULL values, which only denote no-PKs when inserting/deleting.
                         // We re-use the same non-null map since there can't be a scenario where
@@ -486,7 +502,7 @@ mod tests {
             ],
         )?;
 
-        let squashed = squash_batches(&sync_schema, vec![batch.clone()])?;
+        let squashed = squash_batches(&sync_schema, &[batch.clone()])?;
 
         let expected = [
             "+-----------+-----------+----------+------------+----------+",
@@ -635,7 +651,7 @@ mod tests {
             ],
         )?;
 
-        let squashed = squash_batches(&sync_schema, vec![batch.clone()])?;
+        let squashed = squash_batches(&sync_schema, &[batch.clone()])?;
         println!(
             "Squashed PKs from {row_count} to {} rows",
             squashed.num_rows()
@@ -684,14 +700,16 @@ mod tests {
 
         let syncs = &[
             DataSyncItem {
-                tx_id: Uuid::new_v4(),
+                is_squashed: true,
+                tx_ids: vec![Uuid::new_v4()],
                 sync_schema: sync_schema.clone(),
-                batch: batch_1,
+                data: vec![batch_1],
             },
             DataSyncItem {
-                tx_id: Uuid::new_v4(),
+                is_squashed: true,
+                tx_ids: vec![Uuid::new_v4()],
                 sync_schema,
-                batch: batch_2,
+                data: vec![batch_2],
             },
         ];
 
@@ -807,14 +825,16 @@ mod tests {
 
         let syncs = &[
             DataSyncItem {
-                tx_id: Uuid::new_v4(),
+                is_squashed: true,
+                tx_ids: vec![Uuid::new_v4()],
                 sync_schema: sync_schema.clone(),
-                batch: batch_1,
+                data: vec![batch_1],
             },
             DataSyncItem {
-                tx_id: Uuid::new_v4(),
+                is_squashed: true,
+                tx_ids: vec![Uuid::new_v4()],
                 sync_schema,
-                batch: batch_2,
+                data: vec![batch_2],
             },
         ];
 

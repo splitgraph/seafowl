@@ -32,11 +32,16 @@ services:
       MINIO_IDENTITY_OPENID_CLIENT_SECRET: "ZXhhbXBsZS1hcHAtc2VjcmV0"
       MINIO_IDENTITY_OPENID_CLAIM_NAME: "name"
     command: minio server /data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 1s
 
   createbuckets:
     image: minio/mc:latest
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
     volumes:
       - ./tests/data:/test-data
     entrypoint: >
