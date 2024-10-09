@@ -119,7 +119,12 @@ pub async fn build_object_store_from_opts(
             Ok(store)
         }
         ObjectStoreScheme::Local => {
-            Ok(Box::new(LocalFileSystem::new_with_prefix(url.path())?))
+            let store = local::LocalConfig {
+                data_dir: url.path().to_string(),
+                disable_hardlinks: false,
+            }
+            .build_local_storage()?;
+            Ok(Box::new(store))
         }
         ObjectStoreScheme::AmazonS3 => {
             let mut s3_options = aws::map_options_into_amazon_s3_config_keys(options)?;
