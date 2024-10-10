@@ -8,8 +8,8 @@ use google::GCSConfig;
 use local::LocalConfig;
 
 use object_store::{
-    memory::InMemory, parse_url_opts, path::Path,
-    prefix::PrefixStore, DynObjectStore, ObjectStore, ObjectStoreScheme,
+    memory::InMemory, parse_url_opts, path::Path, prefix::PrefixStore, DynObjectStore,
+    ObjectStore, ObjectStoreScheme,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
