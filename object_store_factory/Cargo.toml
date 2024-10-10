@@ -17,6 +17,3 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 
 
-[dev-dependencies]
-tokio = { workspace = true } 
-
