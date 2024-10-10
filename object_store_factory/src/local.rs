@@ -46,7 +46,8 @@ impl LocalConfig {
     pub fn build_local_storage(
         &self,
     ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
-        let store = LocalFileSystem::new_with_prefix(self.data_dir.clone())?;
+        let store = LocalFileSystem::new_with_prefix(self.data_dir.clone())?
+            .with_automatic_cleanup(true);
         Ok(Arc::new(store))
     }
 }
