@@ -58,6 +58,38 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn test_local_storage_automatic_cleanup() {
+        // Step 1: Create a temporary directory for testing
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir_path = temp_dir.path().to_path_buf();
+
+        // Step 2: Initialize the local storage with the temporary directory
+        let local_storage = LocalConfig {
+            data_dir: temp_dir_path.to_string_lossy().to_string(),
+            disable_hardlinks: false,
+        }
+        .build_local_storage()
+        .unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            // Step 3: Create a file in the local storage
+            let file_path = object_store::path::Path::from("test_file.txt");
+            local_storage
+                .put(&file_path, b"test content".to_vec().into())
+                .await
+                .unwrap();
+
+            // Step 4: Delete the file from the local storage
+            local_storage.delete(&file_path).await.unwrap();
+        });
+
+        // Step 5: Verify that the directory is empty after the deletion
+        let entries: Vec<_> = std::fs::read_dir(&temp_dir_path).unwrap().collect();
+        assert!(entries.is_empty(), "Directory is not empty after deletion");
+    }
+
+    #[test]
     fn test_config_from_hashmap_with_data_dir() {
         let mut map = HashMap::new();
         map.insert("data_dir".to_string(), "/tmp/data".to_string());
