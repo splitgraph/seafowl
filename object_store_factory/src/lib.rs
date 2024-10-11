@@ -8,8 +8,8 @@ use google::GCSConfig;
 use local::LocalConfig;
 
 use object_store::{
-    local::LocalFileSystem, memory::InMemory, parse_url_opts, path::Path,
-    prefix::PrefixStore, DynObjectStore, ObjectStore, ObjectStoreScheme,
+    memory::InMemory, parse_url_opts, path::Path, prefix::PrefixStore, DynObjectStore,
+    ObjectStore, ObjectStoreScheme,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -119,7 +119,12 @@ pub async fn build_object_store_from_opts(
             Ok(store)
         }
         ObjectStoreScheme::Local => {
-            Ok(Box::new(LocalFileSystem::new_with_prefix(url.path())?))
+            let store = local::LocalConfig {
+                data_dir: url.path().to_string(),
+                disable_hardlinks: false,
+            }
+            .build_local_storage()?;
+            Ok(Box::new(store))
         }
         ObjectStoreScheme::AmazonS3 => {
             let mut s3_options = aws::map_options_into_amazon_s3_config_keys(options)?;
