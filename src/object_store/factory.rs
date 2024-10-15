@@ -143,11 +143,7 @@ impl ObjectStoreFactory {
             }
         };
 
-        Ok(default_logstore(
-            store,
-            &url,
-            &Default::default(),
-        ))
+        Ok(default_logstore(store, &url, &Default::default()))
     }
 
     pub fn get_default_log_store(&self, path: &str) -> Option<Arc<dyn LogStore>> {
