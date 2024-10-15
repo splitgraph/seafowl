@@ -110,7 +110,8 @@ impl ObjectStoreFactory {
                 store: "object_store_factory",
                 source: "The provided URL is a cannot-be-a-base URL".into(),
             })?
-            .push(&table_path);
+            .pop_if_empty()
+            .extend(table_path.split("/"));
 
         let store = {
             let used_options = options.clone();
