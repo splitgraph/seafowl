@@ -79,7 +79,7 @@ base64 = "0.22.1"
 bytes = "1.7.2"
 chrono = { version = "0.4", default-features = false }
 clade = { path = "clade" }
-clap = { version = "4.5.18", features = [ "derive" ] }
+clap = { version = "4.5.19", features = [ "derive" ] }
 config = "0.14.0"
 
 # PG wire protocol support
@@ -99,7 +99,7 @@ deltalake = { git = "https://github.com/delta-io/delta-rs", rev = "46b38d20f4c0e
 
 futures = "0.3"
 hex = ">=0.4.0"
-indexmap = "2.5.0"
+indexmap = "2.6.0"
 itertools = { workspace = true }
 lazy_static = ">=1.4.0"
 metrics = { version = "0.23.0" }

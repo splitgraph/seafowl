@@ -452,6 +452,9 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         ],
     )?;
 
+    // Wait for the replication lag to exceed the configured max duration
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
     let sync_result = do_put_sync(cmd.clone(), batch, &mut client).await?;
     assert_eq!(
         sync_result,
