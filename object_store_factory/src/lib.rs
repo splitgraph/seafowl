@@ -131,14 +131,20 @@ pub async fn build_object_store_from_opts(
             aws::add_amazon_s3_specific_options(url, &mut s3_options).await;
             aws::add_amazon_s3_environment_variables(&mut s3_options);
 
-            let (store, _) = parse_url_opts(url, s3_options)?;
+            let (mut store, _) = parse_url_opts(url, s3_options)?;
+            if !url.path().is_empty() {
+                store = Box::new(PrefixStore::new(store, url.path()));
+            }
             Ok(store)
         }
         ObjectStoreScheme::GoogleCloudStorage => {
             let mut gcs_options = google::map_options_into_google_config_keys(options)?;
             google::add_google_cloud_storage_environment_variables(&mut gcs_options);
 
-            let (store, _) = parse_url_opts(url, gcs_options)?;
+            let (mut store, _) = parse_url_opts(url, gcs_options)?;
+            if !url.path().is_empty() {
+                store = Box::new(PrefixStore::new(store, url.path()));
+            }
             Ok(store)
         }
         _ => {
