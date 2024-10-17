@@ -39,6 +39,32 @@ pub struct StorageLocationInfo {
 }
 
 impl ObjectStoreConfig {
+    pub async fn build_from_json(
+        url: &Url,
+        json_str: &str,
+    ) -> Result<ObjectStoreConfig, object_store::Error> {
+        let (scheme, _) = ObjectStoreScheme::parse(url)?;
+
+        match scheme {
+            ObjectStoreScheme::Memory => Ok(ObjectStoreConfig::Memory),
+            ObjectStoreScheme::Local => {
+                let config: LocalConfig = serde_json::from_str(json_str).unwrap();
+                Ok(ObjectStoreConfig::Local(config))
+            }
+            ObjectStoreScheme::AmazonS3 => {
+                let config: S3Config = serde_json::from_str(json_str).unwrap();
+                Ok(ObjectStoreConfig::AmazonS3(config))
+            }
+            ObjectStoreScheme::GoogleCloudStorage => {
+                let config: GCSConfig = serde_json::from_str(json_str).unwrap();
+                Ok(ObjectStoreConfig::GoogleCloudStorage(config))
+            }
+            _ => {
+                unimplemented!();
+            }
+        }
+    }
+    
     pub fn to_hashmap(&self) -> HashMap<String, String> {
         match self {
             ObjectStoreConfig::Local(config) => config.to_hashmap(),
