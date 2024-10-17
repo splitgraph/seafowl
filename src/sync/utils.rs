@@ -11,7 +11,7 @@ use datafusion::physical_optimizer::pruning::PruningStatistics;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{col, lit, Accumulator, Expr};
 use std::collections::{HashMap, HashSet, VecDeque};
-use tracing::log::warn;
+use tracing::log::{debug, warn};
 
 // Returns the total number of bytes and rows in the slice of batches
 pub(super) fn get_size_and_rows(batches: &[RecordBatch]) -> (usize, usize) {
@@ -34,6 +34,7 @@ pub(super) fn squash_batches(
 ) -> Result<RecordBatch> {
     // Concatenate all the record batches into a single one
     let schema = data.first().unwrap().schema();
+    debug!("Concatenating {} batch(es)", data.len());
     let batch = concat_batches(&schema, data)?;
 
     // Get columns, sort fields and null arrays for a particular role
@@ -301,6 +302,13 @@ pub(super) fn get_prune_map(
     syncs: &[DataSyncItem],
     pruning_stats: &dyn PruningStatistics,
 ) -> SyncResult<Vec<bool>> {
+    let first_sync_schema = &syncs.first().unwrap().sync_schema;
+
+    debug!(
+        "Building prune map for {} sync(s), first sync descriptor: {}",
+        syncs.len(),
+        first_sync_schema
+    );
     let partition_count = pruning_stats.num_containers();
 
     // Maps of column, partition -> min max scalar value
@@ -308,10 +316,7 @@ pub(super) fn get_prune_map(
     let mut max_values: HashMap<(&str, usize), Scalar<ArrayRef>> = HashMap::new();
 
     // First gather the stats about the partitions and PK columns
-    for col in syncs
-        .first()
-        .unwrap()
-        .sync_schema
+    for col in first_sync_schema
         .columns()
         .iter()
         .filter(|col| col.role() == ColumnRole::OldPk)
@@ -348,6 +353,10 @@ pub(super) fn get_prune_map(
 
     for role in [ColumnRole::OldPk, ColumnRole::NewPk] {
         for sync in syncs {
+            debug!(
+                "Expanding the prune map for {:?}, sync schema {}",
+                role, sync.sync_schema
+            );
             for (ind, used) in prune_map.iter_mut().enumerate() {
                 // Perform pruning only if we don't know whether the partition is needed yet
                 if !*used {

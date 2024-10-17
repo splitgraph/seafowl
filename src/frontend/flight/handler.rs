@@ -184,8 +184,9 @@ impl SeafowlFlightHandler {
             }
         };
         let url = log_store.root_uri();
+        let num_batches = batches.len();
 
-        debug!("Processing data change with {num_rows} rows for url {url} from origin {:?} at position {:?}",
+        debug!("Processing data change with {num_rows} rows, {num_batches} batches, descriptor {sync_schema}, url {url} from origin {:?} at position {:?}",
 	       cmd.origin,
 	       cmd.sequence_number);
         match tokio::time::timeout(
