@@ -10,6 +10,7 @@ use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::DataFusionError;
 use lazy_static::lazy_static;
+use object_store_factory::local::CREATE_DIR;
 use prost::Message;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -168,6 +169,12 @@ impl SeafowlFlightHandler {
                 .get_internal_object_store()?
                 .get_log_store(&cmd.path),
             Some(store_loc) => {
+                let mut options = store_loc.options;
+                if store_loc.location.starts_with("file://") {
+                    // In case of a local FS create the table path
+                    options.insert(CREATE_DIR.to_string(), "true".to_string());
+                }
+
                 self.context
                     .metastore
                     .object_stores
@@ -177,7 +184,7 @@ impl SeafowlFlightHandler {
                                 "Couldn't parse sync location: {e}"
                             ))
                         })?,
-                        store_loc.options,
+                        options,
                         cmd.path,
                     )
                     .await?

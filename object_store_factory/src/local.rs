@@ -1,13 +1,19 @@
 use object_store::{local::LocalFileSystem, ObjectStore};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Arc;
+
+pub const DATA_DIR: &str = "data_dir";
+pub const CREATE_DIR: &str = "create_dir";
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct LocalConfig {
     pub data_dir: String,
     #[serde(default = "default_false")]
     pub disable_hardlinks: bool,
+    #[serde(default = "default_false")]
+    pub create_dir: bool,
 }
 
 fn default_false() -> bool {
@@ -20,7 +26,7 @@ impl LocalConfig {
     ) -> Result<Self, object_store::Error> {
         Ok(Self {
             data_dir: map
-                .get("data_dir")
+                .get(DATA_DIR)
                 .ok_or_else(|| object_store::Error::Generic {
                     store: "local",
                     source: "Missing data_dir".into(),
@@ -30,6 +36,7 @@ impl LocalConfig {
                 .get("disable_hardlinks")
                 .map(|s| s == "true")
                 .unwrap_or(false),
+            create_dir: map.get(CREATE_DIR).map(|s| s == "true").unwrap_or(false),
         })
     }
 
@@ -46,6 +53,16 @@ impl LocalConfig {
     pub fn build_local_storage(
         &self,
     ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+        if self.create_dir {
+            // `LocalFileSystem::new_with_prefix` will error out unless the path fully exists
+            fs::create_dir_all(self.data_dir.clone()).map_err(|e| {
+                object_store::Error::Generic {
+                    store: "LocalFileSystem",
+                    source: Box::new(e),
+                }
+            })?;
+        }
+
         let store = LocalFileSystem::new_with_prefix(self.data_dir.clone())?
             .with_automatic_cleanup(true);
         Ok(Arc::new(store))
@@ -111,6 +128,7 @@ mod tests {
         let result = LocalConfig {
             data_dir: data_dir.to_string(),
             disable_hardlinks: false,
+            create_dir: false,
         }
         .build_local_storage();
         assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result);
@@ -121,6 +139,7 @@ mod tests {
         let result = LocalConfig {
             data_dir: "".to_string(),
             disable_hardlinks: false,
+            create_dir: false,
         }
         .build_local_storage();
         assert!(result.is_err(), "Expected Err due to invalid path, got Ok");
@@ -131,6 +150,7 @@ mod tests {
         let local_config = LocalConfig {
             data_dir: "path/to/data".to_string(),
             disable_hardlinks: true,
+            create_dir: false,
         };
 
         let hashmap = local_config.to_hashmap();

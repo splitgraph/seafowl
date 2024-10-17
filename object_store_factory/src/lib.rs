@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tracing::warn;
 use url::Url;
 
+use crate::local::DATA_DIR;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -104,7 +105,7 @@ impl ObjectStoreConfig {
 
 pub async fn build_object_store_from_opts(
     url: &Url,
-    options: HashMap<String, String>,
+    mut options: HashMap<String, String>,
 ) -> Result<Box<dyn ObjectStore>, object_store::Error> {
     let (scheme, _) = ObjectStoreScheme::parse(url).unwrap();
 
@@ -119,11 +120,10 @@ pub async fn build_object_store_from_opts(
             Ok(store)
         }
         ObjectStoreScheme::Local => {
-            let store = local::LocalConfig {
-                data_dir: url.path().to_string(),
-                disable_hardlinks: false,
-            }
-            .build_local_storage()?;
+            options
+                .entry(DATA_DIR.to_string())
+                .or_insert(url.path().to_string());
+            let store = LocalConfig::from_hashmap(&options)?.build_local_storage()?;
             Ok(Box::new(store))
         }
         ObjectStoreScheme::AmazonS3 => {

@@ -525,6 +525,7 @@ mod tests {
                     ObjectStoreConfig::Local(LocalConfig {
                         data_dir: tmp_dir.path().to_string_lossy().to_string(),
                         disable_hardlinks: false,
+                        create_dir: false,
                     }),
                 ),
                 Some(tmp_dir),
