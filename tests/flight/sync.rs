@@ -2,7 +2,10 @@ use crate::fixtures::minio_options;
 use crate::flight::*;
 use clade::schema::StorageLocation;
 use clade::sync::{ColumnDescriptor, ColumnRole};
+use deltalake::DeltaTable;
+use std::collections::HashMap;
 use tempfile::TempDir;
+use url::Url;
 
 pub(crate) fn sync_cmd_to_flight_data(
     cmd: DataSyncCommand,
@@ -498,7 +501,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
 async fn test_sync_custom_store(
     #[values("local", "minio")] target_type: &str,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let (_ctx, mut client) = flight_server(TestServerType::Memory).await;
+    let (ctx, mut client) = flight_server(TestServerType::Memory).await;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
@@ -529,26 +532,41 @@ async fn test_sync_custom_store(
         ],
     )?;
 
+    let table_name = "sync_table";
+
     let temp_dir = TempDir::new().unwrap();
-    let store = if target_type == "local" {
-        let location = format!("file://{}", temp_dir.path().to_string_lossy());
-        StorageLocation {
-            name: "local_fs".to_string(),
-            location,
-            options: Default::default(),
-        }
+    let (location, options) = if target_type == "local" {
+        (
+            format!("file://{}", temp_dir.path().to_string_lossy()),
+            HashMap::new(),
+        )
     } else {
-        StorageLocation {
-            name: "minio".to_string(),
-            location: "s3://seafowl-test-bucket/some/path".to_string(),
-            options: minio_options(),
-        }
+        (
+            "s3://seafowl-test-bucket/some/path".to_string(),
+            minio_options(),
+        )
+    };
+
+    let log_store = ctx
+        .metastore
+        .object_stores
+        .get_log_store_for_table(
+            Url::parse(&location)?,
+            options.clone(),
+            table_name.to_string(),
+        )
+        .await?;
+
+    let store = StorageLocation {
+        name: "custom-store".to_string(),
+        location,
+        options,
     };
 
     let cmd = DataSyncCommand {
-        path: "sync_table".to_string(),
+        path: table_name.to_string(),
         store: Some(store),
-        column_descriptors: column_descriptors.clone(),
+        column_descriptors,
         origin: "42".to_string(),
         sequence_number: Some(1000),
     };
@@ -563,6 +581,29 @@ async fn test_sync_custom_store(
             first: true,
         }
     );
+
+    let mut table = DeltaTable::new(log_store, Default::default());
+    table.load().await?;
+
+    ctx.inner.register_table(table_name, Arc::new(table))?;
+    let results = ctx
+        .inner
+        .sql(&format!(
+            "SELECT count(*), count(distinct c1), min(c1), max(c1) FROM {table_name}"
+        ))
+        .await?
+        .collect()
+        .await?;
+
+    let expected = [
+        "+----------+-------------------------------+--------------------+--------------------+",
+        "| count(*) | count(DISTINCT sync_table.c1) | min(sync_table.c1) | max(sync_table.c1) |",
+        "+----------+-------------------------------+--------------------+--------------------+",
+        "| 100000   | 100000                        | 0                  | 99999              |",
+        "+----------+-------------------------------+--------------------+--------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
 
     Ok(())
 }
