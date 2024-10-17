@@ -136,7 +136,7 @@ tracing = { workspace = true }
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 url = "2.5"
-uuid = "1.2.1"
+uuid = "1.11.0"
 warp = "0.3.6"
 
 # For WASM user-defined functions
