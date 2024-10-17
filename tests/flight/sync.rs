@@ -1,5 +1,8 @@
+use crate::fixtures::minio_options;
 use crate::flight::*;
+use clade::schema::StorageLocation;
 use clade::sync::{ColumnDescriptor, ColumnRole};
+use tempfile::TempDir;
 
 pub(crate) fn sync_cmd_to_flight_data(
     cmd: DataSyncCommand,
@@ -486,6 +489,80 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     ];
 
     assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_sync_custom_store(
+    #[values("local", "minio")] target_type: &str,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (_ctx, mut client) = flight_server(TestServerType::Memory).await;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+        Field::new("c", DataType::Utf8, true),
+    ]));
+    let column_descriptors = vec![
+        ColumnDescriptor {
+            role: ColumnRole::OldPk as _,
+            name: "c1".to_string(),
+        },
+        ColumnDescriptor {
+            role: ColumnRole::NewPk as _,
+            name: "c1".to_string(),
+        },
+        ColumnDescriptor {
+            role: ColumnRole::Value as _,
+            name: "c2".to_string(),
+        },
+    ];
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::new_null(100_000)),
+            Arc::new(Int32Array::from((0..100_000).collect::<Vec<i32>>())),
+            Arc::new(StringArray::from(vec!["a"; 100_000])),
+        ],
+    )?;
+
+    let temp_dir = TempDir::new().unwrap();
+    let store = if target_type == "local" {
+        let location = format!("file://{}", temp_dir.path().to_string_lossy());
+        StorageLocation {
+            name: "local_fs".to_string(),
+            location,
+            options: Default::default(),
+        }
+    } else {
+        StorageLocation {
+            name: "minio".to_string(),
+            location: "s3://seafowl-test-bucket/some/path".to_string(),
+            options: minio_options(),
+        }
+    };
+
+    let cmd = DataSyncCommand {
+        path: "sync_table".to_string(),
+        store: Some(store),
+        column_descriptors: column_descriptors.clone(),
+        origin: "42".to_string(),
+        sequence_number: Some(1000),
+    };
+
+    let sync_result = do_put_sync(cmd.clone(), batch.clone(), &mut client).await?;
+    assert_eq!(
+        sync_result,
+        DataSyncResponse {
+            accepted: true,
+            memory_sequence_number: Some(1000),
+            durable_sequence_number: Some(1000),
+            first: true,
+        }
+    );
 
     Ok(())
 }
