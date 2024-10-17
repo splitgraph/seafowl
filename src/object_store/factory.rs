@@ -9,6 +9,7 @@ use deltalake::{
     storage::{FactoryRegistry, ObjectStoreRef, StorageOptions},
     DeltaResult, DeltaTableError, Path,
 };
+use object_store::prefix::PrefixStore;
 use object_store::ObjectStore;
 use object_store_factory;
 use url::Url;
@@ -103,16 +104,6 @@ impl ObjectStoreFactory {
         options: HashMap<String, String>,
         table_path: String,
     ) -> Result<Arc<dyn LogStore>, object_store::Error> {
-        // This is the least surprising way to extend the path, and make the url point to the table
-        // root: https://github.com/servo/rust-url/issues/333
-        url.path_segments_mut()
-            .map_err(|_| object_store::Error::Generic {
-                store: "object_store_factory",
-                source: "The provided URL is a cannot-be-a-base URL".into(),
-            })?
-            .pop_if_empty()
-            .extend(table_path.split("/"));
-
         let store = {
             let used_options = options.clone();
             let key = StoreCacheKey {
@@ -143,6 +134,20 @@ impl ObjectStoreFactory {
                 }
             }
         };
+
+        // The table path provided has not been included in the object store root url, so it
+        // needs to become a part of an additional prefix
+        let store = Arc::new(PrefixStore::new(store, table_path.clone()));
+
+        // This is the least surprising way to extend the path, and make the url point to the table
+        // root: https://github.com/servo/rust-url/issues/333
+        url.path_segments_mut()
+            .map_err(|_| object_store::Error::Generic {
+                store: "object_store_factory",
+                source: "The provided URL is a cannot-be-a-base URL".into(),
+            })?
+            .pop_if_empty()
+            .extend(table_path.split("/"));
 
         Ok(default_logstore(store, &url, &Default::default()))
     }

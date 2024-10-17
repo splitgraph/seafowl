@@ -37,29 +37,6 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
         })
     }
 
-    let minio_options = HashMap::from([
-        (
-            AmazonS3ConfigKey::Endpoint.as_ref().to_string(),
-            "http://127.0.0.1:9000".to_string(),
-        ),
-        (
-            AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
-            "minioadmin".to_string(),
-        ),
-        (
-            AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
-            "minioadmin".to_string(),
-        ),
-        (
-            // This has been removed from the config enum, but it can
-            // still be picked up via `AmazonS3ConfigKey::from_str`
-            AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp)
-                .as_ref()
-                .to_string(),
-            "true".to_string(),
-        ),
-    ]);
-
     ListSchemaResponse {
         schemas: vec![
             SchemaObject {
@@ -94,12 +71,12 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
             StorageLocation {
                 name: "minio".to_string(),
                 location: "s3://seafowl-test-bucket".to_string(),
-                options: minio_options.clone(),
+                options: minio_options(),
             },
             StorageLocation {
                 name: "minio-prefix".to_string(),
                 location: "s3://seafowl-test-bucket/test-data".to_string(),
-                options: minio_options,
+                options: minio_options(),
             },
             StorageLocation {
                 name: "fake-gcs".to_string(),
@@ -119,4 +96,29 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
             },
         ],
     }
+}
+
+pub fn minio_options() -> HashMap<String, String> {
+    HashMap::from([
+        (
+            AmazonS3ConfigKey::Endpoint.as_ref().to_string(),
+            "http://127.0.0.1:9000".to_string(),
+        ),
+        (
+            AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
+            "minioadmin".to_string(),
+        ),
+        (
+            AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
+            "minioadmin".to_string(),
+        ),
+        (
+            // This has been removed from the config enum, but it can
+            // still be picked up via `AmazonS3ConfigKey::from_str`
+            AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp)
+                .as_ref()
+                .to_string(),
+            "true".to_string(),
+        ),
+    ])
 }
