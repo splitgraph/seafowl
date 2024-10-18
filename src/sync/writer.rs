@@ -236,7 +236,7 @@ impl SeafowlDataSyncWriter {
                         prev_item.tx_ids.push(tx_id);
                         prev_item.data.extend(batches.clone());
                     } else {
-                        debug!("{}: Adding new sync collection for batch with schema {} (existing collection has incompatible schema)", &url, sync_schema);
+                        debug!("{}: Adding new sync item for batch with schema {} (incompatible schema or too many rows in old item)", &url, sync_schema);
                         entry.syncs.push(DataSyncItem {
                             is_squashed: false,
                             tx_ids: vec![tx_id],
