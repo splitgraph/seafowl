@@ -222,19 +222,21 @@ impl SeafowlDataSyncWriter {
             self.metrics.request_rows.increment(sync_rows as u64);
 
             self.syncs
-                .entry(url)
+                .entry(url.clone())
                 .and_modify(|entry| {
                     let prev_item = entry.syncs.last_mut().unwrap();
                     let (_, prev_rows) = get_size_and_rows(&prev_item.data);
                     if prev_item.sync_schema.is_compatible_with(&sync_schema)
                         && prev_rows + sync_rows <= MAX_ROWS_PER_SYNC
                     {
+                        debug!("{}: Appending batch with schema {} to existing sync collection with {} row(s), schema {}", &url, sync_schema, prev_rows, prev_item.sync_schema);
                         // Just append to the last item if the sync schema matches and the row count
                         // is smaller than a predefined value
                         prev_item.is_squashed = false;
                         prev_item.tx_ids.push(tx_id);
                         prev_item.data.extend(batches.clone());
                     } else {
+                        debug!("{}: Adding new sync item for batch with schema {} (incompatible schema or too many rows in old item)", &url, sync_schema);
                         entry.syncs.push(DataSyncItem {
                             is_squashed: false,
                             tx_ids: vec![tx_id],
