@@ -145,7 +145,7 @@ pub async fn build_object_store_from_opts(
             Ok(store)
         }
         ObjectStoreScheme::Local => {
-            let store = local::LocalConfig {
+            let store = LocalConfig {
                 data_dir: url.path().to_string(),
                 disable_hardlinks: false,
             }
@@ -197,6 +197,7 @@ pub async fn build_storage_location_info_from_opts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use serde_json::json;
 
     #[tokio::test]
@@ -293,5 +294,38 @@ mod tests {
 
         let result = ObjectStoreConfig::build_from_json(&url, &json_str).await;
         assert!(result.is_err());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_build_aws_object_store(#[values(true, false)] use_env: bool) {
+        let url = Url::parse("s3://my-bucket").unwrap();
+        let options: HashMap<String, String> = if use_env {
+            HashMap::new()
+        } else {
+            HashMap::from([
+                ("access_key_id".to_string(), "my-key".to_string()),
+                ("secret_access_key".to_string(), "my-secret".to_string()),
+            ])
+        };
+
+        let store = temp_env::async_with_vars(
+            [
+                ("AWS_ACCESS_KEY_ID", Some("env-key")),
+                ("AWS_SECRET_ACCESS_KEY", Some("env-secret")),
+            ],
+            build_object_store_from_opts(&url, options),
+        )
+        .await;
+
+        let debug_output = format!("{store:?}");
+        assert!(debug_output.contains("bucket: \"my-bucket\""));
+        if use_env {
+            assert!(debug_output.contains("key_id: \"env-key\""));
+            assert!(debug_output.contains("secret_key: \"env-secret\""));
+        } else {
+            assert!(debug_output.contains("key_id: \"my-key\""));
+            assert!(debug_output.contains("secret_key: \"my-secret\""));
+        }
     }
 }

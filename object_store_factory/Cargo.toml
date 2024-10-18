@@ -17,6 +17,8 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+rstest = "*"
+temp-env = { version = "0.3", features = ["async_closure"] }
 tokio = { workspace = true }
 
 
