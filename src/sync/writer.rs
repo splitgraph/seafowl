@@ -320,7 +320,8 @@ impl SeafowlDataSyncWriter {
         Ok(())
     }
 
-    // Criteria for return the cached entry ready to be persisted to storage.
+    // Criteria for flushing a cached entry to object storage.
+    //
     // First flush any records that are explicitly beyond the configured max
     // lag, followed by further entries if we're still above max cache size.
     fn flush_ready(&mut self) -> SyncResult<Option<String>> {
@@ -372,7 +373,7 @@ impl SeafowlDataSyncWriter {
         Ok(None)
     }
 
-    // Flush the table containing the oldest sync in memory
+    // Flush the table with the provided url
     async fn flush_syncs(&mut self, url: String) -> SyncResult<()> {
         self.physical_squashing(&url)?;
         let entry = match self.syncs.get(&url) {

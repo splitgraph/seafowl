@@ -28,7 +28,7 @@ impl SyncSchema {
         }
 
         // Validate field role's are parsable, we have the correct number of old/new PKs,
-        // and Changed role is non-nullable boolean type which points to an existing column
+        // and Changed role is a boolean type which points to an existing column
         // TODO: Validate a column can not be a PK and Value at the same time
         let mut old_pk_types = HashSet::new();
         let mut new_pk_types = HashSet::new();

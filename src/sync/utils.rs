@@ -5,12 +5,14 @@ use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, Scalar, UInt64A
 use arrow::compute::kernels::cmp::{gt_eq, lt_eq};
 use arrow::compute::{and_kleene, bool_or, concat_batches, filter, is_not_null, take};
 use arrow_row::{Row, RowConverter, SortField};
+use arrow_schema::Schema;
 use clade::sync::ColumnRole;
 use datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion::physical_optimizer::pruning::PruningStatistics;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{col, lit, Accumulator, Expr};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 use tracing::log::{debug, warn};
 
 // Returns the total number of bytes and rows in the slice of batches
@@ -31,10 +33,12 @@ pub(super) fn get_size_and_rows(batches: &[RecordBatch]) -> (usize, usize) {
 pub(super) fn squash_batches(
     sync_schema: &SyncSchema,
     data: &[RecordBatch],
-) -> Result<RecordBatch> {
-    // Concatenate all the record batches into a single one
-    let schema = data.first().unwrap().schema();
+) -> SyncResult<RecordBatch> {
     debug!("Concatenating {} batch(es)", data.len());
+    // Concatenate all the record batches into a single one
+    let schema = Arc::new(Schema::try_merge(
+        data.iter().map(|batch| batch.schema().as_ref().clone()),
+    )?);
     let batch = concat_batches(&schema, data)?;
 
     // Get columns, sort fields and null arrays for a particular role
@@ -670,6 +674,44 @@ mod tests {
         // the number of chains, and thus the expected row count is equal to the difference between
         // INSERT and DELETE count.
         assert_eq!(squashed.num_rows(), insert_count - delete_count);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_squash_align_nullability() -> Result<(), Box<dyn std::error::Error>> {
+        // Old PK nullable
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c1", DataType::Int32, false),
+        ]));
+
+        let sync_schema = arrow_to_sync_schema(schema.clone())?;
+
+        let batch_1 = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![None])),
+                Arc::new(Int32Array::from(vec![1])),
+            ],
+        )?;
+
+        // New PK nullable
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("old_pk_c1", DataType::Int32, false),
+            Field::new("new_pk_c1", DataType::Int32, true),
+        ]));
+        let batch_2 = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(Int32Array::from(vec![None])),
+            ],
+        )?;
+
+        let squashed = squash_batches(&sync_schema, &[batch_1, batch_2])?;
+
+        assert_eq!(squashed.num_rows(), 0);
 
         Ok(())
     }
