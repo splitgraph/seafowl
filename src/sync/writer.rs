@@ -513,7 +513,7 @@ impl SeafowlDataSyncWriter {
                 let (old_size, old_rows) = get_size_and_rows(&item.data);
 
                 let start = Instant::now();
-                let batch = squash_batches(&item.sync_schema, &item.data)?;
+                let batch = squash_batches(&mut item.sync_schema, &item.data)?;
                 let duration = start.elapsed().as_millis();
 
                 // Get new size and row count

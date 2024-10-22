@@ -31,7 +31,7 @@ pub(super) fn get_size_and_rows(batches: &[RecordBatch]) -> (usize, usize) {
 // output batch (meaning the last NewPk and Value role columns and the last Value column where the
 // accompanying Changed field was `true`).
 pub(super) fn squash_batches(
-    sync_schema: &SyncSchema,
+    sync_schema: &mut SyncSchema,
     data: &[RecordBatch],
 ) -> SyncResult<RecordBatch> {
     debug!("Concatenating {} batch(es)", data.len());
@@ -40,6 +40,7 @@ pub(super) fn squash_batches(
         data.iter().map(|batch| batch.schema().as_ref().clone()),
     )?);
     let batch = concat_batches(&schema, data)?;
+    sync_schema.with_fields(schema.fields())?;
 
     // Get columns, sort fields and null arrays for a particular role
     let columns = |role: ColumnRole| -> (Vec<ArrayRef>, (Vec<SortField>, Vec<ArrayRef>)) {
@@ -473,7 +474,7 @@ mod tests {
             Field::new("value_c3", DataType::Utf8, true),
         ]));
 
-        let sync_schema = arrow_to_sync_schema(schema.clone())?;
+        let mut sync_schema = arrow_to_sync_schema(schema.clone())?;
 
         // Test a batch with several edge cases with:
         // - multiple changes to the same row
@@ -515,7 +516,7 @@ mod tests {
             ],
         )?;
 
-        let squashed = squash_batches(&sync_schema, &[batch.clone()])?;
+        let squashed = squash_batches(&mut sync_schema, &[batch.clone()])?;
 
         let expected = [
             "+-----------+-----------+----------+------------+----------+",
@@ -544,7 +545,7 @@ mod tests {
             Field::new("value_c4", DataType::Utf8, true),
         ]));
 
-        let sync_schema = arrow_to_sync_schema(schema.clone())?;
+        let mut sync_schema = arrow_to_sync_schema(schema.clone())?;
 
         let mut rng = rand::thread_rng();
         let row_count = rng.gen_range(1..=1000); // With more than 1000 rows the test becomes slow
@@ -664,7 +665,7 @@ mod tests {
             ],
         )?;
 
-        let squashed = squash_batches(&sync_schema, &[batch.clone()])?;
+        let squashed = squash_batches(&mut sync_schema, &[batch.clone()])?;
         println!(
             "Squashed PKs from {row_count} to {} rows",
             squashed.num_rows()
@@ -686,7 +687,7 @@ mod tests {
             Field::new("new_pk_c1", DataType::Int32, false),
         ]));
 
-        let sync_schema = arrow_to_sync_schema(schema.clone())?;
+        let mut sync_schema = arrow_to_sync_schema(schema.clone())?;
 
         let batch_1 = RecordBatch::try_new(
             schema.clone(),
@@ -709,7 +710,7 @@ mod tests {
             ],
         )?;
 
-        let squashed = squash_batches(&sync_schema, &[batch_1, batch_2])?;
+        let squashed = squash_batches(&mut sync_schema, &[batch_1, batch_2])?;
 
         assert_eq!(squashed.num_rows(), 0);
 
