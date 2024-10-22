@@ -5,7 +5,7 @@ use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch, Scalar, UInt64A
 use arrow::compute::kernels::cmp::{gt_eq, lt_eq};
 use arrow::compute::{and_kleene, bool_or, concat_batches, filter, is_not_null, take};
 use arrow_row::{Row, RowConverter, SortField};
-use arrow_schema::Schema;
+use arrow_schema::{Field, Fields, Schema};
 use clade::sync::ColumnRole;
 use datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion::physical_optimizer::pruning::PruningStatistics;
@@ -35,12 +35,27 @@ pub(super) fn squash_batches(
     data: &[RecordBatch],
 ) -> SyncResult<RecordBatch> {
     debug!("Concatenating {} batch(es)", data.len());
-    // Concatenate all the record batches into a single one
-    let schema = Arc::new(Schema::try_merge(
-        data.iter().map(|batch| batch.schema().as_ref().clone()),
-    )?);
+    // Concatenate all the record batches into a single one, after making all fields nullable first.
+    let nullable_fields = Fields::from(
+        data.first()
+            .unwrap()
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| {
+                if field.is_nullable() {
+                    field.clone()
+                } else {
+                    // Clone the field but set it to nullable
+                    Arc::new(Field::new(field.name(), field.data_type().clone(), true))
+                }
+            })
+            .collect::<Vec<_>>(),
+    );
+
+    sync_schema.with_fields(&nullable_fields)?;
+    let schema = Arc::new(Schema::new(nullable_fields));
     let batch = concat_batches(&schema, data)?;
-    sync_schema.with_fields(schema.fields())?;
 
     // Get columns, sort fields and null arrays for a particular role
     let columns = |role: ColumnRole| -> (Vec<ArrayRef>, (Vec<SortField>, Vec<ArrayRef>)) {
