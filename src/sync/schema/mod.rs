@@ -126,17 +126,18 @@ impl SyncSchema {
     pub fn with_fields(&mut self, fields: &Fields) -> SyncResult<()> {
         if fields.len() != self.columns.len() {
             return Err(SyncError::SchemaError {
-                reason: "New and old field count is different".to_string(),
+                reason: "New and old field counts are different".to_string(),
             });
         }
 
         for (col, field) in self.columns.iter_mut().zip(fields.iter()) {
-            if col.field.data_type() != field.data_type() {
+            let col_data_type = col.field.data_type();
+            let field_data_type = field.data_type();
+
+            if col_data_type != field_data_type {
                 return Err(SyncError::SchemaError {
                     reason: format!(
-                        "Expected {} but got {} for column {col:?}",
-                        col.field.data_type(),
-                        field.data_type()
+                        "Schema mismatch for column {col:?}: expected data type {col_data_type}, got {field_data_type}"
                     ),
                 });
             }
