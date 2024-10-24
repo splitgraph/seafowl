@@ -22,7 +22,7 @@ datafusion-functions-nested = "41.0.0"
 futures = "0.3"
 
 itertools = ">=0.10.0"
-object_store = { version = "0.10.2", features = ["aws", "azure", "gcp"] }
+object_store = { version = "0.11.1", features = ["aws", "azure", "gcp"] }
 prost = "0.12.6"
 
 serde = "1.0.213"
@@ -105,7 +105,7 @@ lazy_static = ">=1.4.0"
 metrics = { version = "0.23.0" }
 metrics-exporter-prometheus = { version = "0.15.3" }
 moka = { version = "0.12.5", default-features = false, features = ["future", "atomic64", "quanta"] }
-object_store = { version = "0.10.2", features = ["aws", "azure", "gcp"] }
+object_store = { version = "0.11.1", features = ["aws", "azure", "gcp"] }
 object_store_factory = { path = "object_store_factory" }
 percent-encoding = "2.2.0"
 prost = { workspace = true }
