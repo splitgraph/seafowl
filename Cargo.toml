@@ -152,7 +152,7 @@ aws-credential-types = { version = "1.2.1", features = ["hardcoded-credentials"]
 aws-sdk-sts = { version = "1.46.0", features = ["behavior-version-latest"] }
 rstest = "*"
 serial_test = "3"
-tonic-reflection = "0.11"
+tonic-reflection = "0.12"
 wiremock = "0.6"
 
 [build-dependencies]
