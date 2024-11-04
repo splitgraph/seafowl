@@ -450,7 +450,7 @@ impl SeafowlContext {
     }
 
     // Cleanup the table objects in the storage
-    pub async fn delete_delta_table<'a>(
+    pub async fn delete_delta_table(
         &self,
         table_name: impl Into<TableReference>,
     ) -> Result<()> {

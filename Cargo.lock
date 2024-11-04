@@ -2573,8 +2573,7 @@ dependencies = [
 [[package]]
 name = "deltalake"
 version = "0.20.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cdaf5eed6cf6be7d94ce89ee9d7325324fc7c6c0b1ca8b911b0a5d95f6b1af5"
+source = "git+https://github.com/splitgraph/delta-rs?branch=pr-2975-backport#2bee4af97289d43724339fb15bb09bc40ad43319"
 dependencies = [
  "deltalake-core",
 ]
@@ -2582,8 +2581,7 @@ dependencies = [
 [[package]]
 name = "deltalake-core"
 version = "0.20.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ebab21c8c8820f9accb3ee74cc6ab7d930adf44323f39b7a764fd34e34aa7f4"
+source = "git+https://github.com/splitgraph/delta-rs?branch=pr-2975-backport#2bee4af97289d43724339fb15bb09bc40ad43319"
 dependencies = [
  "arrow",
  "arrow-arith",

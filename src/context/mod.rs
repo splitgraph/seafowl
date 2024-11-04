@@ -141,7 +141,7 @@ impl SeafowlContext {
     }
 
     /// Resolve a table reference into a Delta table
-    pub async fn try_get_delta_table<'a>(
+    pub async fn try_get_delta_table(
         &self,
         table_name: impl Into<TableReference>,
     ) -> Result<DeltaTable> {
@@ -157,10 +157,7 @@ impl SeafowlContext {
     }
 
     // Parse the uuid from the Delta table uri if available
-    pub async fn get_table_uuid<'a>(
-        &self,
-        name: impl Into<TableReference>,
-    ) -> Result<Uuid> {
+    pub async fn get_table_uuid(&self, name: impl Into<TableReference>) -> Result<Uuid> {
         match self
             .inner
             .table_provider(name)
