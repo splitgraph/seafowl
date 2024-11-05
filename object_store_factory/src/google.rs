@@ -107,15 +107,34 @@ pub fn map_options_into_google_config_keys(
 pub fn add_google_cloud_storage_environment_variables(
     options: &mut HashMap<GoogleConfigKey, String>,
 ) {
-    if let Ok(service_account_path) = env::var("SERVICE_ACCOUNT") {
-        options.insert(GoogleConfigKey::ServiceAccount, service_account_path);
+    // Insert the service account {path, key} from env only if neither the path nor the key are
+    // already supplied.
+    //
+    // This is because if the same config was already passed we don't want to override it, and if
+    // the other config was passed the client builder will error out (doesn't support both file and
+    // key).
+    if !options.contains_key(&GoogleConfigKey::ServiceAccount)
+        && !options.contains_key(&GoogleConfigKey::ServiceAccountKey)
+    {
+        if let Ok(service_account_path) = env::var("GOOGLE_SERVICE_ACCOUNT") {
+            options.insert(GoogleConfigKey::ServiceAccount, service_account_path);
+        } else if let Ok(service_account_path) = env::var("GOOGLE_SERVICE_ACCOUNT_KEY") {
+            options.insert(GoogleConfigKey::ServiceAccountKey, service_account_path);
+        }
     }
 
+    // Override all other configs from env vars
     for (os_key, os_value) in env::vars_os() {
         if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
             if key.starts_with("GOOGLE_") {
                 if let Ok(config_key) = key.to_ascii_lowercase().parse() {
-                    options.insert(config_key, value.to_string());
+                    if !matches!(
+                        config_key,
+                        GoogleConfigKey::ServiceAccount
+                            | GoogleConfigKey::ServiceAccountKey
+                    ) {
+                        options.entry(config_key).or_insert(value.to_string());
+                    }
                 }
             }
         }

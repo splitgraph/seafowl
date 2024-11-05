@@ -28,7 +28,7 @@ use std::iter::once;
 use std::ops::Not;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 pub(super) const LOWER_REL: &str = "__lower_rel";
 pub(super) const UPPER_REL: &str = "__upper_rel";
@@ -579,6 +579,11 @@ impl SeafowlSyncPlanner {
         )?;
         let pruning_predicate =
             PruningPredicate::try_new(prune_expr, full_schema.clone())?;
+        trace!(
+            "Constructed pruning predicate: {:?}, schema {}",
+            pruning_predicate,
+            full_schema
+        );
 
         let mut prune_map = pruning_predicate.prune(snapshot)?;
 

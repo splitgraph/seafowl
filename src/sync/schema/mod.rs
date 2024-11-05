@@ -1,5 +1,5 @@
-use crate::sync::SyncError;
-use arrow_schema::{DataType, FieldRef, SchemaRef};
+use crate::sync::{SyncError, SyncResult};
+use arrow_schema::{DataType, FieldRef, Fields, SchemaRef};
 use clade::sync::{ColumnDescriptor, ColumnRole};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
@@ -20,7 +20,7 @@ impl SyncSchema {
         column_descriptors: Vec<ColumnDescriptor>,
         schema: SchemaRef,
         validate_pks: bool,
-    ) -> Result<Self, SyncError> {
+    ) -> SyncResult<Self> {
         if column_descriptors.len() != schema.flattened_fields().len() {
             return Err(SyncError::SchemaError {
                 reason: "Column descriptors do not match the schema".to_string(),
@@ -28,7 +28,7 @@ impl SyncSchema {
         }
 
         // Validate field role's are parsable, we have the correct number of old/new PKs,
-        // and Changed role is non-nullable boolean type which points to an existing column
+        // and Changed role is a boolean type which points to an existing column
         // TODO: Validate a column can not be a PK and Value at the same time
         let mut old_pk_types = HashSet::new();
         let mut new_pk_types = HashSet::new();
@@ -120,6 +120,32 @@ impl SyncSchema {
             columns: vec![],
             indices: Default::default(),
         }
+    }
+
+    // Replace the existing field references for sync columns with new ones.
+    pub fn with_fields(&mut self, fields: &Fields) -> SyncResult<()> {
+        if fields.len() != self.columns.len() {
+            return Err(SyncError::SchemaError {
+                reason: "New and old field counts are different".to_string(),
+            });
+        }
+
+        for (col, field) in self.columns.iter_mut().zip(fields.iter()) {
+            let col_data_type = col.field.data_type();
+            let field_data_type = field.data_type();
+
+            if col_data_type != field_data_type {
+                return Err(SyncError::SchemaError {
+                    reason: format!(
+                        "Schema mismatch for column {col:?}: expected data type {col_data_type}, got {field_data_type}"
+                    ),
+                });
+            }
+
+            col.field = field.clone();
+        }
+
+        Ok(())
     }
 
     pub fn column(&self, name: &str, role: ColumnRole) -> Option<&SyncColumn> {

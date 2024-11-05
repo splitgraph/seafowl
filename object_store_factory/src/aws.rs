@@ -224,7 +224,7 @@ pub fn add_amazon_s3_environment_variables(
         if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
             if key.starts_with("AWS_") {
                 if let Ok(config_key) = key.to_ascii_lowercase().parse() {
-                    options.insert(config_key, value.to_string());
+                    options.entry(config_key).or_insert(value.to_string());
                 }
             }
         }
@@ -236,10 +236,9 @@ pub fn add_amazon_s3_environment_variables(
             .to_uppercase(),
     ) == Ok("true".to_string())
     {
-        options.insert(
-            AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp),
-            "true".to_string(),
-        );
+        options
+            .entry(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp))
+            .or_insert("true".to_string());
     }
 }
 

@@ -1,5 +1,11 @@
+use crate::fixtures::minio_options;
 use crate::flight::*;
+use clade::schema::StorageLocation;
 use clade::sync::{ColumnDescriptor, ColumnRole};
+use deltalake::DeltaTable;
+use std::collections::HashMap;
+use tempfile::TempDir;
+use url::Url;
 
 pub(crate) fn sync_cmd_to_flight_data(
     cmd: DataSyncCommand,
@@ -486,6 +492,118 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
     ];
 
     assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_sync_custom_store(
+    #[values("local", "minio")] target_type: &str,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let (ctx, mut client) = flight_server(TestServerType::Memory).await;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+        Field::new("c", DataType::Utf8, true),
+    ]));
+    let column_descriptors = vec![
+        ColumnDescriptor {
+            role: ColumnRole::OldPk as _,
+            name: "c1".to_string(),
+        },
+        ColumnDescriptor {
+            role: ColumnRole::NewPk as _,
+            name: "c1".to_string(),
+        },
+        ColumnDescriptor {
+            role: ColumnRole::Value as _,
+            name: "c2".to_string(),
+        },
+    ];
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::new_null(100_000)),
+            Arc::new(Int32Array::from((0..100_000).collect::<Vec<i32>>())),
+            Arc::new(StringArray::from(vec!["a"; 100_000])),
+        ],
+    )?;
+
+    let table_name = "sync_table";
+
+    let temp_dir = TempDir::new().unwrap();
+    let (location, options) = if target_type == "local" {
+        (
+            format!("file://{}", temp_dir.path().to_string_lossy()),
+            HashMap::new(),
+        )
+    } else {
+        (
+            "s3://seafowl-test-bucket/some/path".to_string(),
+            minio_options(),
+        )
+    };
+
+    let log_store = ctx
+        .metastore
+        .object_stores
+        .get_log_store_for_table(
+            Url::parse(&location)?,
+            options.clone(),
+            table_name.to_string(),
+        )
+        .await?;
+
+    let store = StorageLocation {
+        name: "custom-store".to_string(),
+        location,
+        options,
+    };
+
+    let cmd = DataSyncCommand {
+        path: table_name.to_string(),
+        store: Some(store),
+        column_descriptors,
+        origin: "42".to_string(),
+        sequence_number: Some(1000),
+    };
+
+    let sync_result = do_put_sync(cmd.clone(), batch.clone(), &mut client).await?;
+    assert_eq!(
+        sync_result,
+        DataSyncResponse {
+            accepted: true,
+            memory_sequence_number: Some(1000),
+            durable_sequence_number: Some(1000),
+            first: true,
+        }
+    );
+
+    let mut table = DeltaTable::new(log_store, Default::default());
+    table.load().await?;
+
+    ctx.inner.register_table(table_name, Arc::new(table))?;
+    let results = ctx
+        .inner
+        .sql(&format!(
+            "SELECT count(*), count(distinct c1), min(c1), max(c1) FROM {table_name}"
+        ))
+        .await?
+        .collect()
+        .await?;
+
+    let expected = [
+        "+----------+-------------------------------+--------------------+--------------------+",
+        "| count(*) | count(DISTINCT sync_table.c1) | min(sync_table.c1) | max(sync_table.c1) |",
+        "+----------+-------------------------------+--------------------+--------------------+",
+        "| 100000   | 100000                        | 0                  | 99999              |",
+        "+----------+-------------------------------+--------------------+--------------------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
 
     Ok(())
 }
