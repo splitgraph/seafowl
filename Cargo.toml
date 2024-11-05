@@ -95,7 +95,7 @@ datafusion-functions-nested = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { version = "0.20.1", features = ["datafusion"] }
+deltalake = { version = "0.21", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
