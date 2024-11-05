@@ -55,8 +55,8 @@ impl TestSeafowl {
 }
 
 // Actual Seafowl target running in a separate process
-#[allow(clippy::zombie_processes)]
 #[fixture]
+#[allow(clippy::zombie_processes)]
 pub async fn test_seafowl() -> TestSeafowl {
     // Pick free ports for the frontends
     let http_addr = get_addr().await;
