@@ -163,3 +163,8 @@ vergen-gitcl = { version = "1", features = ["build", "cargo", "rustc"] }
 codegen-units = 1
 lto = true
 strip = true
+
+[profile.release-with-debug]
+debug = true
+inherits = "release"
+strip = false

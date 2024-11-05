@@ -1,0 +1,19 @@
+build-bytehound:
+    docker build --target bytehound -f Dockerfile.profile -t splitgraph/bytehound .
+
+build-profiler:
+    docker build -f Dockerfile.profile -t splitgraph/seafowl:profile ..
+
+profile:
+    docker run \
+      -p 8080:8080 -p 47470:47470 \
+      -v .:/seafowl/profiles \
+      -v `realpath ../seafowl.toml`:/seafowl.toml \
+      splitgraph/seafowl:profile -c /seafowl.toml
+
+view:
+    docker run -p 8888:8888 -v .:/profiles -w /profiles  splitgraph/bytehound \
+        /bytehound/target/release/bytehound server -i 0.0.0.0 -p 8888 memory-profiling_*
+
+clean:
+    rm -rf memory-profiling_*
