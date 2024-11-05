@@ -74,7 +74,9 @@ impl ObjectStoreConfig {
         }
     }
 
-    pub fn build_object_store(&self) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+    pub fn build_object_store(
+        &self,
+    ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
         match self {
             ObjectStoreConfig::Memory => memory::build_in_memory_storage(),
             ObjectStoreConfig::Local(local_config) => local_config.build_local_storage(),
@@ -263,8 +265,7 @@ mod tests {
         })
         .to_string();
 
-        let config = ObjectStoreConfig::build_from_json(&url, &json_str)
-            .unwrap();
+        let config = ObjectStoreConfig::build_from_json(&url, &json_str).unwrap();
         if let ObjectStoreConfig::GoogleCloudStorage(gcs_config) = config {
             assert_eq!(gcs_config.bucket, "bucket");
             assert_eq!(
