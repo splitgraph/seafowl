@@ -8,7 +8,7 @@ build-profiler:
     DOCKER_BUILDKIT=1 docker build -f Dockerfile.profile -t splitgraph/seafowl:profile ..
 
 profile:
-    docker run \
+    docker run --rm --name seafowl-profiler \
       -p 8080:8080 -p 47470:47470 \
       -v .:/profiles \
       -v `realpath ../seafowl.toml`:/seafowl.toml \
@@ -16,7 +16,11 @@ profile:
       splitgraph/seafowl:profile -c /seafowl.toml
 
 view *files='memory-profiling_*':
-    docker run -p 9999:9999 -v .:/profiles -w /profiles  \splitgraph/bytehound \
+    docker run --rm --name seafowl-profile-server \
+        -p 9999:9999 \
+        -v .:/profiles \
+        -w /profiles  \
+        \splitgraph/bytehound \
         /bytehound/target/release/bytehound server -i 0.0.0.0 -p 9999 {{files}}
 
 clean:
