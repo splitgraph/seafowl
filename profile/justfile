@@ -1,19 +1,23 @@
 build-bytehound:
-    docker build --target bytehound -f Dockerfile.profile -t splitgraph/bytehound .
+    DOCKER_BUILDKIT=1 docker build --target bytehound -f Dockerfile.profile -t splitgraph/bytehound .
 
+# TODO: generailze to support amd64
 build-profiler:
-    docker build -f Dockerfile.profile -t splitgraph/seafowl:profile ..
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+    cargo build --target aarch64-unknown-linux-gnu --profile release-with-debug
+    DOCKER_BUILDKIT=1 docker build -f Dockerfile.profile -t splitgraph/seafowl:profile ..
 
 profile:
     docker run \
       -p 8080:8080 -p 47470:47470 \
-      -v .:/seafowl/profiles \
+      -v .:/profiles \
       -v `realpath ../seafowl.toml`:/seafowl.toml \
+      -v `realpath ../../seafowl-data`:/seafowl-data \
       splitgraph/seafowl:profile -c /seafowl.toml
 
-view:
-    docker run -p 8888:8888 -v .:/profiles -w /profiles  splitgraph/bytehound \
-        /bytehound/target/release/bytehound server -i 0.0.0.0 -p 8888 memory-profiling_*
+view *files='memory-profiling_*':
+    docker run -p 9999:9999 -v .:/profiles -w /profiles  \splitgraph/bytehound \
+        /bytehound/target/release/bytehound server -i 0.0.0.0 -p 9999 {{files}}
 
 clean:
     rm -rf memory-profiling_*
