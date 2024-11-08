@@ -12,7 +12,7 @@ dsn = "../seafowl-data/seafowl.sqlite"
 bind_port = 6432
 
 [frontend.http]
-bind_host = "0.0.0.0"
+bind_host = "127.0.0.1"
 
 [frontend.flight]
-bind_host = "0.0.0.0"
+bind_host = "127.0.0.1"

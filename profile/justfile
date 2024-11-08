@@ -13,6 +13,8 @@ profile:
       -v .:/profiles \
       -v `realpath ../seafowl.toml`:/seafowl.toml \
       -v `realpath ../../seafowl-data`:/seafowl-data \
+      -e SEAFOWL__FRONTEND__HTTP__BIND_HOST=0.0.0.0 \
+      -e SEAFOWL__FRONTEND__FLIGHT__BIND_HOST=0.0.0.0 \
       splitgraph/seafowl:profile -c /seafowl.toml
 
 view *files='memory-profiling_*':
