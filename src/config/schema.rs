@@ -13,12 +13,11 @@ use object_store_factory::aws::S3Config;
 use object_store_factory::google::GCSConfig;
 use object_store_factory::ObjectStoreConfig;
 
-use rand::distributions::{Alphanumeric, DistString};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqliteJournalMode;
 
-use tracing::{info, warn};
+use tracing::warn;
 
 pub const DEFAULT_DATA_DIR: &str = "seafowl-data";
 pub const DEFAULT_SQLITE_DB: &str = "seafowl.sqlite";
@@ -87,16 +86,14 @@ bind_port = 8080
 # By default, make Seafowl readable by anyone...
 read_access = "any"
 
-# ...and writeable by users with a password.
-# We store the password's SHA hash here. See the logs from the first
-# startup of Seafowl to get the password or set this to a different hash.
-write_access = "{}"
+# ...and not writeable.
+# To enable writes store the password's SHA hash here.
+write_access = "off"
 "#,
         // Use `escape_default` here since on Windows, these paths
         // use backslashes which toml treats as escapes.
         DEFAULT_DATA_DIR.escape_default(),
         dsn.escape_default(),
-        random_password().escape_default()
     );
 
     let config = load_config_from_string(&config_str, false, None).unwrap();
@@ -242,21 +239,6 @@ pub fn str_to_hex_hash(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input);
     encode(hasher.finalize())
-}
-
-pub fn random_password() -> String {
-    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 32);
-    let sha256_hash = str_to_hex_hash(&password);
-
-    info!(
-        "Writing to Seafowl will require a password. Randomly generated password: {:}",
-        password
-    );
-    info!("The SHA-256 hash will be stored in the config as follows:");
-    info!("[frontend.http]");
-    info!("write_access = \"{:}\"", sha256_hash);
-
-    sha256_hash
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -803,10 +785,13 @@ cache_control = "private, max-age=86400"
         // Run the default config builder to make sure the config parses
         let (_config_str, config) = build_default_config();
 
-        // Make sure we default to requiring a password for writes
-        match &config.frontend.http.as_ref().unwrap().write_access {
-            AccessSettings::Password { sha256_hash: _ } => (),
-            _ => panic!("write_access didn't default to a password!"),
-        };
+        // Make sure we default to disabling writes
+        assert!(
+            matches!(
+                &config.frontend.http.as_ref().unwrap().write_access,
+                AccessSettings::Off
+            ),
+            "write_access not disabled in the default config file!"
+        );
     }
 }
