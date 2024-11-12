@@ -39,7 +39,7 @@ pub struct StorageLocationInfo {
 }
 
 impl ObjectStoreConfig {
-    pub async fn build_from_json(
+    pub fn build_from_json(
         url: &Url,
         json_str: &str,
     ) -> Result<ObjectStoreConfig, object_store::Error> {
@@ -74,7 +74,9 @@ impl ObjectStoreConfig {
         }
     }
 
-    pub fn build_object_store(self) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+    pub fn build_object_store(
+        &self,
+    ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
         match self {
             ObjectStoreConfig::Memory => memory::build_in_memory_storage(),
             ObjectStoreConfig::Local(local_config) => local_config.build_local_storage(),
@@ -200,8 +202,8 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    #[tokio::test]
-    async fn test_build_from_json_local() {
+    #[test]
+    fn test_build_from_json_local() {
         let url = Url::parse("file:///tmp").unwrap();
         let json_str = json!({
             "type": "local",
@@ -210,9 +212,7 @@ mod tests {
         })
         .to_string();
 
-        let config = ObjectStoreConfig::build_from_json(&url, &json_str)
-            .await
-            .unwrap();
+        let config = ObjectStoreConfig::build_from_json(&url, &json_str).unwrap();
         if let ObjectStoreConfig::Local(local_config) = config {
             assert_eq!(local_config.data_dir, "/tmp");
             assert!(!local_config.disable_hardlinks);
@@ -221,22 +221,20 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_build_from_json_memory() {
+    #[test]
+    fn test_build_from_json_memory() {
         let url = Url::parse("memory:///").unwrap();
         let json_str = json!({
             "type": "memory"
         })
         .to_string();
 
-        let config = ObjectStoreConfig::build_from_json(&url, &json_str)
-            .await
-            .unwrap();
+        let config = ObjectStoreConfig::build_from_json(&url, &json_str).unwrap();
         assert_eq!(config, ObjectStoreConfig::Memory);
     }
 
-    #[tokio::test]
-    async fn test_build_from_json_amazon_s3() {
+    #[test]
+    fn test_build_from_json_amazon_s3() {
         let url = Url::parse("s3://bucket").unwrap();
         let json_str = json!({
             "type": "s3",
@@ -247,9 +245,7 @@ mod tests {
         })
         .to_string();
 
-        let config = ObjectStoreConfig::build_from_json(&url, &json_str)
-            .await
-            .unwrap();
+        let config = ObjectStoreConfig::build_from_json(&url, &json_str).unwrap();
         if let ObjectStoreConfig::AmazonS3(s3_config) = config {
             assert_eq!(s3_config.bucket, "bucket");
             assert_eq!(s3_config.region.unwrap(), "us-west-2");
@@ -260,8 +256,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_build_from_json_google_cloud_storage() {
+    #[test]
+    fn test_build_from_json_google_cloud_storage() {
         let url = Url::parse("gs://bucket").unwrap();
         let json_str = json!({
             "type": "gcs",
@@ -270,9 +266,7 @@ mod tests {
         })
         .to_string();
 
-        let config = ObjectStoreConfig::build_from_json(&url, &json_str)
-            .await
-            .unwrap();
+        let config = ObjectStoreConfig::build_from_json(&url, &json_str).unwrap();
         if let ObjectStoreConfig::GoogleCloudStorage(gcs_config) = config {
             assert_eq!(gcs_config.bucket, "bucket");
             assert_eq!(
@@ -284,15 +278,15 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_build_from_json_invalid_scheme() {
+    #[test]
+    fn test_build_from_json_invalid_scheme() {
         let url = Url::parse("ftp://bucket").unwrap();
         let json_str = json!({
             "type": "ftp"
         })
         .to_string();
 
-        let result = ObjectStoreConfig::build_from_json(&url, &json_str).await;
+        let result = ObjectStoreConfig::build_from_json(&url, &json_str);
         assert!(result.is_err());
     }
 
