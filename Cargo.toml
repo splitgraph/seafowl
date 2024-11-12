@@ -95,7 +95,8 @@ datafusion-functions-nested = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { version = "0.21", features = ["datafusion"] }
+# pr-2975-backport, pick up https://github.com/delta-io/delta-rs/pull/2975
+deltalake = { git = "https://github.com/splitgraph/delta-rs", rev = "bd765bd1d65dd99af43f47e8af3da11f39e8ee43", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
