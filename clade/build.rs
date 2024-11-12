@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_server(true)
         .build_client(true)
         .type_attribute("clade.sync.ColumnDescriptor", "#[derive(Eq, Hash)]")
-        .compile(&["proto/schema.proto", "proto/sync.proto"], &["proto"])?;
+        .compile_protos(&["proto/schema.proto", "proto/sync.proto"], &["proto"])?;
 
     Ok(())
 }

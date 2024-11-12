@@ -15,12 +15,14 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::{Expr, TableType};
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 pub const SYSTEM_SCHEMA: &str = "system";
 const TABLE_VERSIONS: &str = "table_versions";
 const DROPPED_TABLES: &str = "dropped_tables";
 
+#[derive(Debug)]
 pub struct SystemSchemaProvider {
     database: Arc<str>,
     table_catalog: Arc<dyn TableStore>,
@@ -80,7 +82,7 @@ impl SchemaProvider for SystemSchemaProvider {
 
 // Base trait for Seafowl system tables, as a way to imitate OOP
 #[async_trait]
-trait SeafowlSystemTable: Send + Sync {
+trait SeafowlSystemTable: Debug + Send + Sync {
     /// The schema for this system table
     fn schema(&self) -> SchemaRef;
 
@@ -89,6 +91,7 @@ trait SeafowlSystemTable: Send + Sync {
 }
 
 /// Adapter that makes any `SeafowlSystemTable` a DataFusion `TableProvider`
+#[derive(Debug)]
 struct SystemTableProvider<T: SeafowlSystemTable> {
     table: Arc<T>,
 }
@@ -127,6 +130,7 @@ where
 }
 
 // Table listing all available version for the given database
+#[derive(Debug)]
 struct TableVersionsTable {
     database: Arc<str>,
     schema: SchemaRef,
@@ -206,6 +210,7 @@ impl SeafowlSystemTable for TableVersionsTable {
 }
 
 // Table listing all dropped tables that are pending lazy deletion on subsequent `VACUUM`s
+#[derive(Debug)]
 struct DroppedTablesTable {
     database: Arc<str>,
     schema: SchemaRef,

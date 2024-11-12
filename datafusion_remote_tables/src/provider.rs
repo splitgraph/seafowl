@@ -23,6 +23,7 @@ use tokio::task;
 use tracing::debug;
 
 // Implementation of a remote table, capable of querying Postgres, MySQL, SQLite, etc...
+#[derive(Debug)]
 pub struct RemoteTable {
     // We manually escape the field names during scans, but expect the user to escape the table name
     // appropriately in the remote table definition

@@ -190,7 +190,7 @@ impl SeafowlContext {
             }
             LogicalPlan::Dml(DmlStatement {
                 table_name,
-                op: WriteOp::InsertInto,
+                op: WriteOp::Insert(_),
                 input,
                 ..
             }) => {

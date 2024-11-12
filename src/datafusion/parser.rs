@@ -28,7 +28,9 @@
 pub use datafusion::sql::parser::Statement;
 use datafusion::sql::parser::{CopyToSource, CopyToStatement, CreateExternalTable};
 use lazy_static::lazy_static;
-use sqlparser::ast::{CreateFunctionBody, Expr, ObjectName, OrderByExpr, Value};
+use sqlparser::ast::{
+    CreateFunctionBody, Expr, ObjectName, OrderByExpr, TruncateTableTarget, Value,
+};
 use sqlparser::tokenizer::{TokenWithLocation, Word};
 use sqlparser::{
     ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
@@ -217,9 +219,12 @@ impl<'a> DFParser<'a> {
         }
 
         Ok(Statement::Statement(Box::new(SQLStatement::Truncate {
-            table_name,
+            table_names: vec![TruncateTableTarget { name: table_name }],
             partitions,
             table: false,
+            only: false,
+            identity: None,
+            cascade: None,
         })))
     }
 
@@ -231,9 +236,12 @@ impl<'a> DFParser<'a> {
         let table_name = self.parser.parse_object_name(true)?;
 
         Ok(Statement::Statement(Box::new(SQLStatement::Truncate {
-            table_name,
+            table_names: vec![TruncateTableTarget { name: table_name }],
             partitions: None,
             table: true,
+            only: false,
+            identity: None,
+            cascade: None,
         })))
     }
 
@@ -315,12 +323,7 @@ impl<'a> DFParser<'a> {
             Token::SingleQuotedString(s) => Ok(Value::SingleQuotedString(s)),
             Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
             Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
-            Token::Number(ref n, l) => {
-                let n = n
-                    .parse()
-                    .expect("Token::Number should always contain a valid number");
-                Ok(Value::Number(n, l))
-            }
+            Token::Number(n, l) => Ok(Value::Number(n, l)),
             _ => self.parser.expected("string or numeric value", next_token),
         }
     }
@@ -655,13 +658,14 @@ impl<'a> DFParser<'a> {
         }
 
         let create = CreateExternalTable {
-            name: table_name.to_string(),
+            name: table_name,
             columns,
             file_type: builder.file_type.unwrap(),
             location: builder.location.unwrap(),
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
             order_exprs: builder.order_exprs,
             if_not_exists,
+            temporary: false,
             unbounded,
             options: builder.options.unwrap_or(Vec::new()),
             constraints,

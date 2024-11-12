@@ -81,7 +81,7 @@ async fn run_clade_server(addr: SocketAddr) {
 
     let reflection = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
-        .build()
+        .build_v1()
         .unwrap();
 
     Server::builder()

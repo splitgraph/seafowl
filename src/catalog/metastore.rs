@@ -34,7 +34,7 @@ type LocationAndOptions = (String, HashMap<String, String>);
 // This is the main entrypoint to all individual catalogs for various objects types.
 // The intention is to make it extensible and de-coupled from the underlying metastore
 // persistence mechanism (such as the presently used `Repository`).
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Metastore {
     pub catalogs: Arc<dyn CatalogStore>,
     pub schemas: Arc<dyn SchemaStore>,

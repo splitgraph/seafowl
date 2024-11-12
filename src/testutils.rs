@@ -74,7 +74,7 @@ pub async fn make_mock_parquet_server(
 
     let input_batch = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7]))],
     )
     .unwrap();
 

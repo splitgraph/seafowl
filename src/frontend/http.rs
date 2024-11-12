@@ -1207,25 +1207,6 @@ pub mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn test_error_json_conversion(
-        #[values(None, Some("test_db"))] new_db: Option<&str>,
-    ) {
-        let context = in_memory_context_with_single_table(new_db).await;
-        let handler = filters(context, http_config_from_access_policy(free_for_all()));
-
-        let resp =
-            query_uncached_endpoint(&handler, "SELECT 1::NUMERIC", new_db, None).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let error_msg = String::from_utf8_lossy(resp.body());
-        assert_eq!(
-            error_msg,
-            "Invalid argument error: JSON Writer does not support data type: Decimal128(38, 10)"
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
     async fn test_password_read_anonymous_cant_cached_get(
         #[values(None, Some("test_db"))] new_db: Option<&str>,
     ) {

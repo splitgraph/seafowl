@@ -8,7 +8,7 @@ use tonic::transport::{channel::Channel, Endpoint, Error};
 use tonic::Request;
 
 // An external store, facilitated via a remote clade server implementation
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ExternalStore {
     client: SchemaStoreServiceClient<Channel>,
 }

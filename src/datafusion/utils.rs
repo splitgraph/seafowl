@@ -137,7 +137,7 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         | SQLDataType::Bytes(_)
         | SQLDataType::Int64
         | SQLDataType::Float64
-        | SQLDataType::Struct(_)
+        | SQLDataType::Struct(_, _)
         | SQLDataType::JSONB
         | SQLDataType::Unspecified
         // Clickhouse datatypes
@@ -157,10 +157,12 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         | SQLDataType::FixedString(_)
         | SQLDataType::Map(_, _)
         | SQLDataType::Tuple(_)
+
         | SQLDataType::Nested(_)
         | SQLDataType::Union(_)
         | SQLDataType::Nullable(_)
         | SQLDataType::LowCardinality(_)
+        | SQLDataType::Trigger
         => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),

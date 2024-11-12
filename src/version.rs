@@ -2,7 +2,8 @@ use chrono::{DateTime, FixedOffset, NaiveDateTime, Utc};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::sql::TableReference;
 use sqlparser::ast::{
-    Expr, FunctionArg, FunctionArgExpr, Ident, ObjectName, TableFactor, Value, VisitorMut,
+    Expr, FunctionArg, FunctionArgExpr, Ident, ObjectName, TableFactor,
+    TableFunctionArgs, Value, VisitorMut,
 };
 use std::collections::HashSet;
 use std::ops::ControlFlow;
@@ -68,29 +69,35 @@ impl VisitorMut for TableVersionProcessor {
             name, ref mut args, ..
         } = table_factor
         {
-            // If a function arg expression is a single string interpret this as a version specifier
-            if let Some(
-                [FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
-                    Value::SingleQuotedString(value),
-                )))],
-            ) = &args.as_deref()
+            if let Some(TableFunctionArgs {
+                args: func_args, ..
+            }) = args
             {
-                let unresolved_name = name.to_string();
-                let resolved_ref = TableReference::from(unresolved_name.as_str())
-                    .resolve(&self.default_catalog, &self.default_schema);
-                let full_object_name = ObjectName(vec![
-                    Ident::new(resolved_ref.catalog.as_ref()),
-                    Ident::new(resolved_ref.schema.as_ref()),
-                    Ident::new(resolved_ref.table.as_ref()),
-                ]);
+                // If a function arg expression is a single string interpret this as a version specifier
+                if let [FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(
+                    Value::SingleQuotedString(value),
+                )))] = &func_args[..]
+                {
+                    let unresolved_name = name.to_string();
+                    let resolved_ref = TableReference::from(unresolved_name.as_str())
+                        .resolve(&self.default_catalog, &self.default_schema);
+                    let full_object_name = ObjectName(vec![
+                        Ident::new(resolved_ref.catalog.as_ref()),
+                        Ident::new(resolved_ref.schema.as_ref()),
+                        Ident::new(resolved_ref.table.as_ref()),
+                    ]);
 
-                self.table_versions
-                    .insert((full_object_name.clone(), value.to_string()));
-                // Do the actual name rewrite
-                name.0.last_mut().unwrap().value =
-                    TableVersionProcessor::table_with_version(&full_object_name, value);
-                // Void the function table arg struct to leave a clean printable statement
-                *args = None;
+                    self.table_versions
+                        .insert((full_object_name.clone(), value.clone()));
+                    // Do the actual name rewrite
+                    name.0.last_mut().unwrap().value =
+                        TableVersionProcessor::table_with_version(
+                            &full_object_name,
+                            value,
+                        );
+                    // Void the function table arg struct to leave a clean printable statement
+                    *args = None;
+                }
             }
         }
 

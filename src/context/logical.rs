@@ -246,9 +246,9 @@ impl SeafowlContext {
                         })),
                     }))
                 },
-                Statement::Truncate { table: false, table_name, partitions, .. } => {
+                Statement::Truncate { table: false, table_names, partitions, .. } => {
                     let table_name = if partitions.is_none() {
-                        Some(table_name.to_string())
+                        Some(table_names[0].to_string())
                     } else {
                         None
                     };
@@ -268,10 +268,10 @@ impl SeafowlContext {
                         })),
                     }))
                 }
-                Statement::Truncate { table: true, table_name, .. } => {
+                Statement::Truncate { table: true, table_names, .. } => {
                     Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(SeafowlExtensionNode::Truncate(Truncate {
-                            table_name: table_name.to_string(),
+                            table_name: table_names[0].to_string(),
                             output_schema: Arc::new(DFSchema::empty())
                         })),
                     }))
