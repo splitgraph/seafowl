@@ -141,7 +141,7 @@ uuid = "1.11.0"
 warp = "0.3.6"
 
 # For WASM user-defined functions
-wasi-common = "25.0.0"
+wasi-common = "26.0.1"
 wasmtime = "25.0.2"
 wasmtime-wasi = "26.0.1"
 
