@@ -100,8 +100,11 @@ deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "fix-deci
 
 futures = "0.3"
 hex = ">=0.4.0"
+
+iceberg-datafusion = { git = "https://github.com/apache/iceberg-rust", rev = "697a20060f2247da87f73073e8bf5ab407bd40ea" }
 indexmap = "2.6.0"
 itertools = { workspace = true }
+
 lazy_static = ">=1.4.0"
 metrics = { version = "0.23.0" }
 metrics-exporter-prometheus = { version = "0.15.3" }

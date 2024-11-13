@@ -20,6 +20,7 @@ use datafusion::{
 };
 use deltalake::delta_datafusion::DeltaTableFactory;
 use deltalake::storage::factories;
+use iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory;
 use metrics::describe_counter;
 use metrics_exporter_prometheus::PrometheusBuilder;
 
@@ -103,14 +104,16 @@ pub fn build_state_with_table_factories(
         .with_default_features()
         .build();
 
-    state
-        .table_factories_mut()
-        .insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
+    let table_factories = state.table_factories_mut();
+
+    table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
+    table_factories.insert(
+        "ICEBERG".to_string(),
+        Arc::new(IcebergTableProviderFactory {}),
+    );
     #[cfg(feature = "remote-tables")]
     {
-        state
-            .table_factories_mut()
-            .insert("TABLE".to_string(), Arc::new(RemoteTableFactory {}));
+        table_factories.insert("TABLE".to_string(), Arc::new(RemoteTableFactory {}));
     }
     state
 }

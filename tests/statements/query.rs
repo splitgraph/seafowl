@@ -369,3 +369,37 @@ async fn test_delta_tables() {
     ];
     assert_batches_eq!(expected, &results);
 }
+
+#[ignore]
+#[tokio::test]
+async fn test_iceberg_tables() {
+    let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
+
+    context
+        .plan_query(
+            "CREATE EXTERNAL TABLE test_iceberg \
+            STORED AS ICEBERG \
+            LOCATION '/Users/gruuya/Splitgraph/seafowl/tests/data/iceberg/tables/default.db/iceberg_table/metadata/00001-8f13a2db-1fe2-4679-94b1-3b6e5fa49e51.metadata.json'",
+        )
+        .await
+        .unwrap();
+
+    // The order gets randomized so we need to enforce it
+    let plan = context
+        .plan_query("SELECT * FROM staging.test_iceberg")
+        .await
+        .unwrap();
+    let results = context.collect(plan).await.unwrap();
+
+    let expected = [
+        "+-----+-------+",
+        "| key | value |",
+        "+-----+-------+",
+        "| 1   | one   |",
+        "| 2   | two   |",
+        "| 3   | three |",
+        "| 4   | four  |",
+        "+-----+-------+",
+    ];
+    assert_batches_eq!(expected, &results);
+}
