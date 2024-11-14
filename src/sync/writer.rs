@@ -673,7 +673,9 @@ mod tests {
     use crate::sync::schema::{arrow_to_sync_schema, SyncSchema};
     use crate::sync::writer::{SeafowlDataSyncWriter, SequenceNumber};
     use crate::sync::SyncResult;
-    use arrow::array::{BooleanArray, Float32Array, Int32Array, StringArray};
+    use arrow::array::{
+        BooleanArray, Decimal128Array, Float32Array, Int32Array, StringArray,
+    };
     use arrow::{array::RecordBatch, util::data_gen::create_random_batch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::assert_batches_eq;
@@ -1143,5 +1145,81 @@ mod tests {
             "+----+----+",
         ];
         assert_batches_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn test_decimal_sync() -> SyncResult<()> {
+        let ctx = Arc::new(in_memory_context().await);
+        let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
+
+        ctx.plan_query("CREATE TABLE test_decimal(c1 INT, c2 DECIMAL(38, 6))")
+            .await
+            .unwrap();
+        let table_uuid = ctx.get_table_uuid("test_decimal").await.unwrap();
+
+        let precision = 38;
+        let scale = 6;
+        let arrow_schema = Arc::new(Schema::new(vec![
+            Field::new("old_pk_c1", DataType::Int32, true),
+            Field::new("new_pk_c1", DataType::Int32, true),
+            Field::new("value_c2", DataType::Decimal128(precision, scale), true),
+        ]));
+        let sync_schema = arrow_to_sync_schema(arrow_schema.clone())?;
+        let data = RecordBatch::try_new(
+            arrow_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![None, None, None, None, None, None])),
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+                Arc::new(
+                    Decimal128Array::from(vec![
+                        99999999999999999999999999999999999999i128, // 38 9s
+                        -99999999999999999999999999999999999999i128, // 38 9s
+                        9999999999999999999999999999999999999i128,  // 37 9s
+                        -9999999999999999999999999999999999999i128, // 37 9s
+                        999999999999999999999999999999999999i128,   // 36 9s
+                        -999999999999999999999999999999999999i128,  // 36 9s
+                    ])
+                    .with_precision_and_scale(precision, scale)?,
+                ),
+            ],
+        )?;
+
+        // Enqueue all syncs
+        let log_store = ctx
+            .get_internal_object_store()?
+            .get_log_store(&table_uuid.to_string());
+
+        // Add first non-empty sync
+        sync_mgr.enqueue_sync(
+            log_store.clone(),
+            None,
+            A.to_string(),
+            sync_schema.clone(),
+            vec![data],
+        )?;
+        sync_mgr.flush_syncs(log_store.root_uri()).await?;
+
+        // Ensure updated content is the same as original
+        let plan = ctx
+            .plan_query("SELECT * FROM test_decimal ORDER BY c1")
+            .await
+            .unwrap();
+        let results = ctx.collect(plan).await.unwrap();
+
+        let expected = [
+            "+----+------------------------------------------+",
+            "| c1 | c2                                       |",
+            "+----+------------------------------------------+",
+            "| 1  | 99999999999999999999999999999999.999999  |",
+            "| 2  | -99999999999999999999999999999999.999999 |",
+            "| 3  | 9999999999999999999999999999999.999999   |",
+            "| 4  | -9999999999999999999999999999999.999999  |",
+            "| 5  | 999999999999999999999999999999.999999    |",
+            "| 6  | -999999999999999999999999999999.999999   |",
+            "+----+------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
     }
 }
