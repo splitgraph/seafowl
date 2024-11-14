@@ -35,6 +35,18 @@ tracing-log = "0.2"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 url = "2.5"
 
+[patch.crates-io]
+arrow = { git = "https://github.com/splitgraph/arrow-rs", branch = "backport-pr6729" }
+arrow-array = { git = "https://github.com/splitgraph/arrow-rs", branch = "backport-pr6729" }
+arrow-buffer = { git = "https://github.com/splitgraph/arrow-rs", branch = "backport-pr6729" }
+arrow-csv = { git = "https://github.com/splitgraph/arrow-rs", branch = "backport-pr6729" }
+arrow-data = { git = "https://github.com/splitgraph/arrow-rs", branch = "backport-pr6729" }
+arrow-flight = { git = "https://github.com/splitgraph/arrow-rs", branch = "backport-pr6729" }
+arrow-integration-test = { git = "https://github.com/splitgraph/arrow-rs", branch = "backport-pr6729" }
+arrow-ipc = { git = "https://github.com/splitgraph/arrow-rs", branch = "backport-pr6729" }
+arrow-row = { git = "https://github.com/splitgraph/arrow-rs", branch = "backport-pr6729" }
+arrow-schema = { git = "https://github.com/splitgraph/arrow-rs", branch = "backport-pr6729" }
+
 [package]
 name = "seafowl"
 build = "build.rs"
@@ -96,7 +108,7 @@ datafusion-functions-nested = { workspace = true }
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
 # pr-2975-backport, pick up https://github.com/delta-io/delta-rs/pull/2975
-deltalake = { git = "https://github.com/splitgraph/delta-rs", rev = "bd765bd1d65dd99af43f47e8af3da11f39e8ee43", features = ["datafusion"] }
+deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "pr-2975-with-arrow-pr-6729-backport", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"

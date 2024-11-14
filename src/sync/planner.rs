@@ -985,7 +985,7 @@ mod tests {
             "              ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, true as __lower_rel]",
             "                DeltaScan",
             "                  RepartitionExec: partitioning=RoundRobinBatch",
-            "                    ParquetExec: file_groups={1 group: [[]]}, projection=[c1, c2]",
+            "                    ParquetExec: file_groups={0 groups: []}, projection=[c1, c2]",
             "          CoalesceBatchesExec: target_batch_size=8192",
             "            RepartitionExec: partitioning=Hash",
             "              UnnestExec",

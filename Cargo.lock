@@ -193,22 +193,21 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "52.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05048a8932648b63f21c37d88b552ccc8a65afb6dfe9fc9f30ce79174c2e7a85"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
 dependencies = [
- "arrow-arith",
+ "arrow-arith 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-array",
  "arrow-buffer",
- "arrow-cast",
+ "arrow-cast 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-csv",
  "arrow-data",
  "arrow-ipc",
- "arrow-json",
- "arrow-ord",
+ "arrow-json 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
+ "arrow-ord 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-row",
  "arrow-schema",
- "arrow-select",
- "arrow-string",
+ "arrow-select 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
+ "arrow-string 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "rand",
 ]
 
@@ -228,10 +227,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-arith"
+version = "52.2.0"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "chrono",
+ "half",
+ "num",
+]
+
+[[package]]
 name = "arrow-array"
 version = "52.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16f4a9468c882dc66862cef4e1fd8423d47e67972377d85d80e022786427768c"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
 dependencies = [
  "ahash 0.8.11",
  "arrow-buffer",
@@ -247,8 +259,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "52.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c975484888fc95ec4a632cdc98be39c085b1bb518531b0c80c5d462063e5daa1"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
 dependencies = [
  "bytes",
  "half",
@@ -265,7 +276,26 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
- "arrow-select",
+ "arrow-select 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "atoi",
+ "base64 0.22.1",
+ "chrono",
+ "half",
+ "lexical-core",
+ "num",
+ "ryu",
+]
+
+[[package]]
+name = "arrow-cast"
+version = "52.2.0"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "arrow-select 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "atoi",
  "base64 0.22.1",
  "chrono",
@@ -279,12 +309,11 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "52.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c13c36dc5ddf8c128df19bab27898eea64bf9da2b555ec1cd17a8ff57fba9ec2"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
- "arrow-cast",
+ "arrow-cast 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-data",
  "arrow-schema",
  "chrono",
@@ -298,8 +327,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "52.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd9d6f18c65ef7a2573ab498c374d8ae364b4a4edf67105357491c031f716ca5"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -310,20 +338,19 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "52.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e7ffbc96072e466ae5188974725bb46757587eafe427f77a25b828c375ae882"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
 dependencies = [
- "arrow-arith",
+ "arrow-arith 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-array",
  "arrow-buffer",
- "arrow-cast",
+ "arrow-cast 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-data",
  "arrow-ipc",
- "arrow-ord",
+ "arrow-ord 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-row",
  "arrow-schema",
- "arrow-select",
- "arrow-string",
+ "arrow-select 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
+ "arrow-string 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "base64 0.22.1",
  "bytes",
  "futures",
@@ -338,8 +365,7 @@ dependencies = [
 [[package]]
 name = "arrow-integration-test"
 version = "52.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af9396b0d8931d8d62fa8e4230942b0783cd9b1d98868636f32241e5e8d8eb96"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -352,12 +378,11 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "52.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e786e1cdd952205d9a8afc69397b317cfbb6e0095e445c69cda7e8da5c1eeb0f"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
- "arrow-cast",
+ "arrow-cast 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-data",
  "arrow-schema",
  "flatbuffers",
@@ -372,7 +397,26 @@ checksum = "fb22284c5a2a01d73cebfd88a33511a3234ab45d66086b2ca2d1228c3498e445"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
- "arrow-cast",
+ "arrow-cast 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-data",
+ "arrow-schema",
+ "chrono",
+ "half",
+ "indexmap 2.6.0",
+ "lexical-core",
+ "num",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "arrow-json"
+version = "52.2.0"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-data",
  "arrow-schema",
  "chrono",
@@ -394,7 +438,21 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
- "arrow-select",
+ "arrow-select 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "half",
+ "num",
+]
+
+[[package]]
+name = "arrow-ord"
+version = "52.2.0"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "arrow-select 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "half",
  "num",
 ]
@@ -402,8 +460,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "52.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cd09a518c602a55bd406bcc291a967b284cfa7a63edfbf8b897ea4748aad23c"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
 dependencies = [
  "ahash 0.8.11",
  "arrow-array",
@@ -416,8 +473,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "52.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e972cd1ff4a4ccd22f86d3e53e835c2ed92e0eea6a3e8eadb72b4f1ac802cf8"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
 dependencies = [
  "bitflags 2.6.0",
  "serde",
@@ -438,6 +494,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-select"
+version = "52.2.0"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
+dependencies = [
+ "ahash 0.8.11",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "num",
+]
+
+[[package]]
 name = "arrow-string"
 version = "52.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -447,7 +516,23 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
- "arrow-select",
+ "arrow-select 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "memchr",
+ "num",
+ "regex",
+ "regex-syntax 0.8.5",
+]
+
+[[package]]
+name = "arrow-string"
+version = "52.2.0"
+source = "git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729#edb549a7489562de1b3748d67e78ecfaf7fcd957"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "arrow-select 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "memchr",
  "num",
  "regex",
@@ -2314,7 +2399,7 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-buffer",
- "arrow-ord",
+ "arrow-ord 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
@@ -2357,9 +2442,9 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-buffer",
- "arrow-ord",
+ "arrow-ord 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "arrow-schema",
- "arrow-string",
+ "arrow-string 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "base64 0.22.1",
  "chrono",
  "datafusion-common",
@@ -2413,7 +2498,7 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-buffer",
- "arrow-ord",
+ "arrow-ord 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "arrow-schema",
  "async-trait",
  "chrono",
@@ -2534,13 +2619,13 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa08a82239f51e6d3d249c38f0f5bf7c8a78b28587e1b466893c9eac84d252d8"
 dependencies = [
- "arrow-arith",
+ "arrow-arith 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "arrow-array",
- "arrow-cast",
- "arrow-json",
- "arrow-ord",
+ "arrow-cast 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-json 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-ord 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "arrow-schema",
- "arrow-select",
+ "arrow-select 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "bytes",
  "chrono",
  "delta_kernel_derive",
@@ -2576,28 +2661,28 @@ dependencies = [
 
 [[package]]
 name = "deltalake"
-version = "0.21.0"
-source = "git+https://github.com/splitgraph/delta-rs?rev=bd765bd1d65dd99af43f47e8af3da11f39e8ee43#bd765bd1d65dd99af43f47e8af3da11f39e8ee43"
+version = "0.20.1"
+source = "git+https://github.com/splitgraph/delta-rs?branch=pr-2975-with-arrow-pr-6729-backport#d16af1723265f5ec7ff37d012c202772fe7845a7"
 dependencies = [
  "deltalake-core",
 ]
 
 [[package]]
 name = "deltalake-core"
-version = "0.21.0"
-source = "git+https://github.com/splitgraph/delta-rs?rev=bd765bd1d65dd99af43f47e8af3da11f39e8ee43#bd765bd1d65dd99af43f47e8af3da11f39e8ee43"
+version = "0.20.1"
+source = "git+https://github.com/splitgraph/delta-rs?branch=pr-2975-with-arrow-pr-6729-backport#d16af1723265f5ec7ff37d012c202772fe7845a7"
 dependencies = [
  "arrow",
- "arrow-arith",
+ "arrow-arith 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-array",
  "arrow-buffer",
- "arrow-cast",
+ "arrow-cast 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-ipc",
- "arrow-json",
- "arrow-ord",
+ "arrow-json 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
+ "arrow-ord 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "arrow-row",
  "arrow-schema",
- "arrow-select",
+ "arrow-select 52.2.0 (git+https://github.com/splitgraph/arrow-rs?branch=backport-pr6729)",
  "async-trait",
  "bytes",
  "cfg-if",
@@ -4883,11 +4968,11 @@ dependencies = [
  "ahash 0.8.11",
  "arrow-array",
  "arrow-buffer",
- "arrow-cast",
+ "arrow-cast 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "arrow-data",
  "arrow-ipc",
  "arrow-schema",
- "arrow-select",
+ "arrow-select 52.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "base64 0.22.1",
  "brotli",
  "bytes",
