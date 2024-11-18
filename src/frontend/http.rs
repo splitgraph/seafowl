@@ -28,7 +28,7 @@ use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-
+use tempfile::NamedTempFile;
 use tracing::{debug, info, warn};
 use warp::http::HeaderValue;
 use warp::log::Info;
@@ -397,9 +397,9 @@ pub async fn upload(
     let mut has_header = true;
     let mut schema: Option<SchemaRef> = None;
     let mut filename = String::new();
-    let ref_temp_file = context.inner.runtime_env().disk_manager.create_tmp_file(
-        format!("Creating a target file to append to {database_name}.{schema_name}.{table_name}").as_str(),
-    )?;
+    let mut file_type = String::new();
+    let mut temp_path = String::new();
+    let mut temp_file: NamedTempFile;
     while let Some(maybe_part) = form.next().await {
         let mut part = maybe_part.map_err(ApiError::UploadBodyLoadError)?;
 
@@ -426,34 +426,41 @@ pub async fn upload(
                 .ok_or(ApiError::UploadMissingFile)?
                 .to_string();
 
+            if filename.is_empty() {
+                return Err(ApiError::UploadMissingFile);
+            }
+
+            file_type = filename
+                .split('.')
+                .last()
+                .ok_or_else(|| {
+                    ApiError::UploadMissingFilenameExtension(filename.clone())
+                })?
+                .to_string();
+
+            temp_file = tempfile::Builder::new()
+                .suffix(&format!(".{file_type}"))
+                .tempfile()?;
+            temp_path = temp_file.path().display().to_string();
+
             // Write out the incoming bytes into the temporary file
             while let Some(maybe_bytes) = part.data().await {
-                ref_temp_file.inner().write_all(
+                temp_file.write_all(
                     maybe_bytes.map_err(ApiError::UploadBodyLoadError)?.chunk(),
                 )?;
             }
         }
     }
 
-    if filename.is_empty() {
-        return Err(ApiError::UploadMissingFile);
-    }
-
-    let file_type = filename
-        .split('.')
-        .last()
-        .ok_or_else(|| ApiError::UploadMissingFilenameExtension(filename.clone()))?;
-
     if file_type != "csv" && file_type != "parquet" {
         return Err(ApiError::UploadUnsupportedFileFormat(filename));
     };
 
     // Execute the plan and persist objects as well as table/partition metadata
-    let temp_path = ref_temp_file.path();
     let table = context
         .file_to_table(
-            temp_path.display().to_string(),
-            file_type,
+            temp_path,
+            &file_type,
             schema,
             has_header,
             schema_name.clone(),

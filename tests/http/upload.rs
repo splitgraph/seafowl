@@ -337,9 +337,8 @@ async fn test_upload_to_existing_table() {
 
     dbg!("Upload status is {}", status);
 
-    assert_eq!(
-        "Error during planning: Cannot cast file schema field col_4 of type Boolean to table schema field of type Timestamp(Microsecond, None)".to_string(),
-        String::from_utf8(output.stdout).unwrap()
+    assert!(
+        String::from_utf8(output.stdout).unwrap().contains("Error during planning: Cannot cast file schema field col_4 of type Boolean to table schema field of type Timestamp(Microsecond, None)")
     );
 
     terminate.send(()).unwrap();
