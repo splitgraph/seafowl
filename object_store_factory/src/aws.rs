@@ -205,7 +205,7 @@ pub async fn add_amazon_s3_specific_options(
     url: &Url,
     options: &mut HashMap<AmazonS3ConfigKey, String>,
 ) {
-    if !options.contains_key(&AmazonS3ConfigKey::Bucket)
+    if !options.contains_key(&AmazonS3ConfigKey::Region)
         && !options.contains_key(&AmazonS3ConfigKey::Endpoint)
     {
         let region = detect_region(url).await.unwrap();
