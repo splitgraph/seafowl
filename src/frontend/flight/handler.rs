@@ -178,6 +178,7 @@ impl SeafowlFlightHandler {
                             ))
                         })?,
                         store_loc.options,
+                        store_loc.credentials,
                         cmd.path,
                     )
                     .await?

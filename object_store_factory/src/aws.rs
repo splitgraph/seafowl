@@ -47,19 +47,26 @@ impl Default for S3Config {
 }
 
 impl S3Config {
-    pub fn from_hashmap(
-        map: &HashMap<String, String>,
+    pub fn from_options_and_credentials(
+        options: &HashMap<String, String>,
+        credentials: &HashMap<String, String>,
     ) -> Result<Self, object_store::Error> {
         Ok(Self {
-            region: map.get("region").map(|s| s.to_string()),
-            access_key_id: map.get("access_key_id").map(|s| s.to_string()),
-            secret_access_key: map.get("secret_access_key").map(|s| s.to_string()),
-            session_token: map.get("session_token").map(|s| s.to_string()),
-            endpoint: map.get("endpoint").map(|s| s.to_string()),
-            bucket: map.get("bucket").unwrap().clone(),
-            prefix: map.get("prefix").map(|s| s.to_string()),
-            allow_http: map.get("allow_http").map(|s| s != "false").unwrap_or(true),
-            skip_signature: map
+            access_key_id: credentials.get("access_key_id").map(|s| s.to_string()),
+            secret_access_key: credentials
+                .get("secret_access_key")
+                .map(|s| s.to_string()),
+            session_token: credentials.get("session_token").map(|s| s.to_string()),
+
+            region: options.get("region").map(|s| s.to_string()),
+            endpoint: options.get("endpoint").map(|s| s.to_string()),
+            bucket: options.get("bucket").unwrap().clone(),
+            prefix: options.get("prefix").map(|s| s.to_string()),
+            allow_http: options
+                .get("allow_http")
+                .map(|s| s != "false")
+                .unwrap_or(true),
+            skip_signature: options
                 .get("skip_signature")
                 .map(|s| s != "false")
                 .unwrap_or(true),
@@ -89,30 +96,12 @@ impl S3Config {
         })
     }
 
-    pub fn to_hashmap(&self) -> HashMap<String, String> {
+    pub fn get_options(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         if let Some(region) = &self.region {
             map.insert(
                 AmazonS3ConfigKey::Region.as_ref().to_string(),
                 region.clone(),
-            );
-        }
-        if let Some(access_key_id) = &self.access_key_id {
-            map.insert(
-                AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
-                access_key_id.clone(),
-            );
-        }
-        if let Some(secret_access_key) = &self.secret_access_key {
-            map.insert(
-                AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
-                secret_access_key.clone(),
-            );
-        }
-        if let Some(session_token) = &self.session_token {
-            map.insert(
-                AmazonS3ConfigKey::Token.as_ref().to_string(),
-                session_token.clone(),
             );
         }
         if let Some(endpoint) = &self.endpoint {
@@ -131,6 +120,29 @@ impl S3Config {
             AmazonS3ConfigKey::SkipSignature.as_ref().to_string(),
             self.skip_signature.to_string(),
         );
+        map
+    }
+
+    pub fn get_credentials(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        if let Some(access_key_id) = &self.access_key_id {
+            map.insert(
+                AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
+                access_key_id.clone(),
+            );
+        }
+        if let Some(secret_access_key) = &self.secret_access_key {
+            map.insert(
+                AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
+                secret_access_key.clone(),
+            );
+        }
+        if let Some(session_token) = &self.session_token {
+            map.insert(
+                AmazonS3ConfigKey::Token.as_ref().to_string(),
+                session_token.clone(),
+            );
+        }
         map
     }
 
@@ -182,12 +194,16 @@ impl S3Config {
     }
 }
 
-pub fn map_options_into_amazon_s3_config_keys(
+pub fn map_options_and_credentials_into_amazon_s3_config_keys(
     input_options: HashMap<String, String>,
+    input_credentials: HashMap<String, String>,
 ) -> Result<HashMap<AmazonS3ConfigKey, String>, object_store::Error> {
     let mut mapped_keys = HashMap::new();
 
-    for (key, value) in input_options {
+    for (key, value) in input_options
+        .into_iter()
+        .chain(input_credentials.into_iter())
+    {
         match AmazonS3ConfigKey::from_str(&key) {
             Ok(config_key) => {
                 mapped_keys.insert(config_key, value);
@@ -267,17 +283,19 @@ mod tests {
 
     #[test]
     fn test_config_from_hashmap_with_all_fields() {
-        let mut map = HashMap::new();
-        map.insert("region".to_string(), "us-west-2".to_string());
-        map.insert("access_key_id".to_string(), "access_key".to_string());
-        map.insert("secret_access_key".to_string(), "secret_key".to_string());
-        map.insert("session_token".to_string(), "session_token".to_string());
-        map.insert("endpoint".to_string(), "http://localhost:9000".to_string());
-        map.insert("bucket".to_string(), "my-bucket".to_string());
-        map.insert("prefix".to_string(), "my-prefix".to_string());
+        let mut options = HashMap::new();
+        options.insert("region".to_string(), "us-west-2".to_string());
+        options.insert("endpoint".to_string(), "http://localhost:9000".to_string());
+        options.insert("bucket".to_string(), "my-bucket".to_string());
+        options.insert("prefix".to_string(), "my-prefix".to_string());
 
-        let config =
-            S3Config::from_hashmap(&map).expect("Failed to create config from hashmap");
+        let mut credentials = HashMap::new();
+        credentials.insert("access_key_id".to_string(), "access_key".to_string());
+        credentials.insert("secret_access_key".to_string(), "secret_key".to_string());
+        credentials.insert("session_token".to_string(), "session_token".to_string());
+
+        let config = S3Config::from_options_and_credentials(&options, &credentials)
+            .expect("Failed to create config from hashmap");
         assert_eq!(config.region, Some("us-west-2".to_string()));
         assert_eq!(config.access_key_id, Some("access_key".to_string()));
         assert_eq!(config.secret_access_key, Some("secret_key".to_string()));
@@ -289,12 +307,14 @@ mod tests {
 
     #[test]
     fn test_config_from_hashmap_with_missing_optional_fields() {
-        let mut map = HashMap::new();
-        map.insert("region".to_string(), "us-west-2".to_string());
-        map.insert("bucket".to_string(), "my-bucket".to_string());
+        let mut options = HashMap::new();
+        options.insert("region".to_string(), "us-west-2".to_string());
+        options.insert("bucket".to_string(), "my-bucket".to_string());
 
-        let config =
-            S3Config::from_hashmap(&map).expect("Failed to create config from hashmap");
+        let credentials = HashMap::new();
+
+        let config = S3Config::from_options_and_credentials(&options, &credentials)
+            .expect("Failed to create config from hashmap");
         assert_eq!(config.region, Some("us-west-2".to_string()));
         assert!(config.access_key_id.is_none());
         assert!(config.secret_access_key.is_none());
@@ -307,8 +327,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
     fn test_config_from_hashmap_without_required_fields() {
-        let map = HashMap::new();
-        S3Config::from_hashmap(&map).unwrap(); // Missing "region" and "bucket"
+        let options = HashMap::new();
+        let credentials = HashMap::new();
+        S3Config::from_options_and_credentials(&options, &credentials).unwrap();
+        // Missing "region" and "bucket"
     }
 
     #[test]
@@ -373,14 +395,17 @@ mod tests {
     }
 
     #[test]
-    fn test_map_options_into_amazon_s3_config_keys_with_valid_keys() {
-        let mut input_options = HashMap::new();
-        input_options.insert("access_key_id".to_string(), "ACCESS_KEY".to_string());
-        input_options.insert("secret_access_key".to_string(), "SECRET_KEY".to_string());
-        input_options.insert("region".to_string(), "us-west-2".to_string());
-        input_options.insert("bucket".to_string(), "my-bucket".to_string());
+    fn test_map_options_and_credentials_into_amazon_s3_config_keys_with_valid_keys() {
+        let mut options = HashMap::new();
+        options.insert("region".to_string(), "us-west-2".to_string());
+        options.insert("bucket".to_string(), "my-bucket".to_string());
 
-        let result = map_options_into_amazon_s3_config_keys(input_options);
+        let mut credentials = HashMap::new();
+        credentials.insert("access_key_id".to_string(), "ACCESS_KEY".to_string());
+        credentials.insert("secret_access_key".to_string(), "SECRET_KEY".to_string());
+
+        let result =
+            map_options_and_credentials_into_amazon_s3_config_keys(options, credentials);
         assert!(result.is_ok());
 
         let mapped_keys = result.unwrap();
@@ -403,11 +428,14 @@ mod tests {
     }
 
     #[test]
-    fn test_map_options_into_amazon_s3_config_keys_with_invalid_key() {
-        let mut input_options = HashMap::new();
-        input_options.insert("invalid_key".to_string(), "some_value".to_string());
+    fn test_map_options_and_credentials_into_amazon_s3_config_keys_with_invalid_option() {
+        let mut options = HashMap::new();
+        options.insert("invalid_key".to_string(), "some_value".to_string());
 
-        let result = map_options_into_amazon_s3_config_keys(input_options);
+        let credentials = HashMap::new();
+
+        let result =
+            map_options_and_credentials_into_amazon_s3_config_keys(options, credentials);
         assert!(result.is_err());
 
         let error = result.err().unwrap();
@@ -418,13 +446,35 @@ mod tests {
     }
 
     #[test]
-    fn test_map_options_into_amazon_s3_config_keys_with_mixed_keys() {
-        let mut input_options = HashMap::new();
-        input_options.insert("access_key_id".to_string(), "ACCESS_KEY".to_string());
-        input_options.insert("invalid_key".to_string(), "some_value".to_string());
-        input_options.insert("bucket".to_string(), "my-bucket".to_string());
+    fn test_map_options_and_credentials_into_amazon_s3_config_keys_with_invalid_credential(
+    ) {
+        let options = HashMap::new();
 
-        let result = map_options_into_amazon_s3_config_keys(input_options);
+        let mut credentials = HashMap::new();
+        credentials.insert("invalid_credential".to_string(), "some_value".to_string());
+
+        let result =
+            map_options_and_credentials_into_amazon_s3_config_keys(options, credentials);
+        assert!(result.is_err());
+
+        let error = result.err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            "Configuration key: 'invalid_credential' is not valid for store 'S3'."
+        )
+    }
+
+    #[test]
+    fn test_map_options_and_credentials_into_amazon_s3_config_keys_with_mixed_keys() {
+        let mut options = HashMap::new();
+        options.insert("invalid_key".to_string(), "some_value".to_string());
+        options.insert("bucket".to_string(), "my-bucket".to_string());
+
+        let mut credentials = HashMap::new();
+        credentials.insert("access_key_id".to_string(), "ACCESS_KEY".to_string());
+
+        let result =
+            map_options_and_credentials_into_amazon_s3_config_keys(options, credentials);
         assert!(result.is_err());
 
         let error = result.err().unwrap();
@@ -436,8 +486,10 @@ mod tests {
 
     #[test]
     fn test_map_options_into_amazon_s3_config_keys_empty_input() {
-        let input_options = HashMap::new();
-        let result = map_options_into_amazon_s3_config_keys(input_options);
+        let options = HashMap::new();
+        let credentials = HashMap::new();
+        let result =
+            map_options_and_credentials_into_amazon_s3_config_keys(options, credentials);
         assert!(result.is_ok());
 
         let mapped_keys = result.unwrap();
@@ -514,7 +566,7 @@ mod tests {
             skip_signature: true,
         };
 
-        let hashmap = s3_config.to_hashmap();
+        let hashmap = s3_config.get_options();
 
         assert_eq!(
             hashmap.get(AmazonS3ConfigKey::Region.as_ref()),
@@ -560,7 +612,7 @@ mod tests {
             skip_signature: true,
         };
 
-        let hashmap = s3_config.to_hashmap();
+        let hashmap = s3_config.get_options();
 
         assert_eq!(hashmap.get(AmazonS3ConfigKey::Region.as_ref()), None);
         assert_eq!(hashmap.get(AmazonS3ConfigKey::AccessKeyId.as_ref()), None);

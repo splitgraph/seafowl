@@ -23,6 +23,8 @@ message StorageLocation {
   map<string, string> options = 2;
   // Unique storage location identifier
   string name = 3;
+  // Connection credentials for the object store client
+  map<string, string> credentials = 4;
 }
 
 message ListSchemaRequest {

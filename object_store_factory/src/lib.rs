@@ -33,9 +33,9 @@ pub struct StorageLocationInfo {
     // Actual object store for this location
     pub object_store: Arc<DynObjectStore>,
 
-    // Options used to construct the object store (for gRPC consumers)
-    pub options: HashMap<String, String>,
     pub url: String,
+    pub options: HashMap<String, String>,
+    pub credentials: HashMap<String, String>,
 }
 
 impl ObjectStoreConfig {
@@ -68,8 +68,8 @@ impl ObjectStoreConfig {
     pub fn to_hashmap(&self) -> HashMap<String, String> {
         match self {
             ObjectStoreConfig::Local(config) => config.to_hashmap(),
-            ObjectStoreConfig::AmazonS3(config) => config.to_hashmap(),
-            ObjectStoreConfig::GoogleCloudStorage(config) => config.to_hashmap(),
+            ObjectStoreConfig::AmazonS3(config) => config.get_options(),
+            ObjectStoreConfig::GoogleCloudStorage(config) => config.get_options(),
             ObjectStoreConfig::Memory => HashMap::new(), // Memory config has no associated data
         }
     }
@@ -93,14 +93,16 @@ impl ObjectStoreConfig {
         match self {
             ObjectStoreConfig::AmazonS3(aws_config) => Ok(StorageLocationInfo {
                 object_store: aws_config.build_amazon_s3()?,
-                options: aws_config.to_hashmap(),
                 url: aws_config.bucket_to_url(),
+                options: aws_config.get_options(),
+                credentials: aws_config.get_credentials(),
             }),
             ObjectStoreConfig::GoogleCloudStorage(google_config) => {
                 Ok(StorageLocationInfo {
                     object_store: google_config.build_google_cloud_storage()?,
-                    options: google_config.to_hashmap(),
                     url: google_config.bucket_to_url(),
+                    options: google_config.get_options(),
+                    credentials: google_config.get_credentials(),
                 })
             }
             _ => {
@@ -130,9 +132,10 @@ impl ObjectStoreConfig {
     }
 }
 
-pub async fn build_object_store_from_opts(
+pub async fn build_object_store_from_options_and_credentials(
     url: &Url,
     options: HashMap<String, String>,
+    credentials: HashMap<String, String>,
 ) -> Result<Box<dyn ObjectStore>, object_store::Error> {
     let (scheme, _) = ObjectStoreScheme::parse(url).unwrap();
 
@@ -155,7 +158,11 @@ pub async fn build_object_store_from_opts(
             Ok(Box::new(store))
         }
         ObjectStoreScheme::AmazonS3 => {
-            let mut s3_options = aws::map_options_into_amazon_s3_config_keys(options)?;
+            let mut s3_options =
+                aws::map_options_and_credentials_into_amazon_s3_config_keys(
+                    options,
+                    credentials,
+                )?;
             aws::add_amazon_s3_specific_options(url, &mut s3_options).await;
             aws::add_amazon_s3_environment_variables(&mut s3_options);
 
@@ -166,7 +173,11 @@ pub async fn build_object_store_from_opts(
             Ok(store)
         }
         ObjectStoreScheme::GoogleCloudStorage => {
-            let mut gcs_options = google::map_options_into_google_config_keys(options)?;
+            let mut gcs_options =
+                google::map_options_and_credentials_into_google_config_keys(
+                    options,
+                    credentials,
+                )?;
             google::add_google_cloud_storage_environment_variables(&mut gcs_options);
 
             let (mut store, _) = parse_url_opts(url, gcs_options)?;
@@ -188,10 +199,19 @@ pub async fn build_object_store_from_opts(
 pub async fn build_storage_location_info_from_opts(
     url: &Url,
     options: &HashMap<String, String>,
+    credentials: &HashMap<String, String>,
 ) -> Result<StorageLocationInfo, object_store::Error> {
     Ok(StorageLocationInfo {
-        object_store: Arc::new(build_object_store_from_opts(url, options.clone()).await?),
+        object_store: Arc::new(
+            build_object_store_from_options_and_credentials(
+                url,
+                options.clone(),
+                credentials.clone(),
+            )
+            .await?,
+        ),
         options: options.clone(),
+        credentials: credentials.clone(),
         url: url.to_string(),
     })
 }
@@ -294,7 +314,8 @@ mod tests {
     #[tokio::test]
     async fn test_build_aws_object_store(#[values(true, false)] use_env: bool) {
         let url = Url::parse("s3://my-bucket").unwrap();
-        let options: HashMap<String, String> = if use_env {
+        let options = HashMap::new();
+        let credentials: HashMap<String, String> = if use_env {
             HashMap::new()
         } else {
             HashMap::from([
@@ -308,7 +329,7 @@ mod tests {
                 ("AWS_ACCESS_KEY_ID", Some("env-key")),
                 ("AWS_SECRET_ACCESS_KEY", Some("env-secret")),
             ],
-            build_object_store_from_opts(&url, options),
+            build_object_store_from_options_and_credentials(&url, options, credentials),
         )
         .await;
 

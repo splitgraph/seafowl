@@ -44,13 +44,15 @@ pub fn build_object_store(
 struct StoreCacheKey {
     url: Url,
     options: HashMap<String, String>,
+    credentials: HashMap<String, String>,
 }
 
 impl Hash for StoreCacheKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         Hash::hash(&self.url, state);
 
-        let mut pairs: Vec<_> = self.options.iter().collect();
+        let mut pairs: Vec<_> =
+            self.options.iter().chain(self.credentials.iter()).collect();
         pairs.sort_by_key(|i| i.0);
 
         Hash::hash(&pairs, state);
@@ -102,21 +104,23 @@ impl ObjectStoreFactory {
         &self,
         mut url: Url,
         options: HashMap<String, String>,
+        credentials: HashMap<String, String>,
         table_path: String,
     ) -> Result<Arc<dyn LogStore>, object_store::Error> {
         let store = {
-            let used_options = options.clone();
             let key = StoreCacheKey {
                 url: url.clone(),
-                options,
+                options: options.clone(),
+                credentials: credentials.clone(),
             };
 
             match self.custom_stores.get_mut(&key) {
                 Some(store) => store.clone(),
                 None => {
-                    let mut store = object_store_factory::build_object_store_from_opts(
+                    let mut store = object_store_factory::build_object_store_from_options_and_credentials(
                         &url,
-                        used_options,
+                        options,
+                        credentials,
                     )
                     .await?
                     .into();

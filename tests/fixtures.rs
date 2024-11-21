@@ -71,12 +71,14 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
             StorageLocation {
                 name: "minio".to_string(),
                 location: "s3://seafowl-test-bucket".to_string(),
-                options: minio_options(),
+                options: minio_options_and_credentials().0,
+                credentials: minio_options_and_credentials().1,
             },
             StorageLocation {
                 name: "minio-prefix".to_string(),
                 location: "s3://seafowl-test-bucket/test-data".to_string(),
-                options: minio_options(),
+                options: minio_options_and_credentials().0,
+                credentials: minio_options_and_credentials().1,
             },
             StorageLocation {
                 name: "fake-gcs".to_string(),
@@ -85,6 +87,7 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
                     GoogleConfigKey::ServiceAccount.as_ref().to_string(),
                     fake_gcs_creds(),
                 )]),
+                credentials: HashMap::new(),
             },
             StorageLocation {
                 name: "local_fs".to_string(),
@@ -93,24 +96,18 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
                     std::env::var("CARGO_MANIFEST_DIR").unwrap()
                 ),
                 options: HashMap::new(),
+                credentials: HashMap::new(),
             },
         ],
     }
 }
 
-pub fn minio_options() -> HashMap<String, String> {
-    HashMap::from([
+pub fn minio_options_and_credentials(
+) -> (HashMap<String, String>, HashMap<String, String>) {
+    let options = HashMap::from([
         (
             AmazonS3ConfigKey::Endpoint.as_ref().to_string(),
             "http://127.0.0.1:9000".to_string(),
-        ),
-        (
-            AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
-            "minioadmin".to_string(),
-        ),
-        (
-            AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
-            "minioadmin".to_string(),
         ),
         (
             // This has been removed from the config enum, but it can
@@ -120,5 +117,16 @@ pub fn minio_options() -> HashMap<String, String> {
                 .to_string(),
             "true".to_string(),
         ),
-    ])
+    ]);
+    let credentials = HashMap::from([
+        (
+            AmazonS3ConfigKey::AccessKeyId.as_ref().to_string(),
+            "minioadmin".to_string(),
+        ),
+        (
+            AmazonS3ConfigKey::SecretAccessKey.as_ref().to_string(),
+            "minioadmin".to_string(),
+        ),
+    ]);
+    (options, credentials)
 }

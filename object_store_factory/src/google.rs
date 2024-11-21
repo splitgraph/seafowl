@@ -39,7 +39,7 @@ impl GCSConfig {
         })
     }
 
-    pub fn to_hashmap(&self) -> HashMap<String, String> {
+    pub fn get_options(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         map.insert(
             GoogleConfigKey::Bucket.as_ref().to_string(),
@@ -48,6 +48,18 @@ impl GCSConfig {
         if let Some(prefix) = &self.prefix {
             map.insert("prefix".to_string(), prefix.clone());
         }
+        if let Some(google_application_credentials) = &self.google_application_credentials
+        {
+            map.insert(
+                GoogleConfigKey::ApplicationCredentials.as_ref().to_string(),
+                google_application_credentials.clone(),
+            );
+        }
+        map
+    }
+
+    pub fn get_credentials(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
         if let Some(google_application_credentials) = &self.google_application_credentials
         {
             map.insert(
@@ -85,12 +97,16 @@ impl GCSConfig {
     }
 }
 
-pub fn map_options_into_google_config_keys(
+pub fn map_options_and_credentials_into_google_config_keys(
     input_options: HashMap<String, String>,
+    input_credentials: HashMap<String, String>,
 ) -> Result<HashMap<GoogleConfigKey, String>, object_store::Error> {
     let mut mapped_keys = HashMap::new();
 
-    for (key, value) in input_options {
+    for (key, value) in input_options
+        .into_iter()
+        .chain(input_credentials.into_iter())
+    {
         match GoogleConfigKey::from_str(&key) {
             Ok(config_key) => {
                 mapped_keys.insert(config_key, value);
@@ -245,18 +261,21 @@ mod tests {
 
     #[test]
     fn test_map_options_into_google_config_keys_with_valid_keys() {
-        let mut input_options = HashMap::new();
-        input_options.insert(
+        let mut options = HashMap::new();
+        options.insert(
             "google_service_account".to_string(),
             "my_google_service_account".to_string(),
         );
-        input_options.insert("bucket".to_string(), "my-bucket".to_string());
-        input_options.insert(
+        options.insert("bucket".to_string(), "my-bucket".to_string());
+
+        let mut credentials = HashMap::new();
+        credentials.insert(
             "google_service_account_key".to_string(),
             "my_google_service_account_key".to_string(),
         );
 
-        let result = map_options_into_google_config_keys(input_options);
+        let result =
+            map_options_and_credentials_into_google_config_keys(options, credentials);
         assert!(result.is_ok());
 
         let mapped_keys = result.unwrap();
@@ -275,11 +294,14 @@ mod tests {
     }
 
     #[test]
-    fn test_map_options_into_google_config_keys_with_invalid_key() {
-        let mut input_options = HashMap::new();
-        input_options.insert("invalid_key".to_string(), "some_value".to_string());
+    fn test_map_options_and_credentials_into_google_config_keys_with_invalid_key() {
+        let mut options = HashMap::new();
+        options.insert("invalid_key".to_string(), "some_value".to_string());
 
-        let result = map_options_into_google_config_keys(input_options);
+        let credentials = HashMap::new();
+
+        let result =
+            map_options_and_credentials_into_google_config_keys(options, credentials);
         assert!(result.is_err());
 
         let error = result.err().unwrap();
@@ -291,12 +313,35 @@ mod tests {
     }
 
     #[test]
-    fn test_map_options_into_google_config_keys_with_mixed_keys() {
-        let mut input_options = HashMap::new();
-        input_options.insert("invalid_key".to_string(), "some_value".to_string());
-        input_options.insert("bucket".to_string(), "my-bucket".to_string());
+    fn test_map_options_and_credentials_into_google_config_keys_with_invalid_credential()
+    {
+        let options = HashMap::new();
 
-        let result = map_options_into_google_config_keys(input_options);
+        let mut credentials = HashMap::new();
+        credentials.insert("invalid_credential".to_string(), "some_value".to_string());
+
+        let result =
+            map_options_and_credentials_into_google_config_keys(options, credentials);
+        assert!(result.is_err());
+
+        let error = result.err().unwrap();
+        print!("ERROR1: {:?}", error.to_string());
+        assert_eq!(
+            error.to_string(),
+            "Configuration key: 'invalid_credential' is not valid for store 'GCS'."
+        )
+    }
+
+    #[test]
+    fn test_map_options_and_credentials_into_google_config_keys_with_mixed_keys() {
+        let mut options = HashMap::new();
+        options.insert("invalid_key".to_string(), "some_value".to_string());
+        options.insert("bucket".to_string(), "my-bucket".to_string());
+
+        let credentials = HashMap::new();
+
+        let result =
+            map_options_and_credentials_into_google_config_keys(options, credentials);
         assert!(result.is_err());
 
         let error = result.err().unwrap();
@@ -307,9 +352,11 @@ mod tests {
     }
 
     #[test]
-    fn test_map_options_into_google_config_keys_empty_input() {
-        let input_options = HashMap::new();
-        let result = map_options_into_google_config_keys(input_options);
+    fn test_map_options_and_credentials_into_google_config_keys_empty_input() {
+        let options = HashMap::new();
+        let credentials = HashMap::new();
+        let result =
+            map_options_and_credentials_into_google_config_keys(options, credentials);
         assert!(result.is_ok());
 
         let mapped_keys = result.unwrap();
@@ -362,7 +409,7 @@ mod tests {
             google_application_credentials: Some("path/to/credentials.json".to_string()),
         };
 
-        let hashmap = gcs_config.to_hashmap();
+        let hashmap = gcs_config.get_options();
 
         assert_eq!(
             hashmap.get(GoogleConfigKey::Bucket.as_ref()),
@@ -383,7 +430,7 @@ mod tests {
             google_application_credentials: None,
         };
 
-        let hashmap = gcs_config.to_hashmap();
+        let hashmap = gcs_config.get_options();
 
         assert_eq!(
             hashmap.get(GoogleConfigKey::Bucket.as_ref()),

@@ -1,4 +1,4 @@
-use crate::fixtures::minio_options;
+use crate::fixtures::minio_options_and_credentials;
 use crate::flight::*;
 use clade::schema::StorageLocation;
 use clade::sync::{ColumnDescriptor, ColumnRole};
@@ -535,15 +535,18 @@ async fn test_sync_custom_store(
     let table_name = "sync_table";
 
     let temp_dir = TempDir::new().unwrap();
-    let (location, options) = if target_type == "local" {
+    let (location, options, credentials) = if target_type == "local" {
         (
             format!("file://{}", temp_dir.path().to_string_lossy()),
             HashMap::new(),
+            HashMap::new(),
         )
     } else {
+        let (options, credentials) = minio_options_and_credentials();
         (
             "s3://seafowl-test-bucket/some/path".to_string(),
-            minio_options(),
+            options,
+            credentials,
         )
     };
 
@@ -553,6 +556,7 @@ async fn test_sync_custom_store(
         .get_log_store_for_table(
             Url::parse(&location)?,
             options.clone(),
+            credentials.clone(),
             table_name.to_string(),
         )
         .await?;
@@ -561,6 +565,7 @@ async fn test_sync_custom_store(
         name: "custom-store".to_string(),
         location,
         options,
+        credentials,
     };
 
     let cmd = DataSyncCommand {
