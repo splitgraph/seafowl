@@ -116,12 +116,7 @@ impl Metastore {
         let store_options = catalog_schemas
             .stores
             .into_iter()
-            .map(|store| {
-                (
-                    store.name,
-                    (store.url, store.options, store.credentials),
-                )
-            })
+            .map(|store| (store.name, (store.url, store.options, store.credentials)))
             .collect();
 
         // Turn the list of all collections, tables and their columns into a nested map.
