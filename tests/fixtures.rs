@@ -70,19 +70,19 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
         stores: vec![
             StorageLocation {
                 name: "minio".to_string(),
-                location: "s3://seafowl-test-bucket".to_string(),
+                url: "s3://seafowl-test-bucket".to_string(),
                 options: minio_options_and_credentials().0,
                 credentials: minio_options_and_credentials().1,
             },
             StorageLocation {
                 name: "minio-prefix".to_string(),
-                location: "s3://seafowl-test-bucket/test-data".to_string(),
+                url: "s3://seafowl-test-bucket/test-data".to_string(),
                 options: minio_options_and_credentials().0,
                 credentials: minio_options_and_credentials().1,
             },
             StorageLocation {
                 name: "fake-gcs".to_string(),
-                location: "gs://test-data".to_string(),
+                url: "gs://test-data".to_string(),
                 options: HashMap::from([(
                     GoogleConfigKey::ServiceAccount.as_ref().to_string(),
                     fake_gcs_creds(),
@@ -91,7 +91,7 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
             },
             StorageLocation {
                 name: "local_fs".to_string(),
-                location: format!(
+                url: format!(
                     "file://{}/tests/data/",
                     std::env::var("CARGO_MANIFEST_DIR").unwrap()
                 ),

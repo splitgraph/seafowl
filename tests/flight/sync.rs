@@ -535,7 +535,7 @@ async fn test_sync_custom_store(
     let table_name = "sync_table";
 
     let temp_dir = TempDir::new().unwrap();
-    let (location, options, credentials) = if target_type == "local" {
+    let (url, options, credentials) = if target_type == "local" {
         (
             format!("file://{}", temp_dir.path().to_string_lossy()),
             HashMap::new(),
@@ -554,7 +554,7 @@ async fn test_sync_custom_store(
         .metastore
         .object_stores
         .get_log_store_for_table(
-            Url::parse(&location)?,
+            Url::parse(&url)?,
             options.clone(),
             credentials.clone(),
             table_name.to_string(),
@@ -563,7 +563,7 @@ async fn test_sync_custom_store(
 
     let store = StorageLocation {
         name: "custom-store".to_string(),
-        location,
+        url,
         options,
         credentials,
     };

@@ -119,7 +119,7 @@ impl Metastore {
             .map(|store| {
                 (
                     store.name,
-                    (store.location, store.options, store.credentials),
+                    (store.url, store.options, store.credentials),
                 )
             })
             .collect();

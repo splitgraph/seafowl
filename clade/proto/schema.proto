@@ -18,7 +18,7 @@ message TableObject {
 // A single root storage location, hosting many individual tables
 message StorageLocation {
   // URL of the storage location root
-  string location = 1;
+  string url = 1;
   // Connection options for the object store client
   map<string, string> options = 2;
   // Unique storage location identifier

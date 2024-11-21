@@ -172,7 +172,7 @@ impl SeafowlFlightHandler {
                     .metastore
                     .object_stores
                     .get_log_store_for_table(
-                        Url::parse(&store_loc.location).map_err(|e| {
+                        Url::parse(&store_loc.url).map_err(|e| {
                             DataFusionError::Execution(format!(
                                 "Couldn't parse sync location: {e}"
                             ))
