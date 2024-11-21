@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn test_to_hashmap() {
+    fn test_get_options_and_credentials() {
         let s3_config = S3Config {
             region: Some("us-west-1".to_string()),
             access_key_id: Some("ACCESS_KEY".to_string()),
@@ -566,40 +566,42 @@ mod tests {
             skip_signature: true,
         };
 
-        let hashmap = s3_config.get_options();
-
+        let options = s3_config.get_options();
         assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::Region.as_ref()),
+            options.get(AmazonS3ConfigKey::Region.as_ref()),
             Some(&"us-west-1".to_string())
         );
         assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::AccessKeyId.as_ref()),
-            Some(&"ACCESS_KEY".to_string())
-        );
-        assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::SecretAccessKey.as_ref()),
-            Some(&"SECRET_KEY".to_string())
-        );
-        assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::Token.as_ref()),
-            Some(&"SESSION_TOKEN".to_string())
-        );
-        assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::Endpoint.as_ref()),
+            options.get(AmazonS3ConfigKey::Endpoint.as_ref()),
             Some(&"https://s3.amazonaws.com".to_string())
         );
         assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
+            options.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
             Some(&"true".to_string())
         );
         assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::SkipSignature.as_ref()),
+            options.get(AmazonS3ConfigKey::SkipSignature.as_ref()),
             Some(&"true".to_string())
+        );
+
+        let credentials = s3_config.get_credentials();
+
+        assert_eq!(
+            credentials.get(AmazonS3ConfigKey::AccessKeyId.as_ref()),
+            Some(&"ACCESS_KEY".to_string())
+        );
+        assert_eq!(
+            credentials.get(AmazonS3ConfigKey::SecretAccessKey.as_ref()),
+            Some(&"SECRET_KEY".to_string())
+        );
+        assert_eq!(
+            credentials.get(AmazonS3ConfigKey::Token.as_ref()),
+            Some(&"SESSION_TOKEN".to_string())
         );
     }
 
     #[test]
-    fn test_to_hashmap_with_none_fields() {
+    fn test_get_options_and_credentials_with_none_fields() {
         let s3_config = S3Config {
             region: None,
             access_key_id: None,
@@ -612,24 +614,28 @@ mod tests {
             skip_signature: true,
         };
 
-        let hashmap = s3_config.get_options();
-
-        assert_eq!(hashmap.get(AmazonS3ConfigKey::Region.as_ref()), None);
-        assert_eq!(hashmap.get(AmazonS3ConfigKey::AccessKeyId.as_ref()), None);
+        let options = s3_config.get_options();
+        assert_eq!(options.get(AmazonS3ConfigKey::Region.as_ref()), None);
+        assert_eq!(options.get(AmazonS3ConfigKey::Endpoint.as_ref()), None);
         assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::SecretAccessKey.as_ref()),
+            options.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            options.get(AmazonS3ConfigKey::SkipSignature.as_ref()),
+            Some(&"true".to_string())
+        );
+
+        let credentials = s3_config.get_credentials();
+        assert_eq!(
+            credentials.get(AmazonS3ConfigKey::AccessKeyId.as_ref()),
             None
         );
-        assert_eq!(hashmap.get(AmazonS3ConfigKey::Token.as_ref()), None);
-        assert_eq!(hashmap.get(AmazonS3ConfigKey::Endpoint.as_ref()), None);
         assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp).as_ref()),
-            Some(&"true".to_string())
+            credentials.get(AmazonS3ConfigKey::SecretAccessKey.as_ref()),
+            None
         );
-        assert_eq!(
-            hashmap.get(AmazonS3ConfigKey::SkipSignature.as_ref()),
-            Some(&"true".to_string())
-        );
+        assert_eq!(credentials.get(AmazonS3ConfigKey::Token.as_ref()), None);
     }
 
     #[test]
