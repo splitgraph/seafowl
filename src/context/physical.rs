@@ -37,6 +37,7 @@ use datafusion::{
     physical_plan::{ExecutionPlan, SendableRecordBatchStream},
     sql::TableReference,
 };
+use datafusion_common::config::TableParquetOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column as ColumnExpr, ResolvedTableReference, SchemaReference};
 use datafusion_expr::logical_plan::{
@@ -941,7 +942,12 @@ impl SeafowlContext {
         let table_path = ListingTableUrl::parse(file_path)?;
         let file_format: Arc<dyn FileFormat> = match file_type {
             "csv" => Arc::new(CsvFormat::default().with_has_header(has_header)),
-            "parquet" => Arc::new(ParquetFormat::default()),
+            "parquet" => {
+                // TODO: We can remove this once delta-rs supports Utf8View
+                let mut options = TableParquetOptions::default();
+                options.global.schema_force_view_types = false;
+                Arc::new(ParquetFormat::default().with_options(options))
+            }
             _ => {
                 return Err(Error::Plan(format!(
                     "File type {file_type:?} not supported!"

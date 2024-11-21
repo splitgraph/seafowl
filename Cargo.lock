@@ -2650,7 +2650,7 @@ dependencies = [
 [[package]]
 name = "deltalake"
 version = "0.22.0"
-source = "git+https://github.com/ion-elgreco/delta-rs?rev=e363ee6a41f2c0b12a748b8fcbd45faf6f29dc93#e363ee6a41f2c0b12a748b8fcbd45faf6f29dc93"
+source = "git+https://github.com/splitgraph/delta-rs?branch=fix-decimal-stat-overflow#3012da568e8a5e4707016dd5f92abee8f3431c75"
 dependencies = [
  "deltalake-core",
 ]
@@ -2658,7 +2658,7 @@ dependencies = [
 [[package]]
 name = "deltalake-core"
 version = "0.22.0"
-source = "git+https://github.com/ion-elgreco/delta-rs?rev=e363ee6a41f2c0b12a748b8fcbd45faf6f29dc93#e363ee6a41f2c0b12a748b8fcbd45faf6f29dc93"
+source = "git+https://github.com/splitgraph/delta-rs?branch=fix-decimal-stat-overflow#3012da568e8a5e4707016dd5f92abee8f3431c75"
 dependencies = [
  "arrow",
  "arrow-arith",

@@ -96,7 +96,7 @@ datafusion-functions-nested = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/ion-elgreco/delta-rs", rev = "e363ee6a41f2c0b12a748b8fcbd45faf6f29dc93", features = ["datafusion"] }
+deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "fix-decimal-stat-overflow", features = ["datafusion"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
