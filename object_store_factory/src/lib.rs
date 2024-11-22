@@ -65,15 +65,6 @@ impl ObjectStoreConfig {
         }
     }
 
-    pub fn to_hashmap(&self) -> HashMap<String, String> {
-        match self {
-            ObjectStoreConfig::Local(config) => config.to_hashmap(),
-            ObjectStoreConfig::AmazonS3(config) => config.get_options(),
-            ObjectStoreConfig::GoogleCloudStorage(config) => config.get_options(),
-            ObjectStoreConfig::Memory => HashMap::new(), // Memory config has no associated data
-        }
-    }
-
     pub fn build_object_store(
         &self,
     ) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
