@@ -370,7 +370,6 @@ async fn test_delta_tables() {
     assert_batches_eq!(expected, &results);
 }
 
-#[ignore]
 #[tokio::test]
 async fn test_iceberg_tables() {
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
@@ -379,7 +378,7 @@ async fn test_iceberg_tables() {
         .plan_query(
             "CREATE EXTERNAL TABLE test_iceberg \
             STORED AS ICEBERG \
-            LOCATION '/Users/gruuya/Splitgraph/seafowl/tests/data/iceberg/tables/default.db/iceberg_table/metadata/00001-8f13a2db-1fe2-4679-94b1-3b6e5fa49e51.metadata.json'",
+            LOCATION 'tests/data/iceberg/tables/default.db/iceberg_table/metadata/00001-f18ddde7-9d9d-40e0-9778-d346b5bb7393.metadata.json'",
         )
         .await
         .unwrap();

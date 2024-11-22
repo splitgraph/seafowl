@@ -977,7 +977,7 @@ mod tests {
         let expected_plan = vec![
             "ProjectionExec: expr=[CASE WHEN __upsert_col@4 IS NULL THEN c1@0 ELSE new_pk_c1@2 END as c1, CASE WHEN __upsert_col@4 IS NULL THEN c2@1 ELSE value_c2@3 END as c2]",
             "  CoalesceBatchesExec: target_batch_size=8192",
-            "    FilterExec: __upsert_col@5 IS DISTINCT FROM false projection=[c1@0, c2@1, new_pk_c1@3, value_c2@4, __upsert_col@5]",
+            "    FilterExec: __upsert_col@5 IS DISTINCT FROM false, projection=[c1@0, c2@1, new_pk_c1@3, value_c2@4, __upsert_col@5]",
             "      CoalesceBatchesExec: target_batch_size=8192",
             "        HashJoinExec: mode=Partitioned, join_type=Full, on=[(c1@0, new_pk_c1@0)]",
             "          CoalesceBatchesExec: target_batch_size=8192",
