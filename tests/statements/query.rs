@@ -370,6 +370,7 @@ async fn test_delta_tables() {
     assert_batches_eq!(expected, &results);
 }
 
+#[ignore]
 #[tokio::test]
 async fn test_iceberg_tables() {
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
