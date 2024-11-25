@@ -151,7 +151,7 @@ pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext>
         .with_information_schema(true)
         .with_default_catalog_and_schema(DEFAULT_DB, DEFAULT_SCHEMA);
 
-    let runtime_env = RuntimeEnv::new(runtime_config)?;
+    let runtime_env = RuntimeEnv::try_new(runtime_config)?;
     let state = build_state_with_table_factories(session_config, Arc::new(runtime_env));
     let context = SessionContext::new_with_state(state);
 

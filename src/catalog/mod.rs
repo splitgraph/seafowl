@@ -8,6 +8,7 @@ use arrow_schema::Schema;
 use async_trait::async_trait;
 use clade::schema::ListSchemaResponse;
 use datafusion_common::DataFusionError;
+use std::fmt::Debug;
 use tonic::Status;
 use uuid::Uuid;
 
@@ -149,7 +150,7 @@ impl From<serde_json::Error> for CreateFunctionError {
 pub type CatalogResult<T> = Result<T, CatalogError>;
 
 #[async_trait]
-pub trait CatalogStore: Sync + Send {
+pub trait CatalogStore: Debug + Sync + Send {
     async fn create(&self, _name: &str) -> CatalogResult<()> {
         not_impl()
     }
@@ -164,7 +165,7 @@ pub trait CatalogStore: Sync + Send {
 }
 
 #[async_trait]
-pub trait SchemaStore: Sync + Send {
+pub trait SchemaStore: Debug + Sync + Send {
     async fn create(&self, _catalog_name: &str, _schema_name: &str) -> CatalogResult<()> {
         not_impl()
     }
@@ -187,7 +188,7 @@ pub trait SchemaStore: Sync + Send {
 }
 
 #[async_trait]
-pub trait TableStore: Sync + Send {
+pub trait TableStore: Debug + Sync + Send {
     async fn create(
         &self,
         _catalog_name: &str,
@@ -275,7 +276,7 @@ pub trait TableStore: Sync + Send {
 }
 
 #[async_trait]
-pub trait FunctionStore: Sync + Send {
+pub trait FunctionStore: Debug + Sync + Send {
     async fn create(
         &self,
         _catalog_name: &str,

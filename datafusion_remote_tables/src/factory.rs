@@ -9,6 +9,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 /// Factory for creating remote tables
+#[derive(Debug)]
 pub struct RemoteTableFactory {}
 
 #[async_trait]

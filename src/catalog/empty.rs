@@ -9,7 +9,7 @@ use clade::schema::ListSchemaResponse;
 
 use super::CatalogError;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct EmptyStore {}
 
 #[async_trait]

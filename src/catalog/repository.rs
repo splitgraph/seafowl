@@ -21,6 +21,7 @@ use crate::repository::interface::{
 use crate::wasm_udf::data_types::CreateFunctionDetails;
 
 // The native catalog implementation for Seafowl.
+#[derive(Debug)]
 pub struct RepositoryStore {
     pub repository: Arc<dyn Repository>,
 }

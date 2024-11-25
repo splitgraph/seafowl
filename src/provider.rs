@@ -21,6 +21,7 @@ use crate::repository::interface::FunctionId;
 use crate::system_tables::{SystemSchemaProvider, SYSTEM_SCHEMA};
 use crate::{catalog::STAGING_SCHEMA, wasm_udf::data_types::CreateFunctionDetails};
 
+#[derive(Debug)]
 pub struct SeafowlDatabase {
     pub name: Arc<str>,
     pub schemas: HashMap<Arc<str>, Arc<SeafowlSchema>>,
@@ -52,6 +53,7 @@ impl CatalogProvider for SeafowlDatabase {
     }
 }
 
+#[derive(Debug)]
 pub struct SeafowlSchema {
     pub name: Arc<str>,
     pub tables: DashMap<Arc<str>, Arc<dyn TableProvider>>,

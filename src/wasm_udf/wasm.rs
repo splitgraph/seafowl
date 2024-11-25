@@ -777,7 +777,7 @@ pub fn create_udf_from_wasm(
         .iter()
         .map(sql_type_to_arrow_type)
         .collect::<Result<_>>()?;
-    let df_return_type = Arc::new(sql_type_to_arrow_type(return_type)?);
+    let df_return_type = sql_type_to_arrow_type(return_type)?;
 
     let function = match language {
         CreateFunctionLanguage::Wasm => {

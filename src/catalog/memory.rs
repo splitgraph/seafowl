@@ -4,7 +4,7 @@ use crate::catalog::{
 use crate::repository::interface::AllDatabaseFunctionsResult;
 use clade::schema::ListSchemaResponse;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct MemoryStore {
     pub schemas: ListSchemaResponse,
 }

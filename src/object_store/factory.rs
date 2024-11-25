@@ -40,7 +40,7 @@ pub fn build_object_store(
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct StoreCacheKey {
     url: Url,
     options: HashMap<String, String>,
@@ -57,6 +57,7 @@ impl Hash for StoreCacheKey {
     }
 }
 
+#[derive(Debug)]
 pub struct ObjectStoreFactory {
     default_store: Option<Arc<InternalObjectStore>>,
     custom_stores: DashMap<StoreCacheKey, Arc<dyn ObjectStore>>,

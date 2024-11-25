@@ -582,7 +582,7 @@ mod tests {
             vec![
                 (
                     PART_0_FILE_NAME.to_string(),
-                    1298,
+                    1164,
                     true,
                     true,
                     json!({
@@ -606,7 +606,7 @@ mod tests {
                 ),
                 (
                     PART_1_FILE_NAME.to_string(),
-                    1313,
+                    1176,
                     true,
                     true,
                     json!({

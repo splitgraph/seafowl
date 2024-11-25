@@ -143,7 +143,7 @@ async fn test_convert_from_flat_parquet_table() -> Result<()> {
         table.statistics(),
         Some(Statistics {
             num_rows: Exact(6),
-            total_byte_size: Inexact(1985),
+            total_byte_size: Inexact(1708),
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Exact(0),

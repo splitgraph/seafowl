@@ -1,11 +1,11 @@
 use datafusion::common::DFSchemaRef;
 
+use crate::wasm_udf::data_types::CreateFunctionDetails;
 use arrow_schema::Schema;
+use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
+use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, fmt, sync::Arc, vec};
-
-use crate::wasm_udf::data_types::CreateFunctionDetails;
-use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use strum_macros::AsRefStr;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -206,6 +206,13 @@ impl UserDefinedLogicalNode for SeafowlExtensionNode {
         match other.as_any().downcast_ref::<Self>() {
             Some(o) => self == o,
             None => false,
+        }
+    }
+
+    fn dyn_ord(&self, other: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
+        match other.as_any().downcast_ref::<Self>() {
+            Some(o) if self == o => Some(Ordering::Equal),
+            _ => None,
         }
     }
 }
