@@ -370,7 +370,6 @@ async fn test_delta_tables() {
     assert_batches_eq!(expected, &results);
 }
 
-#[ignore]
 #[tokio::test]
 async fn test_iceberg_tables() {
     let (context, _) = make_context_with_pg(ObjectStoreType::InMemory).await;
@@ -379,14 +378,21 @@ async fn test_iceberg_tables() {
         .plan_query(
             "CREATE EXTERNAL TABLE test_iceberg \
             STORED AS ICEBERG \
-            LOCATION 'tests/data/iceberg/tables/default.db/iceberg_table/metadata/00001-f18ddde7-9d9d-40e0-9778-d346b5bb7393.metadata.json'",
+            LOCATION 's3://seafowl-test-bucket/test-data/iceberg/default.db/iceberg_table/metadata/00001-f394d7ec-944b-432d-a44f-78b5ec95aae2.metadata.json' \
+            OPTIONS (\
+                's3.access-key-id' 'minioadmin', \
+                's3.secret-access-key' 'minioadmin', \
+                's3.endpoint' 'http://127.0.0.1:9000', \
+                'allow_http' 'true', \
+                's3.region' 'us-east-1'\
+            )",
         )
         .await
         .unwrap();
 
     // The order gets randomized so we need to enforce it
     let plan = context
-        .plan_query("SELECT * FROM staging.test_iceberg")
+        .plan_query("SELECT * FROM staging.test_iceberg ORDER BY key")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
