@@ -196,21 +196,12 @@ pub async fn plan_to_object_store(
                     let mut multipart_upload = store.put_multipart(&file_name).await?;
 
                     let error: object_store::Error;
-                    let mut eof_counter = 0;
                     loop {
                         match reader.read_buf(&mut part_buffer).await {
                             Ok(0) if part_buffer.is_empty() => {
-                                // We've reached EOF and there are no pending writes to flush.
-                                // As per the docs size = 0 doesn't seem to guarantee that we've reached EOF, so we use
-                                // a heuristic: if we encounter Ok(0) 3 times in a row it's safe to assume it's EOF.
-                                // Another potential workaround is to use `stream_position` + `stream_len` to determine
-                                // whether we've reached the end (`stream_len` is nightly-only experimental API atm)
-                                eof_counter += 1;
-                                if eof_counter >= 3 {
-                                    break;
-                                } else {
-                                    continue;
-                                }
+                                // If part_buffer is empty, then it is not full
+                                // According to the the docs, if part_buffer is not full and size = 0, then we've reached EOF
+                                break;
                             }
                             Ok(size)
                                 if size != 0
@@ -218,7 +209,6 @@ pub async fn plan_to_object_store(
                                         < PARTITION_FILE_MIN_PART_SIZE =>
                             {
                                 // Keep filling the part buffer until it surpasses the minimum required size
-                                eof_counter = 0;
                                 continue;
                             }
                             Ok(_) => {
