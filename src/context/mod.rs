@@ -18,6 +18,7 @@ use datafusion::{
     sql::{ResolvedTableReference, TableReference},
 };
 use deltalake::DeltaTable;
+use iceberg_datafusion::IcebergTableProvider;
 use object_store::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -31,6 +32,11 @@ pub struct SeafowlContext {
     pub internal_object_store: Option<Arc<InternalObjectStore>>,
     pub default_catalog: String,
     pub default_schema: String,
+}
+
+pub enum LakehouseTableProvider {
+    Delta(DeltaTable),
+    Iceberg(IcebergTableProvider),
 }
 
 impl SeafowlContext {
@@ -140,20 +146,37 @@ impl SeafowlContext {
         Ok(TableReference::from(resolved_reference))
     }
 
-    /// Resolve a table reference into a Delta table
+    /// Resolve a table reference into a table provider
+    pub async fn get_lakehouse_table_provider(
+        &self,
+        table_name: impl Into<TableReference>,
+    ) -> Result<LakehouseTableProvider> {
+        let table_provider = self.inner.table_provider(table_name).await?;
+        let table_provider_any = table_provider.as_any();
+
+        if let Some(a) = table_provider_any.downcast_ref::<DeltaTable>() {
+            return Ok(LakehouseTableProvider::Delta(a.clone()));
+        }
+        if let Some(a) = table_provider_any.downcast_ref::<IcebergTableProvider>() {
+            return Ok(LakehouseTableProvider::Iceberg(a.clone()));
+        }
+
+        Err(DataFusionError::Execution(
+            "Table {table_name} not found".to_string(),
+        ))
+    }
+
+    /// Resolve a table reference into a table provider
     pub async fn try_get_delta_table(
         &self,
         table_name: impl Into<TableReference>,
     ) -> Result<DeltaTable> {
-        self.inner
-            .table_provider(table_name)
-            .await?
-            .as_any()
-            .downcast_ref::<DeltaTable>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Table {table_name} not found".to_string())
-            })
-            .cloned()
+        match self.get_lakehouse_table_provider(table_name).await? {
+            LakehouseTableProvider::Delta(delta_table) => Ok(delta_table),
+            _ => Err(DataFusionError::Execution(
+                "Delta table {table_name} not found".to_string(),
+            )),
+        }
     }
 
     // Parse the uuid from the Delta table uri if available

@@ -14,7 +14,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use crate::context::delta::plan_to_object_store;
+use crate::context::delta::plan_to_delta_data;
 
 use crate::context::SeafowlContext;
 use crate::sync::metrics::SyncWriterMetrics;
@@ -436,7 +436,7 @@ impl SeafowlDataSyncWriter {
         };
 
         // Dump the batches to the object store
-        let adds = plan_to_object_store(
+        let adds = plan_to_delta_data(
             &self.context.inner.state(),
             &plan,
             log_store.object_store(),
@@ -471,7 +471,7 @@ impl SeafowlDataSyncWriter {
             partition_by: None,
             predicate: None,
         };
-        self.context.commit(actions, &table, op).await?;
+        self.context.commit_delta_table(actions, &table, op).await?;
         debug!("Committed data sync up to {new_sync_commit:?} for location {url}");
 
         // We've flushed all the presently accumulated batches for this location.

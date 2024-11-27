@@ -89,7 +89,7 @@ fn temp_partition_file_writer(
 
 /// Execute a plan and upload the results to object storage as Parquet files, indexing them.
 /// Partially taken from DataFusion's plan_to_parquet with some additions (file stats, using a DiskManager)
-pub async fn plan_to_object_store(
+pub async fn plan_to_delta_data(
     state: &SessionState,
     plan: &Arc<dyn ExecutionPlan>,
     store: Arc<dyn ObjectStore>,
@@ -392,7 +392,7 @@ impl SeafowlContext {
         let local_table_dir = internal_object_store.local_table_dir(&prefix);
 
         // Upload partition files to table's root directory
-        let adds = plan_to_object_store(
+        let adds = plan_to_delta_data(
             &self.inner.state(),
             plan,
             table_log_store.object_store(),
@@ -412,7 +412,7 @@ impl SeafowlContext {
             predicate: None,
         };
 
-        let version = self.commit(actions, &table, op).await?;
+        let version = self.commit_delta_table(actions, &table, op).await?;
 
         // TODO: if `DeltaTable::get_version_timestamp` was globally public we could also pass the
         // exact version timestamp, instead of creating one automatically in our own catalog (which
@@ -426,7 +426,7 @@ impl SeafowlContext {
         Ok(table)
     }
 
-    pub async fn commit(
+    pub async fn commit_delta_table(
         &self,
         actions: Vec<Action>,
         table: &DeltaTable,
@@ -462,7 +462,7 @@ impl SeafowlContext {
 #[cfg(test)]
 mod tests {
     use super::super::test_utils::{in_memory_context, in_memory_context_with_test_db};
-    use crate::context::delta::plan_to_object_store;
+    use crate::context::delta::plan_to_delta_data;
     use crate::object_store::wrapped::InternalObjectStore;
     use crate::testutils::assert_uploaded_objects;
     use arrow::{array::Int32Array, datatypes::DataType, record_batch::RecordBatch};
@@ -535,7 +535,7 @@ mod tests {
             .object_store();
         let local_table_dir =
             internal_object_store.local_table_dir(&table_uuid.to_string());
-        let adds = plan_to_object_store(
+        let adds = plan_to_delta_data(
             &ctx.inner.state(),
             &execution_plan,
             object_store.clone(),
@@ -688,7 +688,7 @@ mod tests {
             Arc::new(InMemory::new()),
             ObjectStoreConfig::Memory,
         ));
-        let adds = plan_to_object_store(
+        let adds = plan_to_delta_data(
             &ctx.inner.state(),
             &execution_plan,
             object_store,
