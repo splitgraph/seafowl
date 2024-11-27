@@ -89,7 +89,7 @@ fn temp_partition_file_writer(
 
 /// Execute a plan and upload the results to object storage as Parquet files, indexing them.
 /// Partially taken from DataFusion's plan_to_parquet with some additions (file stats, using a DiskManager)
-pub async fn plan_to_delta_data(
+pub async fn plan_to_delta_adds(
     state: &SessionState,
     plan: &Arc<dyn ExecutionPlan>,
     store: Arc<dyn ObjectStore>,
@@ -392,7 +392,7 @@ impl SeafowlContext {
         let local_table_dir = internal_object_store.local_table_dir(&prefix);
 
         // Upload partition files to table's root directory
-        let adds = plan_to_delta_data(
+        let adds = plan_to_delta_adds(
             &self.inner.state(),
             plan,
             table_log_store.object_store(),
@@ -462,7 +462,7 @@ impl SeafowlContext {
 #[cfg(test)]
 mod tests {
     use super::super::test_utils::{in_memory_context, in_memory_context_with_test_db};
-    use crate::context::delta::plan_to_delta_data;
+    use crate::context::delta::plan_to_delta_adds;
     use crate::object_store::wrapped::InternalObjectStore;
     use crate::testutils::assert_uploaded_objects;
     use arrow::{array::Int32Array, datatypes::DataType, record_batch::RecordBatch};
@@ -535,7 +535,7 @@ mod tests {
             .object_store();
         let local_table_dir =
             internal_object_store.local_table_dir(&table_uuid.to_string());
-        let adds = plan_to_delta_data(
+        let adds = plan_to_delta_adds(
             &ctx.inner.state(),
             &execution_plan,
             object_store.clone(),
@@ -688,7 +688,7 @@ mod tests {
             Arc::new(InMemory::new()),
             ObjectStoreConfig::Memory,
         ));
-        let adds = plan_to_delta_data(
+        let adds = plan_to_delta_adds(
             &ctx.inner.state(),
             &execution_plan,
             object_store,

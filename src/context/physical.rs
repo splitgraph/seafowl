@@ -1,6 +1,6 @@
 use super::delta::CreateDeltaTableDetails;
 use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
-use crate::context::delta::plan_to_delta_data;
+use crate::context::delta::plan_to_delta_adds;
 use crate::context::SeafowlContext;
 use crate::nodes::{
     ConvertTable, CreateFunction, CreateTable, DropFunction, RenameTable,
@@ -310,7 +310,7 @@ impl SeafowlContext {
                         .object_store();
                     let local_table_dir =
                         internal_object_store.local_table_dir(&uuid.to_string());
-                    let adds = plan_to_delta_data(
+                    let adds = plan_to_delta_adds(
                         &state,
                         &update_plan,
                         object_store,
@@ -422,7 +422,7 @@ impl SeafowlContext {
                                 .object_store();
                             let local_table_dir =
                                 internal_object_store.local_table_dir(&uuid.to_string());
-                            let adds = plan_to_delta_data(
+                            let adds = plan_to_delta_adds(
                                 &state,
                                 &filter_plan,
                                 object_store,

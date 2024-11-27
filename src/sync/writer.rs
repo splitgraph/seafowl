@@ -14,7 +14,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use crate::context::delta::plan_to_delta_data;
+use crate::context::delta::plan_to_delta_adds;
 
 use crate::context::SeafowlContext;
 use crate::sync::metrics::SyncWriterMetrics;
@@ -436,7 +436,7 @@ impl SeafowlDataSyncWriter {
         };
 
         // Dump the batches to the object store
-        let adds = plan_to_delta_data(
+        let adds = plan_to_delta_adds(
             &self.context.inner.state(),
             &plan,
             log_store.object_store(),
