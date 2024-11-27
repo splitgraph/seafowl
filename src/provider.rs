@@ -85,7 +85,7 @@ impl SchemaProvider for SeafowlSchema {
         let mut delta_table = match self.tables.get(name) {
             None => return Ok(None),
             Some(table) => match table.as_any().downcast_ref::<DeltaTable>() {
-                // This shouldn't happen since we store only DeltaTable's in the map
+                // Different table format, e.g. Iceberg
                 None => return Ok(Some(table.clone())),
                 Some(delta_table) => {
                     if delta_table.version() != -1 {

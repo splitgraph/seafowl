@@ -1,4 +1,6 @@
-use clade::schema::{ListSchemaResponse, SchemaObject, StorageLocation, TableObject};
+use clade::schema::{
+    ListSchemaResponse, SchemaObject, StorageLocation, TableFormat, TableObject,
+};
 use object_store::aws::AmazonS3ConfigKey;
 use object_store::gcp::GoogleConfigKey;
 use object_store::ClientConfigKey;
@@ -27,6 +29,7 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
         name: "file_with_store".to_string(),
         path: "delta-0.8.0-partitioned".to_string(),
         store: Some("local_fs".to_string()),
+        format: TableFormat::Delta.into(),
     }];
 
     if include_file_without_store {
@@ -34,6 +37,7 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
             name: "file".to_string(),
             path: "delta-0.8.0-partitioned".to_string(),
             store: None,
+            format: TableFormat::Delta.into(),
         })
     }
 
@@ -50,11 +54,13 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
                         name: "minio".to_string(),
                         path: "test-data/delta-0.8.0-partitioned".to_string(),
                         store: Some("minio".to_string()),
+                        format: TableFormat::Delta.into(),
                     },
                     TableObject {
                         name: "minio_prefix".to_string(),
                         path: "delta-0.8.0-partitioned".to_string(),
                         store: Some("minio-prefix".to_string()),
+                        format: TableFormat::Delta.into(),
                     },
                 ],
             },
@@ -64,6 +70,7 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
                     name: "fake".to_string(),
                     path: "delta-0.8.0-partitioned".to_string(),
                     store: Some("fake-gcs".to_string()),
+                    format: TableFormat::Delta.into(),
                 }],
             },
         ],

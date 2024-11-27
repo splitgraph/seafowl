@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use uuid::Uuid;
 
-use clade::schema::{ListSchemaResponse, SchemaObject, TableObject};
+use clade::schema::{ListSchemaResponse, SchemaObject, TableFormat, TableObject};
 
 use crate::catalog::{
     CatalogError, CatalogResult, CatalogStore, FunctionStore, SchemaStore, TableStore,
@@ -133,6 +133,7 @@ impl SchemaStore for RepositoryStore {
                                 name: name.clone(),
                                 path: uuid.to_string(),
                                 store: None,
+                                format: TableFormat::Delta.into(),
                             })
                         } else {
                             None
