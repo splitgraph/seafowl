@@ -1,6 +1,6 @@
 use super::delta::CreateDeltaTableDetails;
 use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
-use crate::context::delta::plan_to_object_store;
+use crate::context::delta::plan_to_delta_adds;
 use crate::context::SeafowlContext;
 use crate::nodes::{
     ConvertTable, CreateFunction, CreateTable, DropFunction, RenameTable,
@@ -310,7 +310,7 @@ impl SeafowlContext {
                         .object_store();
                     let local_table_dir =
                         internal_object_store.local_table_dir(&uuid.to_string());
-                    let adds = plan_to_object_store(
+                    let adds = plan_to_delta_adds(
                         &state,
                         &update_plan,
                         object_store,
@@ -347,7 +347,7 @@ impl SeafowlContext {
                     predicate: None,
                 };
 
-                let version = self.commit(actions, &table, op).await?;
+                let version = self.commit_delta_table(actions, &table, op).await?;
 
                 self.metastore
                     .tables
@@ -422,7 +422,7 @@ impl SeafowlContext {
                                 .object_store();
                             let local_table_dir =
                                 internal_object_store.local_table_dir(&uuid.to_string());
-                            let adds = plan_to_object_store(
+                            let adds = plan_to_delta_adds(
                                 &state,
                                 &filter_plan,
                                 object_store,
@@ -463,7 +463,7 @@ impl SeafowlContext {
 
                 let op = DeltaOperation::Delete { predicate: None };
 
-                let version = self.commit(actions, &table, op).await?;
+                let version = self.commit_delta_table(actions, &table, op).await?;
 
                 self.metastore
                     .tables
@@ -685,7 +685,7 @@ impl SeafowlContext {
                                 .collect();
 
                             let op = DeltaOperation::Delete { predicate: None };
-                            self.commit(actions, &table, op).await?;
+                            self.commit_delta_table(actions, &table, op).await?;
 
                             Ok(make_dummy_exec())
                         }
