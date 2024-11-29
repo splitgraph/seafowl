@@ -22,6 +22,7 @@ use crate::flight::*;
 #[case("local.file_with_store", TestServerType::InlineOnly, false)]
 #[case("s3.minio", TestServerType::InlineOnly, false)]
 #[case("s3.minio_prefix", TestServerType::InlineOnly, false)]
+#[case("s3.iceberg", TestServerType::InlineOnly, false)]
 #[case("gcs.fake", TestServerType::InlineOnly, false)]
 #[tokio::test]
 async fn test_inline_query(
@@ -33,24 +34,21 @@ async fn test_inline_query(
 
     let batches = get_flight_batches_inlined(
         &mut client,
-        format!("SELECT * FROM {table} ORDER BY value"),
+        format!("SELECT * FROM {table} ORDER BY key"),
         schemas(include_file_without_store),
     )
     .await
     .unwrap();
 
     let expected = [
-        "+-------+------+-------+-----+",
-        "| value | year | month | day |",
-        "+-------+------+-------+-----+",
-        "| 1     | 2020 | 1     | 1   |",
-        "| 2     | 2020 | 2     | 3   |",
-        "| 3     | 2020 | 2     | 5   |",
-        "| 4     | 2021 | 4     | 5   |",
-        "| 5     | 2021 | 12    | 4   |",
-        "| 6     | 2021 | 12    | 20  |",
-        "| 7     | 2021 | 12    | 20  |",
-        "+-------+------+-------+-----+",
+        "+-----+-------+",
+        "| key | value |",
+        "+-----+-------+",
+        "| 1   | one   |",
+        "| 2   | two   |",
+        "| 3   | three |",
+        "| 4   | four  |",
+        "+-----+-------+",
     ];
     assert_batches_eq!(expected, &batches);
 }

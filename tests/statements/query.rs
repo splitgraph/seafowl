@@ -342,30 +342,27 @@ async fn test_delta_tables() {
         .plan_query(
             "CREATE EXTERNAL TABLE test_delta \
             STORED AS DELTATABLE \
-            LOCATION 'tests/data/delta-0.8.0-partitioned'",
+            LOCATION 'tests/data/delta'",
         )
         .await
         .unwrap();
 
     // The order gets randomized so we need to enforce it
     let plan = context
-        .plan_query("SELECT * FROM staging.test_delta ORDER BY value")
+        .plan_query("SELECT * FROM staging.test_delta ORDER BY key")
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
     let expected = [
-        "+-------+------+-------+-----+",
-        "| value | year | month | day |",
-        "+-------+------+-------+-----+",
-        "| 1     | 2020 | 1     | 1   |",
-        "| 2     | 2020 | 2     | 3   |",
-        "| 3     | 2020 | 2     | 5   |",
-        "| 4     | 2021 | 4     | 5   |",
-        "| 5     | 2021 | 12    | 4   |",
-        "| 6     | 2021 | 12    | 20  |",
-        "| 7     | 2021 | 12    | 20  |",
-        "+-------+------+-------+-----+",
+        "+-----+-------+",
+        "| key | value |",
+        "+-----+-------+",
+        "| 1   | one   |",
+        "| 2   | two   |",
+        "| 3   | three |",
+        "| 4   | four  |",
+        "+-----+-------+",
     ];
     assert_batches_eq!(expected, &results);
 }

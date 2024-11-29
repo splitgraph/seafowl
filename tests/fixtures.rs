@@ -27,7 +27,7 @@ pub fn fake_gcs_creds() -> String {
 pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
     let mut local_schema_tables = vec![TableObject {
         name: "file_with_store".to_string(),
-        path: "delta-0.8.0-partitioned".to_string(),
+        path: "delta".to_string(),
         store: Some("local_fs".to_string()),
         format: TableFormat::Delta.into(),
     }];
@@ -35,7 +35,7 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
     if include_file_without_store {
         local_schema_tables.push(TableObject {
             name: "file".to_string(),
-            path: "delta-0.8.0-partitioned".to_string(),
+            path: "delta".to_string(),
             store: None,
             format: TableFormat::Delta.into(),
         })
@@ -52,15 +52,21 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
                 tables: vec![
                     TableObject {
                         name: "minio".to_string(),
-                        path: "test-data/delta-0.8.0-partitioned".to_string(),
+                        path: "test-data/delta".to_string(),
                         store: Some("minio".to_string()),
                         format: TableFormat::Delta.into(),
                     },
                     TableObject {
                         name: "minio_prefix".to_string(),
-                        path: "delta-0.8.0-partitioned".to_string(),
+                        path: "delta".to_string(),
                         store: Some("minio-prefix".to_string()),
                         format: TableFormat::Delta.into(),
+                    },
+                    TableObject {
+                        name: "iceberg".to_string(),
+                        path: "iceberg/default.db/iceberg_table/metadata/00001-f394d7ec-944b-432d-a44f-78b5ec95aae2.metadata.json".to_string(),
+                        store: Some("minio-prefix".to_string()),
+                        format: TableFormat::Iceberg.into(),
                     },
                 ],
             },
@@ -68,7 +74,7 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
                 name: "gcs".to_string(),
                 tables: vec![TableObject {
                     name: "fake".to_string(),
-                    path: "delta-0.8.0-partitioned".to_string(),
+                    path: "delta".to_string(),
                     store: Some("fake-gcs".to_string()),
                     format: TableFormat::Delta.into(),
                 }],

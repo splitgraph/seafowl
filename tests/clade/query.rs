@@ -18,23 +18,20 @@ async fn test_basic_select(#[case] table: &str, #[case] object_store: bool) -> (
     let _r = context.metastore.schemas.list(DEFAULT_DB).await;
 
     let plan = context
-        .plan_query(&format!("SELECT * FROM {table} ORDER BY value"))
+        .plan_query(&format!("SELECT * FROM {table} ORDER BY key"))
         .await
         .unwrap();
     let results = context.collect(plan).await.unwrap();
 
     let expected = [
-        "+-------+------+-------+-----+",
-        "| value | year | month | day |",
-        "+-------+------+-------+-----+",
-        "| 1     | 2020 | 1     | 1   |",
-        "| 2     | 2020 | 2     | 3   |",
-        "| 3     | 2020 | 2     | 5   |",
-        "| 4     | 2021 | 4     | 5   |",
-        "| 5     | 2021 | 12    | 4   |",
-        "| 6     | 2021 | 12    | 20  |",
-        "| 7     | 2021 | 12    | 20  |",
-        "+-------+------+-------+-----+",
+        "+-----+-------+",
+        "| key | value |",
+        "+-----+-------+",
+        "| 1   | one   |",
+        "| 2   | two   |",
+        "| 3   | three |",
+        "| 4   | four  |",
+        "+-----+-------+",
     ];
     assert_batches_eq!(expected, &results);
 }

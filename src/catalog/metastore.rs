@@ -2,7 +2,7 @@ use crate::catalog::external::ExternalStore;
 use crate::catalog::repository::RepositoryStore;
 use crate::catalog::{
     CatalogError, CatalogResult, CatalogStore, CreateFunctionError, FunctionStore,
-    SchemaStore, TableStore,
+    SchemaStore, TableStore, DEFAULT_SCHEMA,
 };
 
 use crate::object_store::factory::ObjectStoreFactory;
@@ -18,15 +18,19 @@ use dashmap::DashMap;
 use datafusion::catalog_common::memory::MemorySchemaProvider;
 use datafusion::datasource::TableProvider;
 
+use super::empty::EmptyStore;
 use crate::catalog::memory::MemoryStore;
+use crate::object_store::utils::object_store_opts_to_file_io_props;
 use deltalake::DeltaTable;
 use futures::{stream, StreamExt, TryStreamExt};
+use iceberg::io::FileIO;
+use iceberg::table::StaticTable;
+use iceberg::TableIdent;
+use iceberg_datafusion::IcebergTableProvider;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
-
-use super::empty::EmptyStore;
 
 // Root URL for a storage location alongside client connection options
 type LocationAndOptions = (String, HashMap<String, String>);
@@ -203,7 +207,43 @@ impl Metastore {
                 Ok((Arc::from(table.name), Arc::new(delta_table) as _))
             }
             TableFormat::Iceberg => {
-                unimplemented!("Iceberg tables are not supported yet");
+                let (location, file_io) = match table.store {
+                    Some(name) => {
+                        let (location, this_store_options) = store_options
+                            .get(&name)
+                            .ok_or(CatalogError::Generic {
+                                reason: format!(
+                                    "Object store with name {name} not found"
+                                ),
+                            })?
+                            .clone();
+
+                        let file_io_props = object_store_opts_to_file_io_props(&this_store_options);
+                        let file_io = FileIO::from_path(&location)?.with_props(file_io_props).build()?;
+                        (location, file_io)
+                    }
+                    None => return Err(CatalogError::Generic {
+                        reason: "Iceberg tables must pass FileIO props as object store options".to_string(),
+                    }),
+                };
+
+                // Create the full path to table metadata by combining the object store location and
+                // relative table metadata path
+                let absolute_path = format!(
+                    "{}/{}",
+                    location.trim_end_matches("/"),
+                    table.path.trim_start_matches("/")
+                );
+                let iceberg_table = StaticTable::from_metadata_file(
+                    &absolute_path,
+                    TableIdent::from_strs(vec![DEFAULT_SCHEMA, &table.name])?,
+                    file_io,
+                )
+                .await?
+                .into_table();
+                let table_provider =
+                    IcebergTableProvider::try_new_from_table(iceberg_table).await?;
+                Ok((Arc::from(table.name), Arc::new(table_provider) as _))
             }
         }
     }
