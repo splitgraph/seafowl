@@ -13,6 +13,13 @@ message TableObject {
   string path = 2;
   // Storage location identifier
   optional string store = 4;
+  // Table format
+  TableFormat format = 5;
+}
+
+enum TableFormat {
+  DELTA = 0;
+  ICEBERG = 1;
 }
 
 // A single root storage location, hosting many individual tables

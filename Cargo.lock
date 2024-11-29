@@ -6648,6 +6648,7 @@ dependencies = [
  "deltalake",
  "futures",
  "hex",
+ "iceberg",
  "iceberg-datafusion",
  "indexmap 2.6.0",
  "itertools 0.13.0",

@@ -91,6 +91,9 @@ pub enum CatalogError {
 
     #[error("No inline metastore passed in")]
     NoInlineMetastore,
+
+    #[error("Failed constructing an Iceberg table: {0}")]
+    IcebergError(#[from] iceberg::Error),
 }
 
 /// Implement a global converter into a DataFusionError from the catalog error type.

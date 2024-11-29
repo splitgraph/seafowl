@@ -2,7 +2,7 @@ use crate::catalog::external::ExternalStore;
 use crate::catalog::repository::RepositoryStore;
 use crate::catalog::{
     CatalogError, CatalogResult, CatalogStore, CreateFunctionError, FunctionStore,
-    SchemaStore, TableStore,
+    SchemaStore, TableStore, DEFAULT_SCHEMA,
 };
 
 use crate::object_store::factory::ObjectStoreFactory;
@@ -13,20 +13,24 @@ use crate::wasm_udf::data_types::{
     CreateFunctionDataType, CreateFunctionDetails, CreateFunctionLanguage,
     CreateFunctionVolatility,
 };
-use clade::schema::{SchemaObject, TableObject};
+use clade::schema::{SchemaObject, TableFormat, TableObject};
 use dashmap::DashMap;
 use datafusion::catalog_common::memory::MemorySchemaProvider;
 use datafusion::datasource::TableProvider;
 
+use super::empty::EmptyStore;
 use crate::catalog::memory::MemoryStore;
+use crate::object_store::utils::object_store_opts_to_file_io_props;
 use deltalake::DeltaTable;
 use futures::{stream, StreamExt, TryStreamExt};
+use iceberg::io::FileIO;
+use iceberg::table::StaticTable;
+use iceberg::TableIdent;
+use iceberg_datafusion::IcebergTableProvider;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
-
-use super::empty::EmptyStore;
 
 // Root URL for a storage location alongside client connection options
 type LocationAndOptions = (String, HashMap<String, String>);
@@ -166,35 +170,82 @@ impl Metastore {
         // delta tables present in the database. The real fix for this is to make DF use `TableSource`
         // for the information schema, and then implement `TableSource` for `DeltaTable` in delta-rs.
 
-        let table_log_store = match table.store {
-            // Use the provided customized location
-            Some(name) => {
-                let (location, this_store_options) = store_options
-                    .get(&name)
-                    .ok_or(CatalogError::Generic {
-                        reason: format!("Object store with name {name} not found"),
-                    })?
-                    .clone();
+        match TableFormat::try_from(table.format).map_err(|e| CatalogError::Generic {
+            reason: format!("Unrecognized table format id {}: {e}", table.format),
+        })? {
+            TableFormat::Delta => {
+                let table_log_store = match table.store {
+                    // Use the provided customized location
+                    Some(name) => {
+                        let (location, this_store_options) = store_options
+                            .get(&name)
+                            .ok_or(CatalogError::Generic {
+                                reason: format!(
+                                    "Object store with name {name} not found"
+                                ),
+                            })?
+                            .clone();
 
-                self.object_stores
-                    .get_log_store_for_table(
-                        Url::parse(&location)?,
-                        this_store_options,
-                        table.path,
-                    )
-                    .await?
+                        self.object_stores
+                            .get_log_store_for_table(
+                                Url::parse(&location)?,
+                                this_store_options,
+                                table.path,
+                            )
+                            .await?
+                    }
+                    // Use the configured, default, object store
+                    None => self
+                        .object_stores
+                        .get_default_log_store(&table.path)
+                        .ok_or(CatalogError::NoTableStoreInInlineMetastore {
+                            name: table.name.clone(),
+                        })?,
+                };
+
+                let delta_table = DeltaTable::new(table_log_store, Default::default());
+                Ok((Arc::from(table.name), Arc::new(delta_table) as _))
             }
-            // Use the configured, default, object store
-            None => self
-                .object_stores
-                .get_default_log_store(&table.path)
-                .ok_or(CatalogError::NoTableStoreInInlineMetastore {
-                    name: table.name.clone(),
-                })?,
-        };
+            TableFormat::Iceberg => {
+                let (location, file_io) = match table.store {
+                    Some(name) => {
+                        let (location, this_store_options) = store_options
+                            .get(&name)
+                            .ok_or(CatalogError::Generic {
+                                reason: format!(
+                                    "Object store with name {name} not found"
+                                ),
+                            })?
+                            .clone();
 
-        let delta_table = DeltaTable::new(table_log_store, Default::default());
-        Ok((Arc::from(table.name), Arc::new(delta_table) as _))
+                        let file_io_props = object_store_opts_to_file_io_props(&this_store_options);
+                        let file_io = FileIO::from_path(&location)?.with_props(file_io_props).build()?;
+                        (location, file_io)
+                    }
+                    None => return Err(CatalogError::Generic {
+                        reason: "Iceberg tables must pass FileIO props as object store options".to_string(),
+                    }),
+                };
+
+                // Create the full path to table metadata by combining the object store location and
+                // relative table metadata path
+                let absolute_path = format!(
+                    "{}/{}",
+                    location.trim_end_matches("/"),
+                    table.path.trim_start_matches("/")
+                );
+                let iceberg_table = StaticTable::from_metadata_file(
+                    &absolute_path,
+                    TableIdent::from_strs(vec![DEFAULT_SCHEMA, &table.name])?,
+                    file_io,
+                )
+                .await?
+                .into_table();
+                let table_provider =
+                    IcebergTableProvider::try_new_from_table(iceberg_table).await?;
+                Ok((Arc::from(table.name), Arc::new(table_provider) as _))
+            }
+        }
     }
 
     pub async fn build_functions(
