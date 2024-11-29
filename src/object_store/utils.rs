@@ -74,7 +74,7 @@ pub fn object_store_opts_to_file_io_props(
     // FileIO requires the region prop even when the S3 store doesn't (e.g. MinIO)
     props
         .entry(S3_REGION.to_string())
-        .or_insert("us-east-1".to_string());
+        .or_insert("dummy-region".to_string());
 
     props
 }
