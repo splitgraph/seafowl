@@ -20,9 +20,10 @@ use crate::flight::*;
 #[case("local.file_with_store", TestServerType::InlineOnly, true)]
 // Testing with properly sent inline metastore
 #[case("local.file_with_store", TestServerType::InlineOnly, false)]
-#[case("s3.minio", TestServerType::InlineOnly, false)]
-#[case("s3.minio_prefix", TestServerType::InlineOnly, false)]
+#[case("s3.delta", TestServerType::InlineOnly, false)]
+#[case("s3.delta_public", TestServerType::InlineOnly, false)]
 #[case("s3.iceberg", TestServerType::InlineOnly, false)]
+#[case("s3.iceberg_public", TestServerType::InlineOnly, false)]
 #[case("gcs.fake", TestServerType::InlineOnly, false)]
 #[tokio::test]
 async fn test_inline_query(
