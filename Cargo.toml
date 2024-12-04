@@ -96,13 +96,13 @@ datafusion-functions-nested = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/splitgraph/delta-rs", branch = "fix-decimal-stat-overflow", features = ["datafusion"] }
+deltalake = { git = "https://github.com/splitgraph/delta-rs", rev = "eff5735698279c12ae4a3aac2afa268d168242b2", features = ["datafusion", "s3"] }
 
 futures = "0.3"
 hex = ">=0.4.0"
 
-iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "eeca14d13b23f2a92e57f503c141a860a3407226" }
-iceberg-datafusion = { git = "https://github.com/splitgraph/iceberg-rust", rev = "eeca14d13b23f2a92e57f503c141a860a3407226" }
+iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "aa54f22f9acf0cc0955ac7b783c7c903a96c4ec6" }
+iceberg-datafusion = { git = "https://github.com/splitgraph/iceberg-rust", rev = "aa54f22f9acf0cc0955ac7b783c7c903a96c4ec6" }
 indexmap = "2.6.0"
 itertools = { workspace = true }
 
