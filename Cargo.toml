@@ -101,8 +101,8 @@ deltalake = { git = "https://github.com/splitgraph/delta-rs", rev = "eff57356982
 futures = "0.3"
 hex = ">=0.4.0"
 
-iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "aa54f22f9acf0cc0955ac7b783c7c903a96c4ec6" }
-iceberg-datafusion = { git = "https://github.com/splitgraph/iceberg-rust", rev = "aa54f22f9acf0cc0955ac7b783c7c903a96c4ec6" }
+iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "adf221357451861ebe403961e9e791c6b4093051" }
+iceberg-datafusion = { git = "https://github.com/splitgraph/iceberg-rust", rev = "adf221357451861ebe403961e9e791c6b4093051" }
 indexmap = "2.6.0"
 itertools = { workspace = true }
 

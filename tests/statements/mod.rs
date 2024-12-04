@@ -98,7 +98,7 @@ bucket = "seafowl-test-bucket"
         ObjectStoreType::S3Public => (
             r#"type = "s3"
 endpoint = "http://127.0.0.1:9000"
-bucket = "seafowl-test-bucket-public"
+bucket = "seafowl-test-bucket"
 "#
             .to_string(),
             None,

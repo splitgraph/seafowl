@@ -48,14 +48,10 @@ services:
       /bin/sh -c " /usr/bin/mc config host add test-minio http://minio:9000 minioadmin minioadmin;
       /usr/bin/mc rm -r --force test-minio/seafowl-test-bucket;  /usr/bin/mc mb
       test-minio/seafowl-test-bucket; /usr/bin/mc cp -r test-data test-minio/seafowl-test-bucket;
-      /usr/bin/mc anonymous set public
-      test-minio/seafowl-test-bucket/test-data/table_with_ns_column.parquet;
+      /usr/bin/mc anonymous set public test-minio/seafowl-test-bucket;
 
       /usr/bin/mc admin user add test-minio test-user test-pass; /usr/bin/mc admin policy attach
-      test-minio readwrite --user test-user;
-
-      /usr/bin/mc mb test-minio/seafowl-test-bucket-public; /usr/bin/mc anonymous set public
-      test-minio/seafowl-test-bucket-public; exit 0; "
+      test-minio readwrite --user test-user; exit 0; "
 
   fake-gcs:
     image: tustvold/fake-gcs-server

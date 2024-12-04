@@ -6,7 +6,7 @@ use crate::clade::*;
 )]
 #[case("local.file", false)]
 #[case("local.file", true)]
-#[case("s3.minio", true)]
+#[case("s3.delta", true)]
 #[case("gcs.fake", true)]
 #[tokio::test]
 async fn test_basic_select(#[case] table: &str, #[case] object_store: bool) -> () {

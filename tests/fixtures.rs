@@ -51,21 +51,27 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
                 name: "s3".to_string(),
                 tables: vec![
                     TableObject {
-                        name: "minio".to_string(),
+                        name: "delta".to_string(),
                         path: "test-data/delta".to_string(),
                         store: Some("minio".to_string()),
                         format: TableFormat::Delta.into(),
                     },
                     TableObject {
-                        name: "minio_prefix".to_string(),
+                        name: "delta_public".to_string(),
                         path: "delta".to_string(),
-                        store: Some("minio-prefix".to_string()),
+                        store: Some("minio-public".to_string()),
                         format: TableFormat::Delta.into(),
                     },
                     TableObject {
                         name: "iceberg".to_string(),
+                        path: "test-data/iceberg/default.db/iceberg_table/metadata/00001-f394d7ec-944b-432d-a44f-78b5ec95aae2.metadata.json".to_string(),
+                        store: Some("minio".to_string()),
+                        format: TableFormat::Iceberg.into(),
+                    },
+                    TableObject {
+                        name: "iceberg_public".to_string(),
                         path: "iceberg/default.db/iceberg_table/metadata/00001-f394d7ec-944b-432d-a44f-78b5ec95aae2.metadata.json".to_string(),
-                        store: Some("minio-prefix".to_string()),
+                        store: Some("minio-public".to_string()),
                         format: TableFormat::Iceberg.into(),
                     },
                 ],
@@ -87,9 +93,9 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
                 options: minio_options(),
             },
             StorageLocation {
-                name: "minio-prefix".to_string(),
+                name: "minio-public".to_string(),
                 location: "s3://seafowl-test-bucket/test-data".to_string(),
-                options: minio_options(),
+                options: minio_public_options(),
             },
             StorageLocation {
                 name: "fake-gcs".to_string(),
@@ -126,8 +132,26 @@ pub fn minio_options() -> HashMap<String, String> {
             "minioadmin".to_string(),
         ),
         (
-            // This has been removed from the config enum, but it can
-            // still be picked up via `AmazonS3ConfigKey::from_str`
+            AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp)
+                .as_ref()
+                .to_string(),
+            "true".to_string(),
+        ),
+    ])
+}
+
+// Used for public bucket/paths
+pub fn minio_public_options() -> HashMap<String, String> {
+    HashMap::from([
+        (
+            AmazonS3ConfigKey::Endpoint.as_ref().to_string(),
+            "http://127.0.0.1:9000".to_string(),
+        ),
+        (
+            AmazonS3ConfigKey::SkipSignature.as_ref().to_string(),
+            "true".to_string(),
+        ),
+        (
             AmazonS3ConfigKey::Client(ClientConfigKey::AllowHttp)
                 .as_ref()
                 .to_string(),
