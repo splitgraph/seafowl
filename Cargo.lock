@@ -712,6 +712,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-dynamodb"
+version = "1.54.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8efdda6a491bb4640d35b99b0a4b93f75ce7d6e3a1937c3e902d3cb23d0a179c"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "once_cell",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-sso"
 version = "1.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2750,15 +2773,43 @@ dependencies = [
 [[package]]
 name = "deltalake"
 version = "0.22.0"
-source = "git+https://github.com/splitgraph/delta-rs?branch=fix-decimal-stat-overflow#3012da568e8a5e4707016dd5f92abee8f3431c75"
+source = "git+https://github.com/splitgraph/delta-rs?rev=eff5735698279c12ae4a3aac2afa268d168242b2#eff5735698279c12ae4a3aac2afa268d168242b2"
 dependencies = [
+ "deltalake-aws",
  "deltalake-core",
+]
+
+[[package]]
+name = "deltalake-aws"
+version = "0.5.0"
+source = "git+https://github.com/splitgraph/delta-rs?rev=eff5735698279c12ae4a3aac2afa268d168242b2#eff5735698279c12ae4a3aac2afa268d168242b2"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-dynamodb",
+ "aws-sdk-sts",
+ "aws-smithy-runtime-api",
+ "backon",
+ "bytes",
+ "chrono",
+ "deltalake-core",
+ "futures",
+ "lazy_static",
+ "maplit",
+ "object_store",
+ "regex",
+ "thiserror 2.0.3",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid 1.11.0",
 ]
 
 [[package]]
 name = "deltalake-core"
 version = "0.22.0"
-source = "git+https://github.com/splitgraph/delta-rs?branch=fix-decimal-stat-overflow#3012da568e8a5e4707016dd5f92abee8f3431c75"
+source = "git+https://github.com/splitgraph/delta-rs?rev=eff5735698279c12ae4a3aac2afa268d168242b2#eff5735698279c12ae4a3aac2afa268d168242b2"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -3895,7 +3946,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.3.0"
-source = "git+https://github.com/splitgraph/iceberg-rust?rev=eeca14d13b23f2a92e57f503c141a860a3407226#eeca14d13b23f2a92e57f503c141a860a3407226"
+source = "git+https://github.com/splitgraph/iceberg-rust?rev=aa54f22f9acf0cc0955ac7b783c7c903a96c4ec6#aa54f22f9acf0cc0955ac7b783c7c903a96c4ec6"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -3941,7 +3992,7 @@ dependencies = [
 [[package]]
 name = "iceberg-datafusion"
 version = "0.3.0"
-source = "git+https://github.com/splitgraph/iceberg-rust?rev=eeca14d13b23f2a92e57f503c141a860a3407226#eeca14d13b23f2a92e57f503c141a860a3407226"
+source = "git+https://github.com/splitgraph/iceberg-rust?rev=aa54f22f9acf0cc0955ac7b783c7c903a96c4ec6#aa54f22f9acf0cc0955ac7b783c7c903a96c4ec6"
 dependencies = [
  "anyhow",
  "async-trait",
