@@ -1,4 +1,5 @@
 pub mod delta;
+pub mod iceberg;
 pub mod logical;
 pub mod physical;
 

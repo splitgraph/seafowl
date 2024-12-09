@@ -47,6 +47,45 @@ async fn test_insert_two_different_schemas(
 
 #[rstest]
 #[tokio::test]
+async fn test_iceberg_insert(
+    #[values(
+        ObjectStoreType::InMemory,
+        ObjectStoreType::Local,
+        ObjectStoreType::S3(None),
+        ObjectStoreType::S3(Some("/path/to/folder"))
+    )]
+    object_store_type: ObjectStoreType,
+) {
+    let (context, _) = make_context_with_pg(object_store_type).await;
+
+    context
+        .plan_query(
+            "CREATE EXTERNAL TABLE test_iceberg \
+            STORED AS ICEBERG \
+            LOCATION 's3://seafowl-test-bucket/test-data/iceberg/default.db/iceberg_table/metadata/00001-f394d7ec-944b-432d-a44f-78b5ec95aae2.metadata.json' \
+            OPTIONS (\
+                's3.access-key-id' 'minioadmin', \
+                's3.secret-access-key' 'minioadmin', \
+                's3.endpoint' 'http://127.0.0.1:9000', \
+                'allow_http' 'true', \
+                's3.region' 'us-east-1'\
+            )",
+        )
+        .await
+        .unwrap();
+
+    context
+        .plan_query(
+            "INSERT INTO staging.test_iceberg (key, value) VALUES
+                (5, 'five'),
+                (6, 'six')",
+        )
+        .await
+        .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
 async fn test_delete_statement(
     #[values(
         ObjectStoreType::InMemory,

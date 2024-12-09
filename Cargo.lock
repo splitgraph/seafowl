@@ -1133,7 +1133,7 @@ dependencies = [
  "bitflags 2.6.0",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.11.0",
  "lazy_static",
  "lazycell",
  "log",
@@ -3148,9 +3148,9 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fastrand"
-version = "2.2.0"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "486f806e73c5707928240ddc295403b1b93c96a02038563881c4a2fd84b81ac4"
+checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fd-lock"
@@ -3809,7 +3809,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "socket2 0.5.7",
+ "socket2 0.4.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -3947,7 +3947,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.3.0"
-source = "git+https://github.com/splitgraph/iceberg-rust?rev=dbe5858039e676b45329a5cfc46cc1e7d9b98402#dbe5858039e676b45329a5cfc46cc1e7d9b98402"
+source = "git+https://github.com/splitgraph/iceberg-rust?rev=bc612896f5ed78c4f3bea613cfbd5b103a4d5d54#bc612896f5ed78c4f3bea613cfbd5b103a4d5d54"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -3993,7 +3993,7 @@ dependencies = [
 [[package]]
 name = "iceberg-datafusion"
 version = "0.3.0"
-source = "git+https://github.com/splitgraph/iceberg-rust?rev=dbe5858039e676b45329a5cfc46cc1e7d9b98402#dbe5858039e676b45329a5cfc46cc1e7d9b98402"
+source = "git+https://github.com/splitgraph/iceberg-rust?rev=bc612896f5ed78c4f3bea613cfbd5b103a4d5d54#bc612896f5ed78c4f3bea613cfbd5b103a4d5d54"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4508,7 +4508,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -5728,8 +5728,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c1318b19085f08681016926435853bbf7858f9c082d0999b80550ff5d9abe15"
 dependencies = [
  "bytes",
- "heck 0.5.0",
- "itertools 0.13.0",
+ "heck 0.4.1",
+ "itertools 0.11.0",
  "log",
  "multimap",
  "once_cell",
@@ -5749,7 +5749,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9552f850d5f0964a4e4d0bf306459ac29323ddfbae05e35a7c0d35cb0803cc5"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn 2.0.89",
@@ -6699,6 +6699,7 @@ dependencies = [
  "datafusion-functions-nested",
  "datafusion-remote-tables",
  "deltalake",
+ "fastrand",
  "futures",
  "hex",
  "iceberg",
@@ -6711,6 +6712,8 @@ dependencies = [
  "moka",
  "object_store",
  "object_store_factory",
+ "opendal",
+ "parquet",
  "percent-encoding",
  "prost",
  "rand",
@@ -7056,7 +7059,7 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03c3c6b7927ffe7ecaa769ee0e3994da3b8cafc8f444578982c83ecb161af917"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.89",
@@ -9301,7 +9304,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
