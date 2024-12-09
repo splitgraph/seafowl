@@ -2,6 +2,7 @@ pub mod aws;
 pub mod google;
 pub mod local;
 mod memory;
+pub mod utils;
 
 use aws::S3Config;
 use google::GCSConfig;

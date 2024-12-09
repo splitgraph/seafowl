@@ -20,13 +20,13 @@ use datafusion::datasource::TableProvider;
 
 use super::empty::EmptyStore;
 use crate::catalog::memory::MemoryStore;
-use crate::object_store::utils::object_store_opts_to_file_io_props;
 use deltalake::DeltaTable;
 use futures::{stream, StreamExt, TryStreamExt};
 use iceberg::io::FileIO;
 use iceberg::table::StaticTable;
 use iceberg::TableIdent;
 use iceberg_datafusion::IcebergTableProvider;
+use object_store_factory::utils::object_store_opts_to_file_io_props;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
