@@ -60,7 +60,7 @@ async fn test_inline_query(
 async fn test_inline_iceberg_write() {
     let (_context, mut client) = flight_server(TestServerType::InlineOnly).await;
 
-    // Verify the v1 dataset is as expected
+    // GIVEN we start with an Iceberg table at v1
     let batches = get_flight_batches_inlined(
         &mut client,
         "SELECT * FROM s3.iceberg_hdfs_v1 ORDER BY key".to_string(),
