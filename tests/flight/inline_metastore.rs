@@ -1,3 +1,5 @@
+use clade::schema::{TableFormat, TableObject};
+
 use crate::flight::*;
 
 #[rstest]
@@ -49,6 +51,94 @@ async fn test_inline_query(
         "| 2   | two   |",
         "| 3   | three |",
         "| 4   | four  |",
+        "+-----+-------+",
+    ];
+    assert_batches_eq!(expected, &batches);
+}
+
+#[tokio::test]
+async fn test_inline_iceberg_write() {
+    let (_context, mut client) = flight_server(TestServerType::InlineOnly).await;
+
+    // Verify the v1 dataset is as expected
+    let batches = get_flight_batches_inlined(
+        &mut client,
+        "SELECT * FROM s3.iceberg_hdfs_v1 ORDER BY key".to_string(),
+        schemas(false),
+    )
+    .await
+    .unwrap();
+
+    let expected = [
+        "+-----+-------+",
+        "| key | value |",
+        "+-----+-------+",
+        "| 1   | one   |",
+        "| 2   | two   |",
+        "| 3   | three |",
+        "| 4   | four  |",
+        "+-----+-------+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    // WHEN data is inserted into the Iceberg table at v1
+    get_flight_batches_inlined(
+        &mut client,
+        "INSERT INTO s3.iceberg_hdfs_v1 (key, value) VALUES (5, 'five'), (6, 'six')"
+            .to_string(),
+        schemas(false),
+    )
+    .await
+    .unwrap();
+
+    // THEN the v1 dataset is not affected
+    let batches = get_flight_batches_inlined(
+        &mut client,
+        "SELECT * FROM s3.iceberg_hdfs_v1 ORDER BY key".to_string(),
+        schemas(false),
+    )
+    .await
+    .unwrap();
+
+    let expected = [
+        "+-----+-------+",
+        "| key | value |",
+        "+-----+-------+",
+        "| 1   | one   |",
+        "| 2   | two   |",
+        "| 3   | three |",
+        "| 4   | four  |",
+        "+-----+-------+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    // THEN the v2 dataset contains the v1 data and the inserted data
+    let mut s = schemas(false);
+    s.schemas[1].tables.push(TableObject {
+        name: "iceberg_hdfs_v2".to_string(),
+        path: "test-data/iceberg/default.db/iceberg_table_2/metadata/v2.metadata.json"
+            .to_string(),
+        store: Some("minio".to_string()),
+        format: TableFormat::Iceberg.into(),
+    });
+    let batches = get_flight_batches_inlined(
+        &mut client,
+        "SELECT * FROM s3.iceberg_hdfs_v2 ORDER BY key".to_string(),
+        s,
+    )
+    .await
+    .unwrap();
+
+    let expected = [
+        "+-----+-------+",
+        "| key | value |",
+        "+-----+-------+",
+        "| 1   | one   |",
+        "| 2   | two   |",
+        "| 3   | three |",
+        "| 4   | four  |",
+        "| 5   | five  |",
+        "| 6   | six   |",
         "+-----+-------+",
     ];
     assert_batches_eq!(expected, &batches);
