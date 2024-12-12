@@ -3148,9 +3148,9 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fastrand"
-version = "2.2.0"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "486f806e73c5707928240ddc295403b1b93c96a02038563881c4a2fd84b81ac4"
+checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fd-lock"
@@ -3947,7 +3947,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.3.0"
-source = "git+https://github.com/splitgraph/iceberg-rust?rev=dbe5858039e676b45329a5cfc46cc1e7d9b98402#dbe5858039e676b45329a5cfc46cc1e7d9b98402"
+source = "git+https://github.com/splitgraph/iceberg-rust?rev=734e70dbe6227de7ce621474c38278da1b450f1a#734e70dbe6227de7ce621474c38278da1b450f1a"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -3993,7 +3993,7 @@ dependencies = [
 [[package]]
 name = "iceberg-datafusion"
 version = "0.3.0"
-source = "git+https://github.com/splitgraph/iceberg-rust?rev=dbe5858039e676b45329a5cfc46cc1e7d9b98402#dbe5858039e676b45329a5cfc46cc1e7d9b98402"
+source = "git+https://github.com/splitgraph/iceberg-rust?rev=734e70dbe6227de7ce621474c38278da1b450f1a#734e70dbe6227de7ce621474c38278da1b450f1a"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6699,6 +6699,7 @@ dependencies = [
  "datafusion-functions-nested",
  "datafusion-remote-tables",
  "deltalake",
+ "fastrand",
  "futures",
  "hex",
  "iceberg",
@@ -6711,6 +6712,8 @@ dependencies = [
  "moka",
  "object_store",
  "object_store_factory",
+ "opendal",
+ "parquet",
  "percent-encoding",
  "prost",
  "rand",
@@ -7979,9 +7982,9 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "tracing"
-version = "0.1.41"
+version = "0.1.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "784e0ac535deb450455cbfa28a6f0df145ea1bb7ae51b821cf5e7927fdcfbdd0"
+checksum = "c3523ab5a71916ccf420eebdf5521fcef02141234bbc0b8a49f2fdc4544364ef"
 dependencies = [
  "log",
  "pin-project-lite",

@@ -69,6 +69,12 @@ pub fn schemas(include_file_without_store: bool) -> ListSchemaResponse {
                         format: TableFormat::Iceberg.into(),
                     },
                     TableObject {
+                        name: "iceberg_hdfs_v1".to_string(),
+                        path: "test-data/iceberg/default.db/iceberg_table_2/metadata/v1.metadata.json".to_string(),
+                        store: Some("minio".to_string()),
+                        format: TableFormat::Iceberg.into(),
+                    },
+                    TableObject {
                         name: "iceberg_public".to_string(),
                         path: "iceberg/default.db/iceberg_table/metadata/00001-f394d7ec-944b-432d-a44f-78b5ec95aae2.metadata.json".to_string(),
                         store: Some("minio-public".to_string()),

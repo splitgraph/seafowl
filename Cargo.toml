@@ -21,8 +21,8 @@ datafusion-functions-nested = "43.0.0"
 
 futures = "0.3"
 
-iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "dbe5858039e676b45329a5cfc46cc1e7d9b98402" }
-iceberg-datafusion = { git = "https://github.com/splitgraph/iceberg-rust", rev = "dbe5858039e676b45329a5cfc46cc1e7d9b98402" }
+iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "734e70dbe6227de7ce621474c38278da1b450f1a" }
+iceberg-datafusion = { git = "https://github.com/splitgraph/iceberg-rust", rev = "734e70dbe6227de7ce621474c38278da1b450f1a" }
 
 itertools = ">=0.10.0"
 object_store = { version = "0.11", features = ["aws", "azure", "gcp"] }
@@ -100,6 +100,7 @@ datafusion-functions-nested = { workspace = true }
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
 deltalake = { git = "https://github.com/splitgraph/delta-rs", rev = "eff5735698279c12ae4a3aac2afa268d168242b2", features = ["datafusion", "s3"] }
+fastrand = "2.2.0"
 
 futures = "0.3"
 hex = ">=0.4.0"
@@ -115,6 +116,8 @@ metrics-exporter-prometheus = { version = "0.15.3" }
 moka = { version = "0.12.5", default-features = false, features = ["future", "atomic64", "quanta"] }
 object_store = { workspace = true }
 object_store_factory = { path = "object_store_factory" }
+opendal = { version = "0.50" }
+parquet = "53.3.0"
 percent-encoding = "2.2.0"
 prost = { workspace = true }
 

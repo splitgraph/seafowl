@@ -1,4 +1,5 @@
 use super::delta::CreateDeltaTableDetails;
+use super::LakehouseTableProvider;
 use crate::catalog::{DEFAULT_SCHEMA, STAGING_SCHEMA};
 use crate::context::delta::plan_to_delta_adds;
 use crate::context::SeafowlContext;
@@ -196,11 +197,21 @@ impl SeafowlContext {
                 ..
             }) => {
                 let physical = self.inner.state().create_physical_plan(input).await?;
-
-                self.plan_to_delta_table(table_name.clone(), &physical)
-                    .await?;
-
-                Ok(make_dummy_exec())
+                match self
+                    .get_lakehouse_table_provider(table_name.clone())
+                    .await?
+                {
+                    LakehouseTableProvider::Delta(_) => {
+                        self.plan_to_delta_table(table_name.clone(), &physical)
+                            .await?;
+                        Ok(make_dummy_exec())
+                    }
+                    LakehouseTableProvider::Iceberg(_) => {
+                        self.plan_to_iceberg_table(table_name.clone(), &physical)
+                            .await?;
+                        Ok(make_dummy_exec())
+                    }
+                }
             }
             LogicalPlan::Dml(DmlStatement {
                 table_name,
