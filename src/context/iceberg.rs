@@ -1,16 +1,18 @@
 use core::str;
 use std::collections::HashMap;
 use std::error::Error;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::array::RecordBatch;
 use arrow_schema::{Field, Schema, SchemaRef};
 use datafusion::error::Result;
-use datafusion::execution::TaskContext;
+use datafusion::execution::{RecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use datafusion_common::{DataFusionError, TableReference};
+use futures::stream::select_all;
 use futures::{pin_mut, StreamExt, TryStream, TryStreamExt};
 use iceberg::io::FileIO;
 use iceberg::spec::{
@@ -357,23 +359,23 @@ impl SeafowlContext {
             _ => panic!("Expected iceberg provider"),
         };
         let table = provider.table();
-
+        let mut streams: Vec<Pin<Box<dyn RecordBatchStream + Send>>> = vec![];
+        let schema = plan.schema();
         for i in 0..plan.output_partitioning().partition_count() {
             let task_ctx = Arc::new(TaskContext::from(&self.inner.state()));
             let stream = plan.execute(i, task_ctx)?;
-
-            let schema = plan.schema();
-
-            record_batches_to_iceberg(
-                stream.map_err(|e| {
-                    DataLoadingError::BadInputError(format!("Datafusion error: {}", e))
-                }),
-                schema,
-                &table,
-            )
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            streams.push(stream);
         }
+        let merged_stream = select_all(streams);
+        record_batches_to_iceberg(
+            merged_stream.map_err(|e| {
+                DataLoadingError::BadInputError(format!("Datafusion error: {}", e))
+            }),
+            schema,
+            &table,
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
         Ok(())
     }
 }
