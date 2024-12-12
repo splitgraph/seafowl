@@ -1,4 +1,6 @@
-This table was generated with the following code:
+To generate this fixture data:
+
+1. Run the following code:
 
 ```python
 import pyarrow as pa
@@ -30,3 +32,8 @@ pa_table_data = pa.Table.from_pylist([
 ], schema=iceberg_table.schema().as_arrow())
 iceberg_table.append(df=pa_table_data)
 ```
+
+2. Manually rename file `00000-*-metadata.json` to `v0.metadata.json`
+3. Manually rename file `00001-*-metadata.json` to `v1.metadata.json`
+4. Replace `00000-*-metadata.json` with `v0.metadata.json` in the `metadata-log` key in `v1.metadata.json`
+5. Create version hint file: `echo -n 1 > version-hint.text`
