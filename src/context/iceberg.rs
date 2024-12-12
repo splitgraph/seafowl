@@ -356,11 +356,15 @@ impl SeafowlContext {
     ) -> Result<()> {
         let provider = match self.get_lakehouse_table_provider(name).await? {
             LakehouseTableProvider::Iceberg(p) => p,
-            _ => panic!("Expected iceberg provider"),
+            _ => {
+                return Err(DataFusionError::Internal(
+                    "Expected iceberg provider".to_string(),
+                ));
+            }
         };
         let table = provider.table();
-        let mut streams: Vec<Pin<Box<dyn RecordBatchStream + Send>>> = vec![];
         let schema = plan.schema();
+        let mut streams: Vec<Pin<Box<dyn RecordBatchStream + Send>>> = vec![];
         for i in 0..plan.output_partitioning().partition_count() {
             let task_ctx = Arc::new(TaskContext::from(&self.inner.state()));
             let stream = plan.execute(i, task_ctx)?;
