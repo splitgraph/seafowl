@@ -21,8 +21,8 @@ datafusion-functions-nested = "43.0.0"
 
 futures = "0.3"
 
-iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "734e70dbe6227de7ce621474c38278da1b450f1a" }
-iceberg-datafusion = { git = "https://github.com/splitgraph/iceberg-rust", rev = "734e70dbe6227de7ce621474c38278da1b450f1a" }
+iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "2be7c389de17e8b5f88e202b2b696b221c9d9adb" }
+iceberg-datafusion = { git = "https://github.com/splitgraph/iceberg-rust", rev = "2be7c389de17e8b5f88e202b2b696b221c9d9adb" }
 
 itertools = ">=0.10.0"
 object_store = { version = "0.11", features = ["aws", "azure", "gcp"] }
