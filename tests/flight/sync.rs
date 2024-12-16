@@ -1,6 +1,6 @@
 use crate::fixtures::minio_options;
 use crate::flight::*;
-use clade::schema::StorageLocation;
+use clade::schema::{StorageLocation, TableFormat};
 use clade::sync::{ColumnDescriptor, ColumnRole};
 use deltalake::DeltaTable;
 use std::collections::HashMap;
@@ -118,6 +118,7 @@ async fn test_sync_happy_path() -> std::result::Result<(), Box<dyn std::error::E
         column_descriptors,
         origin: "42".to_string(),
         sequence_number: None,
+        format: TableFormat::Delta.into(),
     };
 
     // Changes are still in memory
@@ -569,6 +570,7 @@ async fn test_sync_custom_store(
         column_descriptors,
         origin: "42".to_string(),
         sequence_number: Some(1000),
+        format: TableFormat::Delta.into(),
     };
 
     let sync_result = do_put_sync(cmd.clone(), batch.clone(), &mut client).await?;
