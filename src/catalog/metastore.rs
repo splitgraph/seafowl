@@ -26,7 +26,7 @@ use iceberg::io::FileIO;
 use iceberg::table::StaticTable;
 use iceberg::TableIdent;
 use iceberg_datafusion::IcebergTableProvider;
-use object_store_factory::utils::object_store_opts_to_file_io_props;
+use object_store_factory::object_store_opts_to_file_io_props;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
