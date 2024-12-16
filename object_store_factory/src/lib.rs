@@ -2,21 +2,23 @@ pub mod aws;
 pub mod google;
 pub mod local;
 mod memory;
-pub mod utils;
 
 use aws::S3Config;
 use google::GCSConfig;
 use local::LocalConfig;
 
+use object_store::aws::AmazonS3ConfigKey;
 use object_store::{
     memory::InMemory, parse_url_opts, path::Path, prefix::PrefixStore, DynObjectStore,
     ObjectStore, ObjectStoreScheme,
 };
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::warn;
 use url::Url;
 
+use crate::aws::s3_opts_to_file_io_props;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -195,6 +197,29 @@ pub async fn build_storage_location_info_from_opts(
         options: options.clone(),
         url: url.to_string(),
     })
+}
+
+// Go through all known keys for object store and convert them to corresponding file_io ones.
+//
+// For now only converts S3 keys.
+// TODO: At some point this should be redundant, since there is an OpenDAL adapter for object_store,
+// https://github.com/apache/iceberg-rust/issues/172
+pub fn object_store_opts_to_file_io_props(
+    opts: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut props = HashMap::new();
+
+    for (key, val) in opts.iter() {
+        match AmazonS3ConfigKey::from_str(key) {
+            Ok(s3_key) => s3_opts_to_file_io_props(s3_key, val, &mut props),
+            // for now just propagate any non-S3 keys
+            _ => {
+                props.insert(key.clone(), val.clone());
+            }
+        };
+    }
+
+    props
 }
 
 #[cfg(test)]

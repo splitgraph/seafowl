@@ -1,3 +1,7 @@
+use iceberg::io::{
+    S3_ACCESS_KEY_ID, S3_ALLOW_ANONYMOUS, S3_DISABLE_CONFIG_LOAD,
+    S3_DISABLE_EC2_METADATA, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
+};
 use object_store::aws::{
     resolve_bucket_region, AmazonS3Builder, AmazonS3ConfigKey, S3ConditionalPut,
 };
@@ -257,6 +261,38 @@ async fn detect_region(url: &Url) -> Result<String, object_store::Error> {
     info!("Using autodetected region {} for bucket {}", region, bucket);
 
     Ok(region)
+}
+
+pub fn s3_opts_to_file_io_props(
+    key: AmazonS3ConfigKey,
+    val: &str,
+    props: &mut HashMap<String, String>,
+) {
+    // If any S3 key is detected at all skip picking up config from config file or env vars
+    props.insert(S3_DISABLE_CONFIG_LOAD.to_string(), "true".to_string());
+    // FileIO requires the region prop even when the S3 store doesn't (e.g. MinIO)
+    props
+        .entry(S3_REGION.to_string())
+        .or_insert("dummy-region".to_string());
+
+    let key = match key {
+        AmazonS3ConfigKey::AccessKeyId => S3_ACCESS_KEY_ID,
+        AmazonS3ConfigKey::SecretAccessKey => S3_SECRET_ACCESS_KEY,
+        AmazonS3ConfigKey::SkipSignature
+            if ["true", "t", "1"].contains(&val.to_lowercase().as_str()) =>
+        {
+            // We need two options on the opendal client in this case
+            props.insert(S3_ALLOW_ANONYMOUS.to_string(), val.to_string());
+            props.insert(S3_DISABLE_EC2_METADATA.to_string(), val.to_string());
+            return;
+        }
+        AmazonS3ConfigKey::Region => S3_REGION,
+        AmazonS3ConfigKey::Endpoint => S3_ENDPOINT,
+        // for now just propagate any non-matched keys
+        _ => key.as_ref(),
+    };
+
+    props.insert(key.to_string(), val.to_string());
 }
 
 #[cfg(test)]
@@ -615,5 +651,25 @@ mod tests {
         assert_eq!(config.bucket, "my_bucket".to_string());
         assert!(config.allow_http); // Default value should be true
         assert!(config.skip_signature); // Default value should be true
+    }
+
+    #[test]
+    fn test_s3_opts_to_file_io_props() {
+        let mut props = HashMap::new();
+
+        // Test SkipSignature with a truthy value
+        s3_opts_to_file_io_props(AmazonS3ConfigKey::SkipSignature, "true", &mut props);
+
+        // We expect both allow_anonymous and disable_ec2_metadata to be set.
+        // In addition, we expect disable_config_load to be set, as well as a
+        // region placeholder.
+        assert_eq!(props.get(S3_ALLOW_ANONYMOUS), Some(&"true".to_string()));
+        assert_eq!(
+            props.get(S3_DISABLE_EC2_METADATA),
+            Some(&"true".to_string())
+        );
+        assert_eq!(props.get(S3_DISABLE_CONFIG_LOAD), Some(&"true".to_string()));
+        assert_eq!(props.get(S3_REGION), Some(&"dummy-region".to_string()));
+        props.clear();
     }
 }

@@ -3947,7 +3947,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.3.0"
-source = "git+https://github.com/splitgraph/iceberg-rust?rev=734e70dbe6227de7ce621474c38278da1b450f1a#734e70dbe6227de7ce621474c38278da1b450f1a"
+source = "git+https://github.com/splitgraph/iceberg-rust?rev=2be7c389de17e8b5f88e202b2b696b221c9d9adb#2be7c389de17e8b5f88e202b2b696b221c9d9adb"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -3970,6 +3970,7 @@ dependencies = [
  "itertools 0.13.0",
  "moka",
  "murmur3",
+ "num-bigint",
  "once_cell",
  "opendal",
  "ordered-float 4.5.0",
@@ -3988,12 +3989,13 @@ dependencies = [
  "typed-builder 0.20.0",
  "url",
  "uuid 1.11.0",
+ "zstd",
 ]
 
 [[package]]
 name = "iceberg-datafusion"
 version = "0.3.0"
-source = "git+https://github.com/splitgraph/iceberg-rust?rev=734e70dbe6227de7ce621474c38278da1b450f1a#734e70dbe6227de7ce621474c38278da1b450f1a"
+source = "git+https://github.com/splitgraph/iceberg-rust?rev=2be7c389de17e8b5f88e202b2b696b221c9d9adb#2be7c389de17e8b5f88e202b2b696b221c9d9adb"
 dependencies = [
  "anyhow",
  "async-trait",
