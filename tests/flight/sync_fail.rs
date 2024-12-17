@@ -1,5 +1,8 @@
 use crate::flight::*;
-use clade::sync::{ColumnDescriptor, ColumnRole};
+use clade::{
+    schema::TableFormat,
+    sync::{ColumnDescriptor, ColumnRole},
+};
 
 async fn assert_sync_error(
     cmd: DataSyncCommand,
@@ -36,6 +39,7 @@ async fn test_sync_errors() -> std::result::Result<(), Box<dyn std::error::Error
         column_descriptors: vec![],
         origin: "1".to_string(),
         sequence_number: Some(42),
+        format: TableFormat::Delta.into(),
     };
 
     // No column descriptors provided

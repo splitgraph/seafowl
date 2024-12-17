@@ -4,6 +4,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::{ProstMessageExt, SqlInfo, TicketStatementQuery};
 use arrow_flight::{FlightDescriptor, FlightEndpoint, FlightInfo, Ticket};
+use clade::schema::TableFormat;
 use clade::sync::{DataSyncCommand, DataSyncResponse};
 use dashmap::DashMap;
 use datafusion::common::Result;
@@ -22,7 +23,7 @@ use url::Url;
 use crate::context::SeafowlContext;
 use crate::sync::schema::SyncSchema;
 use crate::sync::writer::SeafowlDataSyncWriter;
-use crate::sync::SyncResult;
+use crate::sync::{SyncError, SyncResult};
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -160,6 +161,10 @@ impl SeafowlFlightHandler {
                 durable_sequence_number: dur_seq,
                 first,
             });
+        }
+
+        if cmd.format != TableFormat::Delta as i32 {
+            return Err(SyncError::NotImplemented);
         }
 
         let log_store = match cmd.store {

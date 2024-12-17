@@ -22,6 +22,9 @@ pub enum SyncError {
     #[error("Invalid sync message: {reason}")]
     InvalidMessage { reason: String },
 
+    #[error("Not implemented")]
+    NotImplemented,
+
     #[error(transparent)]
     ArrowError(#[from] arrow_schema::ArrowError),
 

@@ -38,6 +38,9 @@ message DataSyncCommand {
   // Monotonically-increasing transaction number.
   // Only specified in the last message of a transaction
   optional uint64 sequence_number = 5;
+
+  // Table format
+  schema.TableFormat format = 6;
 }
 
 message DataSyncResponse {
