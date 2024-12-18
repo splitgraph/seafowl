@@ -2,7 +2,6 @@ use arrow::array::RecordBatch;
 use arrow_schema::SchemaBuilder;
 use clade::sync::ColumnRole;
 use deltalake::kernel::{Action, Schema};
-use deltalake::logstore::LogStore;
 use deltalake::operations::create::CreateBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
@@ -22,6 +21,8 @@ use crate::sync::planner::SeafowlSyncPlanner;
 use crate::sync::schema::SyncSchema;
 use crate::sync::utils::{get_size_and_rows, squash_batches};
 use crate::sync::{Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult};
+
+use super::LakehouseSyncTarget;
 
 // Denotes the last sequence number that was fully committed
 pub const SYNC_COMMIT_INFO: &str = "sync_commit_info";
@@ -107,7 +108,7 @@ pub(super) struct DataSyncCollection {
     // Unix epoch of the first sync command in this collection
     insertion_time: u64,
     // Table log store
-    log_store: Arc<dyn LogStore>,
+    sync_target: LakehouseSyncTarget,
     // Collection of batches to replicate
     pub(super) syncs: Vec<DataSyncItem>,
 }
@@ -154,13 +155,18 @@ impl SeafowlDataSyncWriter {
     // Store the pending data in memory and flush if the required criteria are met.
     pub fn enqueue_sync(
         &mut self,
-        log_store: Arc<dyn LogStore>,
+        sync_target: LakehouseSyncTarget,
         sequence_number: Option<SequenceNumber>,
         origin: Origin,
         sync_schema: SyncSchema,
         batches: Vec<RecordBatch>,
     ) -> SyncResult<()> {
-        let url = log_store.root_uri();
+        let url = match sync_target {
+            LakehouseSyncTarget::Delta(ref log_store) => log_store.root_uri(),
+            LakehouseSyncTarget::Iceberg(ref iceberg_sync_target) => {
+                iceberg_sync_target.url.clone()
+            }
+        };
 
         let (sync_size, sync_rows) = get_size_and_rows(&batches);
 
@@ -251,7 +257,7 @@ impl SeafowlDataSyncWriter {
                     size: sync_size,
                     rows: sync_rows,
                     insertion_time: now(),
-                    log_store,
+                    sync_target,
                     syncs: vec![DataSyncItem {
                         is_squashed: false,
                         tx_ids: vec![tx_id],
@@ -284,7 +290,7 @@ impl SeafowlDataSyncWriter {
 
     async fn create_table(
         &self,
-        log_store: Arc<dyn LogStore>,
+        sync_target: LakehouseSyncTarget,
         sync_schema: &SyncSchema,
     ) -> SyncResult<DeltaTable> {
         // Get the actual table schema by removing the OldPk and Changed column roles from the schema.
@@ -295,14 +301,21 @@ impl SeafowlDataSyncWriter {
                 builder.push(field);
             }
         });
+        match sync_target {
+            LakehouseSyncTarget::Delta(log_store) => {
+                let delta_schema = Schema::try_from(&builder.finish())?;
 
-        let delta_schema = Schema::try_from(&builder.finish())?;
-
-        Ok(CreateBuilder::new()
-            .with_log_store(log_store)
-            .with_columns(delta_schema.fields().cloned())
-            .with_comment(format!("Synced by Seafowl {}", env!("CARGO_PKG_VERSION")))
-            .await?)
+                Ok(CreateBuilder::new()
+                    .with_log_store(log_store)
+                    .with_columns(delta_schema.fields().cloned())
+                    .with_comment(format!(
+                        "Synced by Seafowl {}",
+                        env!("CARGO_PKG_VERSION")
+                    ))
+                    .await?)
+            }
+            LakehouseSyncTarget::Iceberg(..) => Err(SyncError::NotImplemented),
+        }
     }
 
     pub async fn flush(&mut self) -> SyncResult<()> {
@@ -396,83 +409,92 @@ impl SeafowlDataSyncWriter {
         let rows = entry.rows;
         let size = entry.size;
         let url = url.clone();
-        let log_store = entry.log_store.clone();
+        match &entry.sync_target {
+            LakehouseSyncTarget::Delta(log_store) => {
+                // If there's no delta table at this location yet create one first.
+                if !log_store.is_delta_table_location().await? {
+                    debug!("Creating new Delta table at location: {url}");
+                    self.create_table(
+                        entry.sync_target.clone(),
+                        &entry.syncs.first().unwrap().sync_schema,
+                    )
+                    .await?;
+                }
 
-        // If there's no delta table at this location yet create one first.
-        if !log_store.is_delta_table_location().await? {
-            debug!("Creating new Delta table at location: {url}");
-            self.create_table(
-                log_store.clone(),
-                &entry.syncs.first().unwrap().sync_schema,
-            )
-            .await?;
-        }
+                let mut table = DeltaTable::new(log_store.clone(), Default::default());
+                table.load().await?;
 
-        let mut table = DeltaTable::new(log_store.clone(), Default::default());
-        table.load().await?;
+                let last_sync_commit = self.table_sequence(&table).await?;
+                let new_sync_commit = self.commit_info(&last_sync_commit, &entry.syncs);
 
-        let last_sync_commit = self.table_sequence(&table).await?;
-        let new_sync_commit = self.commit_info(&last_sync_commit, &entry.syncs);
+                if entry.syncs.is_empty() {
+                    // TODO: Update metrics
+                    self.remove_sync(&url);
+                    return Ok(());
+                }
 
-        if entry.syncs.is_empty() {
-            // TODO: Update metrics
-            self.remove_sync(&url);
-            return Ok(());
-        }
+                let planner = SeafowlSyncPlanner::new(self.context.clone());
+                let planning_start = Instant::now();
+                let (plan, removes) =
+                    planner.plan_delta_syncs(&entry.syncs, &table).await?;
+                let planning_time = planning_start.elapsed().as_millis();
+                info!("Flush plan generated in {planning_time} ms");
+                self.metrics.planning_time.record(planning_time as f64);
 
-        let planner = SeafowlSyncPlanner::new(self.context.clone());
-        let planning_start = Instant::now();
-        let (plan, removes) = planner.plan_syncs(&entry.syncs, &table).await?;
-        let planning_time = planning_start.elapsed().as_millis();
-        info!("Flush plan generated in {planning_time} ms");
-        self.metrics.planning_time.record(planning_time as f64);
+                // To exploit fast data upload to local FS, i.e. simply move the partition files
+                // once written to the disk, try to infer whether the location is a local dir
+                let local_data_dir = if url.starts_with("file://") {
+                    Some(log_store.root_uri())
+                } else {
+                    None
+                };
 
-        // To exploit fast data upload to local FS, i.e. simply move the partition files
-        // once written to the disk, try to infer whether the location is a local dir
-        let local_data_dir = if url.starts_with("file://") {
-            Some(log_store.root_uri())
-        } else {
-            None
+                // Dump the batches to the object store
+                let adds = plan_to_delta_adds(
+                    &self.context.inner.state(),
+                    &plan,
+                    log_store.object_store(),
+                    local_data_dir,
+                    self.context.config.misc.max_partition_size,
+                )
+                .await?;
+
+                let mut actions: Vec<Action> =
+                    adds.into_iter().map(Action::Add).collect();
+                info!(
+                    "Removing {} out of {} files from state and adding {} new one(s)",
+                    removes.len(),
+                    table.get_files_count(),
+                    actions.len(),
+                );
+                actions.extend(removes);
+                debug!("Actions to commit:\n{actions:?}");
+
+                // Append a special `CommitInfo` action to record latest durable sequence number
+                // tied to the commit from this origin if any.
+                if let Some(ref sync_commit) = new_sync_commit {
+                    let info = HashMap::from([(
+                        SYNC_COMMIT_INFO.to_string(),
+                        serde_json::to_value(sync_commit)?,
+                    )]);
+                    let commit_info = Action::commit_info(info);
+                    actions.push(commit_info);
+                }
+
+                let op = DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                };
+                self.context.commit_delta_table(actions, &table, op).await?;
+                debug!(
+                    "Committed data sync up to {new_sync_commit:?} for location {url}"
+                );
+            }
+            LakehouseSyncTarget::Iceberg(..) => {
+                return Err(SyncError::NotImplemented);
+            }
         };
-
-        // Dump the batches to the object store
-        let adds = plan_to_delta_adds(
-            &self.context.inner.state(),
-            &plan,
-            log_store.object_store(),
-            local_data_dir,
-            self.context.config.misc.max_partition_size,
-        )
-        .await?;
-
-        let mut actions: Vec<Action> = adds.into_iter().map(Action::Add).collect();
-        info!(
-            "Removing {} out of {} files from state and adding {} new one(s)",
-            removes.len(),
-            table.get_files_count(),
-            actions.len(),
-        );
-        actions.extend(removes);
-        debug!("Actions to commit:\n{actions:?}");
-
-        // Append a special `CommitInfo` action to record latest durable sequence number
-        // tied to the commit from this origin if any.
-        if let Some(ref sync_commit) = new_sync_commit {
-            let info = HashMap::from([(
-                SYNC_COMMIT_INFO.to_string(),
-                serde_json::to_value(sync_commit)?,
-            )]);
-            let commit_info = Action::commit_info(info);
-            actions.push(commit_info);
-        }
-
-        let op = DeltaOperation::Write {
-            mode: SaveMode::Append,
-            partition_by: None,
-            predicate: None,
-        };
-        self.context.commit_delta_table(actions, &table, op).await?;
-        debug!("Committed data sync up to {new_sync_commit:?} for location {url}");
 
         // We've flushed all the presently accumulated batches for this location.
         // Modify our syncs and sequences maps to reflect this.
@@ -672,7 +694,7 @@ mod tests {
     use crate::context::test_utils::in_memory_context;
     use crate::sync::schema::{arrow_to_sync_schema, SyncSchema};
     use crate::sync::writer::{SeafowlDataSyncWriter, SequenceNumber};
-    use crate::sync::SyncResult;
+    use crate::sync::{LakehouseSyncTarget, SyncResult};
     use arrow::array::{
         BooleanArray, Decimal128Array, Float32Array, Int32Array, StringArray,
     };
@@ -782,6 +804,8 @@ mod tests {
         #[case] table_sequence: &[(&str, &str, Option<i64>)],
         #[case] mut durable_sequences: Vec<Vec<Option<u64>>>,
     ) {
+        use crate::sync::LakehouseSyncTarget;
+
         let ctx = Arc::new(in_memory_context().await);
         let mut sync_mgr = SeafowlDataSyncWriter::new(ctx.clone());
         let arrow_schema = test_schema();
@@ -820,7 +844,7 @@ mod tests {
 
             sync_mgr
                 .enqueue_sync(
-                    log_store,
+                    LakehouseSyncTarget::Delta(log_store),
                     sequence.map(|seq| seq as SequenceNumber),
                     origin.clone(),
                     sync_schema.clone(),
@@ -856,10 +880,11 @@ mod tests {
 
         // Enqueue all syncs
         let log_store = ctx.get_internal_object_store()?.get_log_store("test_table");
+        let sync_target = LakehouseSyncTarget::Delta(log_store);
 
         // Add first non-empty sync
         sync_mgr.enqueue_sync(
-            log_store.clone(),
+            sync_target.clone(),
             None,
             A.to_string(),
             sync_schema.clone(),
@@ -868,7 +893,7 @@ mod tests {
 
         // Add empty sync with an explicit sequence number denoting the end of the transaction
         sync_mgr.enqueue_sync(
-            log_store.clone(),
+            sync_target.clone(),
             Some(100),
             A.to_string(),
             SyncSchema::empty(),
@@ -879,7 +904,7 @@ mod tests {
         // isn't supported
         let err = sync_mgr
             .enqueue_sync(
-                log_store,
+                sync_target,
                 Some(200),
                 A.to_string(),
                 SyncSchema::empty(),
@@ -957,6 +982,7 @@ mod tests {
             .get_internal_object_store()
             .unwrap()
             .get_log_store(&table_uuid.to_string());
+        let sync_target = LakehouseSyncTarget::Delta(log_store.clone());
         // The sync mechanism doesn't register the table, so for the sake of testing do it here
         ctx.metastore
             .tables
@@ -1002,7 +1028,7 @@ mod tests {
 
             sync_mgr
                 .enqueue_sync(
-                    log_store.clone(),
+                    sync_target.clone(),
                     Some(seq as SequenceNumber),
                     A.to_string(),
                     sync_schema.clone(),
@@ -1098,12 +1124,13 @@ mod tests {
             .get_internal_object_store()
             .unwrap()
             .get_log_store(&table_uuid.to_string());
+        let sync_target = LakehouseSyncTarget::Delta(log_store.clone());
 
         // Cycle through the PKs, to end up in the same place as at start
         for (old_pks, new_pks, value) in pk_cycle {
             sync_mgr
                 .enqueue_sync(
-                    log_store.clone(),
+                    sync_target.clone(),
                     None,
                     A.to_string(),
                     sync_schema.clone(),
@@ -1189,9 +1216,11 @@ mod tests {
             .get_internal_object_store()?
             .get_log_store(&table_uuid.to_string());
 
+        let sync_target = LakehouseSyncTarget::Delta(log_store.clone());
+
         // Add first non-empty sync
         sync_mgr.enqueue_sync(
-            log_store.clone(),
+            sync_target.clone(),
             None,
             A.to_string(),
             sync_schema.clone(),

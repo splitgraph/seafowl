@@ -23,7 +23,7 @@ use url::Url;
 use crate::context::SeafowlContext;
 use crate::sync::schema::SyncSchema;
 use crate::sync::writer::SeafowlDataSyncWriter;
-use crate::sync::{SyncError, SyncResult};
+use crate::sync::{LakehouseSyncTarget, SyncError, SyncResult};
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -163,32 +163,38 @@ impl SeafowlFlightHandler {
             });
         }
 
-        if cmd.format != TableFormat::Delta as i32 {
+        let (sync_target, url) = if cmd.format == TableFormat::Delta as i32 {
+            let log_store = match cmd.store {
+                None => self
+                    .context
+                    .get_internal_object_store()?
+                    .get_log_store(&cmd.path),
+                Some(store_loc) => {
+                    self.context
+                        .metastore
+                        .object_stores
+                        .get_log_store_for_table(
+                            Url::parse(&store_loc.location).map_err(|e| {
+                                DataFusionError::Execution(format!(
+                                    "Couldn't parse sync location: {e}"
+                                ))
+                            })?,
+                            store_loc.options,
+                            cmd.path,
+                        )
+                        .await?
+                }
+            };
+            let url = log_store.root_uri();
+            (LakehouseSyncTarget::Delta(log_store), url)
+        } else if cmd.format == TableFormat::Iceberg as i32 {
             return Err(SyncError::NotImplemented);
-        }
-
-        let log_store = match cmd.store {
-            None => self
-                .context
-                .get_internal_object_store()?
-                .get_log_store(&cmd.path),
-            Some(store_loc) => {
-                self.context
-                    .metastore
-                    .object_stores
-                    .get_log_store_for_table(
-                        Url::parse(&store_loc.location).map_err(|e| {
-                            DataFusionError::Execution(format!(
-                                "Couldn't parse sync location: {e}"
-                            ))
-                        })?,
-                        store_loc.options,
-                        cmd.path,
-                    )
-                    .await?
-            }
+        } else {
+            return Err(SyncError::InvalidMessage {
+                reason: "Unknown table format".to_string(),
+            });
         };
-        let url = log_store.root_uri();
+
         let num_batches = batches.len();
 
         debug!("Processing data change with {num_rows} rows, {num_batches} batches, descriptor {sync_schema}, url {url} from origin {:?} at position {:?}",
@@ -202,7 +208,7 @@ impl SeafowlFlightHandler {
         {
             Ok(mut sync_writer) => {
                 sync_writer.enqueue_sync(
-                    log_store,
+                    sync_target,
                     cmd.sequence_number,
                     cmd.origin.clone(),
                     sync_schema,
