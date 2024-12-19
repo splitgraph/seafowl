@@ -163,36 +163,35 @@ impl SeafowlFlightHandler {
             });
         }
 
-        let (sync_target, url) = if cmd.format == TableFormat::Delta as i32 {
-            let log_store = match cmd.store {
-                None => self
-                    .context
-                    .get_internal_object_store()?
-                    .get_log_store(&cmd.path),
-                Some(store_loc) => {
-                    self.context
-                        .metastore
-                        .object_stores
-                        .get_log_store_for_table(
-                            Url::parse(&store_loc.location).map_err(|e| {
-                                DataFusionError::Execution(format!(
-                                    "Couldn't parse sync location: {e}"
-                                ))
-                            })?,
-                            store_loc.options,
-                            cmd.path,
-                        )
-                        .await?
-                }
-            };
-            let url = log_store.root_uri();
-            (LakehouseSyncTarget::Delta(log_store), url)
-        } else if cmd.format == TableFormat::Iceberg as i32 {
-            return Err(SyncError::NotImplemented);
-        } else {
-            return Err(SyncError::InvalidMessage {
-                reason: "Unknown table format".to_string(),
-            });
+        let (sync_target, url) = match cmd.format() {
+            TableFormat::Delta => {
+                let log_store = match cmd.store {
+                    None => self
+                        .context
+                        .get_internal_object_store()?
+                        .get_log_store(&cmd.path),
+                    Some(store_loc) => {
+                        self.context
+                            .metastore
+                            .object_stores
+                            .get_log_store_for_table(
+                                Url::parse(&store_loc.location).map_err(|e| {
+                                    DataFusionError::Execution(format!(
+                                        "Couldn't parse sync location: {e}"
+                                    ))
+                                })?,
+                                store_loc.options,
+                                cmd.path,
+                            )
+                            .await?
+                    }
+                };
+                let url = log_store.root_uri();
+                (LakehouseSyncTarget::Delta(log_store), url)
+            }
+            TableFormat::Iceberg => {
+                return Err(SyncError::NotImplemented);
+            }
         };
 
         let num_batches = batches.len();
