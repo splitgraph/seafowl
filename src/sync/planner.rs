@@ -50,7 +50,7 @@ impl SeafowlSyncPlanner {
 
     // Construct a plan for flushing the pending syncs to the provided table.
     // Return the plan and the files that are re-written by it (to be removed from the table state).
-    pub(super) async fn plan_syncs(
+    pub(super) async fn plan_delta_syncs(
         &self,
         syncs: &[DataSyncItem],
         table: &DeltaTable,
@@ -963,7 +963,7 @@ mod tests {
             .await?;
         let table = ctx.try_get_delta_table("test_table").await?;
 
-        let (plan, _) = planner.plan_syncs(&[sync_item], &table).await?;
+        let (plan, _) = planner.plan_delta_syncs(&[sync_item], &table).await?;
 
         let mut actual_plan = get_plan_string(&plan);
         actual_plan.iter_mut().for_each(|node| {

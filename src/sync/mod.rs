@@ -1,4 +1,5 @@
 use crate::sync::writer::SeafowlDataSyncWriter;
+use deltalake::logstore::LogStore;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,6 +55,17 @@ pub(super) struct SyncCommitInfo {
     // Flag denoting whether we've started flushing changes from a new (in-complete)
     // transaction
     new_tx: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct IcebergSyncTarget {
+    url: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum LakehouseSyncTarget {
+    Delta(Arc<dyn LogStore>),
+    Iceberg(IcebergSyncTarget),
 }
 
 impl SyncCommitInfo {
