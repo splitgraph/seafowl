@@ -17,11 +17,10 @@ use futures::stream::select_all;
 use futures::{pin_mut, StreamExt, TryStream, TryStreamExt};
 use iceberg::io::FileIO;
 use iceberg::spec::{
-    BoundPartitionSpec, DataContentType, DataFileFormat, FormatVersion, Manifest,
-    ManifestContentType, ManifestEntry, ManifestFile, ManifestListWriter,
-    ManifestMetadata, ManifestStatus, ManifestWriter, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, Struct, Summary, TableMetadata,
-    TableMetadataBuilder,
+    DataContentType, DataFileFormat, FormatVersion, Manifest, ManifestContentType,
+    ManifestEntry, ManifestFile, ManifestListWriter, ManifestMetadata, ManifestStatus,
+    ManifestWriter, Operation, PartitionSpec, Snapshot, SnapshotReference,
+    SnapshotRetention, Struct, Summary, TableMetadata, TableMetadataBuilder,
 };
 use iceberg::table::Table;
 use iceberg::writer::file_writer::location_generator::{
@@ -279,7 +278,7 @@ pub async fn record_batches_to_iceberg(
         .schema_id(DEFAULT_SCHEMA_ID)
         .schema(iceberg_schema.clone())
         .partition_spec(
-            BoundPartitionSpec::builder(iceberg_schema.clone())
+            PartitionSpec::builder(iceberg_schema.clone())
                 .with_spec_id(0)
                 .build()?,
         )

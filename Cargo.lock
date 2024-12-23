@@ -3946,8 +3946,8 @@ dependencies = [
 
 [[package]]
 name = "iceberg"
-version = "0.3.0"
-source = "git+https://github.com/splitgraph/iceberg-rust?rev=2be7c389de17e8b5f88e202b2b696b221c9d9adb#2be7c389de17e8b5f88e202b2b696b221c9d9adb"
+version = "0.4.0"
+source = "git+https://github.com/splitgraph/iceberg-rust?rev=1e01b7b7b2009076941f3ec1f04340e961d4628a#1e01b7b7b2009076941f3ec1f04340e961d4628a"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -3994,8 +3994,8 @@ dependencies = [
 
 [[package]]
 name = "iceberg-datafusion"
-version = "0.3.0"
-source = "git+https://github.com/splitgraph/iceberg-rust?rev=2be7c389de17e8b5f88e202b2b696b221c9d9adb#2be7c389de17e8b5f88e202b2b696b221c9d9adb"
+version = "0.4.0"
+source = "git+https://github.com/splitgraph/iceberg-rust?rev=1e01b7b7b2009076941f3ec1f04340e961d4628a#1e01b7b7b2009076941f3ec1f04340e961d4628a"
 dependencies = [
  "anyhow",
  "async-trait",
