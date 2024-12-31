@@ -1,5 +1,6 @@
 use crate::catalog::memory::MemoryStore;
 use crate::catalog::metastore::Metastore;
+use crate::catalog::DEFAULT_SCHEMA;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::{ProstMessageExt, SqlInfo, TicketStatementQuery};
@@ -10,7 +11,12 @@ use dashmap::DashMap;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::DataFusionError;
+use iceberg::io::FileIO;
+use iceberg::table::StaticTable;
+use iceberg::TableIdent;
+use iceberg_datafusion::IcebergTableProvider;
 use lazy_static::lazy_static;
+use object_store_factory::object_store_opts_to_file_io_props;
 use prost::Message;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -23,7 +29,7 @@ use url::Url;
 use crate::context::SeafowlContext;
 use crate::sync::schema::SyncSchema;
 use crate::sync::writer::SeafowlDataSyncWriter;
-use crate::sync::{LakehouseSyncTarget, SyncError, SyncResult};
+use crate::sync::{IcebergSyncTarget, LakehouseSyncTarget, SyncError, SyncResult};
 
 lazy_static! {
     pub static ref SEAFOWL_SQL_DATA: SqlInfoData = {
@@ -163,7 +169,7 @@ impl SeafowlFlightHandler {
             });
         }
 
-        let (sync_target, url) = match cmd.format() {
+        let sync_target = match cmd.format() {
             TableFormat::Delta => {
                 let log_store = match cmd.store {
                     None => self
@@ -186,14 +192,49 @@ impl SeafowlFlightHandler {
                             .await?
                     }
                 };
-                let url = log_store.root_uri();
-                (LakehouseSyncTarget::Delta(log_store), url)
+                LakehouseSyncTarget::Delta(log_store)
             }
             TableFormat::Iceberg => {
-                return Err(SyncError::NotImplemented);
+                let (location, file_io) = match cmd.store {
+                    None => {
+                        return Err(SyncError::NotImplemented);
+                    }
+                    Some(store_loc) => {
+                        let location = store_loc.location;
+                        let options = store_loc.options;
+                        let file_io_props = object_store_opts_to_file_io_props(&options);
+                        let file_io = FileIO::from_path(&location)
+                            .unwrap()
+                            .with_props(file_io_props)
+                            .build()?;
+                        (location, file_io)
+                    }
+                };
+
+                // Create the full path to table metadata by combining the object store location and
+                // relative table metadata path
+                let absolute_path = format!(
+                    "{}/{}",
+                    location.trim_end_matches("/"),
+                    cmd.path.trim_start_matches("/")
+                );
+                let iceberg_table = StaticTable::from_metadata_file(
+                    &absolute_path,
+                    TableIdent::from_strs(vec![DEFAULT_SCHEMA, "dummy_name"]).unwrap(),
+                    file_io,
+                )
+                .await?
+                .into_table();
+                let table_provider =
+                    IcebergTableProvider::try_new_from_table(iceberg_table).await?;
+                LakehouseSyncTarget::Iceberg(IcebergSyncTarget {
+                    table_provider,
+                    url: absolute_path.clone(),
+                })
             }
         };
 
+        let url = sync_target.get_url();
         let num_batches = batches.len();
 
         debug!("Processing data change with {num_rows} rows, {num_batches} batches, descriptor {sync_schema}, url {url} from origin {:?} at position {:?}",

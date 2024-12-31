@@ -48,6 +48,31 @@ impl SeafowlSyncPlanner {
         }
     }
 
+    pub(super) async fn plan_iceberg_syncs(
+        &self,
+        syncs: &[DataSyncItem],
+        table_schema: Arc<arrow_schema::Schema>,
+        table_provider: Arc<dyn TableProvider>,
+    ) -> SyncResult<Arc<dyn ExecutionPlan>> {
+        // Convert the custom Iceberg table provider into a base logical plan
+        let base_plan = LogicalPlanBuilder::scan(
+            LOWER_REL,
+            provider_as_source(table_provider),
+            None,
+        )?
+        .build()?;
+
+        let base_df = DataFrame::new(self.session_state(), base_plan);
+
+        let (sync_schema, sync_df) = self.squash_syncs(syncs)?;
+        let (sync_schema, sync_df) = self.normalize_syncs(&sync_schema, sync_df)?;
+        let input_df = self
+            .apply_syncs(table_schema, base_df, sync_df, &sync_schema)
+            .await?;
+        let input_plan = input_df.create_physical_plan().await?;
+        Ok(input_plan)
+    }
+
     // Construct a plan for flushing the pending syncs to the provided table.
     // Return the plan and the files that are re-written by it (to be removed from the table state).
     pub(super) async fn plan_delta_syncs(

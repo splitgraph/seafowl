@@ -5,6 +5,7 @@ use deltalake::kernel::{Action, Schema};
 use deltalake::operations::create::CreateBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
+use iceberg::arrow::schema_to_arrow_schema;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
@@ -20,7 +21,9 @@ use crate::sync::metrics::SyncWriterMetrics;
 use crate::sync::planner::SeafowlSyncPlanner;
 use crate::sync::schema::SyncSchema;
 use crate::sync::utils::{get_size_and_rows, squash_batches};
-use crate::sync::{Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult};
+use crate::sync::{
+    IcebergSyncTarget, Origin, SequenceNumber, SyncCommitInfo, SyncError, SyncResult,
+};
 
 use super::LakehouseSyncTarget;
 
@@ -491,8 +494,23 @@ impl SeafowlDataSyncWriter {
                     "Committed data sync up to {new_sync_commit:?} for location {url}"
                 );
             }
-            LakehouseSyncTarget::Iceberg(..) => {
-                return Err(SyncError::NotImplemented);
+            LakehouseSyncTarget::Iceberg(IcebergSyncTarget {
+                table_provider, ..
+            }) => {
+                let table = table_provider.table();
+                let schema =
+                    schema_to_arrow_schema(table.metadata().current_schema()).unwrap();
+                let planner = SeafowlSyncPlanner::new(self.context.clone());
+                let plan = planner
+                    .plan_iceberg_syncs(
+                        &entry.syncs,
+                        Arc::new(schema),
+                        Arc::new(table_provider.clone()),
+                    )
+                    .await?;
+                self.context
+                    .plan_to_iceberg_table(table_provider, &plan)
+                    .await?;
             }
         };
 

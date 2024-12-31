@@ -1,4 +1,5 @@
 use core::str;
+use iceberg_datafusion::IcebergTableProvider;
 use itertools::izip;
 use std::collections::HashMap;
 use std::error::Error;
@@ -12,7 +13,7 @@ use datafusion::error::Result;
 use datafusion::execution::{RecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanProperties;
-use datafusion_common::{DataFusionError, TableReference};
+use datafusion_common::DataFusionError;
 use futures::stream::select_all;
 use futures::{pin_mut, StreamExt, TryStream, TryStreamExt};
 use iceberg::io::FileIO;
@@ -35,7 +36,7 @@ use tracing::info;
 use url::Url;
 use uuid::Uuid;
 
-use super::{LakehouseTableProvider, SeafowlContext};
+use super::SeafowlContext;
 
 use thiserror::Error;
 
@@ -384,17 +385,9 @@ pub async fn record_batches_to_iceberg(
 impl SeafowlContext {
     pub async fn plan_to_iceberg_table(
         &self,
-        name: impl Into<TableReference>,
+        provider: &IcebergTableProvider,
         plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<()> {
-        let provider = match self.get_lakehouse_table_provider(name).await? {
-            LakehouseTableProvider::Iceberg(p) => p,
-            _ => {
-                return Err(DataFusionError::Internal(
-                    "Expected iceberg provider".to_string(),
-                ));
-            }
-        };
         let table = provider.table();
         let schema = plan.schema();
         let mut streams: Vec<Pin<Box<dyn RecordBatchStream + Send>>> = vec![];
