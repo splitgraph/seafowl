@@ -152,7 +152,8 @@ impl SeafowlContext {
         &self,
         table_name: impl Into<TableReference>,
     ) -> Result<LakehouseTableProvider> {
-        let table_provider = self.inner.table_provider(table_name).await?;
+        let table_ref = table_name.into();
+        let table_provider = self.inner.table_provider(table_ref.clone()).await?;
         let table_provider_any = table_provider.as_any();
 
         if let Some(a) = table_provider_any.downcast_ref::<DeltaTable>() {
@@ -163,7 +164,7 @@ impl SeafowlContext {
         }
 
         Err(DataFusionError::Execution(
-            "Table {table_name} not found".to_string(),
+            format!("Table {table_ref} not found").to_string(),
         ))
     }
 
@@ -172,10 +173,11 @@ impl SeafowlContext {
         &self,
         table_name: impl Into<TableReference>,
     ) -> Result<DeltaTable> {
-        match self.get_lakehouse_table_provider(table_name).await? {
+        let table_ref = table_name.into();
+        match self.get_lakehouse_table_provider(table_ref.clone()).await? {
             LakehouseTableProvider::Delta(delta_table) => Ok(delta_table),
             _ => Err(DataFusionError::Execution(
-                "Delta table {table_name} not found".to_string(),
+                format!("Delta table {table_ref} not found").to_string(),
             )),
         }
     }
