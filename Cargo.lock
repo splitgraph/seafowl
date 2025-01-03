@@ -1877,6 +1877,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranelift-bitset"
+version = "0.115.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9bd49369f76c77e34e641af85d0956869237832c118964d08bf5f51f210875a"
+dependencies = [
+ "serde",
+ "serde_derive",
+]
+
+[[package]]
 name = "cranelift-codegen"
 version = "0.112.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1989,6 +1999,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "305399fd781a2953ac78c1396f02ff53144f39c33eb7fc7789cf4e8936d13a96"
 dependencies = [
  "cranelift-bitset 0.114.0",
+ "serde",
+ "serde_derive",
+]
+
+[[package]]
+name = "cranelift-entity"
+version = "0.115.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "118597e3a9cf86c3556fa579a7a23b955fa18231651a52a77a2475d305a9cf84"
+dependencies = [
+ "cranelift-bitset 0.115.0",
  "serde",
  "serde_derive",
 ]
@@ -3660,6 +3681,7 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash",
+ "serde",
 ]
 
 [[package]]
@@ -5849,6 +5871,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3b8d81cf799e20564931e9867ca32de545188c6ee4c2e0f6e41d32f0c7dc6fb"
 dependencies = [
  "cranelift-bitset 0.114.0",
+ "log",
+ "sptr",
+]
+
+[[package]]
+name = "pulley-interpreter"
+version = "28.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "403a1a95f4c18a45c86c7bff13df00347afd0abcbf2e54af273c837339ffcf77"
+dependencies = [
+ "cranelift-bitset 0.115.0",
  "log",
  "sptr",
 ]
@@ -8515,9 +8548,9 @@ checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
 
 [[package]]
 name = "wasi-common"
-version = "25.0.3"
+version = "28.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7fd674cdb9bdc1637eaab59ccdb07802b64d355896581b038d40d373f172871"
+checksum = "6cb8b6f1ca9cc40aeca0f398163ce2c1305d0661f3311a25abcda1fc6012d8f2"
 dependencies = [
  "anyhow",
  "bitflags 2.6.0",
@@ -8529,14 +8562,13 @@ dependencies = [
  "io-extras",
  "io-lifetimes",
  "log",
- "once_cell",
  "rustix",
  "system-interface",
  "thiserror 1.0.69",
  "tracing",
- "wasmtime 25.0.3",
- "wiggle 25.0.3",
- "windows-sys 0.52.0",
+ "wasmtime 28.0.0",
+ "wiggle 28.0.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8693,6 +8725,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmparser"
+version = "0.221.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9845c470a2e10b61dd42c385839cdd6496363ed63b5c9e420b5488b77bd22083"
+dependencies = [
+ "bitflags 2.6.0",
+ "hashbrown 0.15.2",
+ "indexmap 2.6.0",
+ "serde",
+]
+
+[[package]]
 name = "wasmprinter"
 version = "0.217.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8795,7 +8839,7 @@ dependencies = [
  "paste",
  "postcard",
  "psm",
- "pulley-interpreter",
+ "pulley-interpreter 27.0.0",
  "rustix",
  "semver",
  "serde",
@@ -8818,6 +8862,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmtime"
+version = "28.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f639ecae347b9a2227e453a7b7671e84370a0b61f47a15e0390fe9b7725e47b3"
+dependencies = [
+ "anyhow",
+ "bitflags 2.6.0",
+ "bumpalo",
+ "cc",
+ "cfg-if",
+ "hashbrown 0.14.5",
+ "indexmap 2.6.0",
+ "libc",
+ "libm",
+ "log",
+ "mach2",
+ "memfd",
+ "object",
+ "paste",
+ "postcard",
+ "psm",
+ "pulley-interpreter 28.0.0",
+ "rustix",
+ "serde",
+ "serde_derive",
+ "smallvec",
+ "sptr",
+ "target-lexicon",
+ "wasmparser 0.221.2",
+ "wasmtime-asm-macros 28.0.0",
+ "wasmtime-environ 28.0.0",
+ "wasmtime-slab 28.0.0",
+ "wasmtime-versioned-export-macros 28.0.0",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "wasmtime-asm-macros"
 version = "25.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8831,6 +8912,15 @@ name = "wasmtime-asm-macros"
 version = "27.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe53a24e7016a5222875d8ca3ad6024b464465985693c42098cd0bb710002c28"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
+name = "wasmtime-asm-macros"
+version = "28.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "882a18800471cfc063c8b3ccf75723784acc3fd534009ac09421f2fac2fcdcec"
 dependencies = [
  "cfg-if",
 ]
@@ -9000,6 +9090,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmtime-environ"
+version = "28.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2604ddb24879d4dc1dedcb7081d7a8e017259bce916fdae097a97db52cbaab80"
+dependencies = [
+ "anyhow",
+ "cranelift-bitset 0.115.0",
+ "cranelift-entity 0.115.0",
+ "gimli 0.31.1",
+ "indexmap 2.6.0",
+ "log",
+ "object",
+ "postcard",
+ "serde",
+ "serde_derive",
+ "smallvec",
+ "target-lexicon",
+ "wasmparser 0.221.2",
+]
+
+[[package]]
 name = "wasmtime-fiber"
 version = "25.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9078,6 +9189,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d5f8acf677ee6b3b8ba400dd9753ea4769e56a95c4b30b045ac6d2d54b2f8ea"
 
 [[package]]
+name = "wasmtime-slab"
+version = "28.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8579c335220b4ece9aa490a0e8b46de78cd342b195ab21ff981d095e14b52383"
+
+[[package]]
 name = "wasmtime-types"
 version = "25.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9107,6 +9224,17 @@ name = "wasmtime-versioned-export-macros"
 version = "27.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df09be00c38f49172ca9936998938476e3f2df782673a39ae2ef9fb0838341b6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.89",
+]
+
+[[package]]
+name = "wasmtime-versioned-export-macros"
+version = "28.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7de0a56fb0a69b185968f2d7a9ba54750920a806470dff7ad8de91ac06d277e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9292,21 +9420,6 @@ dependencies = [
 
 [[package]]
 name = "wiggle"
-version = "25.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c8fdcd81702e0f46a8ab2ed28a5bf824aabf4a1af1673af496a020aacd0b6f9"
-dependencies = [
- "anyhow",
- "async-trait",
- "bitflags 2.6.0",
- "thiserror 1.0.69",
- "tracing",
- "wasmtime 25.0.3",
- "wiggle-macro 25.0.3",
-]
-
-[[package]]
-name = "wiggle"
 version = "27.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80e0f6ef83a263c0fa11957c363aeaa76dc84832484d0e119f22810d4d0e09a7"
@@ -9321,18 +9434,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "wiggle-generate"
-version = "25.0.3"
+name = "wiggle"
+version = "28.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14f745361f0a9071aaabd05de1bb2b782d9f0597f30d9c0f20326224902e64d5"
+checksum = "17bccfa2095b348aa6de0efcc4c621ba14d6ecc2371433232f337b1d2f089fa3"
 dependencies = [
  "anyhow",
- "heck 0.4.1",
- "proc-macro2",
- "quote",
- "shellexpand",
- "syn 2.0.89",
- "witx",
+ "async-trait",
+ "bitflags 2.6.0",
+ "thiserror 1.0.69",
+ "tracing",
+ "wasmtime 28.0.0",
+ "wiggle-macro 28.0.0",
 ]
 
 [[package]]
@@ -9351,15 +9464,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "wiggle-macro"
-version = "25.0.3"
+name = "wiggle-generate"
+version = "28.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfbdae3574621921ed3c13325edc910388487759d10fb330f656cfc69bee38db"
+checksum = "5a1fda112fc9de89fc4af51ea8b4c8e745ce1f01cd19f08c36c37aa11563ad41"
 dependencies = [
+ "anyhow",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
+ "shellexpand",
  "syn 2.0.89",
- "wiggle-generate 25.0.3",
+ "witx",
 ]
 
 [[package]]
@@ -9372,6 +9488,18 @@ dependencies = [
  "quote",
  "syn 2.0.89",
  "wiggle-generate 27.0.0",
+]
+
+[[package]]
+name = "wiggle-macro"
+version = "28.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc9a143339de27ff05ce30366c58b741afb38c803b5ffb68e9546fd2e0629c4a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.89",
+ "wiggle-generate 28.0.0",
 ]
 
 [[package]]
