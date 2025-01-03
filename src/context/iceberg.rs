@@ -31,7 +31,7 @@ use iceberg::TableCreation;
 use opendal;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
-use tracing::info;
+use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -363,11 +363,13 @@ pub async fn record_batches_to_iceberg(
             if let Some(opendal_error) =
                 iceberg_error_source.downcast_ref::<opendal::Error>()
             {
-                if opendal_error.kind() == opendal::ErrorKind::ConditionNotMatch {
+                if opendal_error.kind() == opendal::ErrorKind::AlreadyExists {
+                    warn!("Failed writing new metadata file {new_metadata_location} due to a concurrency error");
                     return Err(DataLoadingError::OptimisticConcurrencyError());
                 }
             }
         }
+        warn!("Failed writing new metadata file {new_metadata_location} due to: {iceberg_error}");
         return Err(iceberg_error.into());
     };
     info!("Wrote new metadata: {:?}", new_metadata_location);
