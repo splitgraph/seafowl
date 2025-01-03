@@ -1,6 +1,6 @@
 use crate::sync::writer::SeafowlDataSyncWriter;
 use deltalake::logstore::LogStore;
-use iceberg_datafusion::IcebergTableProvider;
+use iceberg::io::FileIO;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,7 +63,7 @@ pub(super) struct SyncCommitInfo {
 
 #[derive(Clone, Debug)]
 pub struct IcebergSyncTarget {
-    pub table_provider: IcebergTableProvider,
+    pub file_io: FileIO,
     pub url: String,
 }
 

@@ -610,8 +610,12 @@ async fn test_sync_custom_store(
     Ok(())
 }
 
+#[rstest]
+// #[case(false)] // TODO
+#[case(true)]
 #[tokio::test]
 async fn test_sync_iceberg_custom_store(
+    #[case] is_existing_table: bool,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (_ctx, mut client) = flight_server(TestServerType::Memory).await;
 
@@ -645,7 +649,11 @@ async fn test_sync_iceberg_custom_store(
     )?;
 
     let location = "s3://seafowl-test-bucket/test-data/iceberg/default.db";
-    let path = "iceberg_table_2/metadata/v1.metadata.json";
+    let path = if is_existing_table {
+        "iceberg_table_2/metadata/v1.metadata.json"
+    } else {
+        "iceberg_table_3/metadata/v0.metadata.json"
+    };
     let options = minio_options();
 
     let store = StorageLocation {

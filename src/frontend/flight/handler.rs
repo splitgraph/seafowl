@@ -1,6 +1,5 @@
 use crate::catalog::memory::MemoryStore;
 use crate::catalog::metastore::Metastore;
-use crate::catalog::DEFAULT_SCHEMA;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::{ProstMessageExt, SqlInfo, TicketStatementQuery};
@@ -12,9 +11,6 @@ use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::DataFusionError;
 use iceberg::io::FileIO;
-use iceberg::table::StaticTable;
-use iceberg::TableIdent;
-use iceberg_datafusion::IcebergTableProvider;
 use lazy_static::lazy_static;
 use object_store_factory::object_store_opts_to_file_io_props;
 use prost::Message;
@@ -218,17 +214,8 @@ impl SeafowlFlightHandler {
                     location.trim_end_matches("/"),
                     cmd.path.trim_start_matches("/")
                 );
-                let iceberg_table = StaticTable::from_metadata_file(
-                    &absolute_path,
-                    TableIdent::from_strs(vec![DEFAULT_SCHEMA, "dummy_name"]).unwrap(),
-                    file_io,
-                )
-                .await?
-                .into_table();
-                let table_provider =
-                    IcebergTableProvider::try_new_from_table(iceberg_table).await?;
                 LakehouseSyncTarget::Iceberg(IcebergSyncTarget {
-                    table_provider,
+                    file_io,
                     url: absolute_path.clone(),
                 })
             }

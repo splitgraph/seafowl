@@ -6,6 +6,9 @@ use deltalake::operations::create::CreateBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
 use iceberg::arrow::schema_to_arrow_schema;
+use iceberg::table::StaticTable;
+use iceberg::TableIdent;
+use iceberg_datafusion::IcebergTableProvider;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
@@ -14,6 +17,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 use uuid::Uuid;
 
+use crate::catalog::DEFAULT_SCHEMA;
 use crate::context::delta::plan_to_delta_adds;
 
 use crate::context::SeafowlContext;
@@ -494,9 +498,17 @@ impl SeafowlDataSyncWriter {
                     "Committed data sync up to {new_sync_commit:?} for location {url}"
                 );
             }
-            LakehouseSyncTarget::Iceberg(IcebergSyncTarget {
-                table_provider, ..
-            }) => {
+            LakehouseSyncTarget::Iceberg(IcebergSyncTarget { file_io, url, .. }) => {
+                // TODO: handle case when metadata file doesn't exist
+                let iceberg_table = StaticTable::from_metadata_file(
+                    url,
+                    TableIdent::from_strs(vec![DEFAULT_SCHEMA, "dummy_name"]).unwrap(),
+                    file_io.clone(),
+                )
+                .await?
+                .into_table();
+                let table_provider =
+                    IcebergTableProvider::try_new_from_table(iceberg_table).await?;
                 let table = table_provider.table();
                 let schema =
                     schema_to_arrow_schema(table.metadata().current_schema()).unwrap();
@@ -509,7 +521,7 @@ impl SeafowlDataSyncWriter {
                     )
                     .await?;
                 self.context
-                    .plan_to_iceberg_table(table_provider, &plan)
+                    .plan_to_iceberg_table(&table_provider, &plan)
                     .await?;
             }
         };

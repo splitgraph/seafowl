@@ -15,10 +15,12 @@ use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{Column, DFSchemaRef, JoinType, ScalarValue, ToDFSchema};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, JoinType, ScalarValue, ToDFSchema,
+};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
-    col, lit, when, Expr, LogicalPlan, LogicalPlanBuilder, Projection,
+    col, lit, when, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Projection,
 };
 use datafusion_functions_nested::expr_fn::make_array;
 use deltalake::delta_datafusion::DeltaTableProvider;
@@ -52,15 +54,17 @@ impl SeafowlSyncPlanner {
         &self,
         syncs: &[DataSyncItem],
         table_schema: Arc<arrow_schema::Schema>,
-        table_provider: Arc<dyn TableProvider>,
+        _table_provider: Arc<dyn TableProvider>,
     ) -> SyncResult<Arc<dyn ExecutionPlan>> {
-        // Convert the custom Iceberg table provider into a base logical plan
-        let base_plan = LogicalPlanBuilder::scan(
-            LOWER_REL,
-            provider_as_source(table_provider),
-            None,
-        )?
-        .build()?;
+        let df_table_schema = DFSchema::try_from(table_schema.clone()).unwrap(); // TODO: error handling
+
+        let base_plan =
+            LogicalPlanBuilder::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(df_table_schema),
+            }))
+            .alias(LOWER_REL)?
+            .build()?;
 
         let base_df = DataFrame::new(self.session_state(), base_plan);
 
