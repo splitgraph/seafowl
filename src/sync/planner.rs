@@ -15,10 +15,12 @@ use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{Column, DFSchemaRef, JoinType, ScalarValue, ToDFSchema};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, JoinType, ScalarValue, ToDFSchema,
+};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
-    col, lit, when, Expr, LogicalPlan, LogicalPlanBuilder, Projection,
+    col, lit, when, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Projection,
 };
 use datafusion_functions_nested::expr_fn::make_array;
 use deltalake::delta_datafusion::DeltaTableProvider;
@@ -46,6 +48,33 @@ impl SeafowlSyncPlanner {
             context,
             metrics: Default::default(),
         }
+    }
+
+    pub(super) async fn plan_iceberg_syncs(
+        &self,
+        syncs: &[DataSyncItem],
+        table_schema: Arc<arrow_schema::Schema>,
+        _table_provider: Arc<dyn TableProvider>,
+    ) -> SyncResult<Arc<dyn ExecutionPlan>> {
+        let df_table_schema = DFSchema::try_from(table_schema.clone()).unwrap(); // TODO: error handling
+
+        let base_plan =
+            LogicalPlanBuilder::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(df_table_schema),
+            }))
+            .alias(LOWER_REL)?
+            .build()?;
+
+        let base_df = DataFrame::new(self.session_state(), base_plan);
+
+        let (sync_schema, sync_df) = self.squash_syncs(syncs)?;
+        let (sync_schema, sync_df) = self.normalize_syncs(&sync_schema, sync_df)?;
+        let input_df = self
+            .apply_syncs(table_schema, base_df, sync_df, &sync_schema)
+            .await?;
+        let input_plan = input_df.create_physical_plan().await?;
+        Ok(input_plan)
     }
 
     // Construct a plan for flushing the pending syncs to the provided table.

@@ -1,5 +1,6 @@
 use crate::sync::writer::SeafowlDataSyncWriter;
 use deltalake::logstore::LogStore;
+use iceberg::io::FileIO;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,6 +40,9 @@ pub enum SyncError {
     DeltaTableError(#[from] deltalake::errors::DeltaTableError),
 
     #[error(transparent)]
+    IcebergError(#[from] iceberg::Error),
+
+    #[error(transparent)]
     ObjectStoreError(#[from] object_store::Error),
 }
 
@@ -59,13 +63,23 @@ pub(super) struct SyncCommitInfo {
 
 #[derive(Clone, Debug)]
 pub struct IcebergSyncTarget {
-    url: String,
+    pub file_io: FileIO,
+    pub url: String,
 }
 
 #[derive(Clone, Debug)]
 pub enum LakehouseSyncTarget {
     Delta(Arc<dyn LogStore>),
     Iceberg(IcebergSyncTarget),
+}
+
+impl LakehouseSyncTarget {
+    pub fn get_url(&self) -> String {
+        match self {
+            LakehouseSyncTarget::Iceberg(IcebergSyncTarget { url, .. }) => url.clone(),
+            LakehouseSyncTarget::Delta(log_store) => log_store.root_uri(),
+        }
+    }
 }
 
 impl SyncCommitInfo {
