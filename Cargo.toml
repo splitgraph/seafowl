@@ -2,27 +2,27 @@
 members = ["clade", "object_store_factory"]
 
 [workspace.dependencies]
-arrow = { version = "53.2.0", features = ["test_utils"] }
-arrow-buffer = "53.2.0"
-arrow-csv = "53.2.0"
-arrow-flight = "53.2.0"
+arrow = { version = "53.3.0", features = ["test_utils"] }
+arrow-buffer = "53.3.0"
+arrow-csv = "53.3.0"
+arrow-flight = "53.3.0"
 # For the JSON format support
 # https://github.com/apache/arrow-rs/pull/2868
 # https://github.com/apache/arrow-rs/pull/2724
-arrow-integration-test = "53.2.0"
-arrow-row = "53.2.0"
-arrow-schema = "53.2.0"
+arrow-integration-test = "53.3.0"
+arrow-row = "53.3.0"
+arrow-schema = "53.3.0"
 async-trait = "0.1.83"
 
-datafusion = { version = "43.0.0", features = ["backtrace"] }
-datafusion-common = "43.0.0"
-datafusion-expr = "43.0.0"
-datafusion-functions-nested = "43.0.0"
+datafusion = { version = "44.0.0", features = ["backtrace"] }
+datafusion-common = "44.0.0"
+datafusion-expr = "44.0.0"
+datafusion-functions-nested = "44.0.0"
 
 futures = "0.3"
 
-iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "1e01b7b7b2009076941f3ec1f04340e961d4628a" }
-iceberg-datafusion = { git = "https://github.com/splitgraph/iceberg-rust", rev = "1e01b7b7b2009076941f3ec1f04340e961d4628a" }
+iceberg = { git = "https://github.com/splitgraph/iceberg-rust", rev = "cb5c36565b641d2309d4e96fcf6a1ee21308aa0d" }
+iceberg-datafusion = { git = "https://github.com/splitgraph/iceberg-rust", rev = "cb5c36565b641d2309d4e96fcf6a1ee21308aa0d" }
 
 itertools = ">=0.10.0"
 object_store = { version = "0.11", features = ["aws", "azure", "gcp"] }
@@ -87,8 +87,8 @@ clap = { version = "4.5.21", features = [ "derive" ] }
 config = "0.14.0"
 
 # PG wire protocol support
-convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-43-upgrade", optional = true }
-convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-43-upgrade", optional = true }
+convergence = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-44-upgrade", optional = true }
+convergence-arrow = { git = "https://github.com/splitgraph/convergence", branch = "datafusion-44-upgrade", optional = true }
 
 dashmap = "6.1.0"
 
@@ -99,7 +99,7 @@ datafusion-functions-nested = { workspace = true }
 
 datafusion-remote-tables = { path = "./datafusion_remote_tables", optional = true }
 
-deltalake = { git = "https://github.com/splitgraph/delta-rs", rev = "eff5735698279c12ae4a3aac2afa268d168242b2", features = ["datafusion", "s3"] }
+deltalake = { git = "https://github.com/splitgraph/delta-rs", rev = "a639dea6289839161baae15ff368db74dbac2074", features = ["datafusion", "s3"] }
 fastrand = "2.2.0"
 
 futures = "0.3"
@@ -133,7 +133,7 @@ rustyline = "14.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = ">=0.10.1"
-sqlparser = { version = "0.51", features = ["visitor"] }
+sqlparser = { version = "0.53", features = ["visitor"] }
 sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "sqlite", "any", "uuid" ] }
 strum = ">=0.24"
 strum_macros = ">=0.24"

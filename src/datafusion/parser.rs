@@ -31,9 +31,12 @@ use lazy_static::lazy_static;
 use sqlparser::ast::{
     CreateFunctionBody, Expr, ObjectName, OrderByExpr, TruncateTableTarget, Value,
 };
-use sqlparser::tokenizer::{TokenWithLocation, Word};
+use sqlparser::tokenizer::{TokenWithSpan, Word};
 use sqlparser::{
-    ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
+    ast::{
+        ColumnDef, ColumnOptionDef, CreateFunction, Statement as SQLStatement,
+        TableConstraint,
+    },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
@@ -135,7 +138,7 @@ impl<'a> DFParser<'a> {
     fn expected<T>(
         &self,
         expected: &str,
-        found: TokenWithLocation,
+        found: TokenWithSpan,
     ) -> Result<T, ParserError> {
         parser_err!(format!("Expected {expected}, found: {found}"))
     }
@@ -225,6 +228,7 @@ impl<'a> DFParser<'a> {
             only: false,
             identity: None,
             cascade: None,
+            on_cluster: None,
         })))
     }
 
@@ -242,6 +246,7 @@ impl<'a> DFParser<'a> {
             only: false,
             identity: None,
             cascade: None,
+            on_cluster: None,
         })))
     }
 
@@ -258,23 +263,76 @@ impl<'a> DFParser<'a> {
             CopyToSource::Relation(table_name)
         };
 
-        self.parser.expect_keyword(Keyword::TO)?;
+        #[derive(Default)]
+        struct Builder {
+            stored_as: Option<String>,
+            target: Option<String>,
+            partitioned_by: Option<Vec<String>>,
+            options: Option<Vec<(String, Value)>>,
+        }
 
-        let target = self.parser.parse_literal_string()?;
+        let mut builder = Builder::default();
 
-        // check for options in parens
-        let options = if self.parser.peek_token().token == Token::LParen {
-            self.parse_value_options()?
-        } else {
-            vec![]
+        loop {
+            if let Some(keyword) = self.parser.parse_one_of_keywords(&[
+                Keyword::STORED,
+                Keyword::TO,
+                Keyword::PARTITIONED,
+                Keyword::OPTIONS,
+                Keyword::WITH,
+            ]) {
+                match keyword {
+                    Keyword::STORED => {
+                        self.parser.expect_keyword(Keyword::AS)?;
+                        ensure_not_set(&builder.stored_as, "STORED AS")?;
+                        builder.stored_as = Some(self.parse_file_format()?);
+                    }
+                    Keyword::TO => {
+                        ensure_not_set(&builder.target, "TO")?;
+                        builder.target = Some(self.parser.parse_literal_string()?);
+                    }
+                    Keyword::WITH => {
+                        self.parser.expect_keyword(Keyword::HEADER)?;
+                        self.parser.expect_keyword(Keyword::ROW)?;
+                        return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS ('format.has_header' 'true')");
+                    }
+                    Keyword::PARTITIONED => {
+                        self.parser.expect_keyword(Keyword::BY)?;
+                        ensure_not_set(&builder.partitioned_by, "PARTITIONED BY")?;
+                        builder.partitioned_by = Some(self.parse_partitions()?);
+                    }
+                    Keyword::OPTIONS => {
+                        ensure_not_set(&builder.options, "OPTIONS")?;
+                        builder.options = Some(self.parse_value_options()?);
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                }
+            } else {
+                let token = self.parser.next_token();
+                if token == Token::EOF || token == Token::SemiColon {
+                    break;
+                } else {
+                    return Err(ParserError::ParserError(format!(
+                        "Unexpected token {token}"
+                    )));
+                }
+            }
+        }
+
+        let Some(target) = builder.target else {
+            return Err(ParserError::ParserError(
+                "Missing TO clause in COPY statement".into(),
+            ));
         };
 
         Ok(Statement::CopyTo(CopyToStatement {
             source,
             target,
-            options,
-            partitioned_by: vec![],
-            stored_as: None,
+            partitioned_by: builder.partitioned_by.unwrap_or(vec![]),
+            stored_as: builder.stored_as,
+            options: builder.options.unwrap_or(vec![]),
         }))
     }
 
@@ -358,7 +416,7 @@ impl<'a> DFParser<'a> {
         self.parser.expect_keyword(Keyword::AS)?;
         let body = self.parse_create_function_body_string()?;
 
-        let create_function = SQLStatement::CreateFunction {
+        let create_function = SQLStatement::CreateFunction(CreateFunction {
             or_replace,
             temporary,
             if_not_exists: false,
@@ -374,7 +432,7 @@ impl<'a> DFParser<'a> {
             determinism_specifier: None,
             options: None,
             remote_connection: None,
-        };
+        });
 
         Ok(Statement::Statement(Box::from(create_function)))
     }
@@ -544,6 +602,10 @@ impl<'a> DFParser<'a> {
         &mut self,
         unbounded: bool,
     ) -> Result<Statement, ParserError> {
+        let temporary = self
+            .parser
+            .parse_one_of_keywords(&[Keyword::TEMP, Keyword::TEMPORARY])
+            .is_some();
         self.parser.expect_keyword(Keyword::TABLE)?;
         let if_not_exists =
             self.parser
@@ -606,10 +668,10 @@ impl<'a> DFParser<'a> {
                         // Note that mixing both names and definitions is not allowed
                         let peeked = self.parser.peek_nth_token(2);
                         if peeked == Token::Comma || peeked == Token::RParen {
-                            // list of column names
+                            // List of column names
                             builder.table_partition_cols = Some(self.parse_partitions()?)
                         } else {
-                            // list of column defs
+                            // List of column defs
                             let (cols, cons) = self.parse_columns()?;
                             builder.table_partition_cols = Some(
                                 cols.iter().map(|col| col.name.to_string()).collect(),
@@ -665,7 +727,7 @@ impl<'a> DFParser<'a> {
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
             order_exprs: builder.order_exprs,
             if_not_exists,
-            temporary: false,
+            temporary,
             unbounded,
             options: builder.options.unwrap_or(Vec::new()),
             constraints,
@@ -692,7 +754,7 @@ impl<'a> DFParser<'a> {
             options.push((key, value));
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
-                // allow a trailing comma, even though it's not in standard
+                // Allow a trailing comma, even though it's not in standard
                 break;
             } else if !comma {
                 return self.expected(

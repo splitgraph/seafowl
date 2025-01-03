@@ -117,7 +117,7 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         | SQLDataType::Regclass
         | SQLDataType::Custom(_, _)
         | SQLDataType::Array(_)
-        | SQLDataType::Enum(_)
+        | SQLDataType::Enum(_, _)
         | SQLDataType::Set(_)
         | SQLDataType::MediumInt(_)
         | SQLDataType::UnsignedMediumInt(_)
@@ -163,6 +163,14 @@ pub(crate) fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataTyp
         | SQLDataType::Nullable(_)
         | SQLDataType::LowCardinality(_)
         | SQLDataType::Trigger
+        | SQLDataType::TinyBlob
+        | SQLDataType::MediumBlob
+        | SQLDataType::LongBlob
+        | SQLDataType::TinyText
+        | SQLDataType::MediumText
+        | SQLDataType::LongText
+        | SQLDataType::Bit(_)
+        | SQLDataType::BitVarying(_)
         => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),

@@ -26,9 +26,9 @@ use datafusion_expr::logical_plan::{Extension, LogicalPlan};
 use deltalake::DeltaTable;
 use itertools::Itertools;
 use sqlparser::ast::{
-    AlterTableOperation, CreateFunctionBody, CreateTable as CreateTableSql,
-    Expr as SqlExpr, Expr, Insert, ObjectType, Query, Statement, TableFactor,
-    TableWithJoins, Value, VisitMut,
+    AlterTableOperation, CreateFunction as CreateFunctionSql, CreateFunctionBody,
+    CreateTable as CreateTableSql, Expr as SqlExpr, Expr, Insert, ObjectType, Query,
+    Statement, TableFactor, TableWithJoins, Value, VisitMut,
 };
 use std::sync::Arc;
 use tracing::debug;
@@ -223,13 +223,13 @@ impl SeafowlContext {
                     state.statement_to_plan(stmt).await
                 },
 
-                Statement::CreateFunction {
+                Statement::CreateFunction(CreateFunctionSql {
                     or_replace,
                     temporary: false,
                     name,
                     function_body: Some(CreateFunctionBody::AsBeforeOptions(Expr::Value(Value::SingleQuotedString(details)))),
                     ..
-                } => {
+                }) => {
                     // We abuse the fact that in CREATE FUNCTION AS [class_name], class_name can be an arbitrary string
                     // and so we can get the user to put some JSON in there
                     let function_details: CreateFunctionDetails = serde_json::from_str(details)

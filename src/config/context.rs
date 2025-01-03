@@ -15,7 +15,7 @@ use datafusion::execution::{
 };
 use datafusion::{
     common::Result,
-    execution::runtime_env::{RuntimeConfig, RuntimeEnv},
+    execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
     prelude::{SessionConfig, SessionContext},
 };
 use deltalake::delta_datafusion::DeltaTableFactory;
@@ -132,7 +132,7 @@ pub fn setup_metrics(metrics: &schema::Metrics) {
 }
 
 pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext> {
-    let mut runtime_config = RuntimeConfig::new();
+    let mut runtime_env_builder = RuntimeEnvBuilder::new();
 
     let memory_pool: Arc<dyn MemoryPool> =
         if let Some(max_memory) = cfg.runtime.max_memory {
@@ -143,18 +143,18 @@ pub async fn build_context(cfg: schema::SeafowlConfig) -> Result<SeafowlContext>
             Arc::new(UnboundedMemoryPool::default())
         };
 
-    runtime_config =
-        runtime_config.with_memory_pool(Arc::new(MemoryPoolMetrics::new(memory_pool)));
+    runtime_env_builder = runtime_env_builder
+        .with_memory_pool(Arc::new(MemoryPoolMetrics::new(memory_pool)));
 
     if let Some(temp_dir) = &cfg.runtime.temp_dir {
-        runtime_config = runtime_config.with_temp_file_path(temp_dir);
+        runtime_env_builder = runtime_env_builder.with_temp_file_path(temp_dir);
     }
 
     let session_config = SessionConfig::from_env()?
         .with_information_schema(true)
         .with_default_catalog_and_schema(DEFAULT_DB, DEFAULT_SCHEMA);
 
-    let runtime_env = RuntimeEnv::try_new(runtime_config)?;
+    let runtime_env = runtime_env_builder.build()?;
     let state = build_state_with_table_factories(session_config, Arc::new(runtime_env));
     let context = SessionContext::new_with_state(state);
 

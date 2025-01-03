@@ -195,6 +195,8 @@ async fn test_read_time_travel() {
         "+--------------------+-------------+",
         "| information_schema | columns     |",
         "| information_schema | df_settings |",
+        "| information_schema | parameters  |",
+        "| information_schema | routines    |",
         "| information_schema | schemata    |",
         "| information_schema | tables      |",
         "| information_schema | views       |",
