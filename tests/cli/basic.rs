@@ -94,6 +94,8 @@ fn test_cli_basic() -> std::io::Result<()> {
         "| default       | information_schema | columns        | VIEW       |",
         "| default       | information_schema | df_settings    | VIEW       |",
         "| default       | information_schema | schemata       | VIEW       |",
+        "| default       | information_schema | routines       | VIEW       |",
+        "| default       | information_schema | parameters     | VIEW       |",
         "+---------------+--------------------+----------------+------------+",
     ]);
 
