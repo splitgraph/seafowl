@@ -326,12 +326,11 @@ impl SeafowlDataSyncWriter {
                 Ok(())
             }
             LakehouseSyncTarget::Iceberg(IcebergSyncTarget { file_io, url, .. }) => {
-                let y = builder.finish();
-                let mut a = Url::parse(&url).unwrap();
+                let mut table_location = Url::parse(&url).unwrap();
 
                 // Turn metadata location into table location
                 // E.g. s3://a/b/metadata/v3.metadata.json -> s3://a/b
-                match a.path_segments_mut() {
+                match table_location.path_segments_mut() {
                     Ok(mut segments) => segments.pop_if_empty().pop(),
                     Err(_) => {
                         return Err(SyncError::InvalidMessage {
@@ -342,7 +341,7 @@ impl SeafowlDataSyncWriter {
                         })
                     }
                 };
-                match a.path_segments_mut() {
+                match table_location.path_segments_mut() {
                     Ok(mut segments) => segments.pop_if_empty().pop(),
                     Err(_) => {
                         return Err(SyncError::InvalidMessage {
@@ -356,9 +355,9 @@ impl SeafowlDataSyncWriter {
 
                 match record_batches_to_iceberg(
                     stream::empty(),
-                    y.into(),
+                    builder.finish().into(),
                     &file_io,
-                    a.as_str(),
+                    table_location.as_str(),
                 )
                 .await
                 {
@@ -546,16 +545,11 @@ impl SeafowlDataSyncWriter {
             }
             LakehouseSyncTarget::Iceberg(IcebergSyncTarget { file_io, url, .. }) => {
                 if !file_io.exists(url).await.unwrap() {
-                    // TODO: handle case when metadata file doesn't exist
-                    let x = self
-                        .create_table(
-                            entry.sync_target.clone(),
-                            &entry.syncs.first().unwrap().sync_schema,
-                        )
-                        .await;
-                    println!("DBG1 {:?}", x);
-                    // println!("file doesn't exist");
-                    // panic!("file doesn't exist");
+                    self.create_table(
+                        entry.sync_target.clone(),
+                        &entry.syncs.first().unwrap().sync_schema,
+                    )
+                    .await?;
                 }
                 let iceberg_table = StaticTable::from_metadata_file(
                     url,
