@@ -54,9 +54,8 @@ impl SeafowlSyncPlanner {
         &self,
         syncs: &[DataSyncItem],
         table_schema: Arc<arrow_schema::Schema>,
-        _table_provider: Arc<dyn TableProvider>,
     ) -> SyncResult<Arc<dyn ExecutionPlan>> {
-        let df_table_schema = DFSchema::try_from(table_schema.clone()).unwrap(); // TODO: error handling
+        let df_table_schema = DFSchema::try_from(table_schema.clone())?;
 
         let base_plan =
             LogicalPlanBuilder::new(LogicalPlan::EmptyRelation(EmptyRelation {

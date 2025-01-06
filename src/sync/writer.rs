@@ -5,6 +5,7 @@ use deltalake::kernel::{Action, Schema};
 use deltalake::operations::create::CreateBuilder;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::DeltaTable;
+use futures::stream;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::table::StaticTable;
 use iceberg::TableIdent;
@@ -15,11 +16,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
+use url::Url;
 use uuid::Uuid;
 
 use crate::catalog::DEFAULT_SCHEMA;
 use crate::context::delta::plan_to_delta_adds;
 
+use crate::context::iceberg::record_batches_to_iceberg;
 use crate::context::SeafowlContext;
 use crate::sync::metrics::SyncWriterMetrics;
 use crate::sync::planner::SeafowlSyncPlanner;
@@ -299,7 +302,7 @@ impl SeafowlDataSyncWriter {
         &self,
         sync_target: LakehouseSyncTarget,
         sync_schema: &SyncSchema,
-    ) -> SyncResult<DeltaTable> {
+    ) -> SyncResult<()> {
         // Get the actual table schema by removing the OldPk and Changed column roles from the schema.
         let mut builder = SchemaBuilder::new();
         sync_schema.columns().iter().for_each(|col| {
@@ -312,16 +315,59 @@ impl SeafowlDataSyncWriter {
             LakehouseSyncTarget::Delta(log_store) => {
                 let delta_schema = Schema::try_from(&builder.finish())?;
 
-                Ok(CreateBuilder::new()
+                CreateBuilder::new()
                     .with_log_store(log_store)
                     .with_columns(delta_schema.fields().cloned())
                     .with_comment(format!(
                         "Synced by Seafowl {}",
                         env!("CARGO_PKG_VERSION")
                     ))
-                    .await?)
+                    .await?;
+                Ok(())
             }
-            LakehouseSyncTarget::Iceberg(..) => Err(SyncError::NotImplemented),
+            LakehouseSyncTarget::Iceberg(IcebergSyncTarget { file_io, url, .. }) => {
+                let y = builder.finish();
+                let mut a = Url::parse(&url).unwrap();
+
+                // Turn metadata location into table location
+                // E.g. s3://a/b/metadata/v3.metadata.json -> s3://a/b
+                match a.path_segments_mut() {
+                    Ok(mut segments) => segments.pop_if_empty().pop(),
+                    Err(_) => {
+                        return Err(SyncError::InvalidMessage {
+                            reason: format!(
+                                "Could not compute metadata directory from URL: {}",
+                                url
+                            ),
+                        })
+                    }
+                };
+                match a.path_segments_mut() {
+                    Ok(mut segments) => segments.pop_if_empty().pop(),
+                    Err(_) => {
+                        return Err(SyncError::InvalidMessage {
+                            reason: format!(
+                                "Could not compute table directory from URL: {}",
+                                url
+                            ),
+                        })
+                    }
+                };
+
+                match record_batches_to_iceberg(
+                    stream::empty(),
+                    y.into(),
+                    &file_io,
+                    a.as_str(),
+                )
+                .await
+                {
+                    Err(e) => Err(SyncError::InvalidMessage {
+                        reason: e.to_string(),
+                    }),
+                    Ok(_) => Ok(()),
+                }
+            }
         }
     }
 
@@ -499,7 +545,18 @@ impl SeafowlDataSyncWriter {
                 );
             }
             LakehouseSyncTarget::Iceberg(IcebergSyncTarget { file_io, url, .. }) => {
-                // TODO: handle case when metadata file doesn't exist
+                if !file_io.exists(url).await.unwrap() {
+                    // TODO: handle case when metadata file doesn't exist
+                    let x = self
+                        .create_table(
+                            entry.sync_target.clone(),
+                            &entry.syncs.first().unwrap().sync_schema,
+                        )
+                        .await;
+                    println!("DBG1 {:?}", x);
+                    // println!("file doesn't exist");
+                    // panic!("file doesn't exist");
+                }
                 let iceberg_table = StaticTable::from_metadata_file(
                     url,
                     TableIdent::from_strs(vec![DEFAULT_SCHEMA, "dummy_name"]).unwrap(),
@@ -514,14 +571,10 @@ impl SeafowlDataSyncWriter {
                     schema_to_arrow_schema(table.metadata().current_schema()).unwrap();
                 let planner = SeafowlSyncPlanner::new(self.context.clone());
                 let plan = planner
-                    .plan_iceberg_syncs(
-                        &entry.syncs,
-                        Arc::new(schema),
-                        Arc::new(table_provider.clone()),
-                    )
+                    .plan_iceberg_syncs(&entry.syncs, Arc::new(schema))
                     .await?;
                 self.context
-                    .plan_to_iceberg_table(&table_provider, &plan)
+                    .plan_to_iceberg_table(file_io, url, &plan)
                     .await?;
             }
         };

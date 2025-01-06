@@ -1,5 +1,4 @@
 use core::str;
-use iceberg_datafusion::IcebergTableProvider;
 use itertools::izip;
 use std::collections::HashMap;
 use std::error::Error;
@@ -23,7 +22,6 @@ use iceberg::spec::{
     ManifestWriter, Operation, PartitionSpec, Snapshot, SnapshotReference,
     SnapshotRetention, Struct, Summary, TableMetadata, TableMetadataBuilder,
 };
-use iceberg::table::Table;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
@@ -157,14 +155,12 @@ const DEFAULT_SCHEMA_ID: i32 = 0;
 pub async fn record_batches_to_iceberg(
     record_batch_stream: impl TryStream<Item = Result<RecordBatch, DataLoadingError>>,
     arrow_schema: SchemaRef,
-    table: &Table,
+    file_io: &FileIO,
+    table_location: &str,
 ) -> Result<(), DataLoadingError> {
     pin_mut!(record_batch_stream);
 
-    let table_location = table.metadata().location();
     let table_base_url = Url::parse(table_location).unwrap();
-
-    let file_io = table.file_io();
 
     let version_hint_location = format!("{}/metadata/version-hint.text", table_base_url);
     let version_hint_input = file_io.new_input(&version_hint_location)?;
@@ -385,10 +381,10 @@ pub async fn record_batches_to_iceberg(
 impl SeafowlContext {
     pub async fn plan_to_iceberg_table(
         &self,
-        provider: &IcebergTableProvider,
+        file_io: &FileIO,
+        table_location: &str,
         plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<()> {
-        let table = provider.table();
         let schema = plan.schema();
         let mut streams: Vec<Pin<Box<dyn RecordBatchStream + Send>>> = vec![];
         for i in 0..plan.output_partitioning().partition_count() {
@@ -402,7 +398,8 @@ impl SeafowlContext {
                 DataLoadingError::BadInputError(format!("Datafusion error: {}", e))
             }),
             schema,
-            &table,
+            file_io,
+            table_location,
         )
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
