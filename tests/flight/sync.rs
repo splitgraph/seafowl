@@ -611,7 +611,7 @@ async fn test_sync_custom_store(
 }
 
 #[rstest]
-#[case(false)] // TODO
+#[case(false)]
 #[case(true)]
 #[tokio::test]
 async fn test_sync_iceberg_custom_store(
