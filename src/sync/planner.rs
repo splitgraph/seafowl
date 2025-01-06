@@ -32,6 +32,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, trace, warn};
 
+use super::SyncError;
+
 pub(super) const LOWER_REL: &str = "__lower_rel";
 pub(super) const UPPER_REL: &str = "__upper_rel";
 pub(super) const UPSERT_COL: &str = "__upsert_col";
@@ -55,6 +57,25 @@ impl SeafowlSyncPlanner {
         syncs: &[DataSyncItem],
         table_schema: Arc<arrow_schema::Schema>,
     ) -> SyncResult<Arc<dyn ExecutionPlan>> {
+        for sync in syncs {
+            for sc in sync.sync_schema.columns() {
+                if sc.role() == ColumnRole::OldPk {
+                    for batch in &sync.data {
+                        let null_count = batch
+                            .column_by_name(sc.field().name())
+                            .expect("Old PK array must exist")
+                            .null_count();
+                        if batch.num_rows() != null_count {
+                            return Err(SyncError::InvalidMessage {
+                                reason: "Old PK for Iceberg contains non-null value"
+                                    .to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         let df_table_schema = DFSchema::try_from(table_schema.clone())?;
 
         let base_plan =
