@@ -111,7 +111,7 @@ indexmap = "2.6.0"
 itertools = { workspace = true }
 
 lazy_static = ">=1.4.0"
-metrics = { version = "0.23.0" }
+metrics = { version = "0.24.1" }
 metrics-exporter-prometheus = { version = "0.15.3" }
 moka = { version = "0.12.5", default-features = false, features = ["future", "atomic64", "quanta"] }
 object_store = { workspace = true }
